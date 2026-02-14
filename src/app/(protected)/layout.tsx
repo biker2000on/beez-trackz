@@ -1,7 +1,18 @@
+import { Sidebar } from "@/components/nav/sidebar";
+import { BottomNav } from "@/components/nav/bottom-nav";
+
 export default function ProtectedLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <>{children}</>;
+  return (
+    <div className="min-h-screen">
+      <Sidebar />
+      <main className="md:pl-64 pb-16 md:pb-0">
+        {children}
+      </main>
+      <BottomNav />
+    </div>
+  );
 }
