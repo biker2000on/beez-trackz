@@ -1,9 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import { getSessionSecret } from "./constants";
 
-const SESSION_SECRET = new TextEncoder().encode(
-  process.env.SESSION_SECRET || "default-secret-change-me"
-);
 const SESSION_DURATION = 60 * 60 * 24 * 30; // 30 days
 
 export async function createSession(): Promise<string> {
@@ -11,13 +9,13 @@ export async function createSession(): Promise<string> {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DURATION}s`)
-    .sign(SESSION_SECRET);
+    .sign(getSessionSecret());
   return token;
 }
 
 export async function verifySession(token: string): Promise<boolean> {
   try {
-    await jwtVerify(token, SESSION_SECRET);
+    await jwtVerify(token, getSessionSecret());
     return true;
   } catch {
     return false;

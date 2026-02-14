@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
-
-const SESSION_SECRET = new TextEncoder().encode(
-  process.env.SESSION_SECRET || "default-secret-change-me"
-);
+import { getSessionSecret } from "./lib/constants";
 
 const PUBLIC_PATHS = ["/login", "/setup", "/_next", "/favicon.ico"];
 
@@ -23,7 +20,7 @@ export async function middleware(request: NextRequest) {
   }
 
   try {
-    await jwtVerify(token, SESSION_SECRET);
+    await jwtVerify(token, getSessionSecret());
     return NextResponse.next();
   } catch {
     return NextResponse.redirect(new URL("/login", request.url));

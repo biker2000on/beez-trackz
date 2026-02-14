@@ -21,23 +21,27 @@ export async function createHive(_prevState: unknown, formData: FormData) {
     return { error: "Position label is required" };
   }
 
-  const [hive] = await db
-    .insert(hives)
-    .values({
+  const [hive] = await db.transaction(async (tx) => {
+    const [newHive] = await tx
+      .insert(hives)
+      .values({
+        apiaryId,
+        positionLabel: positionLabel.trim(),
+        status: (status as "active" | "dead" | "sold" | "combined") || "active",
+        installedDate: installedDate ? new Date(installedDate) : null,
+        notes: notes?.trim() || null,
+      })
+      .returning();
+
+    // Create initial location history entry
+    await tx.insert(hiveLocationHistory).values({
+      hiveId: newHive.id,
       apiaryId,
       positionLabel: positionLabel.trim(),
-      status: (status as "active" | "dead" | "sold" | "combined") || "active",
-      installedDate: installedDate ? new Date(installedDate) : null,
-      notes: notes?.trim() || null,
-    })
-    .returning();
+      dateFrom: newHive.installedDate || new Date(),
+    });
 
-  // Create initial location history entry
-  await db.insert(hiveLocationHistory).values({
-    hiveId: hive.id,
-    apiaryId,
-    positionLabel: positionLabel.trim(),
-    dateFrom: hive.installedDate || new Date(),
+    return [newHive];
   });
 
   revalidatePath("/hives");
@@ -94,34 +98,36 @@ export async function moveHive(
 
   const now = new Date();
 
-  // Close current location record
-  await db
-    .update(hiveLocationHistory)
-    .set({ dateTo: now })
-    .where(
-      and(
-        eq(hiveLocationHistory.hiveId, id),
-        isNull(hiveLocationHistory.dateTo)
-      )
-    );
+  await db.transaction(async (tx) => {
+    // Close current location record
+    await tx
+      .update(hiveLocationHistory)
+      .set({ dateTo: now })
+      .where(
+        and(
+          eq(hiveLocationHistory.hiveId, id),
+          isNull(hiveLocationHistory.dateTo)
+        )
+      );
 
-  // Open new location record
-  await db.insert(hiveLocationHistory).values({
-    hiveId: id,
-    apiaryId: newApiaryId,
-    positionLabel: newPositionLabel.trim(),
-    dateFrom: now,
-  });
-
-  // Update hive's current apiary and position
-  await db
-    .update(hives)
-    .set({
+    // Open new location record
+    await tx.insert(hiveLocationHistory).values({
+      hiveId: id,
       apiaryId: newApiaryId,
       positionLabel: newPositionLabel.trim(),
-      updatedAt: now,
-    })
-    .where(eq(hives.id, id));
+      dateFrom: now,
+    });
+
+    // Update hive's current apiary and position
+    await tx
+      .update(hives)
+      .set({
+        apiaryId: newApiaryId,
+        positionLabel: newPositionLabel.trim(),
+        updatedAt: now,
+      })
+      .where(eq(hives.id, id));
+  });
 
   revalidatePath("/hives");
   revalidatePath(`/hives/${id}`);
@@ -142,7 +148,7 @@ export async function deleteHive(id: string) {
 }
 
 // Get all hives with apiary info
-export async function getHives(apiaryId?: string) {
+export async function getHives(apiaryId?: string, status?: string) {
   const query = db
     .select({
       id: hives.id,
@@ -158,8 +164,16 @@ export async function getHives(apiaryId?: string) {
     .innerJoin(apiaries, eq(hives.apiaryId, apiaries.id))
     .orderBy(apiaries.name, hives.positionLabel);
 
+  const conditions = [];
   if (apiaryId) {
-    return query.where(eq(hives.apiaryId, apiaryId));
+    conditions.push(eq(hives.apiaryId, apiaryId));
+  }
+  if (status) {
+    conditions.push(eq(hives.status, status as "active" | "dead" | "sold" | "combined"));
+  }
+
+  if (conditions.length > 0) {
+    return query.where(and(...conditions));
   }
   return query;
 }

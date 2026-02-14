@@ -1,7 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { createSession, verifySession } from "@/lib/session";
 
 describe("session", () => {
+  beforeAll(() => {
+    // Set SESSION_SECRET for tests
+    process.env.SESSION_SECRET = "test-secret-key-for-testing-purposes-only";
+  });
+
   it("should create a valid session token", async () => {
     const token = await createSession();
     expect(token).toBeDefined();

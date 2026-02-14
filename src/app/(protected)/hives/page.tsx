@@ -7,10 +7,10 @@ import { Plus } from "lucide-react";
 export default async function HivesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ apiaryId?: string }>;
+  searchParams: Promise<{ apiaryId?: string; status?: string }>;
 }) {
-  const { apiaryId } = await searchParams;
-  const hives = await getHives(apiaryId);
+  const { apiaryId, status } = await searchParams;
+  const hives = await getHives(apiaryId, status);
 
   return (
     <div className="p-6">
