@@ -6,7 +6,7 @@ import { eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-export async function createApiary(formData: FormData) {
+export async function createApiary(_prevState: unknown, formData: FormData) {
   const name = formData.get("name") as string;
   const latitude = formData.get("latitude") as string;
   const longitude = formData.get("longitude") as string;
@@ -30,7 +30,11 @@ export async function createApiary(formData: FormData) {
   redirect(`/apiaries/${apiary.id}`);
 }
 
-export async function updateApiary(id: string, formData: FormData) {
+export async function updateApiary(
+  id: string,
+  _prevState: unknown,
+  formData: FormData
+) {
   const name = formData.get("name") as string;
   const latitude = formData.get("latitude") as string;
   const longitude = formData.get("longitude") as string;
