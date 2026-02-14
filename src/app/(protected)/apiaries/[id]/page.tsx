@@ -1,9 +1,11 @@
 import { notFound } from "next/navigation";
 import { getApiary } from "@/actions/apiaries";
+import { getHivesForApiary } from "@/actions/hives";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { HiveCard } from "@/components/hives/hive-card";
 import Link from "next/link";
-import { Pencil } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 
 export default async function ApiaryDetailPage({
   params,
@@ -11,7 +13,10 @@ export default async function ApiaryDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const apiary = await getApiary(id);
+  const [apiary, hives] = await Promise.all([
+    getApiary(id),
+    getHivesForApiary(id),
+  ]);
 
   if (!apiary) {
     notFound();
@@ -45,9 +50,37 @@ export default async function ApiaryDetailPage({
           </p>
         </TabsContent>
         <TabsContent value="hives">
-          <p className="text-muted-foreground p-4">
-            Hive list coming in Phase 6
-          </p>
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">
+                {hives.length} {hives.length === 1 ? "Hive" : "Hives"}
+              </h2>
+              <Link href={`/hives/new?apiaryId=${id}`}>
+                <Button size="sm">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Hive
+                </Button>
+              </Link>
+            </div>
+            {hives.length === 0 ? (
+              <p className="text-muted-foreground">
+                No hives in this apiary yet.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {hives.map((hive) => (
+                  <HiveCard
+                    key={hive.id}
+                    id={hive.id}
+                    positionLabel={hive.positionLabel}
+                    status={hive.status}
+                    apiaryName={hive.apiaryName}
+                    installedDate={hive.installedDate}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </TabsContent>
         <TabsContent value="photos">
           <p className="text-muted-foreground p-4">
