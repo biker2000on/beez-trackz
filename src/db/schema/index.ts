@@ -1,3 +1,11 @@
-// Schema modules will be added per phase.
-// Each entity gets its own file in src/db/schema/
-export {};
+export { apiaries } from "./apiaries";
+export { hives, hiveStatusEnum } from "./hives";
+export { hiveLocationHistory } from "./hive-location-history";
+export { queens, queenOriginEnum, queenStatusEnum } from "./queens";
+export { inspections } from "./inspections";
+export { equipment, equipmentTypeEnum, frameTypeEnum } from "./equipment";
+export { feedings, feedTypeEnum, feederTypeEnum, quantityUnitEnum } from "./feedings";
+export { honeyHarvests, honeyInventory, honeySales } from "./honey";
+export { photos, mediaFiles, mediaOwnerTypeEnum, transcriptionStatusEnum } from "./media";
+export { aiRecommendations, recommendationTypeEnum } from "./ai";
+export { userSettings } from "./settings";
