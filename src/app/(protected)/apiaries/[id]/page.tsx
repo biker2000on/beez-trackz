@@ -18,9 +18,11 @@ import { ActiveBlooms } from "@/components/flora/active-blooms";
 import { BloomHistory } from "@/components/flora/bloom-history";
 import { ApiaryRecordingHandler } from "@/components/recording/apiary-recording-handler";
 import { BulkHiveForm } from "@/components/bulk/bulk-hive-form";
+import { BulkInspectionForm } from "@/components/bulk/bulk-inspection-form";
+import { BulkFeedingForm } from "@/components/bulk/bulk-feeding-form";
 import type { CanvasLayout } from "@/actions/canvas";
 import Link from "next/link";
-import { Pencil, Plus, Flower2 } from "lucide-react";
+import { Pencil, Plus, Flower2, ListChecks } from "lucide-react";
 
 export default async function ApiaryDetailPage({
   params,
@@ -64,6 +66,10 @@ export default async function ApiaryDetailPage({
         <TabsList>
           <TabsTrigger value="layout">Layout</TabsTrigger>
           <TabsTrigger value="hives">Hives</TabsTrigger>
+          <TabsTrigger value="bulk">
+            <ListChecks className="h-4 w-4 mr-2" />
+            Bulk Actions
+          </TabsTrigger>
           <TabsTrigger value="flora">
             <Flower2 className="h-4 w-4 mr-2" />
             Flora
@@ -119,6 +125,24 @@ export default async function ApiaryDetailPage({
                 ))}
               </div>
             )}
+          </div>
+        </TabsContent>
+        <TabsContent value="bulk">
+          <div className="p-4 space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <BulkInspectionForm
+                hives={hives.map((h) => ({
+                  id: h.id,
+                  positionLabel: h.positionLabel,
+                }))}
+              />
+              <BulkFeedingForm
+                hives={hives.map((h) => ({
+                  id: h.id,
+                  positionLabel: h.positionLabel,
+                }))}
+              />
+            </div>
           </div>
         </TabsContent>
         <TabsContent value="flora">
