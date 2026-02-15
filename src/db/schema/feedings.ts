@@ -2,7 +2,7 @@ import { pgTable, uuid, text, timestamp, doublePrecision, pgEnum } from "drizzle
 import { hives } from "./hives";
 
 export const feedTypeEnum = pgEnum("feed_type", ["sugar_syrup_1to1", "sugar_syrup_2to1", "dry_sugar", "pollen_patty", "fondant", "other"]);
-export const feederTypeEnum = pgEnum("feeder_type", ["entrance", "top", "frame", "baggie", "open", "other"]);
+export const feederTypeEnum = pgEnum("feeder_type", ["entrance", "top", "frame", "baggie", "bucket", "open", "other"]);
 export const quantityUnitEnum = pgEnum("quantity_unit", ["lbs", "oz", "quarts", "gallons"]);
 
 export const feedings = pgTable("feedings", {

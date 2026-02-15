@@ -1,0 +1,1 @@
+ALTER TYPE "public"."feeder_type" ADD VALUE 'bucket' BEFORE 'open';
