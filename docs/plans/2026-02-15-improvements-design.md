@@ -157,6 +157,8 @@ Each sub-unit is a fully independent hive record in the DB with its own inspecti
 | Promote nuc | Context menu > "Move to own slot" > moves hive to an empty slot |
 | Recombine | Context menu on multi-occupant slot > "Recombine" > merges into single hive |
 | Delete stand | Context menu, confirms if hives are assigned |
+| Add hive from canvas | Right-click empty slot > "Add New Hive" creates hive record + assigns to slot |
+| Right-click hive | Context menu with: New Inspection, Quick Inspection, Record, Feed, Equipment, Photo, View Hive, Set Facing, Move, Remove |
 
 ---
 
