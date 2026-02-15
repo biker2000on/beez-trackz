@@ -162,14 +162,14 @@ export function InspectionForm({
                 <Select
                   name="storesHoney"
                   defaultValue={
-                    defaultValues?.storesHoney?.toString() ?? ""
+                    defaultValues?.storesHoney?.toString() || "__none__"
                   }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="1-5" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Not rated</SelectItem>
+                    <SelectItem value="__none__">Not rated</SelectItem>
                     {RATING_OPTIONS.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}
@@ -183,14 +183,14 @@ export function InspectionForm({
                 <Select
                   name="storesPollen"
                   defaultValue={
-                    defaultValues?.storesPollen?.toString() ?? ""
+                    defaultValues?.storesPollen?.toString() || "__none__"
                   }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="1-5" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Not rated</SelectItem>
+                    <SelectItem value="__none__">Not rated</SelectItem>
                     {RATING_OPTIONS.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}
@@ -204,14 +204,14 @@ export function InspectionForm({
                 <Select
                   name="temperament"
                   defaultValue={
-                    defaultValues?.temperament?.toString() ?? ""
+                    defaultValues?.temperament?.toString() || "__none__"
                   }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="1-5" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Not rated</SelectItem>
+                    <SelectItem value="__none__">Not rated</SelectItem>
                     {RATING_OPTIONS.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}

@@ -6,6 +6,12 @@ import { eq, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+function parseOptionalInt(value: string): number | null {
+  if (!value || value === "__none__") return null;
+  const parsed = parseInt(value, 10);
+  return isNaN(parsed) ? null : parsed;
+}
+
 function safeJsonParse(json: string): unknown {
   try {
     return JSON.parse(json);
@@ -47,9 +53,9 @@ export async function createInspection(
       queenSeen: queenSeen || null,
       queenHealth: queenHealth?.trim() || null,
       broodPattern: broodPattern?.trim() || null,
-      storesHoney: storesHoney ? parseInt(storesHoney) : null,
-      storesPollen: storesPollen ? parseInt(storesPollen) : null,
-      temperament: temperament ? parseInt(temperament) : null,
+      storesHoney: parseOptionalInt(storesHoney),
+      storesPollen: parseOptionalInt(storesPollen),
+      temperament: parseOptionalInt(temperament),
       pests: pestsJson ? safeJsonParse(pestsJson) : null,
       treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
       notes: notes?.trim() || null,
@@ -98,9 +104,9 @@ export async function updateInspection(
       queenSeen: queenSeen || null,
       queenHealth: queenHealth?.trim() || null,
       broodPattern: broodPattern?.trim() || null,
-      storesHoney: storesHoney ? parseInt(storesHoney) : null,
-      storesPollen: storesPollen ? parseInt(storesPollen) : null,
-      temperament: temperament ? parseInt(temperament) : null,
+      storesHoney: parseOptionalInt(storesHoney),
+      storesPollen: parseOptionalInt(storesPollen),
+      temperament: parseOptionalInt(temperament),
       pests: pestsJson ? safeJsonParse(pestsJson) : null,
       treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
       notes: notes?.trim() || null,
