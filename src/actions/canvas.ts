@@ -4,14 +4,9 @@ import { db } from "@/db";
 import { apiaries } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import type { CanvasLayout } from "@/lib/canvas/types";
 
-export interface CanvasLayout {
-  hives: Record<string, { x: number; y: number }>;
-  northArrow?: { x: number; y: number; rotation: number };
-  zoom?: number;
-  offsetX?: number;
-  offsetY?: number;
-}
+export type { CanvasLayout } from "@/lib/canvas/types";
 
 export async function saveCanvasLayout(apiaryId: string, layout: CanvasLayout) {
   if (!apiaryId) {
