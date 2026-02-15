@@ -20,7 +20,7 @@ import { ApiaryRecordingHandler } from "@/components/recording/apiary-recording-
 import { BulkHiveForm } from "@/components/bulk/bulk-hive-form";
 import { BulkInspectionForm } from "@/components/bulk/bulk-inspection-form";
 import { BulkFeedingForm } from "@/components/bulk/bulk-feeding-form";
-import type { CanvasLayout } from "@/actions/canvas";
+import type { CanvasLayout } from "@/lib/canvas/types";
 import Link from "next/link";
 import { Pencil, Plus, Flower2, ListChecks } from "lucide-react";
 

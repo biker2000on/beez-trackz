@@ -6,7 +6,6 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { CanvasLayout } from "@/lib/canvas/types";
 
-export type { CanvasLayout } from "@/lib/canvas/types";
 
 export async function saveCanvasLayout(apiaryId: string, layout: CanvasLayout) {
   if (!apiaryId) {

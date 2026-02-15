@@ -11,8 +11,7 @@ import { NorthArrow } from "./north-arrow";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { SatelliteOverlay } from "./satellite-overlay";
 import { saveCanvasLayout, createHiveFromCanvas } from "@/actions/canvas";
-import type { CanvasLayout } from "@/actions/canvas";
-import type { Stand, Slot } from "@/lib/canvas/types";
+import type { CanvasLayout, Stand, Slot } from "@/lib/canvas/types";
 import { createEmptyStand, getNextStandLabel, getSlotLabel } from "@/lib/canvas/types";
 
 const MIN_ZOOM = 0.2;

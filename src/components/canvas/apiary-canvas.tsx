@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { CanvasLayout } from "@/actions/canvas";
+import type { CanvasLayout } from "@/lib/canvas/types";
 
 // Dynamically import the canvas inner component to avoid SSR issues with react-konva.
 // react-konva depends on browser APIs (canvas, window) that are unavailable on the server.
