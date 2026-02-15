@@ -6,14 +6,16 @@ import { navItems } from "./nav-items";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
 import { logout } from "@/actions/auth";
+import { SyncIndicator } from "@/components/offline/sync-indicator";
 
 export function Sidebar() {
   const pathname = usePathname();
 
   return (
     <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-r bg-card">
-      <div className="flex h-16 items-center px-6 border-b">
+      <div className="flex h-16 items-center justify-between px-6 border-b">
         <h1 className="text-xl font-bold">Beez Trackz</h1>
+        <SyncIndicator />
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map((item) => {
