@@ -61,7 +61,7 @@ export async function createJarring(
   await db.insert(honeyInventory).values({
     jarSize: jarSize.trim(),
     quantity: parseInt(quantity),
-    harvestId: harvestId || null,
+    harvestId: harvestId && harvestId !== "__none__" ? harvestId : null,
   });
 
   revalidatePath("/harvest");
@@ -80,13 +80,19 @@ export async function createSale(
   if (!date) return { error: "Date is required" };
   if (!itemsJson) return { error: "At least one item is required" };
 
-  const items = JSON.parse(itemsJson) as Array<{
+  let items: Array<{
     jarSize: string;
     quantity: number;
     pricePerUnit: number;
   }>;
+  try {
+    items = JSON.parse(itemsJson);
+  } catch {
+    return { error: "Invalid items data" };
+  }
 
-  if (items.length === 0) return { error: "At least one item is required" };
+  if (!Array.isArray(items) || items.length === 0)
+    return { error: "At least one item is required" };
 
   const totalAmount = items.reduce(
     (sum, item) => sum + item.quantity * item.pricePerUnit,
@@ -94,42 +100,58 @@ export async function createSale(
   );
 
   // Deduct from inventory inside a transaction
-  await db.transaction(async (tx) => {
-    for (const item of items) {
-      // Find inventory rows for this jar size and deduct FIFO
-      const inventoryRows = await tx
-        .select()
-        .from(honeyInventory)
-        .where(eq(honeyInventory.jarSize, item.jarSize))
-        .orderBy(honeyInventory.createdAt);
+  try {
+    await db.transaction(async (tx) => {
+      for (const item of items) {
+        const inventoryRows = await tx
+          .select()
+          .from(honeyInventory)
+          .where(eq(honeyInventory.jarSize, item.jarSize))
+          .orderBy(honeyInventory.createdAt);
 
-      let remaining = item.quantity;
-      for (const row of inventoryRows) {
-        if (remaining <= 0) break;
-        const deduct = Math.min(remaining, row.quantity);
-        const newQty = row.quantity - deduct;
-        if (newQty <= 0) {
-          await tx
-            .delete(honeyInventory)
-            .where(eq(honeyInventory.id, row.id));
-        } else {
-          await tx
-            .update(honeyInventory)
-            .set({ quantity: newQty, updatedAt: new Date() })
-            .where(eq(honeyInventory.id, row.id));
+        const available = inventoryRows.reduce(
+          (sum, r) => sum + r.quantity,
+          0
+        );
+        if (available < item.quantity) {
+          throw new Error(
+            `Insufficient inventory for ${item.jarSize}: need ${item.quantity}, have ${available}`
+          );
         }
-        remaining -= deduct;
-      }
-    }
 
-    await tx.insert(honeySales).values({
-      date: new Date(date),
-      customerName: customerName?.trim() || null,
-      items,
-      totalAmount,
-      notes: notes?.trim() || null,
+        let remaining = item.quantity;
+        for (const row of inventoryRows) {
+          if (remaining <= 0) break;
+          const deduct = Math.min(remaining, row.quantity);
+          const newQty = row.quantity - deduct;
+          if (newQty <= 0) {
+            await tx
+              .delete(honeyInventory)
+              .where(eq(honeyInventory.id, row.id));
+          } else {
+            await tx
+              .update(honeyInventory)
+              .set({ quantity: newQty, updatedAt: new Date() })
+              .where(eq(honeyInventory.id, row.id));
+          }
+          remaining -= deduct;
+        }
+      }
+
+      await tx.insert(honeySales).values({
+        date: new Date(date),
+        customerName: customerName?.trim() || null,
+        items,
+        totalAmount,
+        notes: notes?.trim() || null,
+      });
     });
-  });
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("Insufficient inventory")) {
+      return { error: e.message };
+    }
+    throw e;
+  }
 
   revalidatePath("/harvest");
   redirect("/harvest");

@@ -6,6 +6,14 @@ import { eq, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+function safeJsonParse(json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 export async function createInspection(
   _prevState: unknown,
   formData: FormData
@@ -42,8 +50,8 @@ export async function createInspection(
       storesHoney: storesHoney ? parseInt(storesHoney) : null,
       storesPollen: storesPollen ? parseInt(storesPollen) : null,
       temperament: temperament ? parseInt(temperament) : null,
-      pests: pestsJson ? JSON.parse(pestsJson) : null,
-      treatments: treatmentsJson ? JSON.parse(treatmentsJson) : null,
+      pests: pestsJson ? safeJsonParse(pestsJson) : null,
+      treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
       notes: notes?.trim() || null,
     })
     .returning();
@@ -93,8 +101,8 @@ export async function updateInspection(
       storesHoney: storesHoney ? parseInt(storesHoney) : null,
       storesPollen: storesPollen ? parseInt(storesPollen) : null,
       temperament: temperament ? parseInt(temperament) : null,
-      pests: pestsJson ? JSON.parse(pestsJson) : null,
-      treatments: treatmentsJson ? JSON.parse(treatmentsJson) : null,
+      pests: pestsJson ? safeJsonParse(pestsJson) : null,
+      treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
       notes: notes?.trim() || null,
       updatedAt: new Date(),
     })
@@ -104,7 +112,7 @@ export async function updateInspection(
     revalidatePath(`/hives/${hiveId}`);
   }
   revalidatePath("/dashboard");
-  redirect(`/hives/${hiveId}`);
+  redirect(hiveId ? `/hives/${hiveId}` : "/hives");
 }
 
 export async function deleteInspection(id: string) {
@@ -121,7 +129,7 @@ export async function deleteInspection(id: string) {
     revalidatePath(`/hives/${hiveId}`);
   }
   revalidatePath("/dashboard");
-  redirect(`/hives/${hiveId}`);
+  redirect(hiveId ? `/hives/${hiveId}` : "/hives");
 }
 
 export async function getInspectionsForHive(hiveId: string) {

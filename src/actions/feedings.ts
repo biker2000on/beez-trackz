@@ -83,7 +83,7 @@ export async function deleteFeeding(id: string) {
     revalidatePath(`/hives/${hiveId}`);
   }
   revalidatePath("/dashboard");
-  redirect(`/hives/${hiveId}`);
+  redirect(hiveId ? `/hives/${hiveId}` : "/hives");
 }
 
 export async function getFeedingsForHive(hiveId: string) {
