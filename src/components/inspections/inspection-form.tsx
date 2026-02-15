@@ -57,6 +57,14 @@ const RATING_OPTIONS = [
   { value: "5", label: "5 - Excellent" },
 ];
 
+const TEMPERAMENT_OPTIONS = [
+  { value: "1", label: "1 - Very Aggressive" },
+  { value: "2", label: "2 - Aggressive" },
+  { value: "3", label: "3 - Moderate" },
+  { value: "4", label: "4 - Calm" },
+  { value: "5", label: "5 - Very Calm" },
+];
+
 export function InspectionForm({
   action,
   defaultValues,
@@ -212,7 +220,7 @@ export function InspectionForm({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">Not rated</SelectItem>
-                    {RATING_OPTIONS.map((opt) => (
+                    {TEMPERAMENT_OPTIONS.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value}>
                         {opt.label}
                       </SelectItem>
