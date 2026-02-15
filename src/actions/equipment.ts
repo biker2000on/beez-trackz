@@ -13,12 +13,13 @@ export async function createEquipment(_prevState: unknown, formData: FormData) {
   const frameType = formData.get("frameType") as string;
   const hiveId = formData.get("hiveId") as string;
   const storageLocation = formData.get("storageLocation") as string;
+  const quantity = parseInt(formData.get("quantity") as string) || 1;
 
   if (!type) {
     return { error: "Equipment type is required" };
   }
 
-  await db.insert(equipment).values({
+  const equipmentValues = {
     type: type as (typeof equipmentTypeEnum.enumValues)[number],
     frameCapacity: frameCapacity ? parseInt(frameCapacity) : null,
     framesInstalled: framesInstalled ? parseInt(framesInstalled) : null,
@@ -26,6 +27,12 @@ export async function createEquipment(_prevState: unknown, formData: FormData) {
     hiveId: hiveId || null,
     storageLocation: storageLocation?.trim() || null,
     addedToHiveDate: hiveId ? new Date() : null,
+  };
+
+  await db.transaction(async (tx) => {
+    for (let i = 0; i < quantity; i++) {
+      await tx.insert(equipment).values(equipmentValues);
+    }
   });
 
   revalidatePath("/settings/equipment");

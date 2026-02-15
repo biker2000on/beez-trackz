@@ -141,6 +141,19 @@ export function EquipmentForm({
             </>
           )}
 
+          {/* Quantity */}
+          <div className="space-y-2">
+            <Label htmlFor="quantity">Quantity</Label>
+            <Input
+              id="quantity"
+              name="quantity"
+              type="number"
+              min={1}
+              defaultValue={1}
+              placeholder="1"
+            />
+          </div>
+
           {/* Hive assignment */}
           {hives && hives.length > 0 && (
             <div className="space-y-2">
