@@ -6,6 +6,8 @@ export async function HoneyInventoryWidget() {
 
   const hasData =
     dashboard.totalHarvested > 0 ||
+    dashboard.totalJarredLbs > 0 ||
+    dashboard.totalLosses > 0 ||
     dashboard.inventory.length > 0 ||
     dashboard.totalRevenue > 0;
 
@@ -25,14 +27,38 @@ export async function HoneyInventoryWidget() {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div>
-          <p className="text-xs text-muted-foreground">Total Harvested</p>
+          <p className="text-xs text-muted-foreground">Extracted</p>
           <p className="text-lg font-bold">
             {dashboard.totalHarvested.toFixed(1)}{" "}
             <span className="text-xs font-normal text-muted-foreground">lbs</span>
           </p>
         </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Jarred</p>
+          <p className="text-lg font-bold">
+            {dashboard.totalJarredLbs.toFixed(1)}{" "}
+            <span className="text-xs font-normal text-muted-foreground">lbs</span>
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Losses</p>
+          <p className="text-lg font-bold">
+            {dashboard.totalLosses.toFixed(1)}{" "}
+            <span className="text-xs font-normal text-muted-foreground">lbs</span>
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Available</p>
+          <p className="text-lg font-bold">
+            {dashboard.availableToJar.toFixed(1)}{" "}
+            <span className="text-xs font-normal text-muted-foreground">lbs</span>
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 pt-2 border-t">
         <div>
           <p className="text-xs text-muted-foreground">Revenue</p>
           <p className="text-lg font-bold">

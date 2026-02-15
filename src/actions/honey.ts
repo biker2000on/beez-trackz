@@ -7,6 +7,8 @@ import {
   honeySales,
   hives,
   apiaries,
+  harvestSessions,
+  honeyAdjustments,
 } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
@@ -196,7 +198,12 @@ export async function getSales() {
 }
 
 export async function getHoneyDashboard() {
-  const [harvests, inventory, sales] = await Promise.all([
+  const [sessions, harvests, inventory, sales, adjustments, inventoryWithOz] = await Promise.all([
+    db
+      .select({
+        total: sql<number>`coalesce(sum(${harvestSessions.totalExtractedWeight}), 0)`,
+      })
+      .from(harvestSessions),
     db
       .select({
         total: sql<number>`coalesce(sum(${honeyHarvests.calculatedHoneyWeight}), 0)`,
@@ -208,10 +215,43 @@ export async function getHoneyDashboard() {
         total: sql<number>`coalesce(sum(${honeySales.totalAmount}), 0)`,
       })
       .from(honeySales),
+    db
+      .select({
+        total: sql<number>`coalesce(sum(${honeyAdjustments.amountLbs}), 0)`,
+      })
+      .from(honeyAdjustments),
+    db
+      .select({
+        honeyOz: honeyInventory.honeyOz,
+        quantity: honeyInventory.quantity,
+      })
+      .from(honeyInventory),
   ]);
 
+  // Calculate total harvested from sessions if available, else from harvests
+  const sessionTotal = Number(sessions[0]?.total || 0);
+  const harvestTotal = Number(harvests[0]?.total || 0);
+  const totalHarvested = sessionTotal > 0 ? sessionTotal : harvestTotal;
+
+  // Calculate total losses
+  const totalLosses = Number(adjustments[0]?.total || 0);
+
+  // Calculate total jarred in lbs from inventory
+  const totalJarredLbs = inventoryWithOz.reduce((sum, item) => {
+    if (item.honeyOz) {
+      return sum + (item.honeyOz * item.quantity) / 16;
+    }
+    return sum;
+  }, 0);
+
+  // Calculate available to jar
+  const availableToJar = totalHarvested - totalJarredLbs - totalLosses;
+
   return {
-    totalHarvested: Number(harvests[0]?.total || 0),
+    totalHarvested,
+    totalLosses,
+    totalJarredLbs,
+    availableToJar,
     inventory,
     totalRevenue: Number(sales[0]?.total || 0),
   };
