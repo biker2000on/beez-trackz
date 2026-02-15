@@ -27,12 +27,16 @@ interface ApiaryCanvasProps {
   apiaryId: string;
   hives: Hive[];
   initialLayout: CanvasLayout | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 export function ApiaryCanvas({
   apiaryId,
   hives,
   initialLayout,
+  latitude,
+  longitude,
 }: ApiaryCanvasProps) {
   if (hives.length === 0) {
     return (
@@ -49,6 +53,8 @@ export function ApiaryCanvas({
       apiaryId={apiaryId}
       hives={hives}
       initialLayout={initialLayout}
+      latitude={latitude}
+      longitude={longitude}
     />
   );
 }

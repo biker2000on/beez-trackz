@@ -7,6 +7,7 @@ import type Konva from "konva";
 import { HiveIcon } from "./hive-icon";
 import { NorthArrow } from "./north-arrow";
 import { CanvasToolbar } from "./canvas-toolbar";
+import { SatelliteOverlay } from "./satellite-overlay";
 import { saveCanvasLayout, type CanvasLayout } from "@/actions/canvas";
 
 const HIVE_WIDTH = 60;
@@ -26,6 +27,8 @@ interface CanvasInnerProps {
   apiaryId: string;
   hives: Hive[];
   initialLayout: CanvasLayout | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 function autoPlaceHives(
@@ -86,6 +89,8 @@ export function CanvasInner({
   apiaryId,
   hives,
   initialLayout,
+  latitude,
+  longitude,
 }: CanvasInnerProps) {
   const router = useRouter();
   const stageRef = useRef<Konva.Stage>(null);
@@ -95,6 +100,11 @@ export function CanvasInner({
   const [editMode, setEditMode] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Satellite overlay state
+  const [satelliteEnabled, setSatelliteEnabled] = useState(false);
+  const [satelliteOpacity, setSatelliteOpacity] = useState(0.7);
+  const hasSatelliteData = latitude != null && longitude != null;
 
   // Canvas state
   const [zoom, setZoom] = useState(initialLayout?.zoom ?? 1);
@@ -255,6 +265,14 @@ export function CanvasInner({
     setEditMode((prev) => !prev);
   }, []);
 
+  const handleToggleSatellite = useCallback(() => {
+    setSatelliteEnabled((prev) => !prev);
+  }, []);
+
+  const handleSatelliteOpacityChange = useCallback((opacity: number) => {
+    setSatelliteOpacity(opacity);
+  }, []);
+
   const handleSave = useCallback(async () => {
     setIsSaving(true);
     try {
@@ -292,11 +310,15 @@ export function CanvasInner({
           editMode={editMode}
           hasUnsavedChanges={hasUnsavedChanges}
           isSaving={isSaving}
+          satelliteEnabled={satelliteEnabled}
+          satelliteOpacity={satelliteOpacity}
           onToggleEditMode={handleToggleEditMode}
           onZoomIn={handleZoomIn}
           onZoomOut={handleZoomOut}
           onResetView={handleResetView}
           onSave={handleSave}
+          onToggleSatellite={hasSatelliteData ? handleToggleSatellite : undefined}
+          onSatelliteOpacityChange={hasSatelliteData ? handleSatelliteOpacityChange : undefined}
         />
       </div>
 
@@ -360,6 +382,17 @@ export function CanvasInner({
               fill="transparent"
               listening={false}
             />
+
+            {/* Satellite overlay - rendered behind everything else */}
+            {satelliteEnabled && hasSatelliteData && latitude != null && longitude != null && (
+              <SatelliteOverlay
+                latitude={latitude}
+                longitude={longitude}
+                canvasWidth={dimensions.width / zoom}
+                canvasHeight={dimensions.height / zoom}
+                opacity={satelliteOpacity}
+              />
+            )}
 
             {/* North arrow */}
             <NorthArrow
