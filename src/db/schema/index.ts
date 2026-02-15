@@ -9,3 +9,6 @@ export { honeyHarvests, honeyInventory, honeySales } from "./honey";
 export { photos, mediaFiles, mediaOwnerTypeEnum, transcriptionStatusEnum } from "./media";
 export { aiRecommendations, recommendationTypeEnum } from "./ai";
 export { userSettings } from "./settings";
+export { harvestSessions } from "./harvest-sessions";
+export { honeyAdjustments, adjustmentTypeEnum } from "./honey-adjustments";
+export { bloomObservations } from "./bloom-observations";
