@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { HiveDetailTabs } from "@/components/hives/hive-detail-tabs";
-import { Pencil, ClipboardList, StickyNote, Camera, Droplets } from "lucide-react";
+import { Pencil, ClipboardList, StickyNote, Camera, Droplets, Mic } from "lucide-react";
 
 const statusColors: Record<string, string> = {
   active: "bg-green-500/10 text-green-700 border-green-200",
@@ -83,6 +83,12 @@ export default async function HiveDetailPage({
           <Link href={`/hives/${id}/inspections/new`}>
             <ClipboardList className="h-4 w-4 mr-2" />
             New Inspection
+          </Link>
+        </Button>
+        <Button variant="outline" size="sm" asChild>
+          <Link href={`/hives/${id}/transcribe`}>
+            <Mic className="h-4 w-4 mr-2" />
+            Record Inspection
           </Link>
         </Button>
         <Button variant="outline" size="sm" asChild>

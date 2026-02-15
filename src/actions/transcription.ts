@@ -148,10 +148,7 @@ export async function confirmTranscription(
   // Create inspection records from the confirmed parsed data
   const createdInspections = [];
   for (const inspection of confirmedInspections) {
-    // For batch mode, hiveReference is used to identify the hive
-    // The caller is expected to resolve hiveReference to actual hiveId
-    // For now, we use the media file's ownerId as the hiveId (single mode)
-    // or expect a hiveId to be set from the front end
+    // For single mode, use the media file's ownerId as the hiveId
     const hiveId = mediaFile.ownerId;
 
     const [created] = await db
@@ -181,6 +178,76 @@ export async function confirmTranscription(
 
   // Revalidate relevant paths
   revalidatePath(`/hives/${mediaFile.ownerId}`);
+  revalidatePath("/dashboard");
+
+  return {
+    success: true,
+    inspectionIds: createdInspections.map((i) => i.id),
+  };
+}
+
+export async function confirmBatchTranscription(
+  mediaFileId: string,
+  confirmedInspections: Array<ParsedInspection & { hiveId: string }>
+) {
+  // Verify the media file exists
+  const mediaResult = await db
+    .select()
+    .from(mediaFiles)
+    .where(eq(mediaFiles.id, mediaFileId))
+    .limit(1);
+
+  const mediaFile = mediaResult[0];
+  if (!mediaFile) {
+    return { error: "Media file not found" };
+  }
+
+  if (confirmedInspections.length === 0) {
+    return { error: "No inspections to confirm" };
+  }
+
+  // Create inspection records from the confirmed parsed data
+  const createdInspections = [];
+  const affectedHiveIds = new Set<string>();
+
+  for (const inspection of confirmedInspections) {
+    const { hiveId, ...inspectionData } = inspection;
+
+    if (!hiveId) {
+      return { error: "Hive ID is required for each inspection" };
+    }
+
+    affectedHiveIds.add(hiveId);
+
+    const [created] = await db
+      .insert(inspections)
+      .values({
+        hiveId,
+        date: new Date(),
+        queenSeen: inspectionData.queenSeen ?? null,
+        queenHealth: inspectionData.queenHealth ?? null,
+        broodPattern: inspectionData.broodPattern ?? null,
+        storesHoney: inspectionData.storesHoney ?? null,
+        storesPollen: inspectionData.storesPollen ?? null,
+        temperament: inspectionData.temperament ?? null,
+        pests: inspectionData.pests ?? null,
+        treatments: inspectionData.treatments ?? null,
+        notes: inspectionData.notes ?? null,
+        sourceMedia: {
+          mediaFileId,
+          hiveReference: inspectionData.hiveReference,
+          rawText: mediaFile.transcriptionText,
+        },
+      })
+      .returning();
+
+    createdInspections.push(created);
+  }
+
+  // Revalidate relevant paths for all affected hives
+  affectedHiveIds.forEach((hiveId) => {
+    revalidatePath(`/hives/${hiveId}`);
+  });
   revalidatePath("/dashboard");
 
   return {
