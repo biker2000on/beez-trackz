@@ -12,6 +12,8 @@ import {
 import { InspectionCard } from "@/components/inspections/inspection-card";
 import { EquipmentStack } from "@/components/equipment/equipment-stack";
 import { FeedingList } from "@/components/feedings/feeding-list";
+import { PhotoGallery } from "@/components/photos/photo-gallery";
+import { PhotoUpload } from "@/components/photos/photo-upload";
 
 interface LocationHistoryEntry {
   apiaryName: string;
@@ -61,6 +63,18 @@ interface FeedingEntry {
   notes: string | null;
 }
 
+interface PhotoEntry {
+  id: string;
+  thumbnailPath: string | null;
+  mediumPath: string | null;
+  originalPath: string;
+  caption: string | null;
+  tags: unknown;
+  takenDate: Date | null;
+  ownerType: string;
+  ownerId: string;
+}
+
 interface HiveDetailTabsProps {
   hiveId: string;
   locationHistory: LocationHistoryEntry[];
@@ -68,6 +82,7 @@ interface HiveDetailTabsProps {
   inspections: InspectionEntry[];
   equipment: EquipmentEntry[];
   feedings: FeedingEntry[];
+  photos: PhotoEntry[];
 }
 
 function formatDate(date: Date): string {
@@ -99,6 +114,7 @@ export function HiveDetailTabs({
   inspections,
   equipment,
   feedings,
+  photos,
 }: HiveDetailTabsProps) {
   const activeQueen = queens.find((q) => q.status === "active");
   const pastQueens = queens.filter((q) => q.status !== "active");
@@ -189,7 +205,20 @@ export function HiveDetailTabs({
       </TabsContent>
 
       <TabsContent value="photos">
-        <p className="text-muted-foreground p-4">No photos</p>
+        <div className="p-4 space-y-6">
+          <div>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Upload Photo
+            </h3>
+            <PhotoUpload ownerType="hive" ownerId={hiveId} />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Gallery ({photos.length})
+            </h3>
+            <PhotoGallery photos={photos} ownerType="hive" ownerId={hiveId} />
+          </div>
+        </div>
       </TabsContent>
 
       <TabsContent value="queen">

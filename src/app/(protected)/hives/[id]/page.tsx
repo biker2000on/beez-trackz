@@ -5,6 +5,7 @@ import { getQueensForHive } from "@/actions/queens";
 import { getInspectionsForHive } from "@/actions/inspections";
 import { getEquipmentForHive } from "@/actions/equipment";
 import { getFeedingsForHive } from "@/actions/feedings";
+import { getPhotosForOwner } from "@/actions/photos";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -24,13 +25,14 @@ export default async function HiveDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [hive, locationHistory, queens, inspections, equipment, feedings] = await Promise.all([
+  const [hive, locationHistory, queens, inspections, equipment, feedings, photos] = await Promise.all([
     getHive(id),
     getHiveLocationHistory(id),
     getQueensForHive(id),
     getInspectionsForHive(id),
     getEquipmentForHive(id),
     getFeedingsForHive(id),
+    getPhotosForOwner("hive", id),
   ]);
 
   if (!hive) {
@@ -106,7 +108,7 @@ export default async function HiveDetailPage({
       <Separator className="mb-6" />
 
       {/* Tabs */}
-      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} equipment={equipment} feedings={feedings} />
+      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} equipment={equipment} feedings={feedings} photos={photos} />
     </div>
   );
 }
