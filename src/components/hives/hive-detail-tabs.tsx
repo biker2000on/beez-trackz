@@ -11,6 +11,7 @@ import {
 } from "@/lib/queen-colors";
 import { InspectionCard } from "@/components/inspections/inspection-card";
 import { EquipmentStack } from "@/components/equipment/equipment-stack";
+import { FeedingList } from "@/components/feedings/feeding-list";
 
 interface LocationHistoryEntry {
   apiaryName: string;
@@ -48,12 +49,25 @@ interface EquipmentEntry {
   frameType: string | null;
 }
 
+interface FeedingEntry {
+  id: string;
+  hiveId: string;
+  dateFed: Date;
+  type: string;
+  quantity: number;
+  quantityUnit: string;
+  feederType: string | null;
+  dateEmpty: Date | null;
+  notes: string | null;
+}
+
 interface HiveDetailTabsProps {
   hiveId: string;
   locationHistory: LocationHistoryEntry[];
   queens: QueenEntry[];
   inspections: InspectionEntry[];
   equipment: EquipmentEntry[];
+  feedings: FeedingEntry[];
 }
 
 function formatDate(date: Date): string {
@@ -84,6 +98,7 @@ export function HiveDetailTabs({
   queens,
   inspections,
   equipment,
+  feedings,
 }: HiveDetailTabsProps) {
   const activeQueen = queens.find((q) => q.status === "active");
   const pastQueens = queens.filter((q) => q.status !== "active");
@@ -94,6 +109,7 @@ export function HiveDetailTabs({
         <TabsTrigger value="inspections">Inspections</TabsTrigger>
         <TabsTrigger value="equipment">Equipment</TabsTrigger>
         <TabsTrigger value="photos">Photos</TabsTrigger>
+        <TabsTrigger value="feedings">Feedings</TabsTrigger>
         <TabsTrigger value="queen">Queen</TabsTrigger>
         <TabsTrigger value="history">History</TabsTrigger>
       </TabsList>
@@ -152,6 +168,23 @@ export function HiveDetailTabs({
             </Link>
           </div>
           <EquipmentStack equipment={equipment} />
+        </div>
+      </TabsContent>
+
+      <TabsContent value="feedings">
+        <div className="p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {feedings.length} feeding{feedings.length !== 1 ? "s" : ""}
+            </h3>
+            <Link href={`/hives/${hiveId}/feedings/new`}>
+              <Button variant="outline" size="sm">
+                <Plus className="h-4 w-4 mr-2" />
+                Record Feeding
+              </Button>
+            </Link>
+          </div>
+          <FeedingList feedings={feedings} hiveId={hiveId} />
         </div>
       </TabsContent>
 
