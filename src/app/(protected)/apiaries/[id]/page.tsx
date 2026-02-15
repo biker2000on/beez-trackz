@@ -2,16 +2,24 @@ import { notFound } from "next/navigation";
 import { getApiary } from "@/actions/apiaries";
 import { getHivesForApiary } from "@/actions/hives";
 import { getPhotosForOwner } from "@/actions/photos";
+import {
+  getActiveBloomsForApiary,
+  getBloomHistoryForApiary,
+  getBloomSpeciesAutocomplete,
+} from "@/actions/bloom-observations";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { HiveCard } from "@/components/hives/hive-card";
 import { ApiaryCanvas } from "@/components/canvas/apiary-canvas";
 import { PhotoGallery } from "@/components/photos/photo-gallery";
 import { PhotoUpload } from "@/components/photos/photo-upload";
+import { BloomForm } from "@/components/flora/bloom-form";
+import { ActiveBlooms } from "@/components/flora/active-blooms";
+import { BloomHistory } from "@/components/flora/bloom-history";
 import { ApiaryRecordingHandler } from "@/components/recording/apiary-recording-handler";
 import type { CanvasLayout } from "@/actions/canvas";
 import Link from "next/link";
-import { Pencil, Plus } from "lucide-react";
+import { Pencil, Plus, Flower2 } from "lucide-react";
 
 export default async function ApiaryDetailPage({
   params,
@@ -19,10 +27,13 @@ export default async function ApiaryDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [apiary, hives, photos] = await Promise.all([
+  const [apiary, hives, photos, activeBlooms, bloomHistory, speciesList] = await Promise.all([
     getApiary(id),
     getHivesForApiary(id),
     getPhotosForOwner("apiary", id),
+    getActiveBloomsForApiary(id),
+    getBloomHistoryForApiary(id),
+    getBloomSpeciesAutocomplete(id),
   ]);
 
   if (!apiary) {
@@ -52,6 +63,10 @@ export default async function ApiaryDetailPage({
         <TabsList>
           <TabsTrigger value="layout">Layout</TabsTrigger>
           <TabsTrigger value="hives">Hives</TabsTrigger>
+          <TabsTrigger value="flora">
+            <Flower2 className="h-4 w-4 mr-2" />
+            Flora
+          </TabsTrigger>
           <TabsTrigger value="photos">Photos</TabsTrigger>
         </TabsList>
         <TabsContent value="layout">
@@ -100,6 +115,28 @@ export default async function ApiaryDetailPage({
                 ))}
               </div>
             )}
+          </div>
+        </TabsContent>
+        <TabsContent value="flora">
+          <div className="p-4 space-y-6">
+            <div>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                Add Bloom Observation
+              </h3>
+              <BloomForm apiaryId={id} speciesList={speciesList} />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                Active Blooms ({activeBlooms.length})
+              </h3>
+              <ActiveBlooms blooms={activeBlooms} apiaryId={id} />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+                Bloom History
+              </h3>
+              <BloomHistory history={bloomHistory} />
+            </div>
           </div>
         </TabsContent>
         <TabsContent value="photos">
