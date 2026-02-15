@@ -221,3 +221,43 @@ export async function getHiveLocationHistory(hiveId: string) {
     .where(eq(hiveLocationHistory.hiveId, hiveId))
     .orderBy(desc(hiveLocationHistory.dateFrom));
 }
+
+// Bulk create hives
+export async function bulkCreateHives(
+  _prevState: unknown,
+  formData: FormData
+) {
+  const apiaryId = formData.get("apiaryId") as string;
+  const quantity = parseInt(formData.get("quantity") as string);
+  const startLabel = formData.get("startLabel") as string;
+
+  if (!apiaryId || !quantity || quantity < 1) {
+    return { error: "Apiary and valid quantity required" };
+  }
+
+  await db.transaction(async (tx) => {
+    const now = new Date();
+    for (let i = 0; i < quantity; i++) {
+      const label = startLabel
+        ? `${startLabel}${i + 1}`
+        : `Hive ${i + 1}`;
+
+      const [newHive] = await tx.insert(hives).values({
+        apiaryId,
+        positionLabel: label,
+        status: "active",
+      }).returning();
+
+      // Create initial location history entry
+      await tx.insert(hiveLocationHistory).values({
+        hiveId: newHive.id,
+        apiaryId,
+        positionLabel: label,
+        dateFrom: now,
+      });
+    }
+  });
+
+  revalidatePath(`/apiaries/${apiaryId}`);
+  return { success: true, count: quantity };
+}

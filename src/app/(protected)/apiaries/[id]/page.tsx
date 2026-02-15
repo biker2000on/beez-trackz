@@ -17,6 +17,7 @@ import { BloomForm } from "@/components/flora/bloom-form";
 import { ActiveBlooms } from "@/components/flora/active-blooms";
 import { BloomHistory } from "@/components/flora/bloom-history";
 import { ApiaryRecordingHandler } from "@/components/recording/apiary-recording-handler";
+import { BulkHiveForm } from "@/components/bulk/bulk-hive-form";
 import type { CanvasLayout } from "@/actions/canvas";
 import Link from "next/link";
 import { Pencil, Plus, Flower2 } from "lucide-react";
@@ -85,8 +86,8 @@ export default async function ApiaryDetailPage({
           </div>
         </TabsContent>
         <TabsContent value="hives">
-          <div className="p-4">
-            <div className="flex items-center justify-between mb-4">
+          <div className="p-4 space-y-6">
+            <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
                 {hives.length} {hives.length === 1 ? "Hive" : "Hives"}
               </h2>
@@ -97,6 +98,9 @@ export default async function ApiaryDetailPage({
                 </Button>
               </Link>
             </div>
+
+            <BulkHiveForm apiaryId={id} />
+
             {hives.length === 0 ? (
               <p className="text-muted-foreground">
                 No hives in this apiary yet.
