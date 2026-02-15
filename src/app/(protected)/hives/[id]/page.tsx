@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getHive, getHiveLocationHistory } from "@/actions/hives";
 import { getQueensForHive } from "@/actions/queens";
 import { getInspectionsForHive } from "@/actions/inspections";
+import { getEquipmentForHive } from "@/actions/equipment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -22,11 +23,12 @@ export default async function HiveDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [hive, locationHistory, queens, inspections] = await Promise.all([
+  const [hive, locationHistory, queens, inspections, equipment] = await Promise.all([
     getHive(id),
     getHiveLocationHistory(id),
     getQueensForHive(id),
     getInspectionsForHive(id),
+    getEquipmentForHive(id),
   ]);
 
   if (!hive) {
@@ -102,7 +104,7 @@ export default async function HiveDetailPage({
       <Separator className="mb-6" />
 
       {/* Tabs */}
-      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} />
+      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} equipment={equipment} />
     </div>
   );
 }

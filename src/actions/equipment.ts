@@ -1,7 +1,7 @@
 "use server";
 
 import { db } from "@/db";
-import { equipment, hives, apiaries } from "@/db/schema";
+import { equipment, hives, apiaries, equipmentTypeEnum, frameTypeEnum } from "@/db/schema";
 import { eq, isNull, sql, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -19,10 +19,10 @@ export async function createEquipment(_prevState: unknown, formData: FormData) {
   }
 
   await db.insert(equipment).values({
-    type: type as any,
+    type: type as (typeof equipmentTypeEnum.enumValues)[number],
     frameCapacity: frameCapacity ? parseInt(frameCapacity) : null,
     framesInstalled: framesInstalled ? parseInt(framesInstalled) : null,
-    frameType: frameType ? (frameType as any) : null,
+    frameType: frameType ? (frameType as (typeof frameTypeEnum.enumValues)[number]) : null,
     hiveId: hiveId || null,
     storageLocation: storageLocation?.trim() || null,
     addedToHiveDate: hiveId ? new Date() : null,
@@ -51,10 +51,10 @@ export async function updateEquipment(
   await db
     .update(equipment)
     .set({
-      type: type as any,
+      type: type as (typeof equipmentTypeEnum.enumValues)[number],
       frameCapacity: frameCapacity ? parseInt(frameCapacity) : null,
       framesInstalled: framesInstalled ? parseInt(framesInstalled) : null,
-      frameType: frameType ? (frameType as any) : null,
+      frameType: frameType ? (frameType as (typeof frameTypeEnum.enumValues)[number]) : null,
       storageLocation: storageLocation?.trim() || null,
       updatedAt: new Date(),
     })

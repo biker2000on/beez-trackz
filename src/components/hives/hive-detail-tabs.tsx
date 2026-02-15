@@ -10,6 +10,7 @@ import {
   getQueenColorForDate,
 } from "@/lib/queen-colors";
 import { InspectionCard } from "@/components/inspections/inspection-card";
+import { EquipmentStack } from "@/components/equipment/equipment-stack";
 
 interface LocationHistoryEntry {
   apiaryName: string;
@@ -39,11 +40,20 @@ interface InspectionEntry {
   notes: string | null;
 }
 
+interface EquipmentEntry {
+  id: string;
+  type: string;
+  frameCapacity: number | null;
+  framesInstalled: number | null;
+  frameType: string | null;
+}
+
 interface HiveDetailTabsProps {
   hiveId: string;
   locationHistory: LocationHistoryEntry[];
   queens: QueenEntry[];
   inspections: InspectionEntry[];
+  equipment: EquipmentEntry[];
 }
 
 function formatDate(date: Date): string {
@@ -73,6 +83,7 @@ export function HiveDetailTabs({
   locationHistory,
   queens,
   inspections,
+  equipment,
 }: HiveDetailTabsProps) {
   const activeQueen = queens.find((q) => q.status === "active");
   const pastQueens = queens.filter((q) => q.status !== "active");
@@ -128,7 +139,20 @@ export function HiveDetailTabs({
       </TabsContent>
 
       <TabsContent value="equipment">
-        <p className="text-muted-foreground p-4">No equipment tracked</p>
+        <div className="p-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              Hive Stack
+            </h3>
+            <Link href={`/settings/equipment/new?hiveId=${hiveId}`}>
+              <Button variant="outline" size="sm">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Equipment
+              </Button>
+            </Link>
+          </div>
+          <EquipmentStack equipment={equipment} />
+        </div>
       </TabsContent>
 
       <TabsContent value="photos">
