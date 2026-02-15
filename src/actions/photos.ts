@@ -24,8 +24,16 @@ export async function uploadPhoto(_prevState: unknown, formData: FormData) {
   if (!file || file.size === 0) {
     return { error: "Photo file is required" };
   }
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+  if (file.size > MAX_FILE_SIZE) {
+    return { error: "Photo must be under 10MB" };
+  }
   if (!ownerType) {
     return { error: "Owner type is required" };
+  }
+  const validOwnerTypes = ["hive", "apiary", "inspection"];
+  if (!validOwnerTypes.includes(ownerType)) {
+    return { error: "Invalid owner type" };
   }
   if (!ownerId) {
     return { error: "Owner ID is required" };

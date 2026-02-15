@@ -18,7 +18,7 @@ export interface QueuedItem {
   action: QueuedAction;
   data: unknown;
   timestamp: number;
-  synced: boolean;
+  synced: number; // 0 = not synced, 1 = synced (boolean not valid as IndexedDB key)
 }
 
 /**
@@ -78,7 +78,7 @@ export async function addToQueue(
       action,
       data,
       timestamp: Date.now(),
-      synced: false,
+      synced: 0,
     };
 
     const request = store.add(item);
@@ -107,7 +107,7 @@ export async function getQueuedItems(storeName: StoreName): Promise<QueuedItem[]
     const transaction = db.transaction(storeName, "readonly");
     const store = transaction.objectStore(storeName);
     const index = store.index("synced");
-    const request = index.getAll(IDBKeyRange.only(false));
+    const request = index.getAll(IDBKeyRange.only(0));
 
     request.onsuccess = () => {
       resolve(request.result as QueuedItem[]);
@@ -165,7 +165,7 @@ export async function getQueueCount(): Promise<number> {
       const transaction = db.transaction(storeName, "readonly");
       const store = transaction.objectStore(storeName);
       const index = store.index("synced");
-      const request = index.count(IDBKeyRange.only(false));
+      const request = index.count(IDBKeyRange.only(0));
 
       request.onsuccess = () => {
         totalCount += request.result;

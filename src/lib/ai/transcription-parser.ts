@@ -151,7 +151,7 @@ export async function parseTranscription(
   text: string,
   mode: "single" | "batch"
 ): Promise<TranscriptionResult> {
-  const provider = await getAIProvider("recommendations");
+  const provider = await getAIProvider("transcription");
   const prompt = buildPrompt(mode);
   const response = await provider.chat(prompt, text);
 

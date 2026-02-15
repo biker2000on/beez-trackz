@@ -30,155 +30,146 @@ export async function parseImportedFile(
 
 export async function confirmImport(data: ParsedImportData) {
   try {
-    const result = {
-      apiariesCreated: 0,
-      hivesCreated: 0,
-      inspectionsCreated: 0,
-      equipmentCreated: 0,
-    };
+    const result = await db.transaction(async (tx) => {
+      const counts = {
+        apiariesCreated: 0,
+        hivesCreated: 0,
+        inspectionsCreated: 0,
+        equipmentCreated: 0,
+      };
 
-    // Create apiaries first
-    const apiaryMap = new Map<string, string>(); // name -> id
+      // Create apiaries first
+      const apiaryMap = new Map<string, string>();
 
-    for (const apiaryData of data.apiaries) {
-      const [created] = await db
-        .insert(apiaries)
-        .values({
-          name: apiaryData.name,
-          notes: apiaryData.notes,
-        })
-        .returning();
+      for (const apiaryData of data.apiaries) {
+        const [created] = await tx
+          .insert(apiaries)
+          .values({
+            name: apiaryData.name,
+            notes: apiaryData.notes,
+          })
+          .returning();
 
-      apiaryMap.set(apiaryData.name, created.id);
-      result.apiariesCreated++;
-    }
-
-    // Create hives and build reference map
-    const hiveMap = new Map<string, string>(); // "apiaryName - positionLabel" -> hive id
-
-    for (const hiveData of data.hives) {
-      const apiaryId = apiaryMap.get(hiveData.apiaryName);
-
-      if (!apiaryId) {
-        // Try to find existing apiary
-        const existing = await db
-          .select()
-          .from(apiaries)
-          .where(eq(apiaries.name, hiveData.apiaryName))
-          .limit(1);
-
-        if (existing.length === 0) {
-          continue; // Skip hive if apiary not found
-        }
-
-        apiaryMap.set(hiveData.apiaryName, existing[0].id);
+        apiaryMap.set(apiaryData.name, created.id);
+        counts.apiariesCreated++;
       }
 
-      const finalApiaryId = apiaryMap.get(hiveData.apiaryName);
-      if (!finalApiaryId) continue;
+      // Create hives and build reference map
+      const hiveMap = new Map<string, string>();
 
-      const [created] = await db
-        .insert(hives)
-        .values({
-          apiaryId: finalApiaryId,
-          positionLabel: hiveData.positionLabel,
-          status: (hiveData.status as "active" | "dead" | "sold" | "combined") || "active",
-          notes: hiveData.notes,
-        })
-        .returning();
+      for (const hiveData of data.hives) {
+        let apiaryId = apiaryMap.get(hiveData.apiaryName);
 
-      const reference = `${hiveData.apiaryName} - ${hiveData.positionLabel}`;
-      hiveMap.set(reference, created.id);
-      result.hivesCreated++;
-    }
+        if (!apiaryId) {
+          const existing = await tx
+            .select()
+            .from(apiaries)
+            .where(eq(apiaries.name, hiveData.apiaryName))
+            .limit(1);
 
-    // Create inspections
-    for (const inspectionData of data.inspections) {
-      const hiveId = hiveMap.get(inspectionData.hiveReference);
+          if (existing.length === 0) continue;
+          apiaryId = existing[0].id;
+          apiaryMap.set(hiveData.apiaryName, apiaryId);
+        }
 
-      if (!hiveId) {
-        // Try to match existing hive
-        const [apiaryName, positionLabel] =
-          inspectionData.hiveReference.split(" - ");
+        const [created] = await tx
+          .insert(hives)
+          .values({
+            apiaryId,
+            positionLabel: hiveData.positionLabel,
+            status: (hiveData.status as "active" | "dead" | "sold" | "combined") || "active",
+            notes: hiveData.notes,
+          })
+          .returning();
 
-        if (apiaryName && positionLabel) {
-          const apiaryId = apiaryMap.get(apiaryName);
-          if (apiaryId) {
-            const existing = await db
-              .select()
-              .from(hives)
-              .where(eq(hives.apiaryId, apiaryId))
-              .limit(1);
+        const reference = `${hiveData.apiaryName} - ${hiveData.positionLabel}`;
+        hiveMap.set(reference, created.id);
+        counts.hivesCreated++;
+      }
 
-            if (existing.length > 0) {
-              hiveMap.set(inspectionData.hiveReference, existing[0].id);
+      // Create inspections
+      for (const inspectionData of data.inspections) {
+        let hiveId = hiveMap.get(inspectionData.hiveReference);
+
+        if (!hiveId) {
+          const [apiaryName, positionLabel] = inspectionData.hiveReference.split(" - ");
+          if (apiaryName && positionLabel) {
+            const apiaryId = apiaryMap.get(apiaryName);
+            if (apiaryId) {
+              const existing = await tx
+                .select()
+                .from(hives)
+                .where(eq(hives.apiaryId, apiaryId))
+                .limit(1);
+              if (existing.length > 0) {
+                hiveId = existing[0].id;
+                hiveMap.set(inspectionData.hiveReference, hiveId);
+              }
             }
           }
         }
+
+        if (!hiveId) continue;
+
+        await tx.insert(inspections).values({
+          hiveId,
+          date: new Date(inspectionData.date),
+          queenSeen: inspectionData.queenSeen,
+          broodPattern: inspectionData.broodPattern,
+          pests: inspectionData.pests || null,
+          treatments: inspectionData.treatments || null,
+          notes: inspectionData.notes,
+        });
+
+        counts.inspectionsCreated++;
       }
 
-      const finalHiveId = hiveMap.get(inspectionData.hiveReference);
-      if (!finalHiveId) continue;
+      // Create equipment
+      for (const equipmentData of data.equipment) {
+        let hiveId = hiveMap.get(equipmentData.hiveReference);
 
-      await db.insert(inspections).values({
-        hiveId: finalHiveId,
-        date: new Date(inspectionData.date),
-        queenSeen: inspectionData.queenSeen,
-        broodPattern: inspectionData.broodPattern,
-        pests: inspectionData.pests || null,
-        treatments: inspectionData.treatments || null,
-        notes: inspectionData.notes,
-      });
-
-      result.inspectionsCreated++;
-    }
-
-    // Create equipment
-    for (const equipmentData of data.equipment) {
-      const hiveId = hiveMap.get(equipmentData.hiveReference);
-
-      if (!hiveId) {
-        const [apiaryName, positionLabel] =
-          equipmentData.hiveReference.split(" - ");
-
-        if (apiaryName && positionLabel) {
-          const apiaryId = apiaryMap.get(apiaryName);
-          if (apiaryId) {
-            const existing = await db
-              .select()
-              .from(hives)
-              .where(eq(hives.apiaryId, apiaryId))
-              .limit(1);
-
-            if (existing.length > 0) {
-              hiveMap.set(equipmentData.hiveReference, existing[0].id);
+        if (!hiveId) {
+          const [apiaryName, positionLabel] = equipmentData.hiveReference.split(" - ");
+          if (apiaryName && positionLabel) {
+            const apiaryId = apiaryMap.get(apiaryName);
+            if (apiaryId) {
+              const existing = await tx
+                .select()
+                .from(hives)
+                .where(eq(hives.apiaryId, apiaryId))
+                .limit(1);
+              if (existing.length > 0) {
+                hiveId = existing[0].id;
+                hiveMap.set(equipmentData.hiveReference, hiveId);
+              }
             }
           }
         }
+
+        if (!hiveId) continue;
+
+        await tx.insert(equipment).values({
+          hiveId,
+          type: equipmentData.type as
+            | "deep"
+            | "medium"
+            | "shallow"
+            | "queen_excluder"
+            | "double_screen"
+            | "inner_cover"
+            | "outer_cover"
+            | "bottom_board"
+            | "entrance_reducer"
+            | "feeder"
+            | "other",
+          frameCapacity: equipmentData.frameCapacity,
+        });
+
+        counts.equipmentCreated++;
       }
 
-      const finalHiveId = hiveMap.get(equipmentData.hiveReference);
-      if (!finalHiveId) continue;
-
-      await db.insert(equipment).values({
-        hiveId: finalHiveId,
-        type: equipmentData.type as
-          | "deep"
-          | "medium"
-          | "shallow"
-          | "queen_excluder"
-          | "double_screen"
-          | "inner_cover"
-          | "outer_cover"
-          | "bottom_board"
-          | "entrance_reducer"
-          | "feeder"
-          | "other",
-        frameCapacity: equipmentData.frameCapacity,
-      });
-
-      result.equipmentCreated++;
-    }
+      return counts;
+    });
 
     return { success: true, result };
   } catch (error) {

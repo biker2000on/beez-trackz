@@ -34,7 +34,7 @@ export function RecordingButton({
 }: RecordingButtonProps) {
   const [open, setOpen] = useState(false);
 
-  const handleComplete = (audioBlob: Blob, recordingMode: string) => {
+  const handleComplete = (audioBlob: Blob) => {
     onRecordingComplete(audioBlob);
     setOpen(false);
   };

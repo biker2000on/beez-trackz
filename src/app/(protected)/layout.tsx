@@ -1,6 +1,9 @@
 import { Sidebar } from "@/components/nav/sidebar";
 import { BottomNav } from "@/components/nav/bottom-nav";
 import { OfflineBanner } from "@/components/offline/offline-banner";
+import { SyncIndicator } from "@/components/offline/sync-indicator";
+import { InstallPrompt } from "@/components/pwa/install-prompt";
+import { AutoSyncInit } from "@/components/offline/auto-sync-init";
 
 export default function ProtectedLayout({
   children,
@@ -15,6 +18,9 @@ export default function ProtectedLayout({
         {children}
       </main>
       <BottomNav />
+      <SyncIndicator />
+      <InstallPrompt />
+      <AutoSyncInit />
     </div>
   );
 }
