@@ -9,6 +9,7 @@ import {
   QUEEN_COLOR_HEX,
   getQueenColorForDate,
 } from "@/lib/queen-colors";
+import { InspectionCard } from "@/components/inspections/inspection-card";
 
 interface LocationHistoryEntry {
   apiaryName: string;
@@ -25,10 +26,24 @@ interface QueenEntry {
   notes: string | null;
 }
 
+interface InspectionEntry {
+  id: string;
+  hiveId: string;
+  date: Date;
+  inspectorName: string | null;
+  queenSeen: boolean | null;
+  storesHoney: number | null;
+  storesPollen: number | null;
+  temperament: number | null;
+  pests: unknown;
+  notes: string | null;
+}
+
 interface HiveDetailTabsProps {
   hiveId: string;
   locationHistory: LocationHistoryEntry[];
   queens: QueenEntry[];
+  inspections: InspectionEntry[];
 }
 
 function formatDate(date: Date): string {
@@ -57,6 +72,7 @@ export function HiveDetailTabs({
   hiveId,
   locationHistory,
   queens,
+  inspections,
 }: HiveDetailTabsProps) {
   const activeQueen = queens.find((q) => q.status === "active");
   const pastQueens = queens.filter((q) => q.status !== "active");
@@ -72,7 +88,43 @@ export function HiveDetailTabs({
       </TabsList>
 
       <TabsContent value="inspections">
-        <p className="text-muted-foreground p-4">No inspections yet</p>
+        <div className="p-4 space-y-3">
+          {inspections.length === 0 ? (
+            <div className="text-center py-6">
+              <p className="text-muted-foreground mb-3">
+                No inspections yet. Record your first inspection.
+              </p>
+              <Link href={`/hives/${hiveId}/inspections/new`}>
+                <Button variant="outline" size="sm">
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Inspection
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                  {inspections.length} inspection{inspections.length !== 1 ? "s" : ""}
+                </h3>
+                <Link href={`/hives/${hiveId}/inspections/new`}>
+                  <Button variant="outline" size="sm">
+                    <Plus className="h-4 w-4 mr-2" />
+                    New Inspection
+                  </Button>
+                </Link>
+              </div>
+              <div className="space-y-2">
+                {inspections.map((inspection) => (
+                  <InspectionCard
+                    key={inspection.id}
+                    inspection={inspection}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </TabsContent>
 
       <TabsContent value="equipment">
