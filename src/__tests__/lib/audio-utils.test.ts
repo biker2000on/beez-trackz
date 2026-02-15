@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { formatDuration, blobToBase64 } from '@/lib/audio-utils';
 
 describe('formatDuration', () => {
@@ -33,12 +33,11 @@ describe('blobToBase64', () => {
     if (typeof FileReader === 'undefined') {
       global.FileReader = class FileReader {
         result: string | ArrayBuffer | null = null;
-        onloadend: ((this: FileReader, ev: ProgressEvent) => any) | null = null;
-        onerror: ((this: FileReader, ev: ProgressEvent) => any) | null = null;
+        onloadend: ((this: FileReader, ev: ProgressEvent) => unknown) | null = null;
+        onerror: ((this: FileReader, ev: ProgressEvent) => unknown) | null = null;
 
-        readAsDataURL(blob: Blob) {
+        readAsDataURL(_blob: Blob) {
           // Mock implementation - convert blob to base64
-          const reader = new (global as any).FileReader();
           this.result = 'data:text/plain;base64,SGVsbG8sIEJlZXMh';
           setTimeout(() => {
             if (this.onloadend) {
@@ -46,7 +45,7 @@ describe('blobToBase64', () => {
             }
           }, 0);
         }
-      } as any;
+      } as typeof FileReader;
     }
   });
 
