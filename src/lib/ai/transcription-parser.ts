@@ -199,3 +199,20 @@ export async function parseTranscription(
     inspections,
   };
 }
+
+export function matchHiveReferences(
+  inspections: ParsedInspection[],
+  hives: Array<{ id: string; positionLabel: string }>
+): Array<ParsedInspection & { matchedHiveId?: string }> {
+  return inspections.map((insp) => {
+    if (!insp.hiveReference) return insp;
+
+    const ref = insp.hiveReference.toLowerCase().trim();
+    const match = hives.find((h) => {
+      const label = h.positionLabel.toLowerCase();
+      return ref === label || ref.includes(label) || label.includes(ref);
+    });
+
+    return { ...insp, matchedHiveId: match?.id };
+  });
+}

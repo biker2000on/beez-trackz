@@ -8,6 +8,7 @@ import { HiveCard } from "@/components/hives/hive-card";
 import { ApiaryCanvas } from "@/components/canvas/apiary-canvas";
 import { PhotoGallery } from "@/components/photos/photo-gallery";
 import { PhotoUpload } from "@/components/photos/photo-upload";
+import { ApiaryRecordingHandler } from "@/components/recording/apiary-recording-handler";
 import type { CanvasLayout } from "@/actions/canvas";
 import Link from "next/link";
 import { Pencil, Plus } from "lucide-react";
@@ -37,12 +38,15 @@ export default async function ApiaryDetailPage({
             <p className="text-muted-foreground mt-1">{apiary.notes}</p>
           )}
         </div>
-        <Link href={`/apiaries/${id}/edit`}>
-          <Button variant="outline" size="sm">
-            <Pencil className="h-4 w-4 mr-2" />
-            Edit
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <ApiaryRecordingHandler apiaryId={id} apiaryName={apiary.name} />
+          <Link href={`/apiaries/${id}/edit`}>
+            <Button variant="outline" size="sm">
+              <Pencil className="h-4 w-4 mr-2" />
+              Edit
+            </Button>
+          </Link>
+        </div>
       </div>
       <Tabs defaultValue="hives">
         <TabsList>
