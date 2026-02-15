@@ -138,3 +138,8 @@ export async function testAIConnection(provider: string, apiKey: string) {
     return { error: `Connection failed: ${message}` };
   }
 }
+
+export async function getOllamaModels(baseUrl?: string) {
+  const { OllamaProvider } = await import("@/lib/ai/ollama");
+  return OllamaProvider.listModels(baseUrl || "http://localhost:11434");
+}

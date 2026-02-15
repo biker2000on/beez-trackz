@@ -98,4 +98,15 @@ export class OllamaProvider implements AIProvider {
 
     return text;
   }
+
+  static async listModels(baseUrl: string = "http://localhost:11434"): Promise<string[]> {
+    try {
+      const response = await fetch(`${baseUrl}/api/tags`);
+      if (!response.ok) return [];
+      const data = await response.json() as { models?: Array<{ name: string }> };
+      return (data.models || []).map((m) => m.name);
+    } catch {
+      return [];
+    }
+  }
 }
