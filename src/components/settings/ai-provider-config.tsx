@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState, useTransition } from "react";
-import { updateAISettings, testAIConnection } from "@/actions/ai-settings";
+import { updateAISettings, testAIConnection, getOllamaModels } from "@/actions/ai-settings";
 import type { AIProviderConfig as AIProviderConfigType } from "@/lib/ai/types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -18,6 +18,8 @@ export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
   const [state, formAction, isPending] = useActionState(updateAISettings, null);
   const [testResults, setTestResults] = useState<Record<string, { success?: boolean; message?: string; error?: string }>>({});
   const [isPendingTest, startTestTransition] = useTransition();
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
 
   const [formState, setFormState] = useState({
     transcriptionProvider: initialSettings?.transcription.provider || "gemini",
@@ -170,6 +172,45 @@ export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
                 {testResults.ollama.error}
               </p>
             )}
+            <div className="flex gap-2 mt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  setIsDiscovering(true);
+                  try {
+                    const models = await getOllamaModels(formState.ollamaUrl);
+                    setOllamaModels(models);
+                  } catch {
+                    setOllamaModels([]);
+                  } finally {
+                    setIsDiscovering(false);
+                  }
+                }}
+                disabled={isDiscovering || !formState.ollamaUrl}
+              >
+                {isDiscovering ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                Discover Models
+              </Button>
+              {ollamaModels.length > 0 && (
+                <span className="text-sm text-muted-foreground self-center">
+                  {ollamaModels.length} model{ollamaModels.length !== 1 ? "s" : ""} found
+                </span>
+              )}
+            </div>
+            {ollamaModels.length > 0 && (
+              <div className="mt-2">
+                <p className="text-xs text-muted-foreground mb-1">Available models:</p>
+                <div className="flex flex-wrap gap-1">
+                  {ollamaModels.map((model) => (
+                    <span key={model} className="text-xs bg-secondary px-2 py-0.5 rounded">
+                      {model}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -196,12 +237,29 @@ export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
                 <SelectItem value="ollama">Ollama (Local)</SelectItem>
               </SelectContent>
             </Select>
-            <Input
-              name="transcriptionModel"
-              placeholder="Optional: model name override"
-              value={formState.transcriptionModel}
-              onChange={(e) => setFormState({ ...formState, transcriptionModel: e.target.value })}
-            />
+            {formState.transcriptionProvider === "ollama" && ollamaModels.length > 0 ? (
+              <Select
+                name="transcriptionModel"
+                value={formState.transcriptionModel}
+                onValueChange={(value) => setFormState({ ...formState, transcriptionModel: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ollamaModels.map((model) => (
+                    <SelectItem key={model} value={model}>{model}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                name="transcriptionModel"
+                placeholder="Optional: model name override"
+                value={formState.transcriptionModel}
+                onChange={(e) => setFormState({ ...formState, transcriptionModel: e.target.value })}
+              />
+            )}
           </div>
 
           <div className="space-y-2">
@@ -220,12 +278,29 @@ export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
                 <SelectItem value="ollama">Ollama (Local)</SelectItem>
               </SelectContent>
             </Select>
-            <Input
-              name="recommendationsModel"
-              placeholder="Optional: model name override"
-              value={formState.recommendationsModel}
-              onChange={(e) => setFormState({ ...formState, recommendationsModel: e.target.value })}
-            />
+            {formState.recommendationsProvider === "ollama" && ollamaModels.length > 0 ? (
+              <Select
+                name="recommendationsModel"
+                value={formState.recommendationsModel}
+                onValueChange={(value) => setFormState({ ...formState, recommendationsModel: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ollamaModels.map((model) => (
+                    <SelectItem key={model} value={model}>{model}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                name="recommendationsModel"
+                placeholder="Optional: model name override"
+                value={formState.recommendationsModel}
+                onChange={(e) => setFormState({ ...formState, recommendationsModel: e.target.value })}
+              />
+            )}
           </div>
 
           <div className="space-y-2">
@@ -244,12 +319,29 @@ export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
                 <SelectItem value="ollama">Ollama (Local)</SelectItem>
               </SelectContent>
             </Select>
-            <Input
-              name="imageAnalysisModel"
-              placeholder="Optional: model name override"
-              value={formState.imageAnalysisModel}
-              onChange={(e) => setFormState({ ...formState, imageAnalysisModel: e.target.value })}
-            />
+            {formState.imageAnalysisProvider === "ollama" && ollamaModels.length > 0 ? (
+              <Select
+                name="imageAnalysisModel"
+                value={formState.imageAnalysisModel}
+                onValueChange={(value) => setFormState({ ...formState, imageAnalysisModel: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ollamaModels.map((model) => (
+                    <SelectItem key={model} value={model}>{model}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input
+                name="imageAnalysisModel"
+                placeholder="Optional: model name override"
+                value={formState.imageAnalysisModel}
+                onChange={(e) => setFormState({ ...formState, imageAnalysisModel: e.target.value })}
+              />
+            )}
           </div>
         </CardContent>
       </Card>
