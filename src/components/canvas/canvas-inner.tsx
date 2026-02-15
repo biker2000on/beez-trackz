@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Stage, Layer, Rect } from "react-konva";
+import { Stage, Layer, Rect, Circle, Line, Text as KText } from "react-konva";
 import { useRouter } from "next/navigation";
 import type Konva from "konva";
 import { StandGroup } from "./stand-group";
@@ -162,6 +162,19 @@ export function CanvasInner({
     initialLayout?.northArrow ?? { x: 40, y: 40, rotation: 0 }
   );
 
+  // Rotation handle state
+  const [rotatingStandId, setRotatingStandId] = useState<string | null>(null);
+  const isRotationDragging = useRef(false);
+
+  // Derived rotation pivot (center of stand in stage/world coords) — stable during rotation
+  const rotatingStand = rotatingStandId ? stands.find((s) => s.id === rotatingStandId) : null;
+  const rotationPivot = rotatingStand
+    ? {
+        x: rotatingStand.x + (rotatingStand.cols * CELL_SIZE) / 2,
+        y: rotatingStand.y + (rotatingStand.rows * CELL_SIZE) / 2,
+      }
+    : null;
+
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
 
@@ -226,14 +239,7 @@ export function CanvasInner({
   const handleRotateStand = useCallback(
     (standId: string) => {
       if (!editMode) return;
-      const input = window.prompt("Enter rotation in degrees (0-360):", "0");
-      if (input === null) return;
-      const degrees = parseFloat(input);
-      if (isNaN(degrees)) return;
-      setStands((prev) =>
-        prev.map((s) => (s.id === standId ? { ...s, rotation: degrees % 360 } : s))
-      );
-      setHasUnsavedChanges(true);
+      setRotatingStandId((prev) => (prev === standId ? null : standId));
       closeContextMenu();
     },
     [editMode, closeContextMenu]
@@ -682,6 +688,7 @@ export function CanvasInner({
   const handleToggleEditMode = useCallback(() => {
     setEditMode((prev) => !prev);
     closeContextMenu();
+    setRotatingStandId(null);
   }, [closeContextMenu]);
 
   const handleToggleSatellite = useCallback(() => {
@@ -852,9 +859,56 @@ export function CanvasInner({
           draggable
           onWheel={handleWheel}
           onDragEnd={handleStageDragEnd}
-          onClick={() => closeContextMenu()}
-          onTap={() => closeContextMenu()}
+          onClick={() => { closeContextMenu(); setRotatingStandId(null); isRotationDragging.current = false; }}
+          onTap={() => { closeContextMenu(); setRotatingStandId(null); isRotationDragging.current = false; }}
+          onMouseMove={(e) => {
+            if (!isRotationDragging.current || !rotationPivot || !rotatingStandId) return;
+            const stage = stageRef.current;
+            if (!stage) return;
+            const pointer = stage.getPointerPosition();
+            if (!pointer) return;
+            // Convert screen pointer to world/stage coords (account for zoom/pan)
+            const worldX = (pointer.x - stage.x()) / stage.scaleX();
+            const worldY = (pointer.y - stage.y()) / stage.scaleY();
+            const dx = worldX - rotationPivot.x;
+            const dy = worldY - rotationPivot.y;
+            // Compute angle: 0 = north/up, clockwise positive
+            let angle = Math.atan2(dx, -dy) * (180 / Math.PI);
+            angle = ((angle % 360) + 360) % 360;
+            // Snap to 45° only when Ctrl or Shift is held
+            if (e.evt.ctrlKey || e.evt.shiftKey) {
+              angle = Math.round(angle / 45) * 45;
+            }
+            angle = Math.round(angle);
+            setStands((prev) =>
+              prev.map((s) => (s.id === rotatingStandId ? { ...s, rotation: angle } : s))
+            );
+            setHasUnsavedChanges(true);
+          }}
+          onMouseUp={() => {
+            isRotationDragging.current = false;
+          }}
           onTouchMove={(e) => {
+            // Handle rotation drag via touch
+            if (isRotationDragging.current && rotationPivot && rotatingStandId) {
+              const stage = stageRef.current;
+              if (!stage) return;
+              const pointer = stage.getPointerPosition();
+              if (!pointer) return;
+              const worldX = (pointer.x - stage.x()) / stage.scaleX();
+              const worldY = (pointer.y - stage.y()) / stage.scaleY();
+              const dx = worldX - rotationPivot.x;
+              const dy = worldY - rotationPivot.y;
+              let angle = Math.atan2(dx, -dy) * (180 / Math.PI);
+              angle = ((angle % 360) + 360) % 360;
+              angle = Math.round(angle);
+              setStands((prev) =>
+                prev.map((s) => (s.id === rotatingStandId ? { ...s, rotation: angle } : s))
+              );
+              setHasUnsavedChanges(true);
+              return;
+            }
+
             // Pinch zoom support
             const touch1 = e.evt.touches[0];
             const touch2 = e.evt.touches[1];
@@ -878,6 +932,7 @@ export function CanvasInner({
             (stage as unknown as { _lastDist: number })._lastDist = dist;
           }}
           onTouchEnd={() => {
+            isRotationDragging.current = false;
             const stage = stageRef.current;
             if (stage) {
               (stage as unknown as { _lastDist: number | undefined })._lastDist =
@@ -925,6 +980,7 @@ export function CanvasInner({
                 hiveStatusMap={hiveStatusMap}
                 hiveLabelMap={hiveLabelMap}
                 editMode={editMode}
+                isRotating={rotatingStandId === stand.id}
                 onStandDragEnd={handleStandDragEnd}
                 onHiveRightClick={handleHiveRightClick}
                 onSlotRightClick={handleSlotRightClick}
@@ -932,6 +988,74 @@ export function CanvasInner({
                 onHiveDoubleTap={handleHiveDoubleTap}
               />
             ))}
+
+            {/* Rotation handle overlay — rendered in stage coords, outside the rotated group */}
+            {rotatingStand && rotationPivot && (() => {
+              const rad = rotatingStand.rotation * (Math.PI / 180);
+              const handleDist =
+                Math.max(rotatingStand.cols, rotatingStand.rows) * CELL_SIZE / 2 + 50;
+              const hx = rotationPivot.x + Math.sin(rad) * handleDist;
+              const hy = rotationPivot.y - Math.cos(rad) * handleDist;
+              return (
+                <>
+                  {/* Dashed line from center to handle */}
+                  <Line
+                    points={[rotationPivot.x, rotationPivot.y, hx, hy]}
+                    stroke="#f59e0b"
+                    strokeWidth={1.5}
+                    dash={[4, 4]}
+                    listening={false}
+                  />
+                  {/* Center pivot dot */}
+                  <Circle
+                    x={rotationPivot.x}
+                    y={rotationPivot.y}
+                    radius={4}
+                    fill="#f59e0b"
+                    listening={false}
+                  />
+                  {/* Draggable rotation handle */}
+                  <Circle
+                    x={hx}
+                    y={hy}
+                    radius={12}
+                    fill="#f59e0b"
+                    stroke="#b45309"
+                    strokeWidth={2}
+                    onMouseDown={(e) => {
+                      e.cancelBubble = true;
+                      isRotationDragging.current = true;
+                    }}
+                    onTouchStart={(e) => {
+                      e.cancelBubble = true;
+                      isRotationDragging.current = true;
+                    }}
+                    onClick={(e) => { e.cancelBubble = true; }}
+                    onTap={(e) => { e.cancelBubble = true; }}
+                    onMouseEnter={(e) => {
+                      const c = e.target.getStage()?.container();
+                      if (c) c.style.cursor = "grab";
+                    }}
+                    onMouseLeave={(e) => {
+                      const c = e.target.getStage()?.container();
+                      if (c) c.style.cursor = "default";
+                    }}
+                  />
+                  {/* Rotation degree label */}
+                  <KText
+                    x={hx - 20}
+                    y={hy + 16}
+                    width={40}
+                    text={`${Math.round(rotatingStand.rotation)}\u00B0`}
+                    fontSize={11}
+                    fontStyle="bold"
+                    fill="#b45309"
+                    align="center"
+                    listening={false}
+                  />
+                </>
+              );
+            })()}
           </Layer>
         </Stage>
 
@@ -949,7 +1073,9 @@ export function CanvasInner({
           }`}
         >
           {editMode
-            ? "Edit Mode - Drag stands to reposition, right-click for options"
+            ? rotatingStandId
+              ? "Rotate Mode - Drag handle to rotate (hold Ctrl/Shift to snap 45\u00B0), click background to confirm"
+              : "Edit Mode - Drag stands to reposition, right-click for options"
             : "View Mode - Double-click hive to open, right-click for quick actions"}
         </span>
       </div>

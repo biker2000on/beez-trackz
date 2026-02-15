@@ -19,6 +19,7 @@ interface StandGroupProps {
   hiveStatusMap: Record<string, string>; // hiveId -> status
   hiveLabelMap: Record<string, string>; // hiveId -> positionLabel
   editMode: boolean;
+  isRotating?: boolean;
   onStandDragEnd: (standId: string, x: number, y: number) => void;
   onHiveRightClick: (hiveId: string, screenX: number, screenY: number) => void;
   onSlotRightClick: (standId: string, row: number, col: number, screenX: number, screenY: number) => void;
@@ -142,6 +143,7 @@ export function StandGroup({
   hiveStatusMap,
   hiveLabelMap,
   editMode,
+  isRotating,
   onStandDragEnd,
   onHiveRightClick,
   onSlotRightClick,
@@ -154,12 +156,14 @@ export function StandGroup({
 
   return (
     <Group
-      x={stand.x}
-      y={stand.y}
+      x={stand.x + totalW / 2}
+      y={stand.y + totalH / 2}
+      offsetX={totalW / 2}
+      offsetY={totalH / 2}
       rotation={stand.rotation}
-      draggable={editMode}
+      draggable={editMode && !isRotating}
       onDragEnd={(e) => {
-        onStandDragEnd(stand.id, e.target.x(), e.target.y());
+        onStandDragEnd(stand.id, e.target.x() - totalW / 2, e.target.y() - totalH / 2);
       }}
       onContextMenu={(e) => {
         e.evt.preventDefault();
@@ -281,6 +285,7 @@ export function StandGroup({
           </Group>
         );
       })}
+
     </Group>
   );
 }
