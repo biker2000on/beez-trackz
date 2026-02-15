@@ -10,16 +10,18 @@ import {
   getSales,
   getHoneyDashboard,
 } from "@/actions/honey";
+import { getHarvestSessions } from "@/actions/harvest-sessions";
 import { HarvestTable } from "@/components/honey/harvest-table";
 import { InventoryCard } from "@/components/honey/inventory-card";
 import { SalesTable } from "@/components/honey/sales-table";
 
 export default async function HarvestPage() {
-  const [harvests, inventory, sales, dashboard] = await Promise.all([
+  const [harvests, inventory, sales, dashboard, sessions] = await Promise.all([
     getHarvests(),
     getHoneyInventory(),
     getSales(),
     getHoneyDashboard(),
+    getHarvestSessions(),
   ]);
 
   return (
@@ -59,8 +61,16 @@ export default async function HarvestPage() {
       </div>
 
       {/* Tabbed content */}
-      <Tabs defaultValue="harvests">
+      <Tabs defaultValue="sessions">
         <TabsList>
+          <TabsTrigger value="sessions">
+            Sessions
+            {sessions.length > 0 && (
+              <Badge variant="secondary" className="ml-2">
+                {sessions.length}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="harvests">
             Harvests
             {harvests.length > 0 && (
@@ -86,6 +96,58 @@ export default async function HarvestPage() {
             )}
           </TabsTrigger>
         </TabsList>
+
+        {/* Sessions Tab */}
+        <TabsContent value="sessions">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Harvest Sessions</h2>
+            <Link href="/harvest/sessions/new">
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                New Harvest Session
+              </Button>
+            </Link>
+          </div>
+          {sessions.length === 0 ? (
+            <p className="text-muted-foreground text-sm text-center py-8">
+              No harvest sessions yet. Create one to track honey extraction.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-4">
+              {sessions.map((session) => (
+                <Link key={session.id} href={`/harvest/sessions/${session.id}`}>
+                  <Card className="hover:bg-accent/50 transition-colors cursor-pointer">
+                    <CardContent className="pt-6">
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <p className="font-semibold">
+                              {new Date(session.date).toLocaleDateString()}
+                            </p>
+                            <Badge variant="outline">{session.apiaryName}</Badge>
+                            <Badge variant="secondary">
+                              {session.entryCount} {session.entryCount === 1 ? 'entry' : 'entries'}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                            <span>
+                              Calculated: <strong className="text-foreground">{session.calculatedTotal.toFixed(1)} lbs</strong>
+                            </span>
+                            {session.totalExtractedWeight !== null && (
+                              <span>
+                                Actual: <strong className="text-foreground">{session.totalExtractedWeight.toFixed(1)} lbs</strong>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </Link>
+              ))}
+            </div>
+          )}
+        </TabsContent>
 
         {/* Harvests Tab */}
         <TabsContent value="harvests">
