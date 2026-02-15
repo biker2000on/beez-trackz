@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Boxes, Cpu, SlidersHorizontal } from "lucide-react";
+import { Boxes, Cpu, SlidersHorizontal, Upload } from "lucide-react";
 
 const settingsLinks = [
   {
@@ -20,6 +20,12 @@ const settingsLinks = [
     description: "Units, notifications, and display settings",
     href: "/settings/preferences",
     icon: SlidersHorizontal,
+  },
+  {
+    title: "Import Records",
+    description: "Import old beekeeping records from any format",
+    href: "/settings/import",
+    icon: Upload,
   },
 ];
 

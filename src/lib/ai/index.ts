@@ -48,6 +48,7 @@ function getDefaultConfig(): AIProviderConfig {
     transcription: { provider: "gemini" },
     recommendations: { provider: "claude" },
     imageAnalysis: { provider: "claude" },
+    import: { provider: "claude" },
     apiKeys: {
       anthropic: process.env.ANTHROPIC_API_KEY,
       google: process.env.GOOGLE_AI_API_KEY,
@@ -80,6 +81,11 @@ function parseConfig(raw: unknown): AIProviderConfig {
         ? (config.imageAnalysis as AIProviderConfig["imageAnalysis"])
         : defaults.imageAnalysis;
 
+    const importConfig =
+      config.import && typeof config.import === "object"
+        ? (config.import as AIProviderConfig["import"])
+        : defaults.import;
+
     const rawKeys =
       config.apiKeys && typeof config.apiKeys === "object"
         ? (config.apiKeys as Record<string, string | undefined>)
@@ -89,6 +95,7 @@ function parseConfig(raw: unknown): AIProviderConfig {
       transcription,
       recommendations,
       imageAnalysis,
+      import: importConfig,
       apiKeys: {
         anthropic: rawKeys.anthropic || defaults.apiKeys.anthropic,
         google: rawKeys.google || defaults.apiKeys.google,
@@ -105,6 +112,14 @@ export async function getAIProvider(task: AITask): Promise<AIProvider> {
   const config = parseConfig(users[0]?.aiProviderConfig);
 
   const taskConfig = config[task];
+  if (!taskConfig) {
+    const defaults = getDefaultConfig();
+    const defaultTaskConfig = defaults[task];
+    if (!defaultTaskConfig) {
+      throw new Error(`No configuration found for task: ${task}`);
+    }
+    return createProvider(defaultTaskConfig.provider, config, defaultTaskConfig.model);
+  }
   return createProvider(taskConfig.provider, config, taskConfig.model);
 }
 

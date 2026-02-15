@@ -8,6 +8,7 @@ export interface AIProviderConfig {
   transcription: { provider: string; model?: string };
   recommendations: { provider: string; model?: string };
   imageAnalysis: { provider: string; model?: string };
+  import?: { provider: string; model?: string };
   apiKeys: {
     anthropic?: string;
     google?: string;
@@ -15,4 +16,4 @@ export interface AIProviderConfig {
   };
 }
 
-export type AITask = "transcription" | "recommendations" | "imageAnalysis";
+export type AITask = "transcription" | "recommendations" | "imageAnalysis" | "import";
