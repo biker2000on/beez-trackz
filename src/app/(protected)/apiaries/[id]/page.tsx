@@ -4,6 +4,8 @@ import { getHivesForApiary } from "@/actions/hives";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { HiveCard } from "@/components/hives/hive-card";
+import { ApiaryCanvas } from "@/components/canvas/apiary-canvas";
+import type { CanvasLayout } from "@/actions/canvas";
 import Link from "next/link";
 import { Pencil, Plus } from "lucide-react";
 
@@ -45,9 +47,17 @@ export default async function ApiaryDetailPage({
           <TabsTrigger value="photos">Photos</TabsTrigger>
         </TabsList>
         <TabsContent value="layout">
-          <p className="text-muted-foreground p-4">
-            Canvas layout coming soon
-          </p>
+          <div className="p-4">
+            <ApiaryCanvas
+              apiaryId={id}
+              hives={hives.map((h) => ({
+                id: h.id,
+                positionLabel: h.positionLabel,
+                status: h.status,
+              }))}
+              initialLayout={(apiary.canvasLayout as CanvasLayout) ?? null}
+            />
+          </div>
         </TabsContent>
         <TabsContent value="hives">
           <div className="p-4">
