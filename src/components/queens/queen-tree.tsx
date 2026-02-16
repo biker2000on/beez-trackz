@@ -11,6 +11,7 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { useTheme } from "next-themes";
 import { QueenNode } from "./queen-node";
 
 interface QueenData {
@@ -125,6 +126,7 @@ interface QueenTreeProps {
 }
 
 export function QueenTree({ queens }: QueenTreeProps) {
+  const { resolvedTheme } = useTheme();
   const { nodes: initialNodes, edges: initialEdges } = useMemo(
     () => buildTree(queens),
     [queens]
@@ -148,7 +150,7 @@ export function QueenTree({ queens }: QueenTreeProps) {
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
-        colorMode="system"
+        colorMode={resolvedTheme === "dark" ? "dark" : "light"}
         proOptions={{ hideAttribution: true }}
       >
         <Background />

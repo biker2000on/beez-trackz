@@ -104,6 +104,7 @@ function HiveIndicator({
   const cx = rect.x + rect.w / 2;
   const cy = rect.y + rect.h / 2;
   const arrow = getDirectionArrow(hive.facingDegrees, cx, cy, Math.min(rect.w, rect.h));
+  const arrowPointsDown = arrow.endY > arrow.startY;
 
   return (
     <>
@@ -162,7 +163,7 @@ function HiveIndicator({
       {hive.placement === "full" && (
         <Text
           x={rect.x}
-          y={rect.y + rect.h - 14}
+          y={arrowPointsDown ? rect.y + 2 : rect.y + rect.h - 14}
           width={rect.w}
           text={label}
           fontSize={9}
