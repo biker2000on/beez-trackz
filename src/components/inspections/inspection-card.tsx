@@ -1,7 +1,11 @@
+"use client";
+
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Pencil } from "lucide-react";
+import { DeleteButton } from "@/components/shared/delete-button";
+import { deleteInspection } from "@/actions/inspections";
 
 interface PestRow {
   type: string;
@@ -111,13 +115,21 @@ export function InspectionCard({ inspection }: InspectionCardProps) {
             )}
           </div>
 
-          {/* Edit link */}
-          <Link
-            href={`/hives/${inspection.hiveId}/inspections/${inspection.id}/edit`}
-            className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
-          >
-            <Pencil className="h-4 w-4" />
-          </Link>
+          {/* Edit and Delete buttons */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Link
+              href={`/hives/${inspection.hiveId}/inspections/${inspection.id}/edit`}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Pencil className="h-4 w-4" />
+            </Link>
+            <DeleteButton
+              onDelete={async () => {
+                await deleteInspection(inspection.id);
+              }}
+              entityName="Inspection"
+            />
+          </div>
         </div>
       </CardContent>
     </Card>

@@ -164,3 +164,12 @@ export async function getQueenDescendants(queenId: string) {
 
   return result;
 }
+
+export async function deleteQueen(id: string) {
+  const queen = await db.select({ hiveId: queens.hiveId }).from(queens).where(eq(queens.id, id)).limit(1);
+  await db.delete(queens).where(eq(queens.id, id));
+  revalidatePath("/genealogy");
+  if (queen[0]?.hiveId) {
+    revalidatePath(`/hives/${queen[0].hiveId}`);
+  }
+}

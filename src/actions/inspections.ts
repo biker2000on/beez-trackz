@@ -135,7 +135,7 @@ export async function deleteInspection(id: string) {
     revalidatePath(`/hives/${hiveId}`);
   }
   revalidatePath("/dashboard");
-  redirect(hiveId ? `/hives/${hiveId}` : "/hives");
+  revalidatePath("/hives");
 }
 
 export async function getInspectionsForHive(hiveId: string) {
