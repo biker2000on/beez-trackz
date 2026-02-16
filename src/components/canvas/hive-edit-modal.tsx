@@ -27,7 +27,7 @@ interface HiveEditModalProps {
   hiveName: string;
   hiveStatus: string;
   hiveNotes?: string;
-  onSave: (hiveId: string, data: { positionLabel: string; status: string; notes: string }) => Promise<void>;
+  onSave: (hiveId: string, data: { positionLabel: string; status: string; notes: string; placement?: string }) => Promise<void>;
 }
 
 export function HiveEditModal({
@@ -42,13 +42,14 @@ export function HiveEditModal({
   const [positionLabel, setPositionLabel] = useState(hiveName);
   const [status, setStatus] = useState(hiveStatus);
   const [notes, setNotes] = useState(hiveNotes || "");
+  const [placement, setPlacement] = useState("full");
   const [isSaving, setIsSaving] = useState(false);
   const router = useRouter();
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await onSave(hiveId, { positionLabel, status, notes });
+      await onSave(hiveId, { positionLabel, status, notes, placement });
       onOpenChange(false);
       router.refresh();
     } finally {
@@ -69,6 +70,19 @@ export function HiveEditModal({
               value={positionLabel}
               onChange={(e) => setPositionLabel(e.target.value)}
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Placement</Label>
+            <Select value={placement} onValueChange={setPlacement}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="full">Full</SelectItem>
+                <SelectItem value="top">Top</SelectItem>
+                <SelectItem value="bottom">Bottom</SelectItem>
+                <SelectItem value="left">Left</SelectItem>
+                <SelectItem value="right">Right</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label>Status</Label>

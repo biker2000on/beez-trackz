@@ -29,6 +29,13 @@
       "when": 1771208798294,
       "tag": "0003_purple_infant_terrible",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771209862689,
+      "tag": "0004_chubby_barracuda",
+      "breakpoints": true
     }
   ]
 }

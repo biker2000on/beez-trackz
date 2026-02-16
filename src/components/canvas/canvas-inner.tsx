@@ -207,9 +207,9 @@ export function CanvasInner({
   }, []);
 
   // Handle edit hive save
-  const handleEditHiveSave = useCallback(async (hiveId: string, data: { positionLabel: string; status: string; notes: string }) => {
+  const handleEditHiveSave = useCallback(async (hiveId: string, data: { positionLabel: string; status: string; notes: string; placement?: string }) => {
     const { updateHiveFromCanvas } = await import("@/actions/canvas");
-    await updateHiveFromCanvas(hiveId, data.positionLabel, data.status, data.notes);
+    await updateHiveFromCanvas(hiveId, data);
   }, []);
 
   // Sync DB hives into canvas slots — ensure all hives appear

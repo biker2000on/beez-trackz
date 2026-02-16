@@ -24,22 +24,48 @@ export async function saveCanvasLayout(apiaryId: string, layout: CanvasLayout) {
   return { success: true };
 }
 
-export async function createHiveFromCanvas(apiaryId: string, positionLabel: string) {
+export async function createHiveFromCanvas(
+  apiaryId: string,
+  positionLabel: string,
+  standId?: string,
+  slotRow?: number,
+  slotCol?: number,
+  placement?: string
+) {
   const [hive] = await db
     .insert(hives)
-    .values({ apiaryId, positionLabel, status: "active" })
+    .values({
+      apiaryId,
+      positionLabel,
+      standId: standId || null,
+      slotRow: slotRow ?? null,
+      slotCol: slotCol ?? null,
+      placement: (placement as "full" | "top" | "bottom" | "left" | "right") || "full",
+      status: "active",
+    })
     .returning();
   revalidatePath(`/apiaries/${apiaryId}`);
   return hive;
 }
 
-export async function updateHiveFromCanvas(hiveId: string, positionLabel: string, status: string, notes: string) {
+export async function updateHiveFromCanvas(
+  hiveId: string,
+  data: {
+    positionLabel: string;
+    status: string;
+    notes: string;
+    placement?: string;
+  }
+) {
   await db
     .update(hives)
     .set({
-      positionLabel: positionLabel.trim(),
-      status: status as "active" | "dead" | "sold" | "combined",
-      notes: notes.trim() || null,
+      positionLabel: data.positionLabel.trim(),
+      status: data.status as "active" | "dead" | "sold" | "combined",
+      notes: data.notes.trim() || null,
+      placement: data.placement
+        ? (data.placement as "full" | "top" | "bottom" | "left" | "right")
+        : undefined,
       updatedAt: new Date(),
     })
     .where(eq(hives.id, hiveId));

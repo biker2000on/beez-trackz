@@ -1,5 +1,5 @@
 export { apiaries } from "./apiaries";
-export { hives, hiveStatusEnum } from "./hives";
+export { hives, hiveStatusEnum, hivePlacementEnum } from "./hives";
 export { hiveLocationHistory } from "./hive-location-history";
 export { queens, queenOriginEnum, queenStatusEnum } from "./queens";
 export { inspections } from "./inspections";

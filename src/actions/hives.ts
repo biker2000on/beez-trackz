@@ -5,11 +5,16 @@ import { hives, hiveLocationHistory, apiaries } from "@/db/schema";
 import { eq, and, isNull, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { generatePositionLabel } from "@/lib/hive-location";
 
 // Create hive — also creates initial location history entry
 export async function createHive(_prevState: unknown, formData: FormData) {
   const apiaryId = formData.get("apiaryId") as string;
   const positionLabel = formData.get("positionLabel") as string;
+  const standId = formData.get("standId") as string;
+  const slotRow = formData.get("slotRow") as string;
+  const slotCol = formData.get("slotCol") as string;
+  const placement = (formData.get("placement") as string) || "full";
   const status = formData.get("status") as string;
   const installedDate = formData.get("installedDate") as string;
   const notes = formData.get("notes") as string;
@@ -17,8 +22,19 @@ export async function createHive(_prevState: unknown, formData: FormData) {
   if (!apiaryId) {
     return { error: "Apiary is required" };
   }
-  if (!positionLabel?.trim()) {
-    return { error: "Position label is required" };
+
+  // Auto-generate position label if not provided
+  let label = positionLabel?.trim();
+  if (!label && standId) {
+    label = generatePositionLabel(
+      standId,
+      slotRow ? parseInt(slotRow) : null,
+      slotCol ? parseInt(slotCol) : null,
+      placement
+    );
+  }
+  if (!label) {
+    return { error: "Position label or location is required" };
   }
 
   const [hive] = await db.transaction(async (tx) => {
@@ -26,7 +42,11 @@ export async function createHive(_prevState: unknown, formData: FormData) {
       .insert(hives)
       .values({
         apiaryId,
-        positionLabel: positionLabel.trim(),
+        positionLabel: label,
+        standId: standId?.trim() || null,
+        slotRow: slotRow ? parseInt(slotRow) : null,
+        slotCol: slotCol ? parseInt(slotCol) : null,
+        placement: (placement as "full" | "top" | "bottom" | "left" | "right") || "full",
         status: (status as "active" | "dead" | "sold" | "combined") || "active",
         installedDate: installedDate ? new Date(installedDate) : null,
         notes: notes?.trim() || null,
@@ -37,7 +57,7 @@ export async function createHive(_prevState: unknown, formData: FormData) {
     await tx.insert(hiveLocationHistory).values({
       hiveId: newHive.id,
       apiaryId,
-      positionLabel: positionLabel.trim(),
+      positionLabel: label,
       dateFrom: newHive.installedDate || new Date(),
     });
 
@@ -56,18 +76,36 @@ export async function updateHive(
   formData: FormData
 ) {
   const positionLabel = formData.get("positionLabel") as string;
+  const standId = formData.get("standId") as string;
+  const slotRow = formData.get("slotRow") as string;
+  const slotCol = formData.get("slotCol") as string;
+  const placement = (formData.get("placement") as string) || "full";
   const status = formData.get("status") as string;
   const installedDate = formData.get("installedDate") as string;
   const notes = formData.get("notes") as string;
 
-  if (!positionLabel?.trim()) {
-    return { error: "Position label is required" };
+  // Auto-generate position label if not provided
+  let label = positionLabel?.trim();
+  if (!label && standId) {
+    label = generatePositionLabel(
+      standId,
+      slotRow ? parseInt(slotRow) : null,
+      slotCol ? parseInt(slotCol) : null,
+      placement
+    );
+  }
+  if (!label) {
+    return { error: "Position label or location is required" };
   }
 
   await db
     .update(hives)
     .set({
-      positionLabel: positionLabel.trim(),
+      positionLabel: label,
+      standId: standId?.trim() || null,
+      slotRow: slotRow ? parseInt(slotRow) : null,
+      slotCol: slotCol ? parseInt(slotCol) : null,
+      placement: (placement as "full" | "top" | "bottom" | "left" | "right") || "full",
       status: (status as "active" | "dead" | "sold" | "combined") || "active",
       installedDate: installedDate ? new Date(installedDate) : null,
       notes: notes?.trim() || null,
@@ -191,6 +229,10 @@ export async function getHives(apiaryId?: string, status?: string, includeArchiv
     .select({
       id: hives.id,
       positionLabel: hives.positionLabel,
+      standId: hives.standId,
+      slotRow: hives.slotRow,
+      slotCol: hives.slotCol,
+      placement: hives.placement,
       status: hives.status,
       installedDate: hives.installedDate,
       notes: hives.notes,
@@ -231,6 +273,10 @@ export async function getHive(id: string) {
     .select({
       id: hives.id,
       positionLabel: hives.positionLabel,
+      standId: hives.standId,
+      slotRow: hives.slotRow,
+      slotCol: hives.slotCol,
+      placement: hives.placement,
       status: hives.status,
       installedDate: hives.installedDate,
       isArchived: hives.isArchived,
