@@ -3,7 +3,12 @@
 import { useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { endBloom, updateBloomLastSeen } from "@/actions/bloom-observations";
+import { DeleteButton } from "@/components/shared/delete-button";
+import {
+  endBloom,
+  updateBloomLastSeen,
+  deleteBloomObservation,
+} from "@/actions/bloom-observations";
 
 interface Bloom {
   id: string;
@@ -76,6 +81,12 @@ export function ActiveBlooms({ blooms, apiaryId }: ActiveBloomsProps) {
             >
               End Bloom
             </Button>
+            <DeleteButton
+              onDelete={async () => {
+                await deleteBloomObservation(bloom.id, apiaryId);
+              }}
+              entityName="Bloom Observation"
+            />
           </div>
         </div>
       ))}

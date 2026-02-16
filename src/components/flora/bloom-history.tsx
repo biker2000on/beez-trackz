@@ -9,9 +9,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { DeleteButton } from "@/components/shared/delete-button";
+import { deleteBloomObservation } from "@/actions/bloom-observations";
 
 interface BloomRecord {
   id: string;
+  apiaryId: string;
   species: string;
   dateFirstSeen: string;
   dateLastSeen: string | null;
@@ -70,6 +73,7 @@ export function BloomHistory({ history }: BloomHistoryProps) {
               <th className="text-left p-2 font-medium">Last Seen</th>
               <th className="text-left p-2 font-medium">Abundance</th>
               <th className="text-left p-2 font-medium">Notes</th>
+              <th className="text-right p-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -85,6 +89,14 @@ export function BloomHistory({ history }: BloomHistoryProps) {
                 </td>
                 <td className="p-2">{bloom.abundance || "—"}</td>
                 <td className="p-2 text-muted-foreground">{bloom.notes || "—"}</td>
+                <td className="p-2 text-right">
+                  <DeleteButton
+                    onDelete={async () => {
+                      await deleteBloomObservation(bloom.id, bloom.apiaryId);
+                    }}
+                    entityName="Bloom Observation"
+                  />
+                </td>
               </tr>
             ))}
           </tbody>

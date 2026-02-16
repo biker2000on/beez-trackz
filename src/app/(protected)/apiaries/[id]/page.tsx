@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getApiary } from "@/actions/apiaries";
+import { getApiary, deleteApiary } from "@/actions/apiaries";
 import { getHivesForApiary } from "@/actions/hives";
 import { getPhotosForOwner } from "@/actions/photos";
 import {
@@ -20,6 +20,7 @@ import { ApiaryRecordingHandler } from "@/components/recording/apiary-recording-
 import { BulkHiveForm } from "@/components/bulk/bulk-hive-form";
 import { BulkInspectionForm } from "@/components/bulk/bulk-inspection-form";
 import { BulkFeedingForm } from "@/components/bulk/bulk-feeding-form";
+import { DeleteButton } from "@/components/shared/delete-button";
 import type { CanvasLayout } from "@/lib/canvas/types";
 import Link from "next/link";
 import { Pencil, Plus, Flower2, ListChecks } from "lucide-react";
@@ -60,6 +61,14 @@ export default async function ApiaryDetailPage({
               Edit
             </Button>
           </Link>
+          <DeleteButton
+            onDelete={async () => {
+              "use server";
+              await deleteApiary(id);
+            }}
+            entityName="Apiary"
+            warning="This will permanently delete this apiary. All associated hive locations and canvas layout will be lost. This action cannot be undone."
+          />
         </div>
       </div>
       <Tabs defaultValue="hives">
@@ -121,6 +130,7 @@ export default async function ApiaryDetailPage({
                     status={hive.status}
                     apiaryName={hive.apiaryName}
                     installedDate={hive.installedDate}
+                    isArchived={hive.isArchived}
                   />
                 ))}
               </div>

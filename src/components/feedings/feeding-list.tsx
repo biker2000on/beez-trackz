@@ -3,7 +3,8 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { markFeedingEmpty } from "@/actions/feedings";
+import { DeleteButton } from "@/components/shared/delete-button";
+import { markFeedingEmpty, deleteFeeding } from "@/actions/feedings";
 import { useTransition } from "react";
 
 interface FeedingEntry {
@@ -99,18 +100,25 @@ function FeedingItem({ feeding }: { feeding: FeedingEntry }) {
             )}
           </div>
 
-          {/* Mark empty action */}
-          {isActive && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleMarkEmpty}
-              disabled={isPending}
-              className="flex-shrink-0"
-            >
-              {isPending ? "..." : "Mark Empty"}
-            </Button>
-          )}
+          {/* Mark empty and Delete actions */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {isActive && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleMarkEmpty}
+                disabled={isPending}
+              >
+                {isPending ? "..." : "Mark Empty"}
+              </Button>
+            )}
+            <DeleteButton
+              onDelete={async () => {
+                await deleteFeeding(feeding.id);
+              }}
+              entityName="Feeding"
+            />
+          </div>
         </div>
       </CardContent>
     </Card>
