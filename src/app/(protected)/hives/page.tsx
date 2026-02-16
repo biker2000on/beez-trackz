@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getHives } from "@/actions/hives";
-import { HiveCard } from "@/components/hives/hive-card";
+import { HiveListView } from "@/components/hives/hive-list-view";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 
@@ -30,18 +30,7 @@ export default async function HivesPage({
           No hives yet. Create your first hive to get started.
         </p>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {hives.map((hive) => (
-            <HiveCard
-              key={hive.id}
-              id={hive.id}
-              positionLabel={hive.positionLabel}
-              status={hive.status}
-              apiaryName={hive.apiaryName}
-              installedDate={hive.installedDate}
-            />
-          ))}
-        </div>
+        <HiveListView hives={hives} />
       )}
     </div>
   );
