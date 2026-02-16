@@ -196,6 +196,7 @@ export async function getHives(apiaryId?: string, status?: string, includeArchiv
       notes: hives.notes,
       apiaryId: hives.apiaryId,
       apiaryName: apiaries.name,
+      isArchived: hives.isArchived,
       createdAt: hives.createdAt,
     })
     .from(hives)

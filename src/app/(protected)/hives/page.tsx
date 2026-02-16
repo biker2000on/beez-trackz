@@ -7,10 +7,11 @@ import { Plus } from "lucide-react";
 export default async function HivesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ apiaryId?: string; status?: string }>;
+  searchParams: Promise<{ apiaryId?: string; status?: string; showArchived?: string }>;
 }) {
-  const { apiaryId, status } = await searchParams;
-  const hives = await getHives(apiaryId, status);
+  const { apiaryId, status, showArchived } = await searchParams;
+  const includeArchived = showArchived === "true";
+  const hives = await getHives(apiaryId, status, includeArchived);
 
   return (
     <div className="p-6">
@@ -30,7 +31,7 @@ export default async function HivesPage({
           No hives yet. Create your first hive to get started.
         </p>
       ) : (
-        <HiveListView hives={hives} />
+        <HiveListView hives={hives} showArchived={includeArchived} />
       )}
     </div>
   );

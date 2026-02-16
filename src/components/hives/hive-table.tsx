@@ -26,6 +26,7 @@ interface HiveRow {
   status: string;
   apiaryName: string;
   installedDate: Date | null;
+  isArchived: boolean;
 }
 
 interface HiveTableProps {
@@ -79,16 +80,23 @@ export function HiveTable({ hives }: HiveTableProps) {
       </TableHeader>
       <TableBody>
         {sorted.map((hive) => (
-          <TableRow key={hive.id} className="cursor-pointer hover:bg-accent/50">
+          <TableRow key={hive.id} className={`cursor-pointer hover:bg-accent/50 ${hive.isArchived ? "opacity-50" : ""}`}>
             <TableCell>
               <Link href={`/hives/${hive.id}`} className="font-medium hover:underline">
                 {hive.positionLabel}
               </Link>
             </TableCell>
             <TableCell>
-              <Badge variant="outline" className={statusColors[hive.status] || ""}>
-                {hive.status}
-              </Badge>
+              <div className="flex items-center gap-2">
+                {hive.isArchived && (
+                  <Badge variant="secondary" className="text-xs">
+                    Archived
+                  </Badge>
+                )}
+                <Badge variant="outline" className={statusColors[hive.status] || ""}>
+                  {hive.status}
+                </Badge>
+              </div>
             </TableCell>
             <TableCell>{hive.apiaryName}</TableCell>
             <TableCell>

@@ -15,6 +15,7 @@ interface HiveCardProps {
   status: string;
   apiaryName: string;
   installedDate: Date | null;
+  isArchived: boolean;
 }
 
 export function HiveCard({
@@ -23,16 +24,24 @@ export function HiveCard({
   status,
   apiaryName,
   installedDate,
+  isArchived,
 }: HiveCardProps) {
   return (
     <Link href={`/hives/${id}`}>
-      <Card className="hover:border-primary/50 transition-colors cursor-pointer">
+      <Card className={`hover:border-primary/50 transition-colors cursor-pointer ${isArchived ? "opacity-50" : ""}`}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">{positionLabel}</CardTitle>
-            <Badge variant="outline" className={statusColors[status] || ""}>
-              {status}
-            </Badge>
+            <div className="flex items-center gap-2">
+              {isArchived && (
+                <Badge variant="secondary" className="text-xs">
+                  Archived
+                </Badge>
+              )}
+              <Badge variant="outline" className={statusColors[status] || ""}>
+                {status}
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
