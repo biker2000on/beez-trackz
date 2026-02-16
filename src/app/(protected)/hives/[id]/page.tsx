@@ -6,11 +6,13 @@ import { getInspectionsForHive } from "@/actions/inspections";
 import { getEquipmentForHive } from "@/actions/equipment";
 import { getFeedingsForHive } from "@/actions/feedings";
 import { getPhotosForOwner } from "@/actions/photos";
+import { getSplitsForHive } from "@/actions/hive-splits";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { HiveDetailTabs } from "@/components/hives/hive-detail-tabs";
-import { Pencil, ClipboardList, Camera, Droplets, Mic } from "lucide-react";
+import { archiveHive, unarchiveHive, markDeadout } from "@/actions/hives";
+import { Pencil, ClipboardList, Camera, Droplets, Mic, GitBranch, Archive, ArchiveRestore, Skull } from "lucide-react";
 
 const statusColors: Record<string, string> = {
   active: "bg-green-500/10 text-green-700 border-green-200",
@@ -25,7 +27,7 @@ export default async function HiveDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [hive, locationHistory, queens, inspections, equipment, feedings, photos] = await Promise.all([
+  const [hive, locationHistory, queens, inspections, equipment, feedings, photos, splits] = await Promise.all([
     getHive(id),
     getHiveLocationHistory(id),
     getQueensForHive(id),
@@ -33,6 +35,7 @@ export default async function HiveDetailPage({
     getEquipmentForHive(id),
     getFeedingsForHive(id),
     getPhotosForOwner("hive", id),
+    getSplitsForHive(id),
   ]);
 
   if (!hive) {
@@ -109,12 +112,42 @@ export default async function HiveDetailPage({
             Feed
           </Link>
         </Button>
+        <Button variant="outline" size="sm" asChild>
+          <Link href={`/hives/${id}/split`}>
+            <GitBranch className="h-4 w-4 mr-2" />
+            Split Hive
+          </Link>
+        </Button>
+        {!hive.isArchived && hive.status === "active" && (
+          <>
+            <form action={async () => { "use server"; await archiveHive(id); }}>
+              <Button variant="outline" size="sm" type="submit">
+                <Archive className="h-4 w-4 mr-2" />
+                Archive
+              </Button>
+            </form>
+            <form action={async () => { "use server"; await markDeadout(id); }}>
+              <Button variant="destructive" size="sm" type="submit">
+                <Skull className="h-4 w-4 mr-2" />
+                Deadout
+              </Button>
+            </form>
+          </>
+        )}
+        {hive.isArchived && (
+          <form action={async () => { "use server"; await unarchiveHive(id); }}>
+            <Button variant="outline" size="sm" type="submit">
+              <ArchiveRestore className="h-4 w-4 mr-2" />
+              Unarchive
+            </Button>
+          </form>
+        )}
       </div>
 
       <Separator className="mb-6" />
 
       {/* Tabs */}
-      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} equipment={equipment} feedings={feedings} photos={photos} />
+      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} equipment={equipment} feedings={feedings} photos={photos} splits={splits} />
     </div>
   );
 }

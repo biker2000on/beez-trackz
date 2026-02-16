@@ -147,8 +147,46 @@ export async function deleteHive(id: string) {
   redirect("/hives");
 }
 
+// Archive a hive
+export async function archiveHive(id: string) {
+  await db
+    .update(hives)
+    .set({ isArchived: true, updatedAt: new Date() })
+    .where(eq(hives.id, id));
+
+  revalidatePath("/hives");
+  revalidatePath(`/hives/${id}`);
+}
+
+// Unarchive a hive
+export async function unarchiveHive(id: string) {
+  await db
+    .update(hives)
+    .set({ isArchived: false, updatedAt: new Date() })
+    .where(eq(hives.id, id));
+
+  revalidatePath("/hives");
+  revalidatePath(`/hives/${id}`);
+}
+
+// Mark as deadout (set dead + archive + record date)
+export async function markDeadout(id: string) {
+  await db
+    .update(hives)
+    .set({
+      status: "dead",
+      isArchived: true,
+      deadoutDate: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(hives.id, id));
+
+  revalidatePath("/hives");
+  revalidatePath(`/hives/${id}`);
+}
+
 // Get all hives with apiary info
-export async function getHives(apiaryId?: string, status?: string) {
+export async function getHives(apiaryId?: string, status?: string, includeArchived = false) {
   const query = db
     .select({
       id: hives.id,
@@ -165,6 +203,9 @@ export async function getHives(apiaryId?: string, status?: string) {
     .orderBy(apiaries.name, hives.positionLabel);
 
   const conditions = [];
+  if (!includeArchived) {
+    conditions.push(eq(hives.isArchived, false));
+  }
   if (apiaryId) {
     conditions.push(eq(hives.apiaryId, apiaryId));
   }
@@ -191,6 +232,8 @@ export async function getHive(id: string) {
       positionLabel: hives.positionLabel,
       status: hives.status,
       installedDate: hives.installedDate,
+      isArchived: hives.isArchived,
+      deadoutDate: hives.deadoutDate,
       notes: hives.notes,
       apiaryId: hives.apiaryId,
       apiaryName: apiaries.name,
