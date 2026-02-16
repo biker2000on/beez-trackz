@@ -82,10 +82,10 @@ export function HiveMultiSelector({ hives, value, onChange }: HiveMultiSelectorP
           Select Hives ({value.length} of {hives.length} selected)
         </Label>
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={selectAll}>
+          <Button variant="ghost" size="sm" type="button" onClick={selectAll}>
             All
           </Button>
-          <Button variant="ghost" size="sm" onClick={selectNone}>
+          <Button variant="ghost" size="sm" type="button" onClick={selectNone}>
             None
           </Button>
         </div>
@@ -139,7 +139,7 @@ export function HiveMultiSelector({ hives, value, onChange }: HiveMultiSelectorP
                 }
               }}
             />
-            <Button onClick={applyRange} size="sm">
+            <Button onClick={applyRange} size="sm" type="button">
               Apply
             </Button>
           </div>

@@ -25,10 +25,10 @@ export async function createQueen(_prevState: unknown, formData: FormData) {
   await db
     .insert(queens)
     .values({
-      hiveId: hiveId || null,
+      hiveId: hiveId && hiveId !== "__none__" ? hiveId : null,
       origin: origin as QueenOrigin,
-      originHiveId: originHiveId || null,
-      parentQueenId: parentQueenId || null,
+      originHiveId: originHiveId && originHiveId !== "__none__" ? originHiveId : null,
+      parentQueenId: parentQueenId && parentQueenId !== "__none__" ? parentQueenId : null,
       introducedDate: introducedDate ? new Date(introducedDate) : null,
       status: (status as QueenStatus) || "active",
       notes: notes?.trim() || null,
@@ -63,10 +63,10 @@ export async function updateQueen(
   await db
     .update(queens)
     .set({
-      hiveId: hiveId || null,
+      hiveId: hiveId && hiveId !== "__none__" ? hiveId : null,
       origin: origin as QueenOrigin,
-      originHiveId: originHiveId || null,
-      parentQueenId: parentQueenId || null,
+      originHiveId: originHiveId && originHiveId !== "__none__" ? originHiveId : null,
+      parentQueenId: parentQueenId && parentQueenId !== "__none__" ? parentQueenId : null,
       introducedDate: introducedDate ? new Date(introducedDate) : null,
       status: (status as QueenStatus) || "active",
       notes: notes?.trim() || null,

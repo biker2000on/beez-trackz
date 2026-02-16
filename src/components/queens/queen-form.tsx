@@ -79,13 +79,13 @@ export function QueenForm({
             <Label htmlFor="hiveId">Hive</Label>
             <Select
               name="hiveId"
-              defaultValue={defaultValues?.hiveId ?? ""}
+              defaultValue={defaultValues?.hiveId ?? "__none__"}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select a hive (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="__none__">None</SelectItem>
                 {hives.map((hive) => (
                   <SelectItem key={hive.id} value={hive.id}>
                     {hive.name}
@@ -119,13 +119,13 @@ export function QueenForm({
             <Label htmlFor="originHiveId">Origin Hive</Label>
             <Select
               name="originHiveId"
-              defaultValue={defaultValues?.originHiveId ?? ""}
+              defaultValue={defaultValues?.originHiveId ?? "__none__"}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select origin hive (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="__none__">None</SelectItem>
                 {hives.map((hive) => (
                   <SelectItem key={hive.id} value={hive.id}>
                     {hive.name}
@@ -139,13 +139,13 @@ export function QueenForm({
             <Label htmlFor="parentQueenId">Parent Queen</Label>
             <Select
               name="parentQueenId"
-              defaultValue={defaultValues?.parentQueenId ?? ""}
+              defaultValue={defaultValues?.parentQueenId ?? "__none__"}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select parent queen (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">None</SelectItem>
+                <SelectItem value="__none__">None</SelectItem>
                 {queens.map((queen) => (
                   <SelectItem key={queen.id} value={queen.id}>
                     {queen.label}
