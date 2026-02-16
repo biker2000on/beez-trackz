@@ -7,11 +7,12 @@ import type Konva from "konva";
 import { StandGroup } from "./stand-group";
 import { StandContextMenu } from "./stand-context-menu";
 import { HiveContextMenu } from "./hive-context-menu";
+import { HiveEditModal } from "./hive-edit-modal";
 import { NorthArrow } from "./north-arrow";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { SatelliteOverlay } from "./satellite-overlay";
 import { saveCanvasLayout, createHiveFromCanvas } from "@/actions/canvas";
-import type { CanvasLayout, Stand, Slot } from "@/lib/canvas/types";
+import type { CanvasLayout, Stand, Slot, SlotHive } from "@/lib/canvas/types";
 import { createEmptyStand, getNextStandLabel, getSlotLabel } from "@/lib/canvas/types";
 
 const MIN_ZOOM = 0.2;
@@ -24,6 +25,7 @@ interface Hive {
   id: string;
   positionLabel: string;
   status: string;
+  notes?: string | null;
 }
 
 interface CanvasInnerProps {
@@ -158,6 +160,16 @@ export function CanvasInner({
     return [];
   });
 
+  // Drag-and-drop state
+  const [dragOverSlot, setDragOverSlot] = useState<{
+    standId: string;
+    row: number;
+    col: number;
+    canDrop: boolean;
+    willStack: boolean;
+  } | null>(null);
+  const [draggingHiveId, setDraggingHiveId] = useState<string | null>(null);
+
   const [northArrow, setNorthArrow] = useState(
     initialLayout?.northArrow ?? { x: 40, y: 40, rotation: 0 }
   );
@@ -178,6 +190,9 @@ export function CanvasInner({
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
 
+  // Edit modal state
+  const [editModalHive, setEditModalHive] = useState<{ id: string; name: string; status: string; notes?: string } | null>(null);
+
   // Build lookup maps for StandGroup
   const hiveStatusMap: Record<string, string> = {};
   const hiveLabelMap: Record<string, string> = {};
@@ -190,6 +205,53 @@ export function CanvasInner({
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
+
+  // Handle edit hive save
+  const handleEditHiveSave = useCallback(async (hiveId: string, data: { positionLabel: string; status: string; notes: string }) => {
+    const { updateHiveFromCanvas } = await import("@/actions/canvas");
+    await updateHiveFromCanvas(hiveId, data.positionLabel, data.status, data.notes);
+  }, []);
+
+  // Sync DB hives into canvas slots — ensure all hives appear
+  useEffect(() => {
+    const hiveIdsInSlots = new Set<string>();
+    stands.forEach(s => s.slots.forEach(slot => slot.hives.forEach(h => hiveIdsInSlots.add(h.hiveId))));
+
+    const missingHives = hives.filter(h => !hiveIdsInSlots.has(h.id));
+    if (missingHives.length === 0) return;
+
+    // Also remove stale hive IDs from slots (hives that were deleted from DB)
+    const dbHiveIds = new Set(hives.map(h => h.id));
+
+    setStands(prev => {
+      let updated = prev.map(s => ({
+        ...s,
+        slots: s.slots.map(slot => ({
+          ...slot,
+          hives: slot.hives.filter(h => dbHiveIds.has(h.hiveId)),
+        })),
+      }));
+
+      // Add missing hives to first available empty slots
+      const remaining = [...missingHives];
+      for (const stand of updated) {
+        for (const slot of stand.slots) {
+          if (remaining.length === 0) break;
+          if (slot.hives.length === 0) {
+            slot.hives.push({
+              hiveId: remaining.shift()!.id,
+              facingDegrees: 0,
+              placement: "full" as const,
+            });
+          }
+        }
+        if (remaining.length === 0) break;
+      }
+
+      return updated;
+    });
+    setHasUnsavedChanges(true);
+  }, []); // Run once on mount
 
   // Responsive sizing
   useEffect(() => {
@@ -504,6 +566,110 @@ export function CanvasInner({
   }, [editMode, stands, handleAddHiveToSlot]);
 
   // ============================================
+  // Drag-and-drop handlers
+  // ============================================
+
+  const handleHiveDragStart = useCallback((hiveId: string) => {
+    if (!editMode) return;
+    setDraggingHiveId(hiveId);
+  }, [editMode]);
+
+  const handleHiveDragMove = useCallback((hiveId: string, absX: number, absY: number) => {
+    if (!editMode) return;
+
+    // Find which slot the hive is over
+    for (const stand of stands) {
+      const totalW = stand.cols * CELL_SIZE;
+      const totalH = stand.rows * CELL_SIZE;
+
+      // Account for stand rotation
+      const rad = -stand.rotation * (Math.PI / 180);
+      const cx = stand.x + totalW / 2;
+      const cy = stand.y + totalH / 2;
+      const dx = absX - cx;
+      const dy = absY - cy;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad) + totalW / 2;
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad) + totalH / 2;
+
+      if (localX >= 0 && localX < totalW && localY >= 0 && localY < totalH) {
+        const col = Math.floor(localX / CELL_SIZE);
+        const row = Math.floor(localY / CELL_SIZE);
+        const slot = stand.slots.find(s => s.row === row && s.col === col);
+        if (slot) {
+          const otherHives = slot.hives.filter(h => h.hiveId !== hiveId);
+          const canDrop = otherHives.length < 2;
+          const willStack = otherHives.length === 1;
+          setDragOverSlot({ standId: stand.id, row, col, canDrop, willStack });
+          return;
+        }
+      }
+    }
+    setDragOverSlot(null);
+  }, [editMode, stands]);
+
+  const handleHiveDragEnd = useCallback((hiveId: string) => {
+    if (!editMode || !dragOverSlot) {
+      setDraggingHiveId(null);
+      setDragOverSlot(null);
+      return;
+    }
+
+    if (!dragOverSlot.canDrop) {
+      setDraggingHiveId(null);
+      setDragOverSlot(null);
+      return;
+    }
+
+    // Move hive from source slot to target slot
+    setStands(prev => {
+      let movedHive: SlotHive | undefined;
+
+      // Remove from current slot
+      const updated = prev.map(s => ({
+        ...s,
+        slots: s.slots.map(slot => {
+          const idx = slot.hives.findIndex(h => h.hiveId === hiveId);
+          if (idx >= 0) {
+            movedHive = slot.hives[idx];
+            return { ...slot, hives: slot.hives.filter((_, i) => i !== idx) };
+          }
+          return slot;
+        }),
+      }));
+
+      if (!movedHive) return updated;
+
+      // Add to target slot
+      return updated.map(s => {
+        if (s.id !== dragOverSlot.standId) return s;
+        return {
+          ...s,
+          slots: s.slots.map(slot => {
+            if (slot.row !== dragOverSlot.row || slot.col !== dragOverSlot.col) return slot;
+            // Auto-assign placement for stacking
+            const existingHives = slot.hives;
+            let placement = movedHive!.placement;
+            if (existingHives.length === 1) {
+              // Stack: existing becomes bottom, new becomes top
+              const existingUpdated = existingHives.map(h => ({
+                ...h,
+                placement: "bottom" as const,
+              }));
+              placement = "top";
+              return { ...slot, hives: [...existingUpdated, { ...movedHive!, placement }] };
+            }
+            return { ...slot, hives: [...slot.hives, movedHive!] };
+          }),
+        };
+      });
+    });
+
+    setHasUnsavedChanges(true);
+    setDraggingHiveId(null);
+    setDragOverSlot(null);
+  }, [editMode, dragOverSlot]);
+
+  // ============================================
   // Context menu event handlers from StandGroup
   // ============================================
 
@@ -750,6 +916,16 @@ export function CanvasInner({
           onSetFacing={() => handleSetFacing(contextMenu.hiveId)}
           onMoveToSlot={() => handleMoveToSlot(contextMenu.hiveId)}
           onRemoveFromSlot={() => handleRemoveFromSlot(contextMenu.hiveId)}
+          onEditHive={() => {
+            const hive = hives.find(h => h.id === contextMenu.hiveId);
+            setEditModalHive({
+              id: contextMenu.hiveId,
+              name: hive?.positionLabel ?? "",
+              status: hive?.status ?? "active",
+              notes: hive?.notes ?? undefined,
+            });
+            closeContextMenu();
+          }}
         />
       );
     }
@@ -981,11 +1157,16 @@ export function CanvasInner({
                 hiveLabelMap={hiveLabelMap}
                 editMode={editMode}
                 isRotating={rotatingStandId === stand.id}
+                draggingHiveId={draggingHiveId}
+                dragOverSlot={dragOverSlot?.standId === stand.id ? dragOverSlot : null}
                 onStandDragEnd={handleStandDragEnd}
                 onHiveRightClick={handleHiveRightClick}
                 onSlotRightClick={handleSlotRightClick}
                 onStandRightClick={handleStandRightClick}
                 onHiveDoubleTap={handleHiveDoubleTap}
+                onHiveDragStart={handleHiveDragStart}
+                onHiveDragMove={handleHiveDragMove}
+                onHiveDragEnd={handleHiveDragEnd}
               />
             ))}
 
@@ -1079,6 +1260,19 @@ export function CanvasInner({
             : "View Mode - Double-click hive to open, right-click for quick actions"}
         </span>
       </div>
+
+      {/* Edit Hive Modal */}
+      {editModalHive && (
+        <HiveEditModal
+          open={!!editModalHive}
+          onOpenChange={(open) => { if (!open) setEditModalHive(null); }}
+          hiveId={editModalHive.id}
+          hiveName={editModalHive.name}
+          hiveStatus={editModalHive.status}
+          hiveNotes={editModalHive.notes}
+          onSave={handleEditHiveSave}
+        />
+      )}
     </div>
   );
 }

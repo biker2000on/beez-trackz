@@ -20,11 +20,16 @@ interface StandGroupProps {
   hiveLabelMap: Record<string, string>; // hiveId -> positionLabel
   editMode: boolean;
   isRotating?: boolean;
+  draggingHiveId?: string | null;
+  dragOverSlot?: { row: number; col: number; canDrop: boolean; willStack: boolean } | null;
   onStandDragEnd: (standId: string, x: number, y: number) => void;
   onHiveRightClick: (hiveId: string, screenX: number, screenY: number) => void;
   onSlotRightClick: (standId: string, row: number, col: number, screenX: number, screenY: number) => void;
   onStandRightClick: (standId: string, screenX: number, screenY: number) => void;
   onHiveDoubleTap: (hiveId: string) => void;
+  onHiveDragStart?: (hiveId: string) => void;
+  onHiveDragMove?: (hiveId: string, absX: number, absY: number) => void;
+  onHiveDragEnd?: (hiveId: string) => void;
 }
 
 function getDirectionArrow(facingDegrees: number, cx: number, cy: number, size: number) {
@@ -71,8 +76,13 @@ function HiveIndicator({
   cellH,
   status,
   label,
+  editMode,
+  isDragging,
   onRightClick,
   onDoubleTap,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
 }: {
   hive: SlotHive;
   cellX: number;
@@ -81,8 +91,13 @@ function HiveIndicator({
   cellH: number;
   status: string;
   label: string;
+  editMode?: boolean;
+  isDragging?: boolean;
   onRightClick: (hiveId: string, screenX: number, screenY: number) => void;
   onDoubleTap: (hiveId: string) => void;
+  onDragStart?: (hiveId: string) => void;
+  onDragMove?: (hiveId: string, absX: number, absY: number) => void;
+  onDragEnd?: (hiveId: string) => void;
 }) {
   const rect = getPlacementRect(hive.placement, cellX, cellY, cellW, cellH);
   const color = HIVE_COLORS[status] || DEFAULT_HIVE_COLOR;
@@ -98,8 +113,29 @@ function HiveIndicator({
         width={rect.w}
         height={rect.h}
         fill={color}
-        opacity={0.8}
+        opacity={isDragging ? 0.3 : 0.8}
         cornerRadius={3}
+        draggable={editMode}
+        onDragStart={(e) => {
+          e.cancelBubble = true;
+          onDragStart?.(hive.hiveId);
+        }}
+        onDragMove={(e) => {
+          e.cancelBubble = true;
+          // Get absolute position in stage coordinates
+          const stage = e.target.getStage();
+          if (!stage) return;
+          const pos = e.target.getAbsolutePosition();
+          const absX = (pos.x) / stage.scaleX() + (rect.w / 2);
+          const absY = (pos.y) / stage.scaleY() + (rect.h / 2);
+          onDragMove?.(hive.hiveId, absX, absY);
+        }}
+        onDragEnd={(e) => {
+          e.cancelBubble = true;
+          // Reset position (the state update will re-render at correct location)
+          e.target.position({ x: rect.x, y: rect.y });
+          onDragEnd?.(hive.hiveId);
+        }}
         onContextMenu={(e) => {
           e.evt.preventDefault();
           const stage = e.target.getStage();
@@ -144,11 +180,16 @@ export function StandGroup({
   hiveLabelMap,
   editMode,
   isRotating,
+  draggingHiveId,
+  dragOverSlot,
   onStandDragEnd,
   onHiveRightClick,
   onSlotRightClick,
   onStandRightClick,
   onHiveDoubleTap,
+  onHiveDragStart,
+  onHiveDragMove,
+  onHiveDragEnd,
 }: StandGroupProps) {
   const totalW = stand.cols * CELL_SIZE;
   const totalH = stand.rows * CELL_SIZE;
@@ -253,6 +294,22 @@ export function StandGroup({
               }}
             />
 
+            {/* Drag-over highlight */}
+            {dragOverSlot && dragOverSlot.row === slot.row && dragOverSlot.col === slot.col && (
+              <Rect
+                x={cellX + 2}
+                y={cellY + 2}
+                width={CELL_SIZE - 4}
+                height={CELL_SIZE - 4}
+                fill="transparent"
+                stroke={dragOverSlot.canDrop ? (dragOverSlot.willStack ? "#22c55e" : "#3b82f6") : "#ef4444"}
+                strokeWidth={2}
+                dash={[4, 4]}
+                cornerRadius={3}
+                listening={false}
+              />
+            )}
+
             {/* Slot label for empty slots */}
             {slot.hives.length === 0 && (
               <Text
@@ -278,8 +335,13 @@ export function StandGroup({
                 cellH={CELL_SIZE}
                 status={hiveStatusMap[hive.hiveId] || "active"}
                 label={hiveLabelMap[hive.hiveId] || slotLabel}
+                editMode={editMode}
+                isDragging={draggingHiveId === hive.hiveId}
                 onRightClick={onHiveRightClick}
                 onDoubleTap={onHiveDoubleTap}
+                onDragStart={onHiveDragStart}
+                onDragMove={onHiveDragMove}
+                onDragEnd={onHiveDragEnd}
               />
             ))}
           </Group>
