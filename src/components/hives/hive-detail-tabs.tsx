@@ -75,6 +75,18 @@ interface PhotoEntry {
   ownerId: string;
 }
 
+interface SplitEntry {
+  id: string;
+  parentHiveId: string;
+  childHiveId: string;
+  splitDate: Date;
+  splitType: string;
+  framesMoved: number | null;
+  notes: string | null;
+  parentLabel: string;
+  childLabel: string;
+}
+
 interface HiveDetailTabsProps {
   hiveId: string;
   locationHistory: LocationHistoryEntry[];
@@ -83,6 +95,7 @@ interface HiveDetailTabsProps {
   equipment: EquipmentEntry[];
   feedings: FeedingEntry[];
   photos: PhotoEntry[];
+  splits: SplitEntry[];
 }
 
 function formatDate(date: Date): string {
@@ -115,9 +128,14 @@ export function HiveDetailTabs({
   equipment,
   feedings,
   photos,
+  splits,
 }: HiveDetailTabsProps) {
   const activeQueen = queens.find((q) => q.status === "active");
   const pastQueens = queens.filter((q) => q.status !== "active");
+
+  // Separate splits into parent and child
+  const splitsAsParent = splits.filter((s) => s.parentHiveId === hiveId);
+  const splitsAsChild = splits.filter((s) => s.childHiveId === hiveId);
 
   return (
     <Tabs defaultValue="inspections">
@@ -127,6 +145,7 @@ export function HiveDetailTabs({
         <TabsTrigger value="photos">Photos</TabsTrigger>
         <TabsTrigger value="feedings">Feedings</TabsTrigger>
         <TabsTrigger value="queen">Queen</TabsTrigger>
+        <TabsTrigger value="splits">Splits</TabsTrigger>
         <TabsTrigger value="history">History</TabsTrigger>
       </TabsList>
 
@@ -259,6 +278,42 @@ export function HiveDetailTabs({
         </div>
       </TabsContent>
 
+      <TabsContent value="splits">
+        <div className="p-4 space-y-6">
+          {/* Splits from this hive */}
+          {splitsAsParent.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                Splits From This Hive ({splitsAsParent.length})
+              </h3>
+              <div className="space-y-2">
+                {splitsAsParent.map((split) => (
+                  <SplitCard key={split.id} split={split} hiveId={hiveId} role="parent" />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Split origin */}
+          {splitsAsChild.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                Split Origin
+              </h3>
+              <div className="space-y-2">
+                {splitsAsChild.map((split) => (
+                  <SplitCard key={split.id} split={split} hiveId={hiveId} role="child" />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {splitsAsParent.length === 0 && splitsAsChild.length === 0 && (
+            <p className="text-muted-foreground">No splits recorded for this hive</p>
+          )}
+        </div>
+      </TabsContent>
+
       <TabsContent value="history">
         {locationHistory.length === 0 ? (
           <p className="text-muted-foreground p-4">No location history</p>
@@ -324,6 +379,40 @@ function QueenCard({ queen }: { queen: QueenEntry }) {
         )}
         {queen.notes && (
           <p className="text-xs text-muted-foreground mt-1">{queen.notes}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SplitCard({ split, hiveId, role }: { split: SplitEntry; hiveId: string; role: "parent" | "child" }) {
+  const otherHiveId = role === "parent" ? split.childHiveId : split.parentHiveId;
+  const otherHiveLabel = role === "parent" ? split.childLabel : split.parentLabel;
+
+  return (
+    <div className="flex items-start gap-3 rounded-lg border p-3">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium capitalize">
+            {split.splitType.replace("-", " ")}
+          </span>
+          <Badge variant="outline" className="text-xs">
+            {formatFullDate(split.splitDate)}
+          </Badge>
+        </div>
+        <p className="text-sm text-muted-foreground mt-1">
+          {role === "parent" ? "Child hive: " : "Parent hive: "}
+          <Link href={`/hives/${otherHiveId}`} className="text-primary hover:underline">
+            {otherHiveLabel}
+          </Link>
+        </p>
+        {split.framesMoved !== null && (
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {split.framesMoved} frames moved
+          </p>
+        )}
+        {split.notes && (
+          <p className="text-xs text-muted-foreground mt-1">{split.notes}</p>
         )}
       </div>
     </div>
