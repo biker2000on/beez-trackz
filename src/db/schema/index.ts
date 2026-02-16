@@ -13,4 +13,4 @@ export { harvestSessions } from "./harvest-sessions";
 export { honeyAdjustments, adjustmentTypeEnum } from "./honey-adjustments";
 export { bloomObservations } from "./bloom-observations";
 export { hiveSplits, splitTypeEnum } from "./hive-splits";
-export { equipmentTypes, equipmentStock, equipmentStockAdjustments, equipmentDeployments, equipmentCategoryEnum, stockAdjustmentReasonEnum } from "./equipment-v2";
+export { equipmentTypes, equipmentStock, equipmentStockAdjustments, equipmentDeployments, equipmentCategoryEnum, stockAdjustmentReasonEnum, frameConditionEnum } from "./equipment-v2";

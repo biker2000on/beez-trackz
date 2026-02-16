@@ -18,12 +18,15 @@ export async function createEquipmentType(_prevState: unknown, formData: FormDat
   const name = formData.get("name") as string;
   const category = formData.get("category") as string;
 
+  const framesPerBox = formData.get("framesPerBox") as string;
+
   if (!name?.trim()) return { error: "Name is required" };
   if (!category) return { error: "Category is required" };
 
   await db.insert(equipmentTypes).values({
     name: name.trim(),
-    category: category as "box" | "cover" | "bottom" | "accessory" | "other",
+    category: category as "box" | "cover" | "bottom" | "accessory" | "frame" | "other",
+    framesPerBox: framesPerBox ? parseInt(framesPerBox) : null,
   });
 
   revalidatePath("/settings/equipment");
@@ -44,6 +47,8 @@ export async function getEquipmentStock() {
       totalOwned: equipmentStock.totalOwned,
       storageLocation: equipmentStock.storageLocation,
       notes: equipmentStock.notes,
+      frameCondition: equipmentStock.frameCondition,
+      framesPerBox: equipmentTypes.framesPerBox,
     })
     .from(equipmentStock)
     .innerJoin(equipmentTypes, eq(equipmentStock.typeId, equipmentTypes.id))
@@ -118,6 +123,7 @@ export async function createStock(_prevState: unknown, formData: FormData) {
   const initialQuantity = parseInt(formData.get("initialQuantity") as string) || 0;
   const storageLocation = formData.get("storageLocation") as string;
   const notes = formData.get("notes") as string;
+  const frameCondition = formData.get("frameCondition") as string;
 
   if (!typeId) return { error: "Equipment type is required" };
 
@@ -125,6 +131,7 @@ export async function createStock(_prevState: unknown, formData: FormData) {
     const [stock] = await tx.insert(equipmentStock).values({
       typeId,
       totalOwned: initialQuantity,
+      frameCondition: frameCondition ? (frameCondition as "drawn" | "fresh") : null,
       storageLocation: storageLocation?.trim() || null,
       notes: notes?.trim() || null,
     }).returning();
@@ -209,28 +216,118 @@ export async function getDeploymentsForHive(hiveId: string) {
 }
 
 // ============================================
+// Frame Summary
+// ============================================
+
+export async function getFrameSummary() {
+  // Get all frame stock (category = "frame")
+  const frameStock = await db
+    .select({
+      id: equipmentStock.id,
+      typeName: equipmentTypes.name,
+      totalOwned: equipmentStock.totalOwned,
+      frameCondition: equipmentStock.frameCondition,
+    })
+    .from(equipmentStock)
+    .innerJoin(equipmentTypes, eq(equipmentStock.typeId, equipmentTypes.id))
+    .where(eq(equipmentTypes.category, "frame"));
+
+  // Get deployed frame counts
+  const deployedFrameCounts = await db
+    .select({
+      stockId: equipmentDeployments.stockId,
+      deployed: sql<number>`coalesce(sum(${equipmentDeployments.quantity}), 0)`,
+    })
+    .from(equipmentDeployments)
+    .where(isNull(equipmentDeployments.dateRemoved))
+    .groupBy(equipmentDeployments.stockId);
+
+  const deployedMap: Record<string, number> = {};
+  deployedFrameCounts.forEach(d => { deployedMap[d.stockId] = Number(d.deployed); });
+
+  // Calculate standalone frame totals
+  let totalDrawn = 0;
+  let totalFresh = 0;
+  let totalUnspecified = 0;
+
+  for (const s of frameStock) {
+    const available = s.totalOwned - (deployedMap[s.id] || 0);
+    if (s.frameCondition === "drawn") totalDrawn += available;
+    else if (s.frameCondition === "fresh") totalFresh += available;
+    else totalUnspecified += available;
+  }
+
+  // Get boxes with framesPerBox that are deployed (frames in use in hives)
+  const boxFrames = await db
+    .select({
+      typeName: equipmentTypes.name,
+      framesPerBox: equipmentTypes.framesPerBox,
+      deployedQty: sql<number>`coalesce(sum(${equipmentDeployments.quantity}), 0)`,
+    })
+    .from(equipmentDeployments)
+    .innerJoin(equipmentStock, eq(equipmentDeployments.stockId, equipmentStock.id))
+    .innerJoin(equipmentTypes, eq(equipmentStock.typeId, equipmentTypes.id))
+    .where(and(
+      isNull(equipmentDeployments.dateRemoved),
+      eq(equipmentTypes.category, "box"),
+      sql`${equipmentTypes.framesPerBox} is not null`
+    ))
+    .groupBy(equipmentTypes.name, equipmentTypes.framesPerBox);
+
+  let totalBoxFrameCapacity = 0;
+  const boxBreakdown = boxFrames.map(b => {
+    const capacity = Number(b.framesPerBox || 0) * Number(b.deployedQty);
+    totalBoxFrameCapacity += capacity;
+    return {
+      boxType: b.typeName,
+      framesPerBox: Number(b.framesPerBox),
+      deployedBoxes: Number(b.deployedQty),
+      totalFrameCapacity: capacity,
+    };
+  });
+
+  return {
+    standalone: {
+      drawn: totalDrawn,
+      fresh: totalFresh,
+      unspecified: totalUnspecified,
+      total: totalDrawn + totalFresh + totalUnspecified,
+    },
+    boxFrameCapacity: totalBoxFrameCapacity,
+    boxBreakdown,
+    grandTotal: totalDrawn + totalFresh + totalUnspecified + totalBoxFrameCapacity,
+  };
+}
+
+// ============================================
 // Seed default equipment types
 // ============================================
 
 export async function seedDefaultEquipmentTypes() {
-  const defaults = [
-    { name: "Deep Box", category: "box" as const },
-    { name: "Medium Super", category: "box" as const },
-    { name: "Shallow Super", category: "box" as const },
-    { name: "Queen Excluder", category: "accessory" as const },
-    { name: "Inner Cover", category: "cover" as const },
-    { name: "Outer Cover", category: "cover" as const },
-    { name: "Bottom Board", category: "bottom" as const },
-    { name: "Screened Bottom Board", category: "bottom" as const },
-    { name: "Entrance Reducer", category: "accessory" as const },
-    { name: "Feeder", category: "accessory" as const },
-    { name: "Mouse Guard", category: "accessory" as const },
+  const defaults: { name: string; category: "box" | "cover" | "bottom" | "accessory" | "frame" | "other"; framesPerBox?: number }[] = [
+    { name: "Deep Box", category: "box", framesPerBox: 10 },
+    { name: "Medium Super", category: "box", framesPerBox: 10 },
+    { name: "Shallow Super", category: "box", framesPerBox: 10 },
+    { name: "Queen Excluder", category: "accessory" },
+    { name: "Inner Cover", category: "cover" },
+    { name: "Outer Cover", category: "cover" },
+    { name: "Bottom Board", category: "bottom" },
+    { name: "Screened Bottom Board", category: "bottom" },
+    { name: "Entrance Reducer", category: "accessory" },
+    { name: "Feeder", category: "accessory" },
+    { name: "Mouse Guard", category: "accessory" },
+    { name: "Deep Frame", category: "frame" },
+    { name: "Medium Frame", category: "frame" },
+    { name: "Shallow Frame", category: "frame" },
   ];
 
   for (const d of defaults) {
     const existing = await db.select().from(equipmentTypes).where(eq(equipmentTypes.name, d.name)).limit(1);
     if (existing.length === 0) {
       await db.insert(equipmentTypes).values({ ...d, isDefault: true });
+    } else if ('framesPerBox' in d && d.framesPerBox && !existing[0].framesPerBox) {
+      // Update existing box types with framesPerBox if not set
+      await db.update(equipmentTypes).set({ framesPerBox: d.framesPerBox }).where(eq(equipmentTypes.id, existing[0].id));
     }
   }
 }

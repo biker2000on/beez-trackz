@@ -16,6 +16,8 @@ interface EquipmentStockCardProps {
     deployed: number;
     available: number;
     storageLocation: string | null;
+    frameCondition?: string | null;
+    framesPerBox?: number | null;
   };
 }
 
@@ -31,7 +33,12 @@ export function EquipmentStockCard({ stock }: EquipmentStockCardProps) {
               <Package className="h-4 w-4" />
               {stock.typeName}
             </CardTitle>
-            <Badge variant="outline" className="text-xs">{stock.typeCategory}</Badge>
+            <div className="flex gap-1">
+              <Badge variant="outline" className="text-xs">{stock.typeCategory}</Badge>
+              {stock.frameCondition && (
+                <Badge variant="secondary" className="text-xs">{stock.frameCondition}</Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -51,6 +58,9 @@ export function EquipmentStockCard({ stock }: EquipmentStockCardProps) {
           </div>
           {stock.storageLocation && (
             <p className="text-xs text-muted-foreground mb-2">Storage: {stock.storageLocation}</p>
+          )}
+          {stock.framesPerBox && (
+            <p className="text-xs text-muted-foreground mb-2">Frames per box: {stock.framesPerBox}</p>
           )}
           <Button variant="outline" size="sm" className="w-full" onClick={() => setShowAdjust(true)}>
             Adjust Stock

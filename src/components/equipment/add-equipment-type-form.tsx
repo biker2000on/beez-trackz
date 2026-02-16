@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useActionState } from "react";
 import { createEquipmentType } from "@/actions/equipment-v2";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import {
 
 export function AddEquipmentTypeForm() {
   const [state, formAction, isPending] = useActionState(createEquipmentType, null);
+  const [category, setCategory] = useState("accessory");
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
 
@@ -26,24 +28,31 @@ export function AddEquipmentTypeForm() {
       </CardHeader>
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
-        <form action={formAction} className="flex gap-2 items-end">
+        <form action={formAction} className="flex gap-2 items-end flex-wrap">
           <div className="flex-1 space-y-1">
             <Label className="text-xs">Name</Label>
             <Input name="name" placeholder="e.g. Pollen Trap" required />
           </div>
           <div className="w-32 space-y-1">
             <Label className="text-xs">Category</Label>
-            <Select name="category" defaultValue="accessory">
+            <Select name="category" defaultValue="accessory" onValueChange={setCategory}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="box">Box</SelectItem>
                 <SelectItem value="cover">Cover</SelectItem>
                 <SelectItem value="bottom">Bottom</SelectItem>
                 <SelectItem value="accessory">Accessory</SelectItem>
+                <SelectItem value="frame">Frame</SelectItem>
                 <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
           </div>
+          {category === "box" && (
+            <div className="w-32 space-y-1">
+              <Label className="text-xs">Frames/Box</Label>
+              <Input name="framesPerBox" type="number" min="1" placeholder="e.g. 10" />
+            </div>
+          )}
           <Button type="submit" size="sm" disabled={isPending}>
             {isPending ? "..." : "Add"}
           </Button>

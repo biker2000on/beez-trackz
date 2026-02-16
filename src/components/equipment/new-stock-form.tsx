@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useActionState } from "react";
 import { createStock } from "@/actions/equipment-v2";
 import { Button } from "@/components/ui/button";
@@ -15,13 +16,17 @@ import {
 } from "@/components/ui/select";
 
 interface NewStockFormProps {
-  types: { id: string; name: string }[];
+  types: { id: string; name: string; category: string }[];
 }
 
 export function NewStockForm({ types }: NewStockFormProps) {
   const [state, formAction, isPending] = useActionState(createStock, null);
+  const [selectedTypeId, setSelectedTypeId] = useState<string>("");
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
+
+  const selectedType = types.find(t => t.id === selectedTypeId);
+  const isFrameType = selectedType?.category === "frame";
 
   return (
     <Card>
@@ -33,7 +38,7 @@ export function NewStockForm({ types }: NewStockFormProps) {
         <form action={formAction} className="flex gap-2 items-end flex-wrap">
           <div className="w-48 space-y-1">
             <Label className="text-xs">Equipment Type</Label>
-            <Select name="typeId" required>
+            <Select name="typeId" required onValueChange={setSelectedTypeId}>
               <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
               <SelectContent>
                 {types.map(t => (
@@ -46,6 +51,18 @@ export function NewStockForm({ types }: NewStockFormProps) {
             <Label className="text-xs">Initial Qty</Label>
             <Input name="initialQuantity" type="number" min="0" defaultValue="0" />
           </div>
+          {isFrameType && (
+            <div className="w-32 space-y-1">
+              <Label className="text-xs">Condition</Label>
+              <Select name="frameCondition">
+                <SelectTrigger><SelectValue placeholder="Any" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="drawn">Drawn</SelectItem>
+                  <SelectItem value="fresh">Fresh</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="w-40 space-y-1">
             <Label className="text-xs">Storage</Label>
             <Input name="storageLocation" placeholder="e.g. Shed" />
