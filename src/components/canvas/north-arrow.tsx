@@ -11,6 +11,7 @@ interface NorthArrowProps {
   draggable: boolean;
   onDragEnd: (x: number, y: number) => void;
   onRotate: (rotation: number) => void;
+  onRightClick?: (screenX: number, screenY: number) => void;
 }
 
 export function NorthArrow({
@@ -20,6 +21,7 @@ export function NorthArrow({
   draggable,
   onDragEnd,
   onRotate,
+  onRightClick,
 }: NorthArrowProps) {
   const handleDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>) => {
@@ -44,6 +46,17 @@ export function NorthArrow({
       draggable={draggable}
       onDragEnd={handleDragEnd}
       onTransformEnd={handleTransformEnd}
+      onContextMenu={(e) => {
+        e.evt.preventDefault();
+        if (!onRightClick) return;
+        const stage = e.target.getStage();
+        if (!stage) return;
+        const container = stage.container().getBoundingClientRect();
+        const pointer = stage.getPointerPosition();
+        if (pointer) {
+          onRightClick(container.left + pointer.x, container.top + pointer.y);
+        }
+      }}
     >
       {/* Background circle */}
       <Circle

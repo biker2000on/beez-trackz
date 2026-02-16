@@ -11,14 +11,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { HiveDetailTabs } from "@/components/hives/hive-detail-tabs";
+import { HiveEditModal } from "@/components/hives/hive-edit-modal-page";
 import { archiveHive, unarchiveHive, markDeadout } from "@/actions/hives";
-import { Pencil, ClipboardList, Camera, Droplets, Mic, GitBranch, Archive, ArchiveRestore, Skull } from "lucide-react";
+import { ClipboardList, Camera, Droplets, Mic, GitBranch, Archive, ArchiveRestore, Skull } from "lucide-react";
 
 const statusColors: Record<string, string> = {
-  active: "bg-green-500/10 text-green-700 border-green-200",
-  dead: "bg-red-500/10 text-red-700 border-red-200",
-  sold: "bg-blue-500/10 text-blue-700 border-blue-200",
-  combined: "bg-yellow-500/10 text-yellow-700 border-yellow-200",
+  active: "bg-green-500/10 text-green-700 border-green-200 dark:text-green-400 dark:border-green-800",
+  dead: "bg-red-500/10 text-red-700 border-red-200 dark:text-red-400 dark:border-red-800",
+  sold: "bg-blue-500/10 text-blue-700 border-blue-200 dark:text-blue-400 dark:border-blue-800",
+  combined: "bg-yellow-500/10 text-yellow-700 border-yellow-200 dark:text-yellow-400 dark:border-yellow-800",
 };
 
 export default async function HiveDetailPage({
@@ -52,12 +53,7 @@ export default async function HiveDetailPage({
             {hive.status}
           </Badge>
         </div>
-        <Link href={`/hives/${id}/edit`}>
-          <Button variant="outline" size="sm">
-            <Pencil className="h-4 w-4 mr-2" />
-            Edit
-          </Button>
-        </Link>
+        <HiveEditModal hiveId={id} defaultValues={hive} />
       </div>
 
       <p className="text-muted-foreground mb-4">

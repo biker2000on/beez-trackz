@@ -148,6 +148,7 @@ export function QueenTree({ queens }: QueenTreeProps) {
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
+        colorMode="system"
         proOptions={{ hideAttribution: true }}
       >
         <Background />

@@ -14,6 +14,7 @@ import { EquipmentStack } from "@/components/equipment/equipment-stack";
 import { FeedingList } from "@/components/feedings/feeding-list";
 import { PhotoGallery } from "@/components/photos/photo-gallery";
 import { PhotoUpload } from "@/components/photos/photo-upload";
+import { EquipmentDeployModal } from "@/components/hives/equipment-deploy-modal";
 
 interface LocationHistoryEntry {
   apiaryName: string;
@@ -114,10 +115,10 @@ function formatFullDate(date: Date): string {
 }
 
 const statusColors: Record<string, string> = {
-  active: "bg-green-500/10 text-green-700",
-  superseded: "bg-gray-500/10 text-gray-700",
-  dead: "bg-red-500/10 text-red-700",
-  missing: "bg-yellow-500/10 text-yellow-700",
+  active: "bg-green-500/10 text-green-700 dark:text-green-400",
+  superseded: "bg-gray-500/10 text-gray-700 dark:text-gray-300",
+  dead: "bg-red-500/10 text-red-700 dark:text-red-400",
+  missing: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
 };
 
 export function HiveDetailTabs({
@@ -195,12 +196,7 @@ export function HiveDetailTabs({
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               Hive Stack
             </h3>
-            <Link href={`/settings/equipment/new?hiveId=${hiveId}`}>
-              <Button variant="outline" size="sm">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Equipment
-              </Button>
-            </Link>
+            <EquipmentDeployModal hiveId={hiveId} />
           </div>
           <EquipmentStack equipment={equipment} />
         </div>

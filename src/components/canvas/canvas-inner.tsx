@@ -11,7 +11,7 @@ import { HiveEditModal } from "./hive-edit-modal";
 import { NorthArrow } from "./north-arrow";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { SatelliteOverlay } from "./satellite-overlay";
-import { saveCanvasLayout, createHiveFromCanvas } from "@/actions/canvas";
+import { saveCanvasLayout, createHiveFromCanvas, moveHiveOnCanvas } from "@/actions/canvas";
 import type { CanvasLayout, Stand, Slot, SlotHive } from "@/lib/canvas/types";
 import { createEmptyStand, getNextStandLabel, getSlotLabel } from "@/lib/canvas/types";
 
@@ -55,6 +55,10 @@ type ContextMenuState =
       type: "hive";
       position: { x: number; y: number };
       hiveId: string;
+    }
+  | {
+      type: "northArrow";
+      position: { x: number; y: number };
     };
 
 /**
@@ -192,6 +196,15 @@ export function CanvasInner({
 
   // Edit modal state
   const [editModalHive, setEditModalHive] = useState<{ id: string; name: string; status: string; notes?: string } | null>(null);
+
+  // Pending stack dialog state
+  const [pendingStack, setPendingStack] = useState<{
+    hiveId: string;
+    targetStandId: string;
+    targetRow: number;
+    targetCol: number;
+    movedHive: SlotHive;
+  } | null>(null);
 
   // Build lookup maps for StandGroup
   const hiveStatusMap: Record<string, string> = {};
@@ -442,6 +455,33 @@ export function CanvasInner({
     [editMode, closeContextMenu]
   );
 
+  const handleFlipDirection = useCallback(
+    (hiveId: string) => {
+      setStands((prev) =>
+        prev.map((s) => ({
+          ...s,
+          slots: s.slots.map((slot) => ({
+            ...slot,
+            hives: slot.hives.map((h) =>
+              h.hiveId === hiveId ? { ...h, facingDegrees: (h.facingDegrees + 180) % 360 } : h
+            ),
+          })),
+        }))
+      );
+      setHasUnsavedChanges(true);
+      closeContextMenu();
+    },
+    [closeContextMenu]
+  );
+
+  const handleSplitHive = useCallback(
+    (hiveId: string) => {
+      closeContextMenu();
+      router.push(`/hives/${hiveId}/split`);
+    },
+    [router, closeContextMenu]
+  );
+
   const handleMoveToSlot = useCallback(
     (hiveId: string) => {
       if (!editMode) return;
@@ -491,10 +531,11 @@ export function CanvasInner({
             const hiveIndex = slot.hives.findIndex((h) => h.hiveId === hiveId);
             if (hiveIndex >= 0) {
               movedHive = slot.hives[hiveIndex];
-              return {
-                ...slot,
-                hives: slot.hives.filter((_, i) => i !== hiveIndex),
-              };
+              const remaining = slot.hives.filter((_, i) => i !== hiveIndex);
+              if (remaining.length === 1) {
+                return { ...slot, hives: remaining.map(h => ({ ...h, placement: "full" as const })) };
+              }
+              return { ...slot, hives: remaining };
             }
             return slot;
           }),
@@ -510,7 +551,7 @@ export function CanvasInner({
               if (slot.row !== target.row || slot.col !== target.col) return slot;
               return {
                 ...slot,
-                hives: [...slot.hives, movedHive!],
+                hives: [...slot.hives, { ...movedHive!, placement: "full" as const }],
               };
             }),
           };
@@ -518,9 +559,24 @@ export function CanvasInner({
       });
 
       setHasUnsavedChanges(true);
+
+      // Sync location to database
+      const targetStand = stands.find(s => s.id === target.standId);
+      if (targetStand) {
+        moveHiveOnCanvas(
+          hiveId,
+          apiaryId,
+          target.label,
+          targetStand.label,
+          target.row,
+          target.col,
+          "full"
+        ).catch(console.error);
+      }
+
       closeContextMenu();
     },
-    [editMode, stands, closeContextMenu]
+    [editMode, stands, apiaryId, closeContextMenu]
   );
 
   const handleRemoveFromSlot = useCallback(
@@ -617,44 +673,48 @@ export function CanvasInner({
     }
 
     // Move hive from source slot to target slot
+    let capturedMovedHive: SlotHive | undefined;
+    const willStack = dragOverSlot.willStack;
+    const targetStandId = dragOverSlot.standId;
+    const targetRow = dragOverSlot.row;
+    const targetCol = dragOverSlot.col;
+
     setStands(prev => {
       let movedHive: SlotHive | undefined;
 
-      // Remove from current slot
+      // Remove from current slot (and reset remaining hive to "full" if only 1 left)
       const updated = prev.map(s => ({
         ...s,
         slots: s.slots.map(slot => {
           const idx = slot.hives.findIndex(h => h.hiveId === hiveId);
           if (idx >= 0) {
             movedHive = slot.hives[idx];
-            return { ...slot, hives: slot.hives.filter((_, i) => i !== idx) };
+            const remaining = slot.hives.filter((_, i) => i !== idx);
+            if (remaining.length === 1) {
+              return { ...slot, hives: remaining.map(h => ({ ...h, placement: "full" as const })) };
+            }
+            return { ...slot, hives: remaining };
           }
           return slot;
         }),
       }));
 
       if (!movedHive) return updated;
+      capturedMovedHive = movedHive;
 
-      // Add to target slot
+      if (willStack) {
+        // Don't add to target yet — show stacking dialog
+        return updated;
+      }
+
+      // Add to empty target slot with "full" placement
       return updated.map(s => {
-        if (s.id !== dragOverSlot.standId) return s;
+        if (s.id !== targetStandId) return s;
         return {
           ...s,
           slots: s.slots.map(slot => {
-            if (slot.row !== dragOverSlot.row || slot.col !== dragOverSlot.col) return slot;
-            // Auto-assign placement for stacking
-            const existingHives = slot.hives;
-            let placement = movedHive!.placement;
-            if (existingHives.length === 1) {
-              // Stack: existing becomes bottom, new becomes top
-              const existingUpdated = existingHives.map(h => ({
-                ...h,
-                placement: "bottom" as const,
-              }));
-              placement = "top";
-              return { ...slot, hives: [...existingUpdated, { ...movedHive!, placement }] };
-            }
-            return { ...slot, hives: [...slot.hives, movedHive!] };
+            if (slot.row !== targetRow || slot.col !== targetCol) return slot;
+            return { ...slot, hives: [...slot.hives, { ...movedHive!, placement: "full" as const }] };
           }),
         };
       });
@@ -663,7 +723,91 @@ export function CanvasInner({
     setHasUnsavedChanges(true);
     setDraggingHiveId(null);
     setDragOverSlot(null);
-  }, [editMode, dragOverSlot]);
+
+    // If stacking, show the dialog after state update
+    if (willStack && capturedMovedHive) {
+      setPendingStack({
+        hiveId,
+        targetStandId,
+        targetRow,
+        targetCol,
+        movedHive: capturedMovedHive,
+      });
+    } else {
+      // Sync location to database for non-stack moves
+      const targetStand = stands.find(s => s.id === targetStandId);
+      if (targetStand) {
+        const newLabel = getSlotLabel(targetStand.label, targetRow, targetCol, targetStand.cols);
+        moveHiveOnCanvas(
+          hiveId,
+          apiaryId,
+          newLabel,
+          targetStand.label,
+          targetRow,
+          targetCol,
+          "full"
+        ).catch(console.error);
+      }
+    }
+  }, [editMode, dragOverSlot, stands, apiaryId]);
+
+  const handleStackChoice = useCallback((choice: "top-bottom" | "left-right" | "cancel") => {
+    if (!pendingStack || choice === "cancel") {
+      setPendingStack(null);
+      return;
+    }
+
+    const { movedHive, targetStandId, targetRow, targetCol } = pendingStack;
+
+    setStands(prev => prev.map(s => {
+      if (s.id !== targetStandId) return s;
+      return {
+        ...s,
+        slots: s.slots.map(slot => {
+          if (slot.row !== targetRow || slot.col !== targetCol) return slot;
+          if (slot.hives.length !== 1) return slot;
+
+          if (choice === "top-bottom") {
+            return {
+              ...slot,
+              hives: [
+                { ...slot.hives[0], placement: "bottom" as const },
+                { ...movedHive, placement: "top" as const },
+              ],
+            };
+          } else {
+            return {
+              ...slot,
+              hives: [
+                { ...slot.hives[0], placement: "left" as const },
+                { ...movedHive, placement: "right" as const },
+              ],
+            };
+          }
+        }),
+      };
+    }));
+
+    setHasUnsavedChanges(true);
+
+    // Sync location to database
+    const targetStand = stands.find(s => s.id === targetStandId);
+    if (targetStand) {
+      const newLabel = getSlotLabel(targetStand.label, targetRow, targetCol, targetStand.cols);
+      const placement = choice === "top-bottom" ? "top" : "right";
+      moveHiveOnCanvas(
+        pendingStack.hiveId,
+        apiaryId,
+        newLabel,
+        targetStand.label,
+        targetRow,
+        targetCol,
+        placement
+      ).catch(console.error);
+    }
+
+    setPendingStack(null);
+  }, [pendingStack, stands, apiaryId]);
 
   // ============================================
   // Context menu event handlers from StandGroup
@@ -746,6 +890,20 @@ export function CanvasInner({
       setHasUnsavedChanges(true);
     },
     [editMode]
+  );
+
+  const handleNorthRightClick = useCallback(
+    (screenX: number, screenY: number) => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      setContextMenu({
+        type: "northArrow",
+        position: {
+          x: screenX - (containerRect?.left ?? 0),
+          y: screenY - (containerRect?.top ?? 0),
+        },
+      });
+    },
+    []
   );
 
   // ============================================
@@ -901,6 +1059,36 @@ export function CanvasInner({
   function renderContextMenu() {
     if (!contextMenu) return null;
 
+    if (contextMenu.type === "northArrow") {
+      const rotationOptions = [0, 45, 90, 135, 180, 225, 270, 315];
+      return (
+        <div
+          className="absolute z-50 bg-popover border border-border rounded-md shadow-md py-1 min-w-[160px]"
+          style={{ left: contextMenu.position.x, top: contextMenu.position.y }}
+        >
+          <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+            North Arrow
+          </div>
+          <div className="h-px bg-border my-1" />
+          {rotationOptions.map((deg) => (
+            <button
+              key={deg}
+              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent transition-colors ${
+                Math.round(northArrow.rotation) === deg ? "font-bold text-primary" : ""
+              }`}
+              onClick={() => {
+                setNorthArrow(prev => ({ ...prev, rotation: deg }));
+                setHasUnsavedChanges(true);
+                closeContextMenu();
+              }}
+            >
+              {deg}° {deg === 0 ? "(Default)" : ""}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
     if (contextMenu.type === "hive") {
       const hiveData = hives.find((h) => h.id === contextMenu.hiveId);
       return (
@@ -922,6 +1110,8 @@ export function CanvasInner({
             });
             closeContextMenu();
           }}
+          onFlipDirection={() => handleFlipDirection(contextMenu.hiveId)}
+          onSplitHive={() => handleSplitHive(contextMenu.hiveId)}
         />
       );
     }
@@ -1142,6 +1332,7 @@ export function CanvasInner({
               draggable={editMode}
               onDragEnd={handleNorthDragEnd}
               onRotate={handleNorthRotate}
+              onRightClick={handleNorthRightClick}
             />
 
             {/* Stands */}
@@ -1268,6 +1459,40 @@ export function CanvasInner({
           hiveNotes={editModalHive.notes}
           onSave={handleEditHiveSave}
         />
+      )}
+
+      {/* Stack Choice Dialog */}
+      {pendingStack && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="bg-popover border rounded-lg shadow-lg p-4 min-w-[240px]">
+            <h3 className="font-semibold mb-3">Stack Hives</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              How should these hives be arranged?
+            </p>
+            <div className="space-y-2">
+              <button
+                className="w-full text-left px-3 py-2 rounded-md border hover:bg-accent transition-colors"
+                onClick={() => handleStackChoice("top-bottom")}
+              >
+                <div className="font-medium text-sm">Top / Bottom Split</div>
+                <div className="text-xs text-muted-foreground">Stack vertically</div>
+              </button>
+              <button
+                className="w-full text-left px-3 py-2 rounded-md border hover:bg-accent transition-colors"
+                onClick={() => handleStackChoice("left-right")}
+              >
+                <div className="font-medium text-sm">Left / Right Split (Nucs)</div>
+                <div className="text-xs text-muted-foreground">Split horizontally for nuc hives</div>
+              </button>
+              <button
+                className="w-full text-center px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-accent transition-colors"
+                onClick={() => handleStackChoice("cancel")}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

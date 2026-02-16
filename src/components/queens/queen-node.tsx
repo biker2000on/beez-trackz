@@ -19,10 +19,10 @@ export function QueenNode({ data }: { data: QueenNodeData }) {
   const colorHex = color ? QUEEN_COLOR_HEX[color] : "#94A3B8";
 
   const statusColors: Record<string, string> = {
-    active: "bg-green-500/10 text-green-700",
-    superseded: "bg-gray-500/10 text-gray-700",
-    dead: "bg-red-500/10 text-red-700",
-    missing: "bg-yellow-500/10 text-yellow-700",
+    active: "bg-green-500/10 text-green-700 dark:text-green-400",
+    superseded: "bg-gray-500/10 text-gray-700 dark:text-gray-300",
+    dead: "bg-red-500/10 text-red-700 dark:text-red-400",
+    missing: "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400",
   };
 
   return (

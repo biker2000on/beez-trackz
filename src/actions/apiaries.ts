@@ -2,7 +2,7 @@
 
 import { db } from "@/db";
 import { apiaries, hives } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -91,7 +91,11 @@ export async function getApiaries() {
       hiveCount: sql<number>`count(${hives.id})`,
     })
     .from(apiaries)
-    .leftJoin(hives, eq(apiaries.id, hives.apiaryId))
+    .leftJoin(hives, and(
+      eq(apiaries.id, hives.apiaryId),
+      eq(hives.isArchived, false),
+      isNull(hives.deadoutDate)
+    ))
     .groupBy(apiaries.id)
     .orderBy(apiaries.name);
 

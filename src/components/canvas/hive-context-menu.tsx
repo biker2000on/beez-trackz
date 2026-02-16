@@ -12,9 +12,11 @@ interface HiveContextMenuProps {
   onMoveToSlot: () => void;
   onRemoveFromSlot: () => void;
   onEditHive?: () => void;
+  onFlipDirection: () => void;
+  onSplitHive?: () => void;
 }
 
-export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFacing, onMoveToSlot, onRemoveFromSlot, onEditHive }: HiveContextMenuProps) {
+export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFacing, onMoveToSlot, onRemoveFromSlot, onEditHive, onFlipDirection, onSplitHive }: HiveContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -55,6 +57,10 @@ export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFaci
       {/* Canvas actions */}
       {onEditHive && (
         <MenuItem label="Edit Hive" onClick={onEditHive} />
+      )}
+      <MenuItem label="Flip Direction" onClick={onFlipDirection} />
+      {onSplitHive && (
+        <MenuItem label="Split Hive" onClick={onSplitHive} />
       )}
       <MenuItem label="Set Facing Direction" onClick={onSetFacing} />
       <MenuItem label="Move to Slot..." onClick={onMoveToSlot} />
