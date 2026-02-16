@@ -31,6 +31,7 @@ yarn-error.log*
 
 # env files
 .env
+.env.test
 .env*.local
 .env.production
 
@@ -44,5 +45,5 @@ next-env.d.ts
 # turbopack
 .turbo
 
-.playwright-mcp/
+.playwright*/
 sw.js
