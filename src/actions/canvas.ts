@@ -32,3 +32,18 @@ export async function createHiveFromCanvas(apiaryId: string, positionLabel: stri
   revalidatePath(`/apiaries/${apiaryId}`);
   return hive;
 }
+
+export async function updateHiveFromCanvas(hiveId: string, positionLabel: string, status: string, notes: string) {
+  await db
+    .update(hives)
+    .set({
+      positionLabel: positionLabel.trim(),
+      status: status as "active" | "dead" | "sold" | "combined",
+      notes: notes.trim() || null,
+      updatedAt: new Date(),
+    })
+    .where(eq(hives.id, hiveId));
+
+  revalidatePath("/hives");
+  revalidatePath(`/hives/${hiveId}`);
+}

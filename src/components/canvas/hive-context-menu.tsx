@@ -11,9 +11,10 @@ interface HiveContextMenuProps {
   onSetFacing: () => void;
   onMoveToSlot: () => void;
   onRemoveFromSlot: () => void;
+  onEditHive?: () => void;
 }
 
-export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFacing, onMoveToSlot, onRemoveFromSlot }: HiveContextMenuProps) {
+export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFacing, onMoveToSlot, onRemoveFromSlot, onEditHive }: HiveContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -52,6 +53,9 @@ export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFaci
       <div className="h-px bg-border my-1" />
 
       {/* Canvas actions */}
+      {onEditHive && (
+        <MenuItem label="Edit Hive" onClick={onEditHive} />
+      )}
       <MenuItem label="Set Facing Direction" onClick={onSetFacing} />
       <MenuItem label="Move to Slot..." onClick={onMoveToSlot} />
       <MenuItem label="Remove from Stand" onClick={onRemoveFromSlot} />
