@@ -1,0 +1,54 @@
+"use client";
+
+import { useActionState } from "react";
+import { createEquipmentType } from "@/actions/equipment-v2";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+export function AddEquipmentTypeForm() {
+  const [state, formAction, isPending] = useActionState(createEquipmentType, null);
+  const errorMessage = state && typeof state === "object" && "error" in state
+    ? (state as { error: string }).error : null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Add Equipment Type</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
+        <form action={formAction} className="flex gap-2 items-end">
+          <div className="flex-1 space-y-1">
+            <Label className="text-xs">Name</Label>
+            <Input name="name" placeholder="e.g. Pollen Trap" required />
+          </div>
+          <div className="w-32 space-y-1">
+            <Label className="text-xs">Category</Label>
+            <Select name="category" defaultValue="accessory">
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="box">Box</SelectItem>
+                <SelectItem value="cover">Cover</SelectItem>
+                <SelectItem value="bottom">Bottom</SelectItem>
+                <SelectItem value="accessory">Accessory</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Button type="submit" size="sm" disabled={isPending}>
+            {isPending ? "..." : "Add"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}

@@ -1,0 +1,60 @@
+"use client";
+
+import { useActionState } from "react";
+import { createStock } from "@/actions/equipment-v2";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+interface NewStockFormProps {
+  types: { id: string; name: string }[];
+}
+
+export function NewStockForm({ types }: NewStockFormProps) {
+  const [state, formAction, isPending] = useActionState(createStock, null);
+  const errorMessage = state && typeof state === "object" && "error" in state
+    ? (state as { error: string }).error : null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Initialize Stock</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
+        <form action={formAction} className="flex gap-2 items-end flex-wrap">
+          <div className="w-48 space-y-1">
+            <Label className="text-xs">Equipment Type</Label>
+            <Select name="typeId" required>
+              <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
+              <SelectContent>
+                {types.map(t => (
+                  <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="w-24 space-y-1">
+            <Label className="text-xs">Initial Qty</Label>
+            <Input name="initialQuantity" type="number" min="0" defaultValue="0" />
+          </div>
+          <div className="w-40 space-y-1">
+            <Label className="text-xs">Storage</Label>
+            <Input name="storageLocation" placeholder="e.g. Shed" />
+          </div>
+          <Button type="submit" size="sm" disabled={isPending}>
+            {isPending ? "..." : "Add Stock"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}

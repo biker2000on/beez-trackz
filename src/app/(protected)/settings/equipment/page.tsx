@@ -1,186 +1,58 @@
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Plus } from "lucide-react";
-import {
-  getAllEquipment,
-  getFrameShortage,
-} from "@/actions/equipment";
-import { FrameShortageCard } from "@/components/equipment/frame-shortage-card";
+import { getEquipmentStock, getEquipmentTypes, seedDefaultEquipmentTypes } from "@/actions/equipment-v2";
+import { EquipmentStockCard } from "@/components/equipment/equipment-stock-card";
+import { AddEquipmentTypeForm } from "@/components/equipment/add-equipment-type-form";
+import { NewStockForm } from "@/components/equipment/new-stock-form";
 
-const EQUIPMENT_LABELS: Record<string, string> = {
-  deep: "Deep Body",
-  medium: "Medium Super",
-  shallow: "Shallow Super",
-  queen_excluder: "Queen Excluder",
-  double_screen: "Double Screen",
-  inner_cover: "Inner Cover",
-  outer_cover: "Outer Cover",
-  bottom_board: "Bottom Board",
-  entrance_reducer: "Entrance Reducer",
-  feeder: "Feeder",
-  other: "Other",
-};
+export default async function EquipmentPage() {
+  // Seed defaults on first visit
+  await seedDefaultEquipmentTypes();
 
-const FRAME_TYPE_LABELS: Record<string, string> = {
-  wax_foundation: "Wax",
-  plastic: "Plastic",
-  foundationless: "Foundationless",
-  drawn_comb: "Drawn Comb",
-};
-
-export default async function EquipmentInventoryPage() {
-  const [allEquipment, shortage] = await Promise.all([
-    getAllEquipment(),
-    getFrameShortage(),
+  const [stock, types] = await Promise.all([
+    getEquipmentStock(),
+    getEquipmentTypes(),
   ]);
 
-  const onHives = allEquipment.filter((e) => e.hiveId != null);
-  const inStorage = allEquipment.filter((e) => e.hiveId == null);
+  // Group stock by category
+  const grouped = stock.reduce<Record<string, typeof stock>>((acc, s) => {
+    const cat = s.typeCategory;
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(s);
+    return acc;
+  }, {});
+
+  // Types that don't have stock entries yet
+  const typesWithStock = new Set(stock.map(s => s.typeId));
+  const typesWithoutStock = types.filter(t => !typesWithStock.has(t.id));
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Equipment Inventory</h1>
-        <Link href="/settings/equipment/new">
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Equipment
-          </Button>
-        </Link>
-      </div>
+      <h1 className="text-2xl font-bold">Equipment Inventory</h1>
 
-      {/* Frame shortage summary */}
-      <FrameShortageCard data={shortage} />
+      {/* Stock cards */}
+      {Object.entries(grouped).map(([category, items]) => (
+        <div key={category}>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            {category} ({items.length})
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {items.map((s) => (
+              <EquipmentStockCard key={s.id} stock={s} />
+            ))}
+          </div>
+        </div>
+      ))}
 
-      {/* On Hives */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            On Hives ({onHives.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {onHives.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No equipment assigned to hives.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Frames</TableHead>
-                  <TableHead>Frame Type</TableHead>
-                  <TableHead>Hive</TableHead>
-                  <TableHead>Apiary</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {onHives.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell className="font-medium">
-                      {EQUIPMENT_LABELS[e.type] || e.type}
-                    </TableCell>
-                    <TableCell>
-                      {e.frameCapacity != null
-                        ? `${e.framesInstalled ?? 0}/${e.frameCapacity}`
-                        : "\u2014"}
-                    </TableCell>
-                    <TableCell>
-                      {e.frameType ? (
-                        <Badge variant="outline" className="text-xs">
-                          {FRAME_TYPE_LABELS[e.frameType] || e.frameType}
-                        </Badge>
-                      ) : (
-                        "\u2014"
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {e.hiveId ? (
-                        <Link
-                          href={`/hives/${e.hiveId}`}
-                          className="text-primary hover:underline"
-                        >
-                          {e.hiveName || "Unknown"}
-                        </Link>
-                      ) : (
-                        "\u2014"
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {e.apiaryName || "\u2014"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {stock.length === 0 && (
+        <p className="text-muted-foreground">No equipment stock yet. Add stock for your equipment types below.</p>
+      )}
 
-      {/* In Storage */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            In Storage ({inStorage.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {inStorage.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No equipment in storage.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Frames</TableHead>
-                  <TableHead>Frame Type</TableHead>
-                  <TableHead>Location</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {inStorage.map((e) => (
-                  <TableRow key={e.id}>
-                    <TableCell className="font-medium">
-                      {EQUIPMENT_LABELS[e.type] || e.type}
-                    </TableCell>
-                    <TableCell>
-                      {e.frameCapacity != null
-                        ? `${e.framesInstalled ?? 0}/${e.frameCapacity}`
-                        : "\u2014"}
-                    </TableCell>
-                    <TableCell>
-                      {e.frameType ? (
-                        <Badge variant="outline" className="text-xs">
-                          {FRAME_TYPE_LABELS[e.frameType] || e.frameType}
-                        </Badge>
-                      ) : (
-                        "\u2014"
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {e.storageLocation || "Unspecified"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {/* Initialize stock for types */}
+      {typesWithoutStock.length > 0 && (
+        <NewStockForm types={typesWithoutStock.map(t => ({ id: t.id, name: t.name }))} />
+      )}
+
+      {/* Add new equipment type */}
+      <AddEquipmentTypeForm />
     </div>
   );
 }
