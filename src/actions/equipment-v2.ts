@@ -233,6 +233,4 @@ export async function seedDefaultEquipmentTypes() {
       await db.insert(equipmentTypes).values({ ...d, isDefault: true });
     }
   }
-
-  revalidatePath("/settings/equipment");
 }

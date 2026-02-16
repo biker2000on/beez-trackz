@@ -122,13 +122,14 @@ function HiveIndicator({
         }}
         onDragMove={(e) => {
           e.cancelBubble = true;
-          // Get absolute position in stage coordinates
+          // Use pointer position for reliable world-coordinate conversion
           const stage = e.target.getStage();
           if (!stage) return;
-          const pos = e.target.getAbsolutePosition();
-          const absX = (pos.x) / stage.scaleX() + (rect.w / 2);
-          const absY = (pos.y) / stage.scaleY() + (rect.h / 2);
-          onDragMove?.(hive.hiveId, absX, absY);
+          const pointer = stage.getPointerPosition();
+          if (!pointer) return;
+          const worldX = (pointer.x - stage.x()) / stage.scaleX();
+          const worldY = (pointer.y - stage.y()) / stage.scaleY();
+          onDragMove?.(hive.hiveId, worldX, worldY);
         }}
         onDragEnd={(e) => {
           e.cancelBubble = true;

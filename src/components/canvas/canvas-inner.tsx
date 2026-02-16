@@ -213,45 +213,41 @@ export function CanvasInner({
   }, []);
 
   // Sync DB hives into canvas slots — ensure all hives appear
+  // All computation happens inside setStands(prev => ...) to avoid
+  // stale closure issues with React 18 StrictMode double-firing effects.
   useEffect(() => {
-    const hiveIdsInSlots = new Set<string>();
-    stands.forEach(s => s.slots.forEach(slot => slot.hives.forEach(h => hiveIdsInSlots.add(h.hiveId))));
-
-    const missingHives = hives.filter(h => !hiveIdsInSlots.has(h.id));
-    if (missingHives.length === 0) return;
-
-    // Also remove stale hive IDs from slots (hives that were deleted from DB)
     const dbHiveIds = new Set(hives.map(h => h.id));
 
     setStands(prev => {
-      let updated = prev.map(s => ({
-        ...s,
-        slots: s.slots.map(slot => ({
-          ...slot,
-          hives: slot.hives.filter(h => dbHiveIds.has(h.hiveId)),
-        })),
-      }));
+      const hiveIdsInSlots = new Set<string>();
+      prev.forEach(s => s.slots.forEach(slot => slot.hives.forEach(h => hiveIdsInSlots.add(h.hiveId))));
 
-      // Add missing hives to first available empty slots
+      const missingHives = hives.filter(h => !hiveIdsInSlots.has(h.id));
+      const hasStale = prev.some(s => s.slots.some(slot => slot.hives.some(h => !dbHiveIds.has(h.hiveId))));
+
+      if (missingHives.length === 0 && !hasStale) return prev;
+
+      // Remove stale hive IDs and add missing hives to empty slots
       const remaining = [...missingHives];
-      for (const stand of updated) {
-        for (const slot of stand.slots) {
-          if (remaining.length === 0) break;
-          if (slot.hives.length === 0) {
-            slot.hives.push({
-              hiveId: remaining.shift()!.id,
-              facingDegrees: 0,
-              placement: "full" as const,
-            });
+      return prev.map(s => ({
+        ...s,
+        slots: s.slots.map(slot => {
+          const filtered = slot.hives.filter(h => dbHiveIds.has(h.hiveId));
+          if (remaining.length > 0 && filtered.length === 0) {
+            return {
+              ...slot,
+              hives: [{
+                hiveId: remaining.shift()!.id,
+                facingDegrees: 0,
+                placement: "full" as const,
+              }],
+            };
           }
-        }
-        if (remaining.length === 0) break;
-      }
-
-      return updated;
+          return { ...slot, hives: filtered };
+        }),
+      }));
     });
-    setHasUnsavedChanges(true);
-  }, []); // Run once on mount
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Responsive sizing
   useEffect(() => {
