@@ -55,10 +55,12 @@ export async function bulkCreateFeedings(
       await tx.insert(feedings).values({
         hiveId,
         dateFed: new Date(dateFed),
-        type: type as any,
+        type: type as (typeof feedings.$inferInsert)["type"],
         quantity: parseFloat(quantity),
-        quantityUnit: quantityUnit as any,
-        feederType: feederType && feederType !== "__none__" ? (feederType as any) : null,
+        quantityUnit: quantityUnit as (typeof feedings.$inferInsert)["quantityUnit"],
+        feederType: feederType && feederType !== "__none__"
+          ? (feederType as (typeof feedings.$inferInsert)["feederType"])
+          : null,
         notes: notes?.trim() || null,
       });
     }

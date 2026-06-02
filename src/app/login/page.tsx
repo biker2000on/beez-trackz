@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { isSetupComplete, getDisplayName } from "@/actions/auth";
 import { LoginForm } from "./login-form";
 
+export const dynamic = "force-dynamic";
+
 export default async function LoginPage() {
   const setupComplete = await isSetupComplete();
   if (!setupComplete) {

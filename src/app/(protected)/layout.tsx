@@ -5,6 +5,8 @@ import { SyncIndicator } from "@/components/offline/sync-indicator";
 import { InstallPrompt } from "@/components/pwa/install-prompt";
 import { AutoSyncInit } from "@/components/offline/auto-sync-init";
 
+export const dynamic = "force-dynamic";
+
 export default function ProtectedLayout({
   children,
 }: {

@@ -1,4 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("@/lib/queue/setup", () => ({
+  imageProcessingQueue: {
+    add: vi.fn(),
+  },
+  createImageWorker: vi.fn(),
+}));
 
 describe("photo actions", () => {
   it("should export uploadPhoto", async () => {

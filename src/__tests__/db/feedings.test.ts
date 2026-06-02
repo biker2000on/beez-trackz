@@ -15,7 +15,7 @@ describe("feedings schema", () => {
 
   it("should export feederTypeEnum", () => {
     expect(feederTypeEnum).toBeDefined();
-    expect(feederTypeEnum.enumValues).toEqual(["entrance", "top", "frame", "baggie", "open", "other"]);
+    expect(feederTypeEnum.enumValues).toEqual(["entrance", "top", "frame", "baggie", "bucket", "open", "other"]);
   });
 
   it("should export quantityUnitEnum", () => {
