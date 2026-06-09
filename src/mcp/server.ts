@@ -5,7 +5,7 @@ import { z } from "zod";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, desc, sql, and, isNull } from "drizzle-orm";
-import * as schema from "../db/schema/index.js";
+import * as schema from "../db/schema";
 
 // --- Database connection (standalone, not imported from Next.js) ---
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -992,13 +992,22 @@ server.tool(
 // SERVER STARTUP
 // ============================================================
 
+export { server, db };
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("Beez-Trackz MCP Server running on stdio");
 }
 
-main().catch((error) => {
-  console.error("Fatal error:", error);
-  process.exit(1);
-});
+const isMain = process.argv[1] && (
+  process.argv[1].endsWith("server.ts") || 
+  process.argv[1].endsWith("server.js")
+);
+
+if (isMain) {
+  main().catch((error) => {
+    console.error("Fatal error:", error);
+    process.exit(1);
+  });
+}

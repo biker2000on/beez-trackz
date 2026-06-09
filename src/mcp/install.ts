@@ -34,10 +34,18 @@ async function main() {
   // Create directory if it doesn't exist
   await fs.mkdir(configDir, { recursive: true });
 
-  let config: any = { mcpServers: {} };
+  interface McpConfig {
+    mcpServers: Record<string, {
+      command: string;
+      args: string[];
+      env?: Record<string, string>;
+    }>;
+  }
+
+  let config: McpConfig = { mcpServers: {} };
   try {
     const existingContent = await fs.readFile(configPath, "utf-8");
-    config = JSON.parse(existingContent);
+    config = JSON.parse(existingContent) as McpConfig;
     if (!config.mcpServers) {
       config.mcpServers = {};
     }
