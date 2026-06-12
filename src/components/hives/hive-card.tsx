@@ -1,6 +1,9 @@
+"use client";
+
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const statusColors: Record<string, string> = {
   active: "bg-green-500/10 text-green-700 border-green-200",
@@ -16,6 +19,9 @@ interface HiveCardProps {
   apiaryName: string;
   installedDate: Date | null;
   isArchived: boolean;
+  selecting?: boolean;
+  selected?: Set<string>;
+  onToggle?: (id: string) => void;
 }
 
 export function HiveCard({
@@ -25,13 +31,27 @@ export function HiveCard({
   apiaryName,
   installedDate,
   isArchived,
+  selecting = false,
+  selected,
+  onToggle,
 }: HiveCardProps) {
-  return (
-    <Link href={`/hives/${id}`}>
+  const isSelected = selected?.has(id) ?? false;
+  const body = (
       <Card className={`hover:border-primary/50 transition-colors cursor-pointer ${isArchived ? "opacity-50" : ""}`}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-lg">{positionLabel}</CardTitle>
+            <div className="flex items-center gap-2">
+              {selecting && (
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Checkbox
+                    checked={isSelected}
+                    onCheckedChange={() => onToggle?.(id)}
+                    aria-label={`Select ${positionLabel}`}
+                  />
+                </span>
+              )}
+              <CardTitle className="text-lg">{positionLabel}</CardTitle>
+            </div>
             <div className="flex items-center gap-2">
               {isArchived && (
                 <Badge variant="secondary" className="text-xs">
@@ -53,6 +73,17 @@ export function HiveCard({
           )}
         </CardContent>
       </Card>
-    </Link>
   );
+
+  if (selecting) {
+    return (
+      <div
+        onClick={() => onToggle?.(id)}
+        className={isSelected ? "rounded-xl ring-2 ring-primary cursor-pointer" : "cursor-pointer"}
+      >
+        {body}
+      </div>
+    );
+  }
+  return <Link href={`/hives/${id}`}>{body}</Link>;
 }

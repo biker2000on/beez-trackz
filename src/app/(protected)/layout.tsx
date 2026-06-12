@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/nav/sidebar";
+import { ShortcutProvider } from "@/components/keyboard/shortcut-provider";
 import { BottomNav } from "@/components/nav/bottom-nav";
 import { OfflineBanner } from "@/components/offline/offline-banner";
 import { SyncIndicator } from "@/components/offline/sync-indicator";
@@ -13,6 +14,7 @@ export default function ProtectedLayout({
   children: React.ReactNode;
 }) {
   return (
+    <ShortcutProvider>
     <div className="min-h-screen">
       <Sidebar />
       <main className="md:pl-64 pb-16 md:pb-0">
@@ -24,5 +26,6 @@ export default function ProtectedLayout({
       <InstallPrompt />
       <AutoSyncInit />
     </div>
+    </ShortcutProvider>
   );
 }

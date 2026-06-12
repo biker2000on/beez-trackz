@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ArrowUpDown } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const statusColors: Record<string, string> = {
   active: "bg-green-500/10 text-green-700 border-green-200",
@@ -31,11 +32,14 @@ interface HiveRow {
 
 interface HiveTableProps {
   hives: HiveRow[];
+  selecting?: boolean;
+  selected?: Set<string>;
+  onToggle?: (id: string) => void;
 }
 
 type SortKey = "positionLabel" | "status" | "apiaryName" | "installedDate";
 
-export function HiveTable({ hives }: HiveTableProps) {
+export function HiveTable({ hives, selecting = false, selected, onToggle }: HiveTableProps) {
   const [sortKey, setSortKey] = useState<SortKey>("positionLabel");
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -64,6 +68,7 @@ export function HiveTable({ hives }: HiveTableProps) {
     <Table>
       <TableHeader>
         <TableRow>
+          {selecting && <TableHead className="w-10"></TableHead>}
           <TableHead className="cursor-pointer" onClick={() => toggleSort("positionLabel")}>
             Location <ArrowUpDown className="inline h-3 w-3 ml-1" />
           </TableHead>
@@ -80,7 +85,21 @@ export function HiveTable({ hives }: HiveTableProps) {
       </TableHeader>
       <TableBody>
         {sorted.map((hive) => (
-          <TableRow key={hive.id} className={`cursor-pointer hover:bg-accent/50 ${hive.isArchived ? "opacity-50" : ""}`}>
+          <TableRow
+            key={hive.id}
+            className={`cursor-pointer hover:bg-accent/50 ${hive.isArchived ? "opacity-50" : ""}`}
+            onClick={selecting ? () => onToggle?.(hive.id) : undefined}
+            data-state={selecting && selected?.has(hive.id) ? "selected" : undefined}
+          >
+            {selecting && (
+              <TableCell onClick={(e) => e.stopPropagation()}>
+                <Checkbox
+                  checked={selected?.has(hive.id) ?? false}
+                  onCheckedChange={() => onToggle?.(hive.id)}
+                  aria-label={`Select ${hive.positionLabel}`}
+                />
+              </TableCell>
+            )}
             <TableCell>
               <Link href={`/hives/${hive.id}`} className="font-medium hover:underline">
                 {hive.positionLabel}

@@ -3,7 +3,7 @@
 import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { hives, hiveLocationHistory, apiaries } from "@/db/schema";
-import { eq, and, isNull, desc } from "drizzle-orm";
+import { eq, and, isNull, desc, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { generatePositionLabel } from "@/lib/hive-location";
@@ -365,4 +365,35 @@ export async function bulkCreateHives(
 
   revalidatePath(`/apiaries/${apiaryId}`);
   return { success: true, count: quantity };
+}
+
+/**
+ * Bulk update for the hive list: set status and/or archive state for many
+ * hives in one transaction.
+ */
+export async function bulkUpdateHives(input: {
+  hiveIds: string[];
+  status?: "active" | "dead" | "sold" | "combined";
+  isArchived?: boolean;
+}) {
+  await requireSession();
+  const ids = (input.hiveIds ?? []).filter(Boolean);
+  if (ids.length === 0) return { error: "No hives selected" };
+  if (input.status === undefined && input.isArchived === undefined) {
+    return { error: "Nothing to change" };
+  }
+
+  await db
+    .update(hives)
+    .set({
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.status === "dead" ? { deadoutDate: new Date() } : {}),
+      ...(input.isArchived !== undefined ? { isArchived: input.isArchived } : {}),
+      updatedAt: new Date(),
+    })
+    .where(inArray(hives.id, ids));
+
+  revalidatePath("/hives");
+  revalidatePath("/dashboard");
+  return { success: true, count: ids.length };
 }

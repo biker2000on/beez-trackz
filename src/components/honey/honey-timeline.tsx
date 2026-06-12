@@ -3,7 +3,11 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { deleteMovement, deleteSale, type TimelineEntry } from "@/actions/honey";
+import { useBulkSelection } from "@/components/bulk/use-bulk-selection";
+import { BulkActionBar } from "@/components/bulk/bulk-action-bar";
+import { useShortcut } from "@/components/keyboard/shortcut-provider";
 import {
   Package,
   DollarSign,
@@ -12,6 +16,7 @@ import {
   Gift,
   SlidersHorizontal,
   X,
+  ListChecks,
 } from "lucide-react";
 
 const TYPE_META: Record<
@@ -32,6 +37,24 @@ const TYPE_META: Record<
 export function HoneyTimeline({ entries }: { entries: TimelineEntry[] }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const selection = useBulkSelection();
+
+  useShortcut("b", "Toggle bulk selection", "Honey", selection.toggleSelecting);
+
+  const entryKey = (e: TimelineEntry) => `${e.type}:${e.id}`;
+
+  const removeSelected = () => {
+    const keys = selection.selected;
+    const targets = entries.filter((e) => keys.has(entryKey(e)));
+    startTransition(async () => {
+      for (const entry of targets) {
+        if (entry.type === "sale") await deleteSale(entry.id);
+        else await deleteMovement(entry.id);
+      }
+      selection.clear();
+      router.refresh();
+    });
+  };
 
   if (entries.length === 0) {
     return (
@@ -51,12 +74,32 @@ export function HoneyTimeline({ entries }: { entries: TimelineEntry[] }) {
   };
 
   return (
+    <div>
+      <div className="flex justify-end mb-1">
+        <Button
+          variant={selection.selecting ? "default" : "ghost"}
+          size="sm"
+          className="h-7 gap-1.5 text-xs"
+          onClick={selection.toggleSelecting}
+          title="Toggle bulk selection (b)"
+        >
+          <ListChecks className="h-3.5 w-3.5" />
+          Select
+        </Button>
+      </div>
     <ul className="divide-y">
       {entries.map((entry) => {
         const meta = TYPE_META[entry.type];
         const Icon = meta.icon;
         return (
           <li key={`${entry.type}-${entry.id}`} className="flex items-center gap-3 py-2.5">
+            {selection.selecting && (
+              <Checkbox
+                checked={selection.selected.has(entryKey(entry))}
+                onCheckedChange={() => selection.toggle(entryKey(entry))}
+                aria-label="Select entry"
+              />
+            )}
             <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${meta.tint}`}>
               <Icon className="h-4 w-4" />
             </span>
@@ -90,5 +133,18 @@ export function HoneyTimeline({ entries }: { entries: TimelineEntry[] }) {
         );
       })}
     </ul>
+      <BulkActionBar count={selection.selected.size} onClear={selection.clear}>
+        <Button
+          variant="destructive"
+          size="sm"
+          className="h-8 gap-1.5"
+          disabled={pending}
+          onClick={removeSelected}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete entries
+        </Button>
+      </BulkActionBar>
+    </div>
   );
 }

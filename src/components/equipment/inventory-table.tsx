@@ -32,6 +32,7 @@ import {
 import { bulkAdjustStock, updateStock } from "@/actions/equipment-v2";
 import { deployEquipment, removeDeployment } from "@/actions/equipment-v2";
 import { Pencil, ListChecks, ArrowRight, Undo2 } from "lucide-react";
+import { useShortcut } from "@/components/keyboard/shortcut-provider";
 
 export interface StockRow {
   id: string;
@@ -113,6 +114,10 @@ export function InventoryTable({
     }
     return map;
   }, [deployments]);
+
+  useShortcut("b", "Toggle bulk count editing", "Inventory", () =>
+    bulkMode ? setBulkMode(false) : startBulk()
+  );
 
   const startBulk = () => {
     setBulkValues(Object.fromEntries(stock.map((s) => [s.id, String(s.totalOwned)])));

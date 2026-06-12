@@ -27,6 +27,7 @@ import {
   type EditorLine,
   type JarSizeOption,
 } from "./jar-lines-editor";
+import { useShortcut } from "@/components/keyboard/shortcut-provider";
 import { Package, DollarSign, FlaskConical, Trash2, Gift, SlidersHorizontal } from "lucide-react";
 
 type DialogKind = null | "jar" | "sale" | "bulk_use" | "loss" | "give" | "adjust";
@@ -97,6 +98,13 @@ export function HoneyQuickActions({
       setPending(false);
     }
   };
+
+  useShortcut("j", "Jar honey", "Honey", () => open("jar"));
+  useShortcut("s", "Record sale", "Honey", () => open("sale"));
+  useShortcut("u", "Bulk use", "Honey", () => open("bulk_use"));
+  useShortcut("l", "Record loss", "Honey", () => open("loss"));
+  useShortcut("v", "Give away", "Honey", () => open("give"));
+  useShortcut("a", "Adjust jar counts", "Honey", () => open("adjust"));
 
   const saleTotal = lines.reduce(
     (sum, l) => sum + (parseInt(l.quantity) || 0) * (parseFloat(l.unitPrice ?? "") || 0),

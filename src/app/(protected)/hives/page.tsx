@@ -3,6 +3,7 @@ import { getHives } from "@/actions/hives";
 import { HiveListView } from "@/components/hives/hive-list-view";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
+import { NavShortcut } from "@/components/keyboard/nav-shortcut";
 
 export default async function HivesPage({
   searchParams,
@@ -15,6 +16,7 @@ export default async function HivesPage({
 
   return (
     <div className="p-6">
+      <NavShortcut keys="n" href="/hives/new" description="New hive" group="Hives" />
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Hives</h1>
         <Link
