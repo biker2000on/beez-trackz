@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { userSettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -7,6 +8,7 @@ import { revalidatePath } from "next/cache";
 import type { AIProviderConfig } from "@/lib/ai/types";
 
 export async function getAISettings(): Promise<AIProviderConfig | null> {
+  await requireSession();
   const users = await db.select().from(userSettings).limit(1);
 
   if (users.length === 0) {
@@ -29,6 +31,7 @@ export async function updateAISettings(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const users = await db.select().from(userSettings).limit(1);
 
   if (users.length === 0) {
@@ -92,6 +95,7 @@ export async function updateAISettings(
 }
 
 export async function testAIConnection(provider: string, apiKey: string) {
+  await requireSession();
   if (!provider) {
     return { error: "Provider is required" };
   }
@@ -140,6 +144,7 @@ export async function testAIConnection(provider: string, apiKey: string) {
 }
 
 export async function getOllamaModels(baseUrl?: string) {
+  await requireSession();
   const { OllamaProvider } = await import("@/lib/ai/ollama");
   return OllamaProvider.listModels(baseUrl || "http://localhost:11434");
 }

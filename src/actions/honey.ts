@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import {
   honeyHarvests,
@@ -18,6 +19,7 @@ export async function createHarvest(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const date = formData.get("date") as string;
   const superWeightBefore = formData.get("superWeightBefore") as string;
@@ -53,6 +55,7 @@ export async function createJarring(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const jarSize = formData.get("jarSize") as string;
   const quantity = formData.get("quantity") as string;
   const harvestId = formData.get("harvestId") as string;
@@ -74,6 +77,7 @@ export async function createSale(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const date = formData.get("date") as string;
   const customerName = formData.get("customerName") as string;
   const itemsJson = formData.get("items") as string;
@@ -160,6 +164,7 @@ export async function createSale(
 }
 
 export async function getHarvests() {
+  await requireSession();
   return db
     .select({
       id: honeyHarvests.id,
@@ -179,6 +184,7 @@ export async function getHarvests() {
 }
 
 export async function getHoneyInventory() {
+  await requireSession();
   return db
     .select({
       jarSize: honeyInventory.jarSize,
@@ -191,6 +197,7 @@ export async function getHoneyInventory() {
 }
 
 export async function getSales() {
+  await requireSession();
   return db
     .select()
     .from(honeySales)
@@ -198,6 +205,7 @@ export async function getSales() {
 }
 
 export async function getHoneyDashboard() {
+  await requireSession();
   const [sessions, harvests, inventory, sales, adjustments, inventoryWithOz] = await Promise.all([
     db
       .select({

@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { equipment, hives, apiaries, equipmentTypeEnum, frameTypeEnum } from "@/db/schema";
 import { eq, isNull, sql, desc } from "drizzle-orm";
@@ -7,6 +8,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function createEquipment(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const type = formData.get("type") as string;
   const frameCapacity = formData.get("frameCapacity") as string;
   const framesInstalled = formData.get("framesInstalled") as string;
@@ -45,6 +47,7 @@ export async function updateEquipment(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const type = formData.get("type") as string;
   const frameCapacity = formData.get("frameCapacity") as string;
   const framesInstalled = formData.get("framesInstalled") as string;
@@ -72,6 +75,7 @@ export async function updateEquipment(
 }
 
 export async function deleteEquipment(id: string) {
+  await requireSession();
   await db.delete(equipment).where(eq(equipment.id, id));
   revalidatePath("/settings/equipment");
   redirect("/settings/equipment");
@@ -83,6 +87,7 @@ export async function moveEquipment(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const storageLocation = formData.get("storageLocation") as string;
 
@@ -118,6 +123,7 @@ export async function moveEquipment(
 
 // Get equipment for a specific hive — ordered as a stack (most recently added on top)
 export async function getEquipmentForHive(hiveId: string) {
+  await requireSession();
   return db
     .select()
     .from(equipment)
@@ -127,6 +133,7 @@ export async function getEquipmentForHive(hiveId: string) {
 
 // Get equipment in storage (not on any hive)
 export async function getEquipmentInStorage() {
+  await requireSession();
   return db
     .select()
     .from(equipment)
@@ -136,6 +143,7 @@ export async function getEquipmentInStorage() {
 
 // Get all equipment with hive and apiary info
 export async function getAllEquipment() {
+  await requireSession();
   return db
     .select({
       id: equipment.id,
@@ -158,6 +166,7 @@ export async function getAllEquipment() {
 
 // Frame shortage aggregate
 export async function getFrameShortage() {
+  await requireSession();
   const result = await db
     .select({
       type: equipment.type,

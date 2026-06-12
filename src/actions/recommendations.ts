@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { aiRecommendations } from "@/db/schema";
 import { eq, desc, sql, and } from "drizzle-orm";
@@ -20,6 +21,7 @@ const priorityOrder = sql`
 `;
 
 export async function getActiveRecommendations() {
+  await requireSession();
   return db
     .select()
     .from(aiRecommendations)
@@ -32,6 +34,7 @@ export async function getActiveRecommendations() {
 // ---------------------------------------------------------------------------
 
 export async function dismissRecommendation(id: string) {
+  await requireSession();
   await db
     .update(aiRecommendations)
     .set({ dismissed: true })
@@ -45,6 +48,7 @@ export async function dismissRecommendation(id: string) {
 // ---------------------------------------------------------------------------
 
 export async function runRecommendationCheck() {
+  await requireSession();
   const { runRecommendationCheck: engineCheck } = await import(
     "@/lib/recommendations/engine"
   );
@@ -59,6 +63,7 @@ export async function runRecommendationCheck() {
 // ---------------------------------------------------------------------------
 
 export async function getRecommendationCount() {
+  await requireSession();
   const result = await db
     .select({ count: sql<number>`count(*)` })
     .from(aiRecommendations)

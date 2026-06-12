@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { harvestSessions, honeyHarvests, hives, apiaries, equipment } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
@@ -10,6 +11,7 @@ export async function createHarvestSession(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const apiaryId = formData.get("apiaryId") as string;
   const date = formData.get("date") as string;
   const notes = formData.get("notes") as string;
@@ -35,6 +37,7 @@ export async function addHarvestEntry(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const equipmentId = formData.get("equipmentId") as string;
   const superWeightBefore = formData.get("superWeightBefore") as string;
@@ -78,6 +81,7 @@ export async function trueUpHarvestSession(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const totalWeight = formData.get("totalExtractedWeight") as string;
 
   if (!totalWeight) return { error: "Total weight is required" };
@@ -93,11 +97,13 @@ export async function trueUpHarvestSession(
 }
 
 export async function deleteHarvestEntry(entryId: string, sessionId: string) {
+  await requireSession();
   await db.delete(honeyHarvests).where(eq(honeyHarvests.id, entryId));
   revalidatePath(`/harvest/sessions/${sessionId}`);
 }
 
 export async function getHarvestSession(id: string) {
+  await requireSession();
   const session = await db
     .select()
     .from(harvestSessions)
@@ -135,6 +141,7 @@ export async function getHarvestSession(id: string) {
 }
 
 export async function getHarvestSessions() {
+  await requireSession();
   return db
     .select({
       id: harvestSessions.id,

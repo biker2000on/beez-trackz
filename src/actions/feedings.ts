@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { feedings, hives, apiaries } from "@/db/schema";
 import { eq, isNull, desc } from "drizzle-orm";
@@ -10,6 +11,7 @@ export async function createFeeding(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const dateFed = formData.get("dateFed") as string;
   const type = formData.get("type") as string;
@@ -52,6 +54,7 @@ export async function createFeeding(
 }
 
 export async function markFeedingEmpty(id: string) {
+  await requireSession();
   const existing = await db
     .select({ hiveId: feedings.hiveId })
     .from(feedings)
@@ -70,6 +73,7 @@ export async function markFeedingEmpty(id: string) {
 }
 
 export async function deleteFeeding(id: string) {
+  await requireSession();
   const existing = await db
     .select({ hiveId: feedings.hiveId })
     .from(feedings)
@@ -87,6 +91,7 @@ export async function deleteFeeding(id: string) {
 }
 
 export async function getFeedingsForHive(hiveId: string) {
+  await requireSession();
   return db
     .select()
     .from(feedings)
@@ -95,6 +100,7 @@ export async function getFeedingsForHive(hiveId: string) {
 }
 
 export async function getActiveFeedings() {
+  await requireSession();
   return db
     .select({
       id: feedings.id,

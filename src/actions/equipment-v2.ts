@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { equipmentTypes, equipmentStock, equipmentStockAdjustments, equipmentDeployments, hives } from "@/db/schema";
 import { eq, isNull, desc, sql, and } from "drizzle-orm";
@@ -11,10 +12,12 @@ import { redirect } from "next/navigation";
 // ============================================
 
 export async function getEquipmentTypes() {
+  await requireSession();
   return db.select().from(equipmentTypes).orderBy(equipmentTypes.category, equipmentTypes.name);
 }
 
 export async function createEquipmentType(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const name = formData.get("name") as string;
   const category = formData.get("category") as string;
 
@@ -38,6 +41,7 @@ export async function createEquipmentType(_prevState: unknown, formData: FormDat
 // ============================================
 
 export async function getEquipmentStock() {
+  await requireSession();
   const stock = await db
     .select({
       id: equipmentStock.id,
@@ -75,6 +79,7 @@ export async function getEquipmentStock() {
 }
 
 export async function adjustStock(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const stockId = formData.get("stockId") as string;
   const quantity = parseInt(formData.get("quantity") as string);
   const reason = formData.get("reason") as string;
@@ -110,6 +115,7 @@ export async function adjustStock(_prevState: unknown, formData: FormData) {
 }
 
 export async function getStockAdjustments(stockId: string) {
+  await requireSession();
   return db
     .select()
     .from(equipmentStockAdjustments)
@@ -119,6 +125,7 @@ export async function getStockAdjustments(stockId: string) {
 
 // Initialize stock for a type (when first adding stock for a type)
 export async function createStock(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const typeId = formData.get("typeId") as string;
   const initialQuantity = parseInt(formData.get("initialQuantity") as string) || 0;
   const storageLocation = formData.get("storageLocation") as string;
@@ -156,6 +163,7 @@ export async function createStock(_prevState: unknown, formData: FormData) {
 // ============================================
 
 export async function deployEquipment(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const stockId = formData.get("stockId") as string;
   const hiveId = formData.get("hiveId") as string;
   const quantity = parseInt(formData.get("quantity") as string) || 1;
@@ -179,6 +187,7 @@ export async function deployEquipment(_prevState: unknown, formData: FormData) {
 }
 
 export async function removeDeployment(deploymentId: string) {
+  await requireSession();
   const [deployment] = await db
     .select({ hiveId: equipmentDeployments.hiveId })
     .from(equipmentDeployments)
@@ -197,6 +206,7 @@ export async function removeDeployment(deploymentId: string) {
 }
 
 export async function getDeploymentsForHive(hiveId: string) {
+  await requireSession();
   return db
     .select({
       id: equipmentDeployments.id,
@@ -220,6 +230,7 @@ export async function getDeploymentsForHive(hiveId: string) {
 // ============================================
 
 export async function getFrameSummary() {
+  await requireSession();
   // Get all frame stock (category = "frame")
   const frameStock = await db
     .select({
@@ -304,6 +315,7 @@ export async function getFrameSummary() {
 // ============================================
 
 export async function seedDefaultEquipmentTypes() {
+  await requireSession();
   const defaults: { name: string; category: "box" | "cover" | "bottom" | "accessory" | "frame" | "other"; framesPerBox?: number }[] = [
     { name: "Deep Box", category: "box", framesPerBox: 10 },
     { name: "Medium Super", category: "box", framesPerBox: 10 },

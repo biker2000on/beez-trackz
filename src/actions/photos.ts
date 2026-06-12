@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { photos } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -15,6 +16,7 @@ function sanitizeFilename(name: string): string {
 }
 
 export async function uploadPhoto(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const file = formData.get("file") as File | null;
   const ownerType = formData.get("ownerType") as string;
   const ownerId = formData.get("ownerId") as string;
@@ -88,6 +90,7 @@ export async function uploadPhoto(_prevState: unknown, formData: FormData) {
 }
 
 export async function deletePhoto(id: string) {
+  await requireSession();
   // Fetch the photo to get file paths
   const existing = await db
     .select()
@@ -119,6 +122,7 @@ export async function deletePhoto(id: string) {
 }
 
 export async function getPhotosForOwner(ownerType: string, ownerId: string) {
+  await requireSession();
   return db
     .select()
     .from(photos)
@@ -130,6 +134,7 @@ export async function updatePhotoCaption(
   caption: string,
   tags: string[]
 ) {
+  await requireSession();
   const existing = await db
     .select({ ownerType: photos.ownerType, ownerId: photos.ownerId })
     .from(photos)

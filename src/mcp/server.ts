@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import path from "path";
+import { fileURLToPath } from "url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -1000,10 +1002,18 @@ async function main() {
   console.error("Beez-Trackz MCP Server running on stdio");
 }
 
-const isMain = process.argv[1] && (
-  process.argv[1].endsWith("server.ts") || 
-  process.argv[1].endsWith("server.js")
-);
+// Only start the stdio transport when this file is the actual entrypoint
+// (`npm run mcp`). A suffix check is not enough: Next.js standalone runs
+// `node server.js`, which would otherwise match and start a second MCP
+// server inside the web container.
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+})();
 
 if (isMain) {
   main().catch((error) => {

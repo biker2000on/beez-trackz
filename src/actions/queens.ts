@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { queens, hives, apiaries } from "@/db/schema";
 import { eq, sql, desc } from "drizzle-orm";
@@ -10,6 +11,7 @@ type QueenOrigin = "purchased" | "swarm" | "raised" | "walked" | "emergency_cell
 type QueenStatus = "active" | "superseded" | "dead" | "missing";
 
 export async function createQueen(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const origin = formData.get("origin") as string;
   const originHiveId = formData.get("originHiveId") as string;
@@ -48,6 +50,7 @@ export async function updateQueen(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const origin = formData.get("origin") as string;
   const originHiveId = formData.get("originHiveId") as string;
@@ -80,6 +83,7 @@ export async function updateQueen(
 }
 
 export async function getQueensForHive(hiveId: string) {
+  await requireSession();
   return db
     .select()
     .from(queens)
@@ -88,6 +92,7 @@ export async function getQueensForHive(hiveId: string) {
 }
 
 export async function getQueen(id: string) {
+  await requireSession();
   const result = await db
     .select()
     .from(queens)
@@ -98,6 +103,7 @@ export async function getQueen(id: string) {
 
 // Get all queens for genealogy tree
 export async function getAllQueens() {
+  await requireSession();
   return db
     .select({
       id: queens.id,
@@ -119,6 +125,7 @@ export async function getAllQueens() {
 
 // Get lineage (ancestors) for a specific queen
 export async function getQueenLineage(queenId: string) {
+  await requireSession();
   const result = await db.execute(sql`
     WITH RECURSIVE lineage AS (
       SELECT q.*, h.position_label as hive_name, a.name as apiary_name
@@ -143,6 +150,7 @@ export async function getQueenLineage(queenId: string) {
 
 // Get descendants for a specific queen
 export async function getQueenDescendants(queenId: string) {
+  await requireSession();
   const result = await db.execute(sql`
     WITH RECURSIVE descendants AS (
       SELECT q.*, h.position_label as hive_name, a.name as apiary_name
@@ -166,6 +174,7 @@ export async function getQueenDescendants(queenId: string) {
 }
 
 export async function deleteQueen(id: string) {
+  await requireSession();
   const queen = await db.select({ hiveId: queens.hiveId }).from(queens).where(eq(queens.id, id)).limit(1);
   await db.delete(queens).where(eq(queens.id, id));
   revalidatePath("/genealogy");

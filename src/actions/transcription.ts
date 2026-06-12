@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { mediaFiles, inspections } from "@/db/schema";
 import { eq, and, desc } from "drizzle-orm";
@@ -13,6 +14,7 @@ import { parseTranscription } from "@/lib/ai/transcription-parser";
 const AUDIO_DIR = path.resolve("./data/audio");
 
 export async function uploadAudioForTranscription(formData: FormData) {
+  await requireSession();
   const audioBlob = formData.get("audioBlob") as File | null;
   const ownerType = formData.get("ownerType") as string;
   const ownerId = formData.get("ownerId") as string;
@@ -63,6 +65,7 @@ export async function uploadAudioForTranscription(formData: FormData) {
 }
 
 export async function getTranscriptionStatus(mediaFileId: string) {
+  await requireSession();
   const result = await db
     .select()
     .from(mediaFiles)
@@ -103,6 +106,7 @@ export async function getTranscriptionsForOwner(
   ownerType: string,
   ownerId: string
 ) {
+  await requireSession();
   return db
     .select()
     .from(mediaFiles)
@@ -122,6 +126,7 @@ export async function parseTranscriptionText(
   rawText: string,
   mode: "single" | "batch"
 ): Promise<TranscriptionResult> {
+  await requireSession();
   return parseTranscription(rawText, mode);
 }
 
@@ -129,6 +134,7 @@ export async function confirmTranscription(
   mediaFileId: string,
   confirmedInspections: ParsedInspection[]
 ) {
+  await requireSession();
   // Verify the media file exists
   const mediaResult = await db
     .select()
@@ -190,6 +196,7 @@ export async function confirmBatchTranscription(
   mediaFileId: string,
   confirmedInspections: Array<ParsedInspection & { hiveId: string }>
 ) {
+  await requireSession();
   // Verify the media file exists
   const mediaResult = await db
     .select()

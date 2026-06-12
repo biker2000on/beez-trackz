@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { honeyAdjustments } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -10,6 +11,7 @@ export async function createHoneyAdjustment(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const date = formData.get("date") as string;
   const type = formData.get("type") as "jarring_loss" | "other";
   const amountLbs = formData.get("amountLbs") as string;
@@ -31,6 +33,7 @@ export async function createHoneyAdjustment(
 }
 
 export async function getHoneyAdjustments() {
+  await requireSession();
   return db
     .select()
     .from(honeyAdjustments)

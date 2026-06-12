@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { hiveSplits, hives, hiveLocationHistory } from "@/db/schema";
 import { eq, or, desc } from "drizzle-orm";
@@ -7,6 +8,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function createSplit(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const parentHiveId = formData.get("parentHiveId") as string;
   const apiaryId = formData.get("apiaryId") as string;
   const positionLabel = formData.get("positionLabel") as string;
@@ -55,6 +57,7 @@ export async function createSplit(_prevState: unknown, formData: FormData) {
 }
 
 export async function getSplitsForHive(hiveId: string) {
+  await requireSession();
   // Get splits as both parent and child
   const splits = await db
     .select({
@@ -88,6 +91,7 @@ export async function getSplitsForHive(hiveId: string) {
 }
 
 export async function deleteSplit(id: string) {
+  await requireSession();
   await db.delete(hiveSplits).where(eq(hiveSplits.id, id));
   revalidatePath("/hives");
 }

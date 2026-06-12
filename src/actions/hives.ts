@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { hives, hiveLocationHistory, apiaries } from "@/db/schema";
 import { eq, and, isNull, desc } from "drizzle-orm";
@@ -9,6 +10,7 @@ import { generatePositionLabel } from "@/lib/hive-location";
 
 // Create hive — also creates initial location history entry
 export async function createHive(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const apiaryId = formData.get("apiaryId") as string;
   const positionLabel = formData.get("positionLabel") as string;
   const standId = formData.get("standId") as string;
@@ -75,6 +77,7 @@ export async function updateHive(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const positionLabel = formData.get("positionLabel") as string;
   const standId = formData.get("standId") as string;
   const slotRow = formData.get("slotRow") as string;
@@ -124,6 +127,7 @@ export async function moveHive(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const newApiaryId = formData.get("apiaryId") as string;
   const newPositionLabel = formData.get("positionLabel") as string;
 
@@ -174,6 +178,7 @@ export async function moveHive(
 
 // Delete hive
 export async function deleteHive(id: string) {
+  await requireSession();
   // First delete location history
   await db
     .delete(hiveLocationHistory)
@@ -187,6 +192,7 @@ export async function deleteHive(id: string) {
 
 // Archive a hive
 export async function archiveHive(id: string) {
+  await requireSession();
   await db
     .update(hives)
     .set({ isArchived: true, updatedAt: new Date() })
@@ -198,6 +204,7 @@ export async function archiveHive(id: string) {
 
 // Unarchive a hive
 export async function unarchiveHive(id: string) {
+  await requireSession();
   await db
     .update(hives)
     .set({ isArchived: false, updatedAt: new Date() })
@@ -209,6 +216,7 @@ export async function unarchiveHive(id: string) {
 
 // Mark as deadout (set dead + archive + record date)
 export async function markDeadout(id: string) {
+  await requireSession();
   await db
     .update(hives)
     .set({
@@ -225,6 +233,7 @@ export async function markDeadout(id: string) {
 
 // Get all hives with apiary info
 export async function getHives(apiaryId?: string, status?: string, includeArchived = false) {
+  await requireSession();
   const query = db
     .select({
       id: hives.id,
@@ -264,11 +273,13 @@ export async function getHives(apiaryId?: string, status?: string, includeArchiv
 
 // Get hives for a specific apiary (used in apiary detail page)
 export async function getHivesForApiary(apiaryId: string) {
+  await requireSession();
   return getHives(apiaryId);
 }
 
 // Get single hive with full details
 export async function getHive(id: string) {
+  await requireSession();
   const result = await db
     .select({
       id: hives.id,
@@ -297,6 +308,7 @@ export async function getHive(id: string) {
 
 // Get location history for a hive
 export async function getHiveLocationHistory(hiveId: string) {
+  await requireSession();
   return db
     .select({
       id: hiveLocationHistory.id,
@@ -317,6 +329,7 @@ export async function bulkCreateHives(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const apiaryId = formData.get("apiaryId") as string;
   const quantity = parseInt(formData.get("quantity") as string);
   const startLabel = formData.get("startLabel") as string;

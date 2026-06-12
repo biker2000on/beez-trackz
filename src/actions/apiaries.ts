@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { apiaries, hives } from "@/db/schema";
 import { eq, sql, and, isNull } from "drizzle-orm";
@@ -7,6 +8,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 export async function createApiary(_prevState: unknown, formData: FormData) {
+  await requireSession();
   const name = formData.get("name") as string;
   const latitude = formData.get("latitude") as string;
   const longitude = formData.get("longitude") as string;
@@ -35,6 +37,7 @@ export async function updateApiary(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const name = formData.get("name") as string;
   const latitude = formData.get("latitude") as string;
   const longitude = formData.get("longitude") as string;
@@ -61,6 +64,7 @@ export async function updateApiary(
 }
 
 export async function deleteApiary(id: string) {
+  await requireSession();
   // Check for hives first
   const hiveCount = await db
     .select({ count: sql<number>`count(*)` })
@@ -80,6 +84,7 @@ export async function deleteApiary(id: string) {
 }
 
 export async function getApiaries() {
+  await requireSession();
   const result = await db
     .select({
       id: apiaries.id,
@@ -103,6 +108,7 @@ export async function getApiaries() {
 }
 
 export async function getApiary(id: string) {
+  await requireSession();
   const result = await db
     .select()
     .from(apiaries)

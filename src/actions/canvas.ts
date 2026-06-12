@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { apiaries, hives, hiveLocationHistory } from "@/db/schema";
 import { eq, and, isNull } from "drizzle-orm";
@@ -8,6 +9,7 @@ import type { CanvasLayout } from "@/lib/canvas/types";
 
 
 export async function saveCanvasLayout(apiaryId: string, layout: CanvasLayout) {
+  await requireSession();
   if (!apiaryId) {
     return { error: "Apiary ID is required" };
   }
@@ -32,6 +34,7 @@ export async function createHiveFromCanvas(
   slotCol?: number,
   placement?: string
 ) {
+  await requireSession();
   const [hive] = await db
     .insert(hives)
     .values({
@@ -57,6 +60,7 @@ export async function updateHiveFromCanvas(
     placement?: string;
   }
 ) {
+  await requireSession();
   await db
     .update(hives)
     .set({
@@ -83,6 +87,7 @@ export async function moveHiveOnCanvas(
   slotCol?: number,
   placement?: string
 ) {
+  await requireSession();
   const now = new Date();
 
   await db.transaction(async (tx) => {

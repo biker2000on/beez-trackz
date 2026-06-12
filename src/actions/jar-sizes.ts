@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { userSettings } from "@/db/schema/settings";
 import { eq } from "drizzle-orm";
@@ -19,6 +20,7 @@ const DEFAULT_JAR_SIZES: JarSize[] = [
 ];
 
 export async function getJarSizes(): Promise<JarSize[]> {
+  await requireSession();
   const users = await db.select().from(userSettings).limit(1);
   const raw = users[0]?.jarSizes;
   if (Array.isArray(raw)) {
@@ -28,6 +30,7 @@ export async function getJarSizes(): Promise<JarSize[]> {
 }
 
 export async function updateJarSizes(sizes: JarSize[]) {
+  await requireSession();
   const users = await db.select().from(userSettings).limit(1);
   if (!users[0]) return { error: "No user settings found" };
 

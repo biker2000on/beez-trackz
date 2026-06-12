@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { bloomObservations } from "@/db/schema";
 import { eq, desc, and, isNull, sql } from "drizzle-orm";
@@ -9,6 +10,7 @@ export async function createBloomObservation(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   const apiaryId = formData.get("apiaryId") as string;
   const species = formData.get("species") as string;
   const dateFirstSeen = formData.get("dateFirstSeen") as string;
@@ -35,6 +37,7 @@ export async function createBloomObservation(
 }
 
 export async function endBloom(id: string, apiaryId: string) {
+  await requireSession();
   const today = new Date().toISOString().split("T")[0];
   await db
     .update(bloomObservations)
@@ -45,6 +48,7 @@ export async function endBloom(id: string, apiaryId: string) {
 }
 
 export async function updateBloomLastSeen(id: string, apiaryId: string) {
+  await requireSession();
   const today = new Date().toISOString().split("T")[0];
   await db
     .update(bloomObservations)
@@ -55,11 +59,13 @@ export async function updateBloomLastSeen(id: string, apiaryId: string) {
 }
 
 export async function deleteBloomObservation(id: string, apiaryId: string) {
+  await requireSession();
   await db.delete(bloomObservations).where(eq(bloomObservations.id, id));
   revalidatePath(`/apiaries/${apiaryId}`);
 }
 
 export async function getActiveBloomsForApiary(apiaryId: string) {
+  await requireSession();
   return db
     .select()
     .from(bloomObservations)
@@ -73,6 +79,7 @@ export async function getActiveBloomsForApiary(apiaryId: string) {
 }
 
 export async function getBloomHistoryForApiary(apiaryId: string) {
+  await requireSession();
   return db
     .select()
     .from(bloomObservations)
@@ -81,6 +88,7 @@ export async function getBloomHistoryForApiary(apiaryId: string) {
 }
 
 export async function getBloomSpeciesAutocomplete(apiaryId: string) {
+  await requireSession();
   const result = await db
     .select({ species: bloomObservations.species })
     .from(bloomObservations)

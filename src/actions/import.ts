@@ -1,5 +1,6 @@
 "use server";
 
+import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import { apiaries, hives, inspections, equipment } from "@/db/schema";
 import { parseImportFile, type ParsedImportData } from "@/lib/import/parser";
@@ -9,6 +10,7 @@ export async function parseImportedFile(
   _prevState: unknown,
   formData: FormData
 ) {
+  await requireSession();
   try {
     const file = formData.get("file") as File | null;
 
@@ -29,6 +31,7 @@ export async function parseImportedFile(
 }
 
 export async function confirmImport(data: ParsedImportData) {
+  await requireSession();
   try {
     const result = await db.transaction(async (tx) => {
       const counts = {
