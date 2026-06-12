@@ -438,6 +438,18 @@ export function CanvasInner({
     }
   }, [apiaryId, stands, northArrow, viewport.zoom, viewport.offset, markSaved]);
 
+  // Debounced autosave: geometry edits persist ~1s after the last change so
+  // a reload can't drop a freshly added stand (hive assignments reference
+  // stand ids and write through immediately). The Save button remains as a
+  // manual flush.
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+  useEffect(() => {
+    if (!dirty) return;
+    const timer = setTimeout(() => void handleSaveRef.current(), 1000);
+    return () => clearTimeout(timer);
+  }, [dirty, stands, northArrow]);
+
   // ------------------------------------------------------------------
   // Context menu plumbing
   // ------------------------------------------------------------------
