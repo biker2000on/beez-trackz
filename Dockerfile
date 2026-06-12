@@ -10,6 +10,12 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Dummy values for build-time page collection: the MCP route imports modules
+# that exit when DATABASE_URL is unset. postgres.js/ioredis connect lazily,
+# so nothing actually dials these during `next build`.
+ENV DATABASE_URL=postgresql://build:build@localhost:5432/build
+ENV REDIS_URL=redis://localhost:6379
+ENV SESSION_SECRET=build-time-placeholder
 RUN npm run build
 
 # Bundle the migration runner with esbuild so the runtime image needs no
