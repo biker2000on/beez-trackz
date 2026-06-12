@@ -25,6 +25,14 @@ export interface SaleLine extends JarLine {
   unitPrice: number;
 }
 
+
+/** Parse a date-only string (YYYY-MM-DD) in local time, not UTC. */
+function parseLocalDate(value: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Date(value);
+}
+
 // ---------------------------------------------------------------------------
 // Harvest entries (bulk honey in)
 // ---------------------------------------------------------------------------
@@ -51,7 +59,7 @@ export async function createHarvest(_prevState: unknown, formData: FormData) {
 
   await db.insert(honeyHarvests).values({
     hiveId,
-    date: new Date(date),
+    date: parseLocalDate(date),
     superWeightBefore: before,
     superWeightAfter: after,
     calculatedHoneyWeight: honeyWeight,
@@ -102,7 +110,7 @@ export async function recordJarring(input: {
   if (lines.length === 0 && !input.lossLbs) {
     return { error: "Add at least one jar line" };
   }
-  const date = new Date(input.date);
+  const date = parseLocalDate(input.date);
   const sizes = lines.length
     ? await db
         .select()
@@ -151,7 +159,7 @@ export async function recordBulkMovement(input: {
   if (!input.amountLbs || input.amountLbs <= 0)
     return { error: "Amount must be greater than zero" };
   await db.insert(honeyMovements).values({
-    date: new Date(input.date),
+    date: parseLocalDate(input.date),
     kind: input.kind,
     amountLbs: input.amountLbs,
     reason: input.reason?.trim() || null,
@@ -173,7 +181,7 @@ export async function recordGiveAway(input: {
   if (lines.length === 0) return { error: "Add at least one jar line" };
   await db.insert(honeyMovements).values(
     lines.map((line) => ({
-      date: new Date(input.date),
+      date: parseLocalDate(input.date),
       kind: "give_away" as const,
       jarSizeId: line.jarSizeId,
       quantity: line.quantity,
@@ -196,7 +204,7 @@ export async function adjustJarCounts(input: {
   if (lines.length === 0) return { error: "No changes to apply" };
   await db.insert(honeyMovements).values(
     lines.map((line) => ({
-      date: new Date(input.date),
+      date: parseLocalDate(input.date),
       kind: "jar_adjustment" as const,
       jarSizeId: line.jarSizeId,
       quantity: line.delta,
@@ -248,7 +256,7 @@ export async function recordSale(input: {
     const [sale] = await tx
       .insert(honeySales)
       .values({
-        date: new Date(input.date),
+        date: parseLocalDate(input.date),
         customerName: input.customerName?.trim() || null,
         location: input.location?.trim() || null,
         totalAmount,
