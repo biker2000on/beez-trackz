@@ -4,8 +4,14 @@ import { getSessionSecret } from "./constants";
 
 const SESSION_DURATION = 60 * 60 * 24 * 30; // 30 days
 
-export async function createSession(): Promise<string> {
-  const token = await new SignJWT({ authenticated: true })
+export interface SessionIdentity {
+  /** OIDC subject, or "password" for password logins. */
+  sub?: string;
+  name?: string;
+}
+
+export async function createSession(identity: SessionIdentity = {}): Promise<string> {
+  const token = await new SignJWT({ authenticated: true, ...identity })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_DURATION}s`)

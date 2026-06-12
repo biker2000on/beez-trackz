@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { userSettings } from "@/db/schema";
 import { hashPassword, verifyPassword } from "@/lib/auth";
@@ -34,17 +35,25 @@ export async function setup(
     return { error: "Password must be at least 8 characters" };
   }
 
-  // Check if user already exists
+  // Check if user already exists. An OIDC-bootstrapped instance has a
+  // settings row without a password — let setup add one in that case.
   const existing = await db.select().from(userSettings).limit(1);
-  if (existing.length > 0) {
+  if (existing.length > 0 && existing[0].passwordHash) {
     return { error: "Setup already completed" };
   }
 
   const passwordHash = await hashPassword(password);
-  await db.insert(userSettings).values({
-    passwordHash,
-    displayName,
-  });
+  if (existing.length > 0) {
+    await db
+      .update(userSettings)
+      .set({ passwordHash, displayName, updatedAt: new Date() })
+      .where(eq(userSettings.id, existing[0].id));
+  } else {
+    await db.insert(userSettings).values({
+      passwordHash,
+      displayName,
+    });
+  }
 
   redirect("/login");
 }
@@ -65,12 +74,21 @@ export async function login(
   }
 
   const user = users[0];
+  if (!user.passwordHash) {
+    return {
+      error:
+        "Password login is not configured for this instance. Sign in with SSO, or set a password via Setup.",
+    };
+  }
   const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) {
     return { error: "Invalid password" };
   }
 
-  const token = await createSession();
+  const token = await createSession({
+    sub: "password",
+    name: user.displayName ?? undefined,
+  });
   await setSessionCookie(token);
   redirect("/dashboard");
 }

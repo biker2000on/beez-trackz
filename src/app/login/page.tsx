@@ -10,8 +10,10 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
+  // With OIDC configured, a fresh instance can sign up straight from the
+  // login page — only force password setup when there is no SSO option.
   const setupComplete = await isSetupComplete();
-  if (!setupComplete) {
+  if (!setupComplete && !isOidcConfigured()) {
     redirect("/setup");
   }
 

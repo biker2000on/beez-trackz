@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { userSettings } from "@/db/schema";
+import { oidcIdentities, userSettings } from "@/db/schema";
 import { createSession, setSessionCookie } from "@/lib/session";
 import {
   appUrl,
@@ -24,9 +24,10 @@ function loginRedirect(request: NextRequest, error: string) {
  * GET /api/auth/oidc/callback
  *
  * Completes the authorization code flow: verifies state/nonce/PKCE and
- * validates the ID token. Single-user model: the first successful OIDC
- * login links the provider identity to the lone user_settings row;
- * subsequent logins must present the same issuer + subject.
+ * validates the ID token. Any account on the configured provider may sign
+ * in (self-hosted, family-scoped IdP): unknown subjects are registered on
+ * first login, and the instance settings row is bootstrapped if missing,
+ * so a fresh deployment never requires the password /setup flow.
  */
 export async function GET(request: NextRequest) {
   if (!isOidcConfigured()) {
@@ -55,6 +56,8 @@ export async function GET(request: NextRequest) {
   }
 
   let subject: string;
+  let displayName: string | undefined;
+  let email: string | undefined;
   try {
     const config = await getOidcConfiguration();
 
@@ -75,6 +78,10 @@ export async function GET(request: NextRequest) {
       throw new Error("ID token missing subject");
     }
     subject = idClaims.sub;
+    displayName =
+      (idClaims.name as string | undefined) ||
+      (idClaims.preferred_username as string | undefined);
+    email = idClaims.email as string | undefined;
   } catch (error) {
     console.error("OIDC callback validation failed:", error);
     return clearTxnCookie(loginRedirect(request, "oidc_failed"));
@@ -82,27 +89,45 @@ export async function GET(request: NextRequest) {
 
   try {
     const issuer = getOidcIssuer();
-    const users = await db.select().from(userSettings).limit(1);
-    if (users.length === 0) {
-      // No local account yet — run password setup first.
-      return clearTxnCookie(
-        NextResponse.redirect(appUrl("/setup", request.url))
-      );
-    }
-    const user = users[0];
 
-    if (!user.oidcSubject) {
-      // First OIDC login: link this identity to the single local user.
+    // Register or refresh this identity (signup happens implicitly here).
+    const existing = await db
+      .select()
+      .from(oidcIdentities)
+      .where(
+        and(eq(oidcIdentities.issuer, issuer), eq(oidcIdentities.subject, subject))
+      )
+      .limit(1);
+
+    if (existing.length === 0) {
+      await db.insert(oidcIdentities).values({
+        issuer,
+        subject,
+        displayName: displayName ?? null,
+        email: email ?? null,
+      });
+    } else {
       await db
-        .update(userSettings)
-        .set({ oidcSubject: subject, oidcIssuer: issuer, updatedAt: new Date() })
-        .where(eq(userSettings.id, user.id));
-    } else if (user.oidcSubject !== subject || user.oidcIssuer !== issuer) {
-      console.error("OIDC subject mismatch — refusing login");
-      return clearTxnCookie(loginRedirect(request, "oidc_not_linked"));
+        .update(oidcIdentities)
+        .set({
+          displayName: displayName ?? existing[0].displayName,
+          email: email ?? existing[0].email,
+          lastLoginAt: new Date(),
+        })
+        .where(eq(oidcIdentities.id, existing[0].id));
     }
 
-    const token = await createSession();
+    // Bootstrap the instance settings row on first-ever login so OIDC-only
+    // deployments skip the password /setup flow entirely.
+    const settings = await db.select().from(userSettings).limit(1);
+    if (settings.length === 0) {
+      await db.insert(userSettings).values({
+        passwordHash: null,
+        displayName: displayName ?? null,
+      });
+    }
+
+    const token = await createSession({ sub: subject, name: displayName });
     await setSessionCookie(token);
     return clearTxnCookie(
       NextResponse.redirect(appUrl("/dashboard", request.url))

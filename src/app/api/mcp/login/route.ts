@@ -17,12 +17,18 @@ export async function POST(req: NextRequest) {
     }
 
     const user = users[0];
+    if (!user.passwordHash) {
+      return NextResponse.json(
+        { error: "Password login is not configured for this instance" },
+        { status: 401 }
+      );
+    }
     const valid = await verifyPassword(password, user.passwordHash);
     if (!valid) {
       return NextResponse.json({ error: "Invalid password" }, { status: 401 });
     }
 
-    const token = await createSession();
+    const token = await createSession({ sub: "password" });
     const response = NextResponse.json({ success: true, token });
     
     // Set session cookie for web clients
