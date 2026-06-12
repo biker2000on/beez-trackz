@@ -1,7 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/db";
-import { inspections } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import {
+  createInspectionRecord,
+  updateInspectionRecord,
+  deleteInspectionRecord,
+  type InspectionRecordInput,
+} from "@/lib/db/inspections";
+
+const UPDATABLE_FIELDS = [
+  "queenSeen",
+  "queenHealth",
+  "broodPattern",
+  "storesHoney",
+  "storesPollen",
+  "temperament",
+  "pests",
+  "treatments",
+  "notes",
+] as const;
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,38 +29,11 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case "create": {
-        const record = data as {
-          hiveId: string;
-          date: string;
-          queenSeen?: boolean;
-          queenHealth?: string;
-          broodPattern?: string;
-          storesHoney?: number;
-          storesPollen?: number;
-          temperament?: number;
-          pests?: unknown;
-          treatments?: unknown;
-          notes?: string;
-        };
-
+        const record = data as Omit<InspectionRecordInput, "date"> & { date: string };
         if (!record.hiveId || !record.date) {
           return NextResponse.json({ error: "hiveId and date are required" }, { status: 400 });
         }
-
-        await db.insert(inspections).values({
-          hiveId: record.hiveId,
-          date: new Date(record.date),
-          queenSeen: record.queenSeen ?? null,
-          queenHealth: record.queenHealth ?? null,
-          broodPattern: record.broodPattern ?? null,
-          storesHoney: record.storesHoney ?? null,
-          storesPollen: record.storesPollen ?? null,
-          temperament: record.temperament ?? null,
-          pests: record.pests ?? null,
-          treatments: record.treatments ?? null,
-          notes: record.notes ?? null,
-        });
-
+        await createInspectionRecord({ ...record, date: new Date(record.date) });
         return NextResponse.json({ success: true });
       }
 
@@ -54,22 +42,11 @@ export async function POST(request: NextRequest) {
         if (!record.id) {
           return NextResponse.json({ error: "id is required for update" }, { status: 400 });
         }
-
-        const { id, ...fields } = record;
-        const updateData: Record<string, unknown> = {};
-
-        if (fields.queenSeen !== undefined) updateData.queenSeen = fields.queenSeen;
-        if (fields.queenHealth !== undefined) updateData.queenHealth = fields.queenHealth;
-        if (fields.broodPattern !== undefined) updateData.broodPattern = fields.broodPattern;
-        if (fields.storesHoney !== undefined) updateData.storesHoney = fields.storesHoney;
-        if (fields.storesPollen !== undefined) updateData.storesPollen = fields.storesPollen;
-        if (fields.temperament !== undefined) updateData.temperament = fields.temperament;
-        if (fields.pests !== undefined) updateData.pests = fields.pests;
-        if (fields.treatments !== undefined) updateData.treatments = fields.treatments;
-        if (fields.notes !== undefined) updateData.notes = fields.notes;
-        updateData.updatedAt = new Date();
-
-        await db.update(inspections).set(updateData).where(eq(inspections.id, id));
+        const fields: Record<string, unknown> = {};
+        for (const key of UPDATABLE_FIELDS) {
+          if (record[key] !== undefined) fields[key] = record[key];
+        }
+        await updateInspectionRecord(record.id, fields);
         return NextResponse.json({ success: true });
       }
 
@@ -78,8 +55,7 @@ export async function POST(request: NextRequest) {
         if (!record.id) {
           return NextResponse.json({ error: "id is required for delete" }, { status: 400 });
         }
-
-        await db.delete(inspections).where(eq(inspections.id, record.id));
+        await deleteInspectionRecord(record.id);
         return NextResponse.json({ success: true });
       }
 

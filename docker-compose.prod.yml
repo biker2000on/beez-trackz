@@ -50,6 +50,28 @@ services:
       traefik.http.routers.beez-trackz.tls.domains[0].sans: "*.adventureintandem.com"
       traefik.http.services.beez-trackz.loadbalancer.server.port: "3000"
 
+  worker:
+    image: ghcr.io/biker2000on/beez-trackz:${BEEZ_IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    # Skip the migration entrypoint — the app container owns migrations.
+    entrypoint: ["node", "worker.js"]
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}
+      - REDIS_URL=redis://redis:6379
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-}
+      - OLLAMA_URL=${OLLAMA_URL:-}
+    volumes:
+      - ${APP_DATA_DIR:-/mnt/docker/volumes/beez-trackz/data}:/app/data
+    depends_on:
+      app:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped

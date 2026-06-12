@@ -6,6 +6,11 @@ import { inspections, hives, apiaries } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import {
+  createInspectionRecord,
+  updateInspectionRecord,
+  deleteInspectionRecord,
+} from "@/lib/db/inspections";
 
 function parseOptionalInt(value: string): number | null {
   if (!value || value === "__none__") return null;
@@ -46,23 +51,20 @@ export async function createInspection(
     return { error: "Date is required" };
   }
 
-  await db
-    .insert(inspections)
-    .values({
-      hiveId,
-      date: new Date(date),
-      inspectorName: inspectorName?.trim() || null,
-      queenSeen: queenSeen || null,
-      queenHealth: queenHealth?.trim() || null,
-      broodPattern: broodPattern?.trim() || null,
-      storesHoney: parseOptionalInt(storesHoney),
-      storesPollen: parseOptionalInt(storesPollen),
-      temperament: parseOptionalInt(temperament),
-      pests: pestsJson ? safeJsonParse(pestsJson) : null,
-      treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
-      notes: notes?.trim() || null,
-    })
-    .returning();
+  await createInspectionRecord({
+    hiveId,
+    date: new Date(date),
+    inspectorName: inspectorName?.trim() || null,
+    queenSeen: queenSeen || null,
+    queenHealth: queenHealth?.trim() || null,
+    broodPattern: broodPattern?.trim() || null,
+    storesHoney: parseOptionalInt(storesHoney),
+    storesPollen: parseOptionalInt(storesPollen),
+    temperament: parseOptionalInt(temperament),
+    pests: pestsJson ? safeJsonParse(pestsJson) : null,
+    treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
+    notes: notes?.trim() || null,
+  });
 
   revalidatePath(`/hives/${hiveId}`);
   revalidatePath("/dashboard");
@@ -99,23 +101,19 @@ export async function updateInspection(
     .limit(1);
   const hiveId = existing[0]?.hiveId;
 
-  await db
-    .update(inspections)
-    .set({
-      date: new Date(date),
-      inspectorName: inspectorName?.trim() || null,
-      queenSeen: queenSeen || null,
-      queenHealth: queenHealth?.trim() || null,
-      broodPattern: broodPattern?.trim() || null,
-      storesHoney: parseOptionalInt(storesHoney),
-      storesPollen: parseOptionalInt(storesPollen),
-      temperament: parseOptionalInt(temperament),
-      pests: pestsJson ? safeJsonParse(pestsJson) : null,
-      treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
-      notes: notes?.trim() || null,
-      updatedAt: new Date(),
-    })
-    .where(eq(inspections.id, id));
+  await updateInspectionRecord(id, {
+    date: new Date(date),
+    inspectorName: inspectorName?.trim() || null,
+    queenSeen: queenSeen || null,
+    queenHealth: queenHealth?.trim() || null,
+    broodPattern: broodPattern?.trim() || null,
+    storesHoney: parseOptionalInt(storesHoney),
+    storesPollen: parseOptionalInt(storesPollen),
+    temperament: parseOptionalInt(temperament),
+    pests: pestsJson ? safeJsonParse(pestsJson) : null,
+    treatments: treatmentsJson ? safeJsonParse(treatmentsJson) : null,
+    notes: notes?.trim() || null,
+  });
 
   if (hiveId) {
     revalidatePath(`/hives/${hiveId}`);
@@ -133,7 +131,7 @@ export async function deleteInspection(id: string) {
     .limit(1);
   const hiveId = existing[0]?.hiveId;
 
-  await db.delete(inspections).where(eq(inspections.id, id));
+  await deleteInspectionRecord(id);
 
   if (hiveId) {
     revalidatePath(`/hives/${hiveId}`);

@@ -18,12 +18,16 @@ ENV REDIS_URL=redis://localhost:6379
 ENV SESSION_SECRET=build-time-placeholder
 RUN npm run build
 
-# Bundle the migration runner with esbuild so the runtime image needs no
-# drizzle-kit or tsx. drizzle-orm and postgres are pure JS, so bundle them
-# fully — no externals — into a single migrate.js inside .next/standalone.
+# Bundle the migration runner and the background worker with esbuild so the
+# runtime image needs no drizzle-kit or tsx. Everything is pure JS except
+# sharp (native, already present in standalone's traced node_modules).
 RUN npx --yes esbuild scripts/migrate.ts \
       --bundle --platform=node --target=node22 --format=cjs \
-      --outfile=.next/standalone/migrate.js
+      --outfile=.next/standalone/migrate.js \
+ && npx --yes esbuild src/worker.ts \
+      --bundle --platform=node --target=node22 --format=cjs \
+      --alias:@=./src --external:sharp \
+      --outfile=.next/standalone/worker.js
 
 # Production image. Plain Alpine + the distro nodejs package (stripped,
 # shared-lib build) is markedly lighter than node:22-alpine and drops
