@@ -36,6 +36,13 @@
       "when": 1771209862689,
       "tag": "0004_chubby_barracuda",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781299394474,
+      "tag": "0005_brief_satana",
+      "breakpoints": true
     }
   ]
 }

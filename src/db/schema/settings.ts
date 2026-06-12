@@ -4,6 +4,8 @@ export const userSettings = pgTable("user_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name"),
+  oidcSubject: text("oidc_subject"),
+  oidcIssuer: text("oidc_issuer"),
   aiProviderConfig: jsonb("ai_provider_config"),
   inspectionPreferences: jsonb("inspection_preferences"),
   jarSizes: jsonb("jar_sizes"),

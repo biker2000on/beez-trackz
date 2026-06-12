@@ -6,8 +6,9 @@ import { getSessionSecret } from "./lib/constants";
 const PUBLIC_PATHS = ["/login", "/setup", "/_next", "/favicon.ico"];
 
 // /api/mcp handles its own auth (Bearer token or session cookie) and exposes
-// its own login route; everything else under /api requires the session cookie.
-const SELF_AUTHENTICATED_API_PATHS = ["/api/mcp"];
+// its own login route; /api/auth/oidc implements the OIDC redirect flow for
+// logged-out users. Everything else under /api requires the session cookie.
+const SELF_AUTHENTICATED_API_PATHS = ["/api/mcp", "/api/auth/oidc"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
