@@ -57,6 +57,20 @@
       "when": 1781302630152,
       "tag": "0007_third_shinobi_shaw",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781305065213,
+      "tag": "0008_honey_flow_add",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781305088396,
+      "tag": "0009_drop_legacy_inventory",
+      "breakpoints": true
     }
   ]
 }

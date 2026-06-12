@@ -62,18 +62,6 @@ export function HarvestEntryForm({ action, hives }: HarvestEntryFormProps) {
             </Select>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="equipmentId">Super/Equipment (optional)</Label>
-            <Select name="equipmentId">
-              <SelectTrigger id="equipmentId">
-                <SelectValue placeholder="Not tracked" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Not tracked</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="superWeightBefore">Weight Before (lbs)</Label>

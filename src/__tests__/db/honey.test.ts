@@ -1,20 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { getTableName } from "drizzle-orm";
-import { honeyHarvests, honeyInventory, honeySales } from "@/db/schema";
+import {
+  honeyHarvests,
+  honeySales,
+  honeyMovements,
+  honeySaleItems,
+  jarSizes,
+} from "@/db/schema";
 
-describe("honey schema", () => {
-  it("should export honeyHarvests table", () => {
-    expect(honeyHarvests).toBeDefined();
+describe("honey schema (ledger model)", () => {
+  it("should export harvest and sales tables", () => {
     expect(getTableName(honeyHarvests)).toBe("honey_harvests");
-  });
-
-  it("should export honeyInventory table", () => {
-    expect(honeyInventory).toBeDefined();
-    expect(getTableName(honeyInventory)).toBe("honey_inventory");
-  });
-
-  it("should export honeySales table", () => {
-    expect(honeySales).toBeDefined();
     expect(getTableName(honeySales)).toBe("honey_sales");
+  });
+
+  it("should export ledger tables", () => {
+    expect(getTableName(honeyMovements)).toBe("honey_movements");
+    expect(getTableName(honeySaleItems)).toBe("honey_sale_items");
+    expect(getTableName(jarSizes)).toBe("jar_sizes");
   });
 });

@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { hives, inspections, feedings, equipment } from "@/db/schema";
+import { hives, inspections, feedings, equipmentDeployments, equipmentStock, equipmentTypes } from "@/db/schema";
 import { eq, isNull, desc, sql } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
@@ -202,19 +202,22 @@ const equipmentNeededRule: RecommendationRule = {
   async check() {
     const results: RuleResult[] = [];
 
-    // Frame shortage aggregate across all equipment on hives
-    const shortageRows = await db
+    // Frame shortage per hive from active deployments: box deployments
+    // provide capacity (framesPerBox), frame deployments fill it.
+    const deployed = await db
       .select({
-        hiveId: equipment.hiveId,
+        hiveId: equipmentDeployments.hiveId,
         hiveName: hives.positionLabel,
-        type: equipment.type,
-        frameCapacity: equipment.frameCapacity,
-        framesInstalled: equipment.framesInstalled,
+        quantity: equipmentDeployments.quantity,
+        category: equipmentTypes.category,
+        framesPerBox: equipmentTypes.framesPerBox,
       })
-      .from(equipment)
-      .innerJoin(hives, eq(equipment.hiveId, hives.id))
+      .from(equipmentDeployments)
+      .innerJoin(equipmentStock, eq(equipmentDeployments.stockId, equipmentStock.id))
+      .innerJoin(equipmentTypes, eq(equipmentStock.typeId, equipmentTypes.id))
+      .innerJoin(hives, eq(equipmentDeployments.hiveId, hives.id))
       .where(
-        sql`${equipment.hiveId} is not null and ${equipment.frameCapacity} is not null and ${hives.status} = 'active'`
+        sql`${equipmentDeployments.dateRemoved} is null and ${hives.status} = 'active'`
       );
 
     // Aggregate per hive
@@ -223,21 +226,18 @@ const equipmentNeededRule: RecommendationRule = {
       { hiveName: string; totalCapacity: number; totalInstalled: number }
     >();
 
-    for (const row of shortageRows) {
-      const cap = row.frameCapacity ?? 0;
-      const inst = row.framesInstalled ?? 0;
-      const existing = hiveShortages.get(row.hiveId!);
-
-      if (existing) {
-        existing.totalCapacity += cap;
-        existing.totalInstalled += inst;
-      } else {
-        hiveShortages.set(row.hiveId!, {
-          hiveName: row.hiveName,
-          totalCapacity: cap,
-          totalInstalled: inst,
-        });
+    for (const row of deployed) {
+      const entry = hiveShortages.get(row.hiveId) ?? {
+        hiveName: row.hiveName,
+        totalCapacity: 0,
+        totalInstalled: 0,
+      };
+      if (row.category === "box" && row.framesPerBox) {
+        entry.totalCapacity += row.quantity * row.framesPerBox;
+      } else if (row.category === "frame") {
+        entry.totalInstalled += row.quantity;
       }
+      hiveShortages.set(row.hiveId, entry);
     }
 
     for (const [hiveId, data] of hiveShortages) {

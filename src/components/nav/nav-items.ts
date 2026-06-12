@@ -1,4 +1,4 @@
-import { Home, TreePine, Bug, Crown, Bell, Droplets, Settings } from "lucide-react";
+import { Home, TreePine, Bug, Crown, Bell, Droplets, Boxes, Settings } from "lucide-react";
 
 export const navItems = [
   { label: "Home", href: "/dashboard", icon: Home },
@@ -6,6 +6,7 @@ export const navItems = [
   { label: "Hives", href: "/hives", icon: Bug },
   { label: "Queens", href: "/genealogy", icon: Crown },
   { label: "Recommendations", href: "/recommendations", icon: Bell },
-  { label: "Harvest", href: "/harvest", icon: Droplets },
+  { label: "Honey", href: "/harvest", icon: Droplets },
+  { label: "Inventory", href: "/inventory", icon: Boxes },
   { label: "Settings", href: "/settings", icon: Settings },
 ] as const;

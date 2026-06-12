@@ -3,7 +3,7 @@ import Link from "next/link";
 import { getHive, getHiveLocationHistory } from "@/actions/hives";
 import { getQueensForHive } from "@/actions/queens";
 import { getInspectionsForHive } from "@/actions/inspections";
-import { getEquipmentForHive } from "@/actions/equipment";
+import { getDeploymentsForHive } from "@/actions/equipment-v2";
 import { getFeedingsForHive } from "@/actions/feedings";
 import { getPhotosForOwner } from "@/actions/photos";
 import { getSplitsForHive } from "@/actions/hive-splits";
@@ -33,7 +33,7 @@ export default async function HiveDetailPage({
     getHiveLocationHistory(id),
     getQueensForHive(id),
     getInspectionsForHive(id),
-    getEquipmentForHive(id),
+    getDeploymentsForHive(id),
     getFeedingsForHive(id),
     getPhotosForOwner("hive", id),
     getSplitsForHive(id),

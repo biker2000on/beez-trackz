@@ -33,6 +33,7 @@ export async function createEquipmentType(_prevState: unknown, formData: FormDat
   });
 
   revalidatePath("/settings/equipment");
+  revalidatePath("/inventory");
   return { success: true };
 }
 
@@ -111,6 +112,7 @@ export async function adjustStock(_prevState: unknown, formData: FormData) {
   });
 
   revalidatePath("/settings/equipment");
+  revalidatePath("/inventory");
   return { success: true };
 }
 
@@ -155,6 +157,7 @@ export async function createStock(_prevState: unknown, formData: FormData) {
   });
 
   revalidatePath("/settings/equipment");
+  revalidatePath("/inventory");
   return { success: true };
 }
 
@@ -182,6 +185,7 @@ export async function deployEquipment(_prevState: unknown, formData: FormData) {
   });
 
   revalidatePath("/settings/equipment");
+  revalidatePath("/inventory");
   revalidatePath(`/hives/${hiveId}`);
   return { success: true };
 }
@@ -200,6 +204,7 @@ export async function removeDeployment(deploymentId: string) {
     .where(eq(equipmentDeployments.id, deploymentId));
 
   revalidatePath("/settings/equipment");
+  revalidatePath("/inventory");
   if (deployment?.hiveId) {
     revalidatePath(`/hives/${deployment.hiveId}`);
   }
@@ -342,4 +347,88 @@ export async function seedDefaultEquipmentTypes() {
       await db.update(equipmentTypes).set({ framesPerBox: d.framesPerBox }).where(eq(equipmentTypes.id, existing[0].id));
     }
   }
+}
+
+// ============================================
+// Bulk operations
+// ============================================
+
+/**
+ * Bulk stock edit: set new owned totals for many stock rows in one save.
+ * Differences are recorded as adjustments so history stays auditable.
+ */
+export async function bulkAdjustStock(input: {
+  date?: string;
+  reason?: string;
+  lines: Array<{ stockId: string; newTotal: number }>;
+}) {
+  await requireSession();
+  const lines = (input.lines ?? []).filter((l) => l.stockId && l.newTotal >= 0);
+  if (lines.length === 0) return { error: "No changes to apply" };
+  const date = input.date ? new Date(input.date) : new Date();
+
+  await db.transaction(async (tx) => {
+    for (const line of lines) {
+      const [current] = await tx
+        .select({ totalOwned: equipmentStock.totalOwned })
+        .from(equipmentStock)
+        .where(eq(equipmentStock.id, line.stockId))
+        .limit(1);
+      if (!current) continue;
+      const delta = line.newTotal - current.totalOwned;
+      if (delta === 0) continue;
+      await tx.insert(equipmentStockAdjustments).values({
+        stockId: line.stockId,
+        quantity: delta,
+        reason: "other",
+        notes: input.reason?.trim() || "bulk edit",
+        date,
+      });
+      await tx
+        .update(equipmentStock)
+        .set({ totalOwned: line.newTotal, updatedAt: new Date() })
+        .where(eq(equipmentStock.id, line.stockId));
+    }
+  });
+
+  revalidatePath("/inventory");
+  revalidatePath("/settings/equipment");
+  revalidatePath("/inventory");
+  return { success: true };
+}
+
+/** Update storage location / notes on a stock row. */
+export async function updateStock(
+  stockId: string,
+  data: { storageLocation?: string | null; notes?: string | null }
+) {
+  await requireSession();
+  await db
+    .update(equipmentStock)
+    .set({
+      ...(data.storageLocation !== undefined
+        ? { storageLocation: data.storageLocation?.trim() || null }
+        : {}),
+      ...(data.notes !== undefined ? { notes: data.notes?.trim() || null } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(equipmentStock.id, stockId));
+  revalidatePath("/inventory");
+  return { success: true };
+}
+
+/** All active deployments with hive labels (for the inventory page). */
+export async function getActiveDeployments() {
+  await requireSession();
+  return db
+    .select({
+      id: equipmentDeployments.id,
+      stockId: equipmentDeployments.stockId,
+      quantity: equipmentDeployments.quantity,
+      hiveLabel: hives.positionLabel,
+    })
+    .from(equipmentDeployments)
+    .innerJoin(hives, eq(equipmentDeployments.hiveId, hives.id))
+    .where(isNull(equipmentDeployments.dateRemoved))
+    .orderBy(hives.positionLabel);
 }

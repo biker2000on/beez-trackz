@@ -2,7 +2,7 @@
 
 import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
-import { harvestSessions, honeyHarvests, hives, apiaries, equipment } from "@/db/schema";
+import { harvestSessions, honeyHarvests, hives, apiaries } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -39,7 +39,6 @@ export async function addHarvestEntry(
 ) {
   await requireSession();
   const hiveId = formData.get("hiveId") as string;
-  const equipmentId = formData.get("equipmentId") as string;
   const superWeightBefore = formData.get("superWeightBefore") as string;
   const superWeightAfter = formData.get("superWeightAfter") as string;
   const notes = formData.get("notes") as string;
@@ -64,7 +63,6 @@ export async function addHarvestEntry(
   await db.insert(honeyHarvests).values({
     sessionId,
     hiveId,
-    equipmentId: equipmentId && equipmentId !== "__none__" ? equipmentId : null,
     date: session[0].date,
     superWeightBefore: before,
     superWeightAfter: after,
@@ -116,7 +114,6 @@ export async function getHarvestSession(id: string) {
     .select({
       id: honeyHarvests.id,
       hiveId: honeyHarvests.hiveId,
-      equipmentId: honeyHarvests.equipmentId,
       superWeightBefore: honeyHarvests.superWeightBefore,
       superWeightAfter: honeyHarvests.superWeightAfter,
       calculatedHoneyWeight: honeyHarvests.calculatedHoneyWeight,

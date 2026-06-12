@@ -1,15 +1,14 @@
 import Link from "next/link";
-import { getHoneyDashboard } from "@/actions/honey";
+import { getHoneyOverview } from "@/actions/honey";
 
 export async function HoneyInventoryWidget() {
-  const dashboard = await getHoneyDashboard();
+  const overview = await getHoneyOverview();
 
   const hasData =
-    dashboard.totalHarvested > 0 ||
-    dashboard.totalJarredLbs > 0 ||
-    dashboard.totalLosses > 0 ||
-    dashboard.inventory.length > 0 ||
-    dashboard.totalRevenue > 0;
+    overview.totalHarvestedLbs > 0 ||
+    overview.jarredLbs > 0 ||
+    overview.totalRevenue > 0 ||
+    overview.inventory.some((i) => i.onHand > 0);
 
   if (!hasData) {
     return (
@@ -25,69 +24,55 @@ export async function HoneyInventoryWidget() {
     );
   }
 
+  const jarsOnHand = overview.inventory.reduce((s, i) => s + i.onHand, 0);
+
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div>
-          <p className="text-xs text-muted-foreground">Extracted</p>
-          <p className="text-lg font-bold">
-            {dashboard.totalHarvested.toFixed(1)}{" "}
+          <p className="text-xs text-muted-foreground">Harvested</p>
+          <p className="text-lg font-bold tabular-nums">
+            {overview.totalHarvestedLbs.toFixed(1)}{" "}
             <span className="text-xs font-normal text-muted-foreground">lbs</span>
           </p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Jarred</p>
-          <p className="text-lg font-bold">
-            {dashboard.totalJarredLbs.toFixed(1)}{" "}
+          <p className="text-xs text-muted-foreground">Bulk on hand</p>
+          <p className="text-lg font-bold tabular-nums">
+            {overview.bulkOnHandLbs.toFixed(1)}{" "}
             <span className="text-xs font-normal text-muted-foreground">lbs</span>
           </p>
         </div>
         <div>
-          <p className="text-xs text-muted-foreground">Losses</p>
-          <p className="text-lg font-bold">
-            {dashboard.totalLosses.toFixed(1)}{" "}
-            <span className="text-xs font-normal text-muted-foreground">lbs</span>
-          </p>
+          <p className="text-xs text-muted-foreground">Jars on hand</p>
+          <p className="text-lg font-bold tabular-nums">{jarsOnHand}</p>
         </div>
-        <div>
-          <p className="text-xs text-muted-foreground">Available</p>
-          <p className="text-lg font-bold">
-            {dashboard.availableToJar.toFixed(1)}{" "}
-            <span className="text-xs font-normal text-muted-foreground">lbs</span>
-          </p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 pt-2 border-t">
         <div>
           <p className="text-xs text-muted-foreground">Revenue</p>
-          <p className="text-lg font-bold">
-            ${dashboard.totalRevenue.toFixed(2)}
+          <p className="text-lg font-bold tabular-nums">
+            ${overview.totalRevenue.toFixed(2)}
           </p>
         </div>
       </div>
 
-      {dashboard.inventory.length > 0 && (
-        <div>
-          <p className="text-xs font-medium text-muted-foreground mb-1">
-            Jar Inventory
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {dashboard.inventory.map((item) => (
+      {jarsOnHand > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {overview.inventory
+            .filter((i) => i.onHand > 0)
+            .map((i) => (
               <span
-                key={item.jarSize}
-                className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-xs dark:bg-amber-950 dark:border-amber-800"
+                key={i.jarSizeId}
+                className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs"
               >
-                {item.jarSize}: {item.totalQuantity}
+                {i.onHand} × {i.label}
               </span>
             ))}
-          </div>
         </div>
       )}
 
       <div className="pt-1">
         <Link href="/harvest" className="text-xs text-primary hover:underline">
-          View harvest details
+          Manage honey
         </Link>
       </div>
     </div>

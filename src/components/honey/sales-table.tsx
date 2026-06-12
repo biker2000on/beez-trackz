@@ -8,23 +8,21 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 
-interface SaleItem {
-  jarSize: string;
+interface SaleLineItem {
+  jarSizeId: string;
   quantity: number;
-  pricePerUnit: number;
+  unitPrice: number;
+  label: string;
 }
 
 interface SaleEntry {
   id: string;
   date: Date;
   customerName: string | null;
-  items: unknown;
+  location: string | null;
   totalAmount: number;
   notes: string | null;
-}
-
-interface SalesTableProps {
-  sales: SaleEntry[];
+  lineItems: SaleLineItem[];
 }
 
 function formatDate(date: Date): string {
@@ -35,64 +33,53 @@ function formatDate(date: Date): string {
   });
 }
 
-function formatItems(items: unknown): SaleItem[] {
-  if (Array.isArray(items)) return items as SaleItem[];
-  if (typeof items === "string") {
-    try {
-      return JSON.parse(items) as SaleItem[];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
-export function SalesTable({ sales }: SalesTableProps) {
+export function SalesTable({ sales }: { sales: SaleEntry[] }) {
   if (sales.length === 0) {
     return (
       <p className="text-muted-foreground text-sm text-center py-8">
-        No sales recorded yet.
+        No sales recorded yet. Use Record Sale to log your first one.
       </p>
     );
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Date</TableHead>
-          <TableHead>Customer</TableHead>
-          <TableHead>Items</TableHead>
-          <TableHead className="text-right">Total</TableHead>
-          <TableHead>Notes</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sales.map((sale) => {
-          const items = formatItems(sale.items);
-          return (
+    <div className="rounded-md border overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Date</TableHead>
+            <TableHead>Items</TableHead>
+            <TableHead className="hidden sm:table-cell">Location</TableHead>
+            <TableHead className="hidden md:table-cell">Customer</TableHead>
+            <TableHead className="text-right">Total</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sales.map((sale) => (
             <TableRow key={sale.id}>
-              <TableCell>{formatDate(sale.date)}</TableCell>
-              <TableCell>{sale.customerName || "--"}</TableCell>
+              <TableCell className="whitespace-nowrap">{formatDate(sale.date)}</TableCell>
               <TableCell>
                 <div className="flex flex-wrap gap-1">
-                  {items.map((item, i) => (
-                    <Badge key={i} variant="outline" className="text-xs">
-                      {item.quantity}x {item.jarSize} @ ${item.pricePerUnit.toFixed(2)}
+                  {sale.lineItems.map((item, i) => (
+                    <Badge key={i} variant="secondary" className="font-normal">
+                      {item.quantity} × {item.label}
                     </Badge>
                   ))}
                 </div>
               </TableCell>
-              <TableCell className="text-right font-medium">
+              <TableCell className="hidden sm:table-cell text-muted-foreground">
+                {sale.location ?? "—"}
+              </TableCell>
+              <TableCell className="hidden md:table-cell text-muted-foreground">
+                {sale.customerName ?? "—"}
+              </TableCell>
+              <TableCell className="text-right font-semibold tabular-nums">
                 ${sale.totalAmount.toFixed(2)}
               </TableCell>
-              <TableCell className="max-w-[200px] truncate text-muted-foreground text-xs">
-                {sale.notes || "--"}
-              </TableCell>
             </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 }

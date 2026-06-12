@@ -1,14 +1,5 @@
-import { createSale } from "@/actions/honey";
-import { SalesForm } from "@/components/honey/sales-form";
+import { redirect } from "next/navigation";
 
-export default async function SellPage() {
-  return (
-    <div className="p-6">
-      <SalesForm
-        action={createSale}
-        title="Record Sale"
-        submitLabel="Save Sale"
-      />
-    </div>
-  );
+export default function LegacySellRoute() {
+  redirect("/harvest");
 }

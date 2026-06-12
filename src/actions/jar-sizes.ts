@@ -2,16 +2,20 @@
 
 import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
-import { userSettings } from "@/db/schema/settings";
-import { eq } from "drizzle-orm";
+import { jarSizes } from "@/db/schema";
+import { asc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export interface JarSize {
+export interface JarSizeRecord {
+  id: string;
   label: string;
-  honeyOz: number;
+  honeyOz: number | null;
+  defaultPrice: number | null;
+  sortOrder: number;
+  isActive: boolean;
 }
 
-const DEFAULT_JAR_SIZES: JarSize[] = [
+const DEFAULT_JAR_SIZES = [
   { label: "Half Pint", honeyOz: 12 },
   { label: "Pint", honeyOz: 22 },
   { label: "Quart", honeyOz: 44 },
@@ -19,26 +23,59 @@ const DEFAULT_JAR_SIZES: JarSize[] = [
   { label: "Gallon", honeyOz: 176 },
 ];
 
-export async function getJarSizes(): Promise<JarSize[]> {
+/** All jar sizes, seeding the defaults on first use. */
+export async function getJarSizes(includeInactive = false): Promise<JarSizeRecord[]> {
   await requireSession();
-  const users = await db.select().from(userSettings).limit(1);
-  const raw = users[0]?.jarSizes;
-  if (Array.isArray(raw)) {
-    return raw as JarSize[];
+  let rows = await db.select().from(jarSizes).orderBy(asc(jarSizes.sortOrder), asc(jarSizes.label));
+  if (rows.length === 0) {
+    await db
+      .insert(jarSizes)
+      .values(DEFAULT_JAR_SIZES.map((s, i) => ({ ...s, sortOrder: i })))
+      .onConflictDoNothing();
+    rows = await db.select().from(jarSizes).orderBy(asc(jarSizes.sortOrder), asc(jarSizes.label));
   }
-  return DEFAULT_JAR_SIZES;
+  return includeInactive ? rows : rows.filter((r) => r.isActive);
 }
 
-export async function updateJarSizes(sizes: JarSize[]) {
+export async function createJarSize(data: {
+  label: string;
+  honeyOz?: number | null;
+  defaultPrice?: number | null;
+}) {
   await requireSession();
-  const users = await db.select().from(userSettings).limit(1);
-  if (!users[0]) return { error: "No user settings found" };
+  const label = data.label.trim();
+  if (!label) return { error: "Label is required" };
+  const existing = await db.select().from(jarSizes).where(eq(jarSizes.label, label)).limit(1);
+  if (existing.length > 0) return { error: `"${label}" already exists` };
 
+  const all = await db.select({ sortOrder: jarSizes.sortOrder }).from(jarSizes);
+  const maxOrder = all.reduce((m, r) => Math.max(m, r.sortOrder), -1);
+
+  await db.insert(jarSizes).values({
+    label,
+    honeyOz: data.honeyOz ?? null,
+    defaultPrice: data.defaultPrice ?? null,
+    sortOrder: maxOrder + 1,
+  });
+  revalidatePath("/settings/jar-sizes");
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+export async function updateJarSize(
+  id: string,
+  data: { label?: string; honeyOz?: number | null; defaultPrice?: number | null; isActive?: boolean }
+) {
+  await requireSession();
   await db
-    .update(userSettings)
-    .set({ jarSizes: sizes, updatedAt: new Date() })
-    .where(eq(userSettings.id, users[0].id));
-
+    .update(jarSizes)
+    .set({
+      ...(data.label !== undefined ? { label: data.label.trim() } : {}),
+      ...(data.honeyOz !== undefined ? { honeyOz: data.honeyOz } : {}),
+      ...(data.defaultPrice !== undefined ? { defaultPrice: data.defaultPrice } : {}),
+      ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+    })
+    .where(eq(jarSizes.id, id));
   revalidatePath("/settings/jar-sizes");
   revalidatePath("/harvest");
   return { success: true };

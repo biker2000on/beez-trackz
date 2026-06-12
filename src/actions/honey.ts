@@ -4,21 +4,32 @@ import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
 import {
   honeyHarvests,
-  honeyInventory,
   honeySales,
+  honeySaleItems,
+  honeyMovements,
+  jarSizes,
   hives,
   apiaries,
   harvestSessions,
-  honeyAdjustments,
 } from "@/db/schema";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-export async function createHarvest(
-  _prevState: unknown,
-  formData: FormData
-) {
+export interface JarLine {
+  jarSizeId: string;
+  quantity: number;
+}
+
+export interface SaleLine extends JarLine {
+  unitPrice: number;
+}
+
+// ---------------------------------------------------------------------------
+// Harvest entries (bulk honey in)
+// ---------------------------------------------------------------------------
+
+export async function createHarvest(_prevState: unknown, formData: FormData) {
   await requireSession();
   const hiveId = formData.get("hiveId") as string;
   const date = formData.get("date") as string;
@@ -51,118 +62,6 @@ export async function createHarvest(
   redirect("/harvest");
 }
 
-export async function createJarring(
-  _prevState: unknown,
-  formData: FormData
-) {
-  await requireSession();
-  const jarSize = formData.get("jarSize") as string;
-  const quantity = formData.get("quantity") as string;
-  const harvestId = formData.get("harvestId") as string;
-
-  if (!jarSize) return { error: "Jar size is required" };
-  if (!quantity) return { error: "Quantity is required" };
-
-  await db.insert(honeyInventory).values({
-    jarSize: jarSize.trim(),
-    quantity: parseInt(quantity),
-    harvestId: harvestId && harvestId !== "__none__" ? harvestId : null,
-  });
-
-  revalidatePath("/harvest");
-  redirect("/harvest");
-}
-
-export async function createSale(
-  _prevState: unknown,
-  formData: FormData
-) {
-  await requireSession();
-  const date = formData.get("date") as string;
-  const customerName = formData.get("customerName") as string;
-  const itemsJson = formData.get("items") as string;
-  const notes = formData.get("notes") as string;
-
-  if (!date) return { error: "Date is required" };
-  if (!itemsJson) return { error: "At least one item is required" };
-
-  let items: Array<{
-    jarSize: string;
-    quantity: number;
-    pricePerUnit: number;
-  }>;
-  try {
-    items = JSON.parse(itemsJson);
-  } catch {
-    return { error: "Invalid items data" };
-  }
-
-  if (!Array.isArray(items) || items.length === 0)
-    return { error: "At least one item is required" };
-
-  const totalAmount = items.reduce(
-    (sum, item) => sum + item.quantity * item.pricePerUnit,
-    0
-  );
-
-  // Deduct from inventory inside a transaction
-  try {
-    await db.transaction(async (tx) => {
-      for (const item of items) {
-        const inventoryRows = await tx
-          .select()
-          .from(honeyInventory)
-          .where(eq(honeyInventory.jarSize, item.jarSize))
-          .orderBy(honeyInventory.createdAt);
-
-        const available = inventoryRows.reduce(
-          (sum, r) => sum + r.quantity,
-          0
-        );
-        if (available < item.quantity) {
-          throw new Error(
-            `Insufficient inventory for ${item.jarSize}: need ${item.quantity}, have ${available}`
-          );
-        }
-
-        let remaining = item.quantity;
-        for (const row of inventoryRows) {
-          if (remaining <= 0) break;
-          const deduct = Math.min(remaining, row.quantity);
-          const newQty = row.quantity - deduct;
-          if (newQty <= 0) {
-            await tx
-              .delete(honeyInventory)
-              .where(eq(honeyInventory.id, row.id));
-          } else {
-            await tx
-              .update(honeyInventory)
-              .set({ quantity: newQty, updatedAt: new Date() })
-              .where(eq(honeyInventory.id, row.id));
-          }
-          remaining -= deduct;
-        }
-      }
-
-      await tx.insert(honeySales).values({
-        date: new Date(date),
-        customerName: customerName?.trim() || null,
-        items,
-        totalAmount,
-        notes: notes?.trim() || null,
-      });
-    });
-  } catch (e) {
-    if (e instanceof Error && e.message.startsWith("Insufficient inventory")) {
-      return { error: e.message };
-    }
-    throw e;
-  }
-
-  revalidatePath("/harvest");
-  redirect("/harvest");
-}
-
 export async function getHarvests() {
   await requireSession();
   return db
@@ -183,84 +82,438 @@ export async function getHarvests() {
     .orderBy(desc(honeyHarvests.date));
 }
 
-export async function getHoneyInventory() {
+// ---------------------------------------------------------------------------
+// Movements (bulk honey out / jar lifecycle)
+// ---------------------------------------------------------------------------
+
+/**
+ * Jar bulk honey into containers. Multi-line so a whole jarring session is
+ * one entry; optionally records the sticky-loss from the same session.
+ */
+export async function recordJarring(input: {
+  date: string;
+  lines: JarLine[];
+  lossLbs?: number;
+  lossReason?: string;
+  notes?: string;
+}) {
   await requireSession();
-  return db
-    .select({
-      jarSize: honeyInventory.jarSize,
-      totalQuantity:
-        sql<number>`cast(sum(${honeyInventory.quantity}) as integer)`,
-    })
-    .from(honeyInventory)
-    .groupBy(honeyInventory.jarSize)
-    .orderBy(honeyInventory.jarSize);
+  const lines = (input.lines ?? []).filter((l) => l.jarSizeId && l.quantity > 0);
+  if (lines.length === 0 && !input.lossLbs) {
+    return { error: "Add at least one jar line" };
+  }
+  const date = new Date(input.date);
+  const sizes = lines.length
+    ? await db
+        .select()
+        .from(jarSizes)
+        .where(inArray(jarSizes.id, lines.map((l) => l.jarSizeId)))
+    : [];
+  const sizeById = new Map(sizes.map((s) => [s.id, s]));
+
+  type MovementInsert = typeof honeyMovements.$inferInsert;
+  const values: MovementInsert[] = lines.map((line) => {
+    const oz = sizeById.get(line.jarSizeId)?.honeyOz ?? null;
+    return {
+      date,
+      kind: "jarring",
+      jarSizeId: line.jarSizeId,
+      quantity: line.quantity,
+      amountLbs: oz != null ? (oz * line.quantity) / 16 : null,
+      notes: input.notes?.trim() || null,
+    };
+  });
+
+  if (input.lossLbs && input.lossLbs > 0) {
+    values.push({
+      date,
+      kind: "loss",
+      amountLbs: input.lossLbs,
+      reason: input.lossReason?.trim() || "jarring loss",
+      notes: input.notes?.trim() || null,
+    });
+  }
+
+  await db.insert(honeyMovements).values(values);
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+/** Bulk honey consumed directly (mead, baking, …) or written off. */
+export async function recordBulkMovement(input: {
+  date: string;
+  kind: "bulk_use" | "loss";
+  amountLbs: number;
+  reason?: string;
+  notes?: string;
+}) {
+  await requireSession();
+  if (!input.amountLbs || input.amountLbs <= 0)
+    return { error: "Amount must be greater than zero" };
+  await db.insert(honeyMovements).values({
+    date: new Date(input.date),
+    kind: input.kind,
+    amountLbs: input.amountLbs,
+    reason: input.reason?.trim() || null,
+    notes: input.notes?.trim() || null,
+  });
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+/** Jars given away or consumed at home (no revenue). */
+export async function recordGiveAway(input: {
+  date: string;
+  lines: JarLine[];
+  reason?: string;
+  notes?: string;
+}) {
+  await requireSession();
+  const lines = (input.lines ?? []).filter((l) => l.jarSizeId && l.quantity > 0);
+  if (lines.length === 0) return { error: "Add at least one jar line" };
+  await db.insert(honeyMovements).values(
+    lines.map((line) => ({
+      date: new Date(input.date),
+      kind: "give_away" as const,
+      jarSizeId: line.jarSizeId,
+      quantity: line.quantity,
+      reason: input.reason?.trim() || null,
+      notes: input.notes?.trim() || null,
+    }))
+  );
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+/** Manual jar-count corrections (bulk: one row per size, +/- deltas). */
+export async function adjustJarCounts(input: {
+  date: string;
+  lines: Array<{ jarSizeId: string; delta: number }>;
+  reason?: string;
+}) {
+  await requireSession();
+  const lines = (input.lines ?? []).filter((l) => l.jarSizeId && l.delta !== 0);
+  if (lines.length === 0) return { error: "No changes to apply" };
+  await db.insert(honeyMovements).values(
+    lines.map((line) => ({
+      date: new Date(input.date),
+      kind: "jar_adjustment" as const,
+      jarSizeId: line.jarSizeId,
+      quantity: line.delta,
+      reason: input.reason?.trim() || "manual correction",
+    }))
+  );
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+export async function deleteMovement(id: string) {
+  await requireSession();
+  await db.delete(honeyMovements).where(eq(honeyMovements.id, id));
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// Sales
+// ---------------------------------------------------------------------------
+
+export async function recordSale(input: {
+  date: string;
+  location?: string;
+  customerName?: string;
+  lines: SaleLine[];
+  notes?: string;
+}) {
+  await requireSession();
+  const lines = (input.lines ?? []).filter((l) => l.jarSizeId && l.quantity > 0);
+  if (lines.length === 0) return { error: "Add at least one line" };
+
+  // Validate availability against the derived inventory.
+  const inventory = await getJarInventory();
+  const onHand = new Map(inventory.map((i) => [i.jarSizeId, i.onHand]));
+  const labels = new Map(inventory.map((i) => [i.jarSizeId, i.label]));
+  for (const line of lines) {
+    const have = onHand.get(line.jarSizeId) ?? 0;
+    if (line.quantity > have) {
+      return {
+        error: `Not enough ${labels.get(line.jarSizeId) ?? "jars"}: need ${line.quantity}, have ${have}`,
+      };
+    }
+  }
+
+  const totalAmount = lines.reduce((sum, l) => sum + l.quantity * l.unitPrice, 0);
+
+  await db.transaction(async (tx) => {
+    const [sale] = await tx
+      .insert(honeySales)
+      .values({
+        date: new Date(input.date),
+        customerName: input.customerName?.trim() || null,
+        location: input.location?.trim() || null,
+        totalAmount,
+        notes: input.notes?.trim() || null,
+      })
+      .returning();
+    await tx.insert(honeySaleItems).values(
+      lines.map((l) => ({
+        saleId: sale.id,
+        jarSizeId: l.jarSizeId,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+      }))
+    );
+  });
+
+  revalidatePath("/harvest");
+  return { success: true };
+}
+
+export async function deleteSale(id: string) {
+  await requireSession();
+  await db.delete(honeySales).where(eq(honeySales.id, id));
+  revalidatePath("/harvest");
+  return { success: true };
 }
 
 export async function getSales() {
   await requireSession();
-  return db
-    .select()
-    .from(honeySales)
-    .orderBy(desc(honeySales.date));
+  const sales = await db.select().from(honeySales).orderBy(desc(honeySales.date));
+  const items = await db
+    .select({
+      saleId: honeySaleItems.saleId,
+      jarSizeId: honeySaleItems.jarSizeId,
+      quantity: honeySaleItems.quantity,
+      unitPrice: honeySaleItems.unitPrice,
+      label: jarSizes.label,
+    })
+    .from(honeySaleItems)
+    .innerJoin(jarSizes, eq(honeySaleItems.jarSizeId, jarSizes.id));
+
+  const itemsBySale = new Map<string, typeof items>();
+  for (const item of items) {
+    const list = itemsBySale.get(item.saleId) ?? [];
+    list.push(item);
+    itemsBySale.set(item.saleId, list);
+  }
+  return sales.map((s) => ({ ...s, lineItems: itemsBySale.get(s.id) ?? [] }));
 }
 
-export async function getHoneyDashboard() {
+/** Distinct past sale locations for autocomplete. */
+export async function getSaleLocations(): Promise<string[]> {
   await requireSession();
-  const [sessions, harvests, inventory, sales, adjustments, inventoryWithOz] = await Promise.all([
-    db
-      .select({
-        total: sql<number>`coalesce(sum(${harvestSessions.totalExtractedWeight}), 0)`,
-      })
-      .from(harvestSessions),
-    db
-      .select({
-        total: sql<number>`coalesce(sum(${honeyHarvests.calculatedHoneyWeight}), 0)`,
-      })
-      .from(honeyHarvests),
-    getHoneyInventory(),
-    db
-      .select({
-        total: sql<number>`coalesce(sum(${honeySales.totalAmount}), 0)`,
-      })
-      .from(honeySales),
-    db
-      .select({
-        total: sql<number>`coalesce(sum(${honeyAdjustments.amountLbs}), 0)`,
-      })
-      .from(honeyAdjustments),
-    db
-      .select({
-        honeyOz: honeyInventory.honeyOz,
-        quantity: honeyInventory.quantity,
-      })
-      .from(honeyInventory),
-  ]);
+  const rows = await db
+    .selectDistinct({ location: honeySales.location })
+    .from(honeySales);
+  return rows.map((r) => r.location).filter((l): l is string => Boolean(l));
+}
 
-  // Calculate total harvested from sessions if available, else from harvests
-  const sessionTotal = Number(sessions[0]?.total || 0);
-  const harvestTotal = Number(harvests[0]?.total || 0);
-  const totalHarvested = sessionTotal > 0 ? sessionTotal : harvestTotal;
+// ---------------------------------------------------------------------------
+// Derived inventory + overview
+// ---------------------------------------------------------------------------
 
-  // Calculate total losses
-  const totalLosses = Number(adjustments[0]?.total || 0);
+export interface JarInventoryRow {
+  jarSizeId: string;
+  label: string;
+  honeyOz: number | null;
+  defaultPrice: number | null;
+  jarred: number;
+  sold: number;
+  givenAway: number;
+  adjusted: number;
+  onHand: number;
+}
 
-  // Calculate total jarred in lbs from inventory
-  const totalJarredLbs = inventoryWithOz.reduce((sum, item) => {
-    if (item.honeyOz) {
-      return sum + (item.honeyOz * item.quantity) / 16;
-    }
-    return sum;
-  }, 0);
+/** Jar counts derived from the ledger: jarred + adjustments − sold − given. */
+export async function getJarInventory(): Promise<JarInventoryRow[]> {
+  await requireSession();
+  const sizes = await db
+    .select()
+    .from(jarSizes)
+    .orderBy(jarSizes.sortOrder, jarSizes.label);
 
-  // Calculate available to jar
-  const availableToJar = totalHarvested - totalJarredLbs - totalLosses;
+  const movementTotals = await db
+    .select({
+      jarSizeId: honeyMovements.jarSizeId,
+      kind: honeyMovements.kind,
+      total: sql<number>`coalesce(sum(${honeyMovements.quantity}), 0)`,
+    })
+    .from(honeyMovements)
+    .groupBy(honeyMovements.jarSizeId, honeyMovements.kind);
+
+  const soldTotals = await db
+    .select({
+      jarSizeId: honeySaleItems.jarSizeId,
+      total: sql<number>`coalesce(sum(${honeySaleItems.quantity}), 0)`,
+    })
+    .from(honeySaleItems)
+    .groupBy(honeySaleItems.jarSizeId);
+
+  const byKind = (sizeId: string, kind: string) =>
+    Number(
+      movementTotals.find((m) => m.jarSizeId === sizeId && m.kind === kind)
+        ?.total ?? 0
+    );
+  const soldBySize = new Map(soldTotals.map((s) => [s.jarSizeId, Number(s.total)]));
+
+  return sizes.map((size) => {
+    const jarred = byKind(size.id, "jarring");
+    const givenAway = byKind(size.id, "give_away");
+    const adjusted = byKind(size.id, "jar_adjustment");
+    const sold = soldBySize.get(size.id) ?? 0;
+    return {
+      jarSizeId: size.id,
+      label: size.label,
+      honeyOz: size.honeyOz,
+      defaultPrice: size.defaultPrice,
+      jarred,
+      sold,
+      givenAway,
+      adjusted,
+      onHand: jarred + adjusted - sold - givenAway,
+    };
+  });
+}
+
+export interface HoneyOverview {
+  totalHarvestedLbs: number;
+  jarredLbs: number;
+  bulkUsedLbs: number;
+  lossLbs: number;
+  bulkOnHandLbs: number;
+  totalRevenue: number;
+  jarsSold: number;
+  inventory: JarInventoryRow[];
+}
+
+export async function getHoneyOverview(): Promise<HoneyOverview> {
+  await requireSession();
+  const [sessions, harvests, bulkByKind, revenue, soldCount, inventory] =
+    await Promise.all([
+      db
+        .select({
+          total: sql<number>`coalesce(sum(${harvestSessions.totalExtractedWeight}), 0)`,
+        })
+        .from(harvestSessions),
+      db
+        .select({
+          total: sql<number>`coalesce(sum(${honeyHarvests.calculatedHoneyWeight}), 0)`,
+        })
+        .from(honeyHarvests),
+      db
+        .select({
+          kind: honeyMovements.kind,
+          total: sql<number>`coalesce(sum(${honeyMovements.amountLbs}), 0)`,
+        })
+        .from(honeyMovements)
+        .groupBy(honeyMovements.kind),
+      db
+        .select({
+          total: sql<number>`coalesce(sum(${honeySales.totalAmount}), 0)`,
+        })
+        .from(honeySales),
+      db
+        .select({
+          total: sql<number>`coalesce(sum(${honeySaleItems.quantity}), 0)`,
+        })
+        .from(honeySaleItems),
+      getJarInventory(),
+    ]);
+
+  const sessionTotal = Number(sessions[0]?.total ?? 0);
+  const harvestTotal = Number(harvests[0]?.total ?? 0);
+  // Sessions hold the authoritative extracted weight when used; per-hive
+  // harvest entries are the fallback.
+  const totalHarvestedLbs = sessionTotal > 0 ? sessionTotal : harvestTotal;
+
+  const lbsByKind = (kind: string) =>
+    Number(bulkByKind.find((b) => b.kind === kind)?.total ?? 0);
+  const jarredLbs = lbsByKind("jarring");
+  const bulkUsedLbs = lbsByKind("bulk_use");
+  const lossLbs = lbsByKind("loss");
 
   return {
-    totalHarvested,
-    totalLosses,
-    totalJarredLbs,
-    availableToJar,
+    totalHarvestedLbs,
+    jarredLbs,
+    bulkUsedLbs,
+    lossLbs,
+    bulkOnHandLbs: totalHarvestedLbs - jarredLbs - bulkUsedLbs - lossLbs,
+    totalRevenue: Number(revenue[0]?.total ?? 0),
+    jarsSold: Number(soldCount[0]?.total ?? 0),
     inventory,
-    totalRevenue: Number(sales[0]?.total || 0),
   };
+}
+
+/** Unified activity feed: movements + sales, newest first. */
+export interface TimelineEntry {
+  id: string;
+  date: Date;
+  type: "jarring" | "bulk_use" | "loss" | "give_away" | "jar_adjustment" | "sale";
+  description: string;
+  amountLbs: number | null;
+  quantity: number | null;
+  totalAmount: number | null;
+  notes: string | null;
+}
+
+export async function getHoneyTimeline(limit = 50): Promise<TimelineEntry[]> {
+  await requireSession();
+  const [movements, sales] = await Promise.all([
+    db
+      .select({
+        id: honeyMovements.id,
+        date: honeyMovements.date,
+        kind: honeyMovements.kind,
+        amountLbs: honeyMovements.amountLbs,
+        quantity: honeyMovements.quantity,
+        reason: honeyMovements.reason,
+        notes: honeyMovements.notes,
+        sizeLabel: jarSizes.label,
+      })
+      .from(honeyMovements)
+      .leftJoin(jarSizes, eq(honeyMovements.jarSizeId, jarSizes.id))
+      .orderBy(desc(honeyMovements.date))
+      .limit(limit),
+    getSales(),
+  ]);
+
+  const entries: TimelineEntry[] = movements.map((m) => ({
+    id: m.id,
+    date: m.date,
+    type: m.kind,
+    description:
+      m.kind === "jarring"
+        ? `Jarred ${m.quantity} × ${m.sizeLabel ?? "?"}`
+        : m.kind === "give_away"
+          ? `Gave away ${m.quantity} × ${m.sizeLabel ?? "?"}${m.reason ? ` (${m.reason})` : ""}`
+          : m.kind === "jar_adjustment"
+            ? `Adjusted ${m.sizeLabel ?? "?"} by ${m.quantity != null && m.quantity > 0 ? "+" : ""}${m.quantity}${m.reason ? ` (${m.reason})` : ""}`
+            : m.kind === "bulk_use"
+              ? `Used ${m.amountLbs?.toFixed(1)} lbs bulk${m.reason ? ` (${m.reason})` : ""}`
+              : `Loss ${m.amountLbs?.toFixed(1)} lbs${m.reason ? ` (${m.reason})` : ""}`,
+    amountLbs: m.amountLbs,
+    quantity: m.quantity,
+    totalAmount: null,
+    notes: m.notes,
+  }));
+
+  for (const sale of sales.slice(0, limit)) {
+    const lineSummary = sale.lineItems
+      .map((i) => `${i.quantity} × ${i.label}`)
+      .join(", ");
+    entries.push({
+      id: sale.id,
+      date: sale.date,
+      type: "sale",
+      description: `Sold ${lineSummary || "items"}${sale.location ? ` @ ${sale.location}` : ""}${sale.customerName ? ` to ${sale.customerName}` : ""}`,
+      amountLbs: null,
+      quantity: sale.lineItems.reduce((s, i) => s + i.quantity, 0),
+      totalAmount: sale.totalAmount,
+      notes: sale.notes,
+    });
+  }
+
+  return entries
+    .sort((a, b) => b.date.getTime() - a.date.getTime())
+    .slice(0, limit);
 }

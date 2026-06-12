@@ -46,10 +46,12 @@ interface InspectionEntry {
 
 interface EquipmentEntry {
   id: string;
-  type: string;
-  frameCapacity: number | null;
-  framesInstalled: number | null;
-  frameType: string | null;
+  quantity: number;
+  dateDeployed: Date;
+  dateRemoved: Date | null;
+  typeName: string;
+  typeCategory: string;
+  notes: string | null;
 }
 
 interface FeedingEntry {
@@ -198,7 +200,7 @@ export function HiveDetailTabs({
             </h3>
             <EquipmentDeployModal hiveId={hiveId} />
           </div>
-          <EquipmentStack equipment={equipment} />
+          <EquipmentStack deployments={equipment} />
         </div>
       </TabsContent>
 

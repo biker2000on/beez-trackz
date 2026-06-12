@@ -1,120 +1,244 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { X, Plus } from "lucide-react";
-import { updateJarSizes, type JarSize } from "@/actions/jar-sizes";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Plus, Check, EyeOff, Eye } from "lucide-react";
+import {
+  createJarSize,
+  updateJarSize,
+  type JarSizeRecord,
+} from "@/actions/jar-sizes";
 
-interface JarSizeSettingsProps {
-  initialSizes: JarSize[];
-}
+export function JarSizeSettings({ initialSizes }: { initialSizes: JarSizeRecord[] }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
-export function JarSizeSettings({ initialSizes }: JarSizeSettingsProps) {
-  const [sizes, setSizes] = useState<JarSize[]>(initialSizes);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  // Per-row draft edits keyed by id
+  const [drafts, setDrafts] = useState<
+    Record<string, { label: string; honeyOz: string; defaultPrice: string }>
+  >(
+    Object.fromEntries(
+      initialSizes.map((s) => [
+        s.id,
+        {
+          label: s.label,
+          honeyOz: s.honeyOz != null ? String(s.honeyOz) : "",
+          defaultPrice: s.defaultPrice != null ? String(s.defaultPrice) : "",
+        },
+      ])
+    )
+  );
+  const [newRow, setNewRow] = useState({ label: "", honeyOz: "", defaultPrice: "" });
 
-  const handleAddSize = () => {
-    setSizes([...sizes, { label: "", honeyOz: 0 }]);
+  const isDirty = (s: JarSizeRecord) => {
+    const d = drafts[s.id];
+    if (!d) return false;
+    return (
+      d.label !== s.label ||
+      d.honeyOz !== (s.honeyOz != null ? String(s.honeyOz) : "") ||
+      d.defaultPrice !== (s.defaultPrice != null ? String(s.defaultPrice) : "")
+    );
   };
 
-  const handleRemoveSize = (index: number) => {
-    setSizes(sizes.filter((_, i) => i !== index));
+  const saveRow = (s: JarSizeRecord) => {
+    const d = drafts[s.id];
+    startTransition(async () => {
+      const result = await updateJarSize(s.id, {
+        label: d.label,
+        honeyOz: d.honeyOz === "" ? null : parseFloat(d.honeyOz),
+        defaultPrice: d.defaultPrice === "" ? null : parseFloat(d.defaultPrice),
+      });
+      if (result && "error" in result && result.error) setError(String(result.error));
+      else router.refresh();
+    });
   };
 
-  const handleUpdateLabel = (index: number, label: string) => {
-    const updated = [...sizes];
-    updated[index].label = label;
-    setSizes(updated);
-  };
-
-  const handleUpdateOz = (index: number, value: string) => {
-    const updated = [...sizes];
-    updated[index].honeyOz = parseFloat(value) || 0;
-    setSizes(updated);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setSaved(false);
-    try {
-      await updateJarSizes(sizes);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (error) {
-      console.error("Failed to save jar sizes:", error);
-    } finally {
-      setSaving(false);
-    }
+  const addRow = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await createJarSize({
+        label: newRow.label,
+        honeyOz: newRow.honeyOz === "" ? null : parseFloat(newRow.honeyOz),
+        defaultPrice: newRow.defaultPrice === "" ? null : parseFloat(newRow.defaultPrice),
+      });
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
+      setNewRow({ label: "", honeyOz: "", defaultPrice: "" });
+      router.refresh();
+    });
   };
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Jar Sizes</CardTitle>
+        <CardTitle>Container sizes</CardTitle>
         <CardDescription>
-          Configure honey jar sizes and weights for harvest tracking
+          Sizes appear in jarring, sales, and inventory. The honey weight per
+          container keeps the bulk ledger accurate; the default price prefills
+          sales.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-3">
-          {sizes.map((size, index) => (
-            <div key={index} className="flex items-end gap-3">
-              <div className="flex-1">
-                <Label htmlFor={`label-${index}`}>Label</Label>
-                <Input
-                  id={`label-${index}`}
-                  value={size.label}
-                  onChange={(e) => handleUpdateLabel(index, e.target.value)}
-                  placeholder="e.g., Pint"
-                />
-              </div>
-              <div className="w-32">
-                <Label htmlFor={`oz-${index}`}>Honey (oz)</Label>
-                <Input
-                  id={`oz-${index}`}
-                  type="number"
-                  step="0.1"
-                  value={size.honeyOz}
-                  onChange={(e) => handleUpdateOz(index, e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => handleRemoveSize(index)}
-                className="shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          ))}
-        </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          onClick={handleAddSize}
-          className="w-full"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Add Size
-        </Button>
-
-        <div className="flex items-center gap-3 pt-4">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? "Saving..." : "Save"}
-          </Button>
-          {saved && (
-            <span className="text-sm text-green-600 font-medium">
-              Saved!
-            </span>
-          )}
+        {error && (
+          <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+        <div className="rounded-md border overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Label</TableHead>
+                <TableHead className="w-28 text-right">Honey (oz)</TableHead>
+                <TableHead className="w-28 text-right">Price ($)</TableHead>
+                <TableHead className="w-20"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {initialSizes.map((s) => {
+                const d = drafts[s.id];
+                return (
+                  <TableRow key={s.id} className={s.isActive ? "" : "opacity-50"}>
+                    <TableCell>
+                      <Input
+                        value={d?.label ?? s.label}
+                        className="h-9"
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [s.id]: { ...prev[s.id], label: e.target.value },
+                          }))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        className="h-9 text-right tabular-nums"
+                        value={d?.honeyOz ?? ""}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [s.id]: { ...prev[s.id], honeyOz: e.target.value },
+                          }))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.01"
+                        className="h-9 text-right tabular-nums"
+                        value={d?.defaultPrice ?? ""}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [s.id]: { ...prev[s.id], defaultPrice: e.target.value },
+                          }))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 justify-end">
+                        {isDirty(s) && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 text-green-600"
+                            disabled={pending}
+                            onClick={() => saveRow(s)}
+                            title="Save"
+                          >
+                            <Check className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 text-muted-foreground"
+                          disabled={pending}
+                          title={s.isActive ? "Hide from pickers" : "Restore"}
+                          onClick={() =>
+                            startTransition(async () => {
+                              await updateJarSize(s.id, { isActive: !s.isActive });
+                              router.refresh();
+                            })
+                          }
+                        >
+                          {s.isActive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {/* New row */}
+              <TableRow>
+                <TableCell>
+                  <Input
+                    placeholder="New size label"
+                    className="h-9"
+                    value={newRow.label}
+                    onChange={(e) => setNewRow({ ...newRow, label: e.target.value })}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="oz"
+                    className="h-9 text-right tabular-nums"
+                    value={newRow.honeyOz}
+                    onChange={(e) => setNewRow({ ...newRow, honeyOz: e.target.value })}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    placeholder="$"
+                    className="h-9 text-right tabular-nums"
+                    value={newRow.defaultPrice}
+                    onChange={(e) => setNewRow({ ...newRow, defaultPrice: e.target.value })}
+                  />
+                </TableCell>
+                <TableCell>
+                  <Button
+                    size="sm"
+                    disabled={pending || !newRow.label.trim()}
+                    onClick={addRow}
+                    className="gap-1"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add
+                  </Button>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
         </div>
       </CardContent>
     </Card>

@@ -2,7 +2,7 @@
 
 import { requireSession } from "@/lib/require-session";
 import { db } from "@/db";
-import { apiaries, hives, inspections, equipment } from "@/db/schema";
+import { apiaries, hives, inspections, equipmentTypes, equipmentStock, equipmentDeployments } from "@/db/schema";
 import { parseImportFile, type ParsedImportData } from "@/lib/import/parser";
 import { eq } from "drizzle-orm";
 
@@ -151,21 +151,44 @@ export async function confirmImport(data: ParsedImportData) {
 
         if (!hiveId) continue;
 
-        await tx.insert(equipment).values({
+        // v2 inventory: ensure the type exists, bump stock, deploy to hive
+        const typeName = equipmentData.type.trim();
+        let [type] = await tx
+          .select()
+          .from(equipmentTypes)
+          .where(eq(equipmentTypes.name, typeName))
+          .limit(1);
+        if (!type) {
+          [type] = await tx
+            .insert(equipmentTypes)
+            .values({
+              name: typeName,
+              category: "box",
+              framesPerBox: equipmentData.frameCapacity ?? null,
+            })
+            .returning();
+        }
+        let [stock] = await tx
+          .select()
+          .from(equipmentStock)
+          .where(eq(equipmentStock.typeId, type.id))
+          .limit(1);
+        if (!stock) {
+          [stock] = await tx
+            .insert(equipmentStock)
+            .values({ typeId: type.id, totalOwned: 0 })
+            .returning();
+        }
+        await tx
+          .update(equipmentStock)
+          .set({ totalOwned: stock.totalOwned + 1, updatedAt: new Date() })
+          .where(eq(equipmentStock.id, stock.id));
+        await tx.insert(equipmentDeployments).values({
+          stockId: stock.id,
           hiveId,
-          type: equipmentData.type as
-            | "deep"
-            | "medium"
-            | "shallow"
-            | "queen_excluder"
-            | "double_screen"
-            | "inner_cover"
-            | "outer_cover"
-            | "bottom_board"
-            | "entrance_reducer"
-            | "feeder"
-            | "other",
-          frameCapacity: equipmentData.frameCapacity,
+          quantity: 1,
+          dateDeployed: new Date(),
+          notes: "imported",
         });
 
         counts.equipmentCreated++;
