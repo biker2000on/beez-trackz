@@ -1,0 +1,80 @@
+# Beez Trackz - Production Docker Compose (TrueNAS / dockhand)
+#
+# Uses the pre-built image from ghcr.io and publishes the app through
+# traefik at https://beez.adventureintandem.com.
+#
+# Required: a .env file (dockhand: .env.dockhand) with:
+#   POSTGRES_PASSWORD=<password>
+#   SESSION_SECRET=<generate with: openssl rand -base64 32>
+#
+# Optional:
+#   ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY / OLLAMA_URL  # AI transcription parsing
+#   OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET   # OIDC login (Pocket ID)
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+  app:
+    image: ghcr.io/biker2000on/beez-trackz:${BEEZ_IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}
+      - REDIS_URL=redis://redis:6379
+      - SESSION_SECRET=${SESSION_SECRET:?SESSION_SECRET is required}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-}
+      - OLLAMA_URL=${OLLAMA_URL:-}
+      # Optional OIDC login (all empty = OIDC disabled)
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_PROVIDER_NAME=${OIDC_PROVIDER_NAME:-Pocket ID}
+      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-https://beez.adventureintandem.com/api/auth/oidc/callback}
+    volumes:
+      - ${PHOTO_DATA_DIR:-/mnt/docker/volumes/beez-trackz/photos}:/app/data/photos
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.beez-trackz.rule: Host(`beez.adventureintandem.com`)
+      traefik.http.routers.beez-trackz.entrypoints: websecure
+      traefik.http.routers.beez-trackz.tls: "true"
+      traefik.http.routers.beez-trackz.tls.certresolver: cloudflare
+      traefik.http.routers.beez-trackz.tls.domains[0].main: adventureintandem.com
+      traefik.http.routers.beez-trackz.tls.domains[0].sans: "*.adventureintandem.com"
+      traefik.http.services.beez-trackz.loadbalancer.server.port: "3000"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-beeztrackz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-beeztrackz}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/mnt/docker/volumes/beez-trackz/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beeztrackz}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis-data:
