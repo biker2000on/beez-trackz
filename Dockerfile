@@ -45,8 +45,8 @@ RUN addgroup --system --gid 1001 nodejs \
 
 COPY --from=builder /app/public ./public
 
-# Prerender cache and photo storage need to be writable by the app user
-RUN mkdir -p .next data/photos \
+# Prerender cache and upload storage need to be writable by the app user
+RUN mkdir -p .next data/photos data/audio \
  && chown -R nextjs:nodejs .next data
 
 # Next.js standalone output: server.js + traced node_modules, plus the
