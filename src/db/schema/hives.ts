@@ -12,6 +12,7 @@ export const hives = pgTable("hives", {
   slotRow: integer("slot_row"),
   slotCol: integer("slot_col"),
   placement: hivePlacementEnum("placement").default("full"),
+  facingDegrees: integer("facing_degrees").default(0),
   status: hiveStatusEnum("status").default("active").notNull(),
   installedDate: timestamp("installed_date"),
   isArchived: boolean("is_archived").default(false).notNull(),

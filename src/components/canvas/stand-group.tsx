@@ -1,11 +1,14 @@
 "use client";
 
+import { memo } from "react";
 import { Group, Rect, Text, Arrow, Line } from "react-konva";
-import type { Stand, SlotHive, HivePlacement } from "@/lib/canvas/types";
+import type { StandGeometry, Slot, SlotHive } from "@/lib/canvas/types";
 import { getSlotLabel } from "@/lib/canvas/types";
-
-const CELL_SIZE = 60;
-const CELL_PADDING = 4;
+import {
+  CELL_SIZE,
+  getPlacementRect,
+  getDirectionArrow,
+} from "@/lib/canvas/geometry";
 const HIVE_COLORS: Record<string, string> = {
   active: "#4A7C32",
   dead: "#8B4513",
@@ -15,7 +18,8 @@ const HIVE_COLORS: Record<string, string> = {
 const DEFAULT_HIVE_COLOR = "#888";
 
 interface StandGroupProps {
-  stand: Stand;
+  stand: StandGeometry;
+  slots: Slot[];
   hiveStatusMap: Record<string, string>; // hiveId -> status
   hiveLabelMap: Record<string, string>; // hiveId -> positionLabel
   editMode: boolean;
@@ -32,41 +36,7 @@ interface StandGroupProps {
   onHiveDragEnd?: (hiveId: string) => void;
 }
 
-function getDirectionArrow(facingDegrees: number, cx: number, cy: number, size: number) {
-  const rad = (facingDegrees - 90) * (Math.PI / 180);
-  const len = size * 0.35;
-  const endX = cx + Math.cos(rad) * len;
-  const endY = cy + Math.sin(rad) * len;
-  return { startX: cx, startY: cy, endX, endY };
-}
 
-function getPlacementRect(
-  placement: HivePlacement,
-  cellX: number,
-  cellY: number,
-  cellW: number,
-  cellH: number
-): { x: number; y: number; w: number; h: number } {
-  const p = CELL_PADDING;
-  switch (placement) {
-    case "full":
-      return { x: cellX + p, y: cellY + p, w: cellW - p * 2, h: cellH - p * 2 };
-    case "top":
-      return { x: cellX + p, y: cellY + p, w: cellW - p * 2, h: cellH / 2 - p * 1.5 };
-    case "bottom":
-      return { x: cellX + p, y: cellY + cellH / 2 + p * 0.5, w: cellW - p * 2, h: cellH / 2 - p * 1.5 };
-    case "left":
-      return { x: cellX + p, y: cellY + p, w: cellW / 2 - p * 1.5, h: cellH - p * 2 };
-    case "right":
-      return { x: cellX + cellW / 2 + p * 0.5, y: cellY + p, w: cellW / 2 - p * 1.5, h: cellH - p * 2 };
-    case "third-1":
-      return { x: cellX + p, y: cellY + p, w: cellW / 3 - p, h: cellH - p * 2 };
-    case "third-2":
-      return { x: cellX + cellW / 3 + p * 0.5, y: cellY + p, w: cellW / 3 - p, h: cellH - p * 2 };
-    case "third-3":
-      return { x: cellX + (cellW * 2) / 3 + p * 0.5, y: cellY + p, w: cellW / 3 - p, h: cellH - p * 2 };
-  }
-}
 
 function HiveIndicator({
   hive,
@@ -176,8 +146,9 @@ function HiveIndicator({
   );
 }
 
-export function StandGroup({
+function StandGroupInner({
   stand,
+  slots,
   hiveStatusMap,
   hiveLabelMap,
   editMode,
@@ -268,7 +239,7 @@ export function StandGroup({
       ))}
 
       {/* Slots */}
-      {stand.slots.map((slot) => {
+      {slots.map((slot) => {
         const cellX = slot.col * CELL_SIZE;
         const cellY = slot.row * CELL_SIZE;
         const slotLabel = getSlotLabel(stand.label, slot.row, slot.col, stand.cols);
@@ -353,3 +324,5 @@ export function StandGroup({
     </Group>
   );
 }
+
+export const StandGroup = memo(StandGroupInner);

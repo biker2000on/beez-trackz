@@ -1,87 +1,93 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Image as KonvaImage } from "react-konva";
-import { getTileUrl, getRecommendedZoom } from "@/lib/map-utils";
+import {
+  buildTileMosaic,
+  SATELLITE_ZOOM,
+  type PlacedTile,
+} from "@/lib/map-utils";
+import { PX_PER_METER } from "@/lib/canvas/geometry";
 
 interface SatelliteOverlayProps {
   latitude: number;
   longitude: number;
-  canvasWidth: number;
-  canvasHeight: number;
+  /** World point where the apiary lat/lng sits (stable across edits). */
+  anchor: { x: number; y: number };
   opacity: number;
 }
 
 /**
- * Satellite overlay component that renders an OpenStreetMap tile
- * behind the hive icons on the canvas
+ * Georeferenced satellite imagery (Esri World Imagery) rendered in world
+ * coordinates behind the stands, so it pans and zooms with the stage and
+ * the canvas scale (PX_PER_METER) matches the ground scale.
  */
 export function SatelliteOverlay({
   latitude,
   longitude,
-  canvasWidth,
-  canvasHeight,
+  anchor,
   opacity,
 }: SatelliteOverlayProps) {
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [zoom, setZoom] = useState<number>(
-    getRecommendedZoom(canvasWidth, canvasHeight)
+  const tiles = useMemo(
+    () =>
+      buildTileMosaic({
+        lat: latitude,
+        lng: longitude,
+        zoom: SATELLITE_ZOOM,
+        pxPerMeter: PX_PER_METER,
+        anchor,
+        radius: 1,
+      }),
+    [latitude, longitude, anchor]
   );
 
-  useEffect(() => {
-    // Update zoom level when canvas dimensions change
-    const newZoom = getRecommendedZoom(canvasWidth, canvasHeight);
-    setZoom(newZoom);
-  }, [canvasWidth, canvasHeight]);
+  const [images, setImages] = useState<Map<string, HTMLImageElement>>(new Map());
 
   useEffect(() => {
-    // Load tile image from OpenStreetMap
-    const tileUrl = getTileUrl(latitude, longitude, zoom);
-    const img = new window.Image();
+    let cancelled = false;
+    const loaded = new Map<string, HTMLImageElement>();
+    let pending = tiles.length;
 
-    img.crossOrigin = "anonymous"; // Enable CORS for OSM tiles
-    img.onload = () => {
-      setImage(img);
-    };
-    img.onerror = () => {
-      console.error("Failed to load satellite tile:", tileUrl);
-      setImage(null);
-    };
-
-    img.src = tileUrl;
+    for (const tile of tiles) {
+      const img = new window.Image();
+      img.crossOrigin = "anonymous";
+      const done = () => {
+        pending--;
+        if (!cancelled && pending === 0) setImages(new Map(loaded));
+      };
+      img.onload = () => {
+        loaded.set(tile.key, img);
+        done();
+      };
+      img.onerror = done;
+      img.src = tile.url;
+    }
 
     return () => {
-      img.onload = null;
-      img.onerror = null;
+      cancelled = true;
     };
-  }, [latitude, longitude, zoom]);
+  }, [tiles]);
 
-  if (!image) {
-    return null;
-  }
-
-  // OSM tiles are 256x256 pixels
-  // Scale to fill canvas while maintaining aspect ratio
-  const tileSize = 256;
-  const scaleX = canvasWidth / tileSize;
-  const scaleY = canvasHeight / tileSize;
-  const scale = Math.max(scaleX, scaleY);
-
-  // Center the tile on canvas
-  const x = (canvasWidth - tileSize * scale) / 2;
-  const y = (canvasHeight - tileSize * scale) / 2;
+  if (images.size === 0) return null;
 
   return (
-    <KonvaImage
-      image={image}
-      x={x}
-      y={y}
-      width={tileSize}
-      height={tileSize}
-      scaleX={scale}
-      scaleY={scale}
-      opacity={opacity}
-      listening={false}
-    />
+    <>
+      {tiles.map((tile: PlacedTile) => {
+        const img = images.get(tile.key);
+        if (!img) return null;
+        return (
+          <KonvaImage
+            key={tile.key}
+            image={img}
+            x={tile.x}
+            y={tile.y}
+            width={tile.size}
+            height={tile.size}
+            opacity={opacity}
+            listening={false}
+          />
+        );
+      })}
+    </>
   );
 }

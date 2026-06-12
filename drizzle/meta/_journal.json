@@ -50,6 +50,13 @@
       "when": 1781301895558,
       "tag": "0006_unusual_wolfpack",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781302630152,
+      "tag": "0007_third_shinobi_shaw",
+      "breakpoints": true
     }
   ]
 }

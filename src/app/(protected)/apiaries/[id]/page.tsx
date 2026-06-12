@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getApiary, deleteApiary } from "@/actions/apiaries";
+import { normalizeCanvasLayout } from "@/actions/canvas";
 import { getHivesForApiary } from "@/actions/hives";
 import { getPhotosForOwner } from "@/actions/photos";
 import {
@@ -31,6 +32,9 @@ export default async function ApiaryDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // Migrate any legacy canvas layout (embedded slot occupancy) into the
+  // hives table before reading. No-op for already-normalized layouts.
+  await normalizeCanvasLayout(id);
   const [apiary, hives, photos, activeBlooms, bloomHistory, speciesList] = await Promise.all([
     getApiary(id),
     getHivesForApiary(id),
@@ -93,6 +97,12 @@ export default async function ApiaryDetailPage({
                 id: h.id,
                 positionLabel: h.positionLabel,
                 status: h.status,
+                notes: h.notes,
+                standId: h.standId,
+                slotRow: h.slotRow,
+                slotCol: h.slotCol,
+                placement: h.placement,
+                facingDegrees: h.facingDegrees,
               }))}
               initialLayout={(apiary.canvasLayout as CanvasLayout) ?? null}
               latitude={apiary.latitude}

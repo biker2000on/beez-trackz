@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
-import { Stage, Layer, Rect, Circle, Line, Text as KText } from "react-konva";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Stage, Layer, Circle, Line, Text as KText } from "react-konva";
 import { useRouter } from "next/navigation";
 import type Konva from "konva";
 import { StandGroup } from "./stand-group";
@@ -11,89 +11,60 @@ import { HiveEditModal } from "./hive-edit-modal";
 import { NorthArrow } from "./north-arrow";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { SatelliteOverlay } from "./satellite-overlay";
-import { saveCanvasLayout, createHiveFromCanvas, moveHiveOnCanvas } from "@/actions/canvas";
-import type { CanvasLayout, Stand, Slot, SlotHive } from "@/lib/canvas/types";
-import { createEmptyStand, getNextStandLabel, getSlotLabel } from "@/lib/canvas/types";
-
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 3;
-const ZOOM_STEP = 0.1;
-const GRID_SIZE = 40;
-const CELL_SIZE = 60;
-
-interface Hive {
-  id: string;
-  positionLabel: string;
-  status: string;
-  notes?: string | null;
-}
+import { useCanvasViewport } from "./use-canvas-viewport";
+import { useStandGeometry } from "./use-stand-geometry";
+import {
+  StandSettingsDialog,
+  DeleteStandDialog,
+  FacingDialog,
+  MoveToSlotDialog,
+  StackChoiceDialog,
+  type SlotOption,
+} from "./canvas-dialogs";
+import {
+  saveCanvasLayout,
+  createHiveFromCanvas,
+  updateHiveFromCanvas,
+  assignHiveToSlot,
+  setHivePlacement,
+  removeHiveFromSlot,
+  setHiveFacing,
+} from "@/actions/canvas";
+import type { CanvasHive, CanvasLayout, StandGeometry } from "@/lib/canvas/types";
+import { buildSlotOccupancy, getSlotLabel } from "@/lib/canvas/types";
+import {
+  CELL_SIZE,
+  GRID_SIZE,
+  ZOOM_STEP,
+  slotAtPoint,
+  angleFromPivot,
+  standCenter,
+  standsBoundingBox,
+} from "@/lib/canvas/geometry";
 
 interface CanvasInnerProps {
   apiaryId: string;
-  hives: Hive[];
+  hives: CanvasHive[];
   initialLayout: CanvasLayout | null;
   latitude?: number | null;
   longitude?: number | null;
 }
 
-// Context menu state types
 type ContextMenuState =
   | null
-  | {
-      type: "stand";
-      position: { x: number; y: number };
-      standId: string;
-    }
-  | {
-      type: "slot";
-      position: { x: number; y: number };
-      standId: string;
-      row: number;
-      col: number;
-    }
-  | {
-      type: "hive";
-      position: { x: number; y: number };
-      hiveId: string;
-    }
-  | {
-      type: "northArrow";
-      position: { x: number; y: number };
-    };
+  | { type: "stand"; position: { x: number; y: number }; standId: string }
+  | { type: "slot"; position: { x: number; y: number }; standId: string; row: number; col: number }
+  | { type: "hive"; position: { x: number; y: number }; hiveId: string }
+  | { type: "northArrow"; position: { x: number; y: number } };
 
-/**
- * Migrate legacy flat hive positions to a single default stand.
- */
-function migrateLegacyLayout(
-  legacyHives: Record<string, { x: number; y: number }>,
-  hives: Hive[]
-): Stand[] {
-  const hiveIds = Object.keys(legacyHives);
-  if (hiveIds.length === 0 && hives.length === 0) return [];
-
-  // All hives that have positions or exist in hives list
-  const allHiveIds = new Set([...hiveIds, ...hives.map((h) => h.id)]);
-  const count = allHiveIds.size;
-  const cols = Math.max(2, Math.min(8, Math.ceil(Math.sqrt(count))));
-  const rows = Math.max(1, Math.ceil(count / cols));
-
-  const stand = createEmptyStand("A", rows, cols, 100, 100);
-
-  // Assign hives to slots in order
-  const hiveArray = Array.from(allHiveIds);
-  hiveArray.forEach((hiveId, index) => {
-    const slot = stand.slots[index];
-    if (slot) {
-      slot.hives.push({
-        hiveId,
-        facingDegrees: 0,
-        placement: "full",
-      });
-    }
-  });
-
-  return [stand];
-}
+type DialogState =
+  | null
+  | { type: "standSettings"; standId: string }
+  | { type: "deleteStand"; standId: string }
+  | { type: "facing"; hiveId: string }
+  | { type: "moveToSlot"; hiveId: string }
+  | { type: "stack"; hiveId: string; target: SlotOption }
+  | { type: "editHive"; hiveId: string };
 
 function drawGrid(
   ctx: CanvasRenderingContext2D,
@@ -106,11 +77,9 @@ function drawGrid(
   ctx.clearRect(0, 0, width, height);
   ctx.strokeStyle = "#e5e7eb";
   ctx.lineWidth = 0.5;
-
   const gridSize = GRID_SIZE * zoom;
   const startX = (offsetX % gridSize) - gridSize;
   const startY = (offsetY % gridSize) - gridSize;
-
   for (let x = startX; x < width + gridSize; x += gridSize) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
@@ -138,33 +107,59 @@ export function CanvasInner({
 
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
   const [editMode, setEditMode] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [, startTransition] = useTransition();
 
-  // Satellite overlay state
+  // Satellite overlay
   const [satelliteEnabled, setSatelliteEnabled] = useState(false);
   const [satelliteOpacity, setSatelliteOpacity] = useState(0.7);
   const hasSatelliteData = latitude != null && longitude != null;
 
-  // Canvas state
-  const [zoom, setZoom] = useState(initialLayout?.zoom ?? 1);
-  const [offset, setOffset] = useState({
-    x: initialLayout?.offsetX ?? 0,
-    y: initialLayout?.offsetY ?? 0,
+  // Geometry (stands + north arrow) — explicit Save persists it
+  const { stands, northArrow, dirty, dispatch, markSaved } = useStandGeometry({
+    stands: initialLayout?.stands ?? [],
+    northArrow: initialLayout?.northArrow,
   });
 
-  // Stands-based layout state (replaces flat hivePositions)
-  const [stands, setStands] = useState<Stand[]>(() => {
-    if (initialLayout?.stands && initialLayout.stands.length > 0) {
-      return initialLayout.stands;
-    }
-    if (initialLayout?.hives && Object.keys(initialLayout.hives).length > 0) {
-      return migrateLegacyLayout(initialLayout.hives, hives);
-    }
-    return [];
-  });
+  // Viewport
+  const viewport = useCanvasViewport(stageRef, dimensions, initialLayout ?? null);
 
-  // Drag-and-drop state
+  // Derived occupancy — the hives table is the source of truth
+  const { slotsByStand, unassigned } = useMemo(
+    () => buildSlotOccupancy(stands, hives),
+    [stands, hives]
+  );
+
+  const hiveById = useMemo(() => {
+    const map = new Map<string, CanvasHive>();
+    hives.forEach((h) => map.set(h.id, h));
+    return map;
+  }, [hives]);
+
+  const hiveStatusMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    hives.forEach((h) => (map[h.id] = h.status));
+    return map;
+  }, [hives]);
+
+  const hiveLabelMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    hives.forEach((h) => (map[h.id] = h.positionLabel));
+    return map;
+  }, [hives]);
+
+  // Satellite anchor: world point for the apiary lat/lng — fixed at mount
+  // so imagery doesn't shift while stands are edited.
+  const satelliteAnchor = useMemo(() => {
+    const box = standsBoundingBox(initialLayout?.stands ?? []);
+    return box
+      ? { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }
+      : { x: 300, y: 200 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Drag and rotation interaction state
+  const [draggingHiveId, setDraggingHiveId] = useState<string | null>(null);
   const [dragOverSlot, setDragOverSlot] = useState<{
     standId: string;
     row: number;
@@ -172,95 +167,19 @@ export function CanvasInner({
     canDrop: boolean;
     willStack: boolean;
   } | null>(null);
-  const [draggingHiveId, setDraggingHiveId] = useState<string | null>(null);
-
-  const [northArrow, setNorthArrow] = useState(
-    initialLayout?.northArrow ?? { x: 40, y: 40, rotation: 0 }
-  );
-
-  // Rotation handle state
   const [rotatingStandId, setRotatingStandId] = useState<string | null>(null);
   const isRotationDragging = useRef(false);
 
-  // Derived rotation pivot (center of stand in stage/world coords) — stable during rotation
-  const rotatingStand = rotatingStandId ? stands.find((s) => s.id === rotatingStandId) : null;
-  const rotationPivot = rotatingStand
-    ? {
-        x: rotatingStand.x + (rotatingStand.cols * CELL_SIZE) / 2,
-        y: rotatingStand.y + (rotatingStand.rows * CELL_SIZE) / 2,
-      }
+  const rotatingStand = rotatingStandId
+    ? stands.find((s) => s.id === rotatingStandId) ?? null
     : null;
+  const rotationPivot = rotatingStand ? standCenter(rotatingStand) : null;
 
-  // Context menu state
+  // Overlays
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
+  const [dialog, setDialog] = useState<DialogState>(null);
 
-  // Edit modal state
-  const [editModalHive, setEditModalHive] = useState<{ id: string; name: string; status: string; notes?: string } | null>(null);
-
-  // Pending stack dialog state
-  const [pendingStack, setPendingStack] = useState<{
-    hiveId: string;
-    targetStandId: string;
-    targetRow: number;
-    targetCol: number;
-    movedHive: SlotHive;
-  } | null>(null);
-
-  // Build lookup maps for StandGroup
-  const hiveStatusMap: Record<string, string> = {};
-  const hiveLabelMap: Record<string, string> = {};
-  hives.forEach((h) => {
-    hiveStatusMap[h.id] = h.status;
-    hiveLabelMap[h.id] = h.positionLabel;
-  });
-
-  // Close context menu helper
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null);
-  }, []);
-
-  // Handle edit hive save
-  const handleEditHiveSave = useCallback(async (hiveId: string, data: { positionLabel: string; status: string; notes: string; placement?: string }) => {
-    const { updateHiveFromCanvas } = await import("@/actions/canvas");
-    await updateHiveFromCanvas(hiveId, data);
-  }, []);
-
-  // Sync DB hives into canvas slots — ensure all hives appear
-  // All computation happens inside setStands(prev => ...) to avoid
-  // stale closure issues with React 18 StrictMode double-firing effects.
-  useEffect(() => {
-    const dbHiveIds = new Set(hives.map(h => h.id));
-
-    setStands(prev => {
-      const hiveIdsInSlots = new Set<string>();
-      prev.forEach(s => s.slots.forEach(slot => slot.hives.forEach(h => hiveIdsInSlots.add(h.hiveId))));
-
-      const missingHives = hives.filter(h => !hiveIdsInSlots.has(h.id));
-      const hasStale = prev.some(s => s.slots.some(slot => slot.hives.some(h => !dbHiveIds.has(h.hiveId))));
-
-      if (missingHives.length === 0 && !hasStale) return prev;
-
-      // Remove stale hive IDs and add missing hives to empty slots
-      const remaining = [...missingHives];
-      return prev.map(s => ({
-        ...s,
-        slots: s.slots.map(slot => {
-          const filtered = slot.hives.filter(h => dbHiveIds.has(h.hiveId));
-          if (remaining.length > 0 && filtered.length === 0) {
-            return {
-              ...slot,
-              hives: [{
-                hiveId: remaining.shift()!.id,
-                facingDegrees: 0,
-                placement: "full" as const,
-              }],
-            };
-          }
-          return { ...slot, hives: filtered };
-        }),
-      }));
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
   // Responsive sizing
   useEffect(() => {
@@ -278,783 +197,315 @@ export function CanvasInner({
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
-  // ============================================
-  // Stand operations
-  // ============================================
+  // Background grid
+  const gridCanvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = gridCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    canvas.width = dimensions.width;
+    canvas.height = dimensions.height;
+    drawGrid(ctx, dimensions.width, dimensions.height, viewport.zoom, viewport.offset.x, viewport.offset.y);
+  }, [dimensions, viewport.zoom, viewport.offset]);
 
-  const handleAddStand = useCallback(
-    (rows: number, cols: number) => {
-      if (!editMode) return;
-      const label = getNextStandLabel(stands);
-      // Place at center of current viewport
-      const centerX = (dimensions.width / 2 - offset.x) / zoom;
-      const centerY = (dimensions.height / 2 - offset.y) / zoom;
-      const newStand = createEmptyStand(label, rows, cols, centerX - (cols * CELL_SIZE) / 2, centerY - (rows * CELL_SIZE) / 2);
-      setStands((prev) => [...prev, newStand]);
-      setHasUnsavedChanges(true);
-    },
-    [editMode, stands, dimensions, offset, zoom]
+  // ------------------------------------------------------------------
+  // Hive operations — write through to the database immediately
+  // ------------------------------------------------------------------
+
+  const refresh = useCallback(() => {
+    startTransition(() => router.refresh());
+  }, [router]);
+
+  const slotOptionFor = useCallback(
+    (stand: StandGeometry, row: number, col: number): SlotOption => ({
+      standId: stand.id,
+      standLabel: stand.label,
+      standCols: stand.cols,
+      row,
+      col,
+      label: getSlotLabel(stand.label, row, col, stand.cols),
+    }),
+    []
   );
 
-  const handleStandDragEnd = useCallback(
-    (standId: string, x: number, y: number) => {
-      if (!editMode) return;
-      setStands((prev) =>
-        prev.map((s) => (s.id === standId ? { ...s, x, y } : s))
-      );
-      setHasUnsavedChanges(true);
-    },
-    [editMode]
-  );
-
-  const handleRotateStand = useCallback(
-    (standId: string) => {
-      if (!editMode) return;
-      setRotatingStandId((prev) => (prev === standId ? null : standId));
-      closeContextMenu();
-    },
-    [editMode, closeContextMenu]
-  );
-
-  const handleResizeStand = useCallback(
-    (standId: string) => {
-      if (!editMode) return;
-      const stand = stands.find((s) => s.id === standId);
-      if (!stand) return;
-
-      const rowsInput = window.prompt("Number of rows:", String(stand.rows));
-      if (rowsInput === null) return;
-      const newRows = Math.max(1, Math.min(8, parseInt(rowsInput) || stand.rows));
-
-      const colsInput = window.prompt("Number of columns:", String(stand.cols));
-      if (colsInput === null) return;
-      const newCols = Math.max(1, Math.min(8, parseInt(colsInput) || stand.cols));
-
-      setStands((prev) =>
-        prev.map((s) => {
-          if (s.id !== standId) return s;
-          // Build new slots, preserving existing hives where possible
-          const newSlots: Slot[] = [];
-          for (let r = 0; r < newRows; r++) {
-            for (let c = 0; c < newCols; c++) {
-              const existing = s.slots.find(
-                (slot) => slot.row === r && slot.col === c
-              );
-              newSlots.push(existing ?? { row: r, col: c, hives: [] });
-            }
-          }
-          return { ...s, rows: newRows, cols: newCols, slots: newSlots };
-        })
-      );
-      setHasUnsavedChanges(true);
-      closeContextMenu();
-    },
-    [editMode, stands, closeContextMenu]
-  );
-
-  const handleRenameStand = useCallback(
-    (standId: string) => {
-      if (!editMode) return;
-      const stand = stands.find((s) => s.id === standId);
-      if (!stand) return;
-      const newLabel = window.prompt("New stand label:", stand.label);
-      if (!newLabel) return;
-      setStands((prev) =>
-        prev.map((s) => (s.id === standId ? { ...s, label: newLabel } : s))
-      );
-      setHasUnsavedChanges(true);
-      closeContextMenu();
-    },
-    [editMode, stands, closeContextMenu]
-  );
-
-  const handleDeleteStand = useCallback(
-    (standId: string) => {
-      if (!editMode) return;
-      const stand = stands.find((s) => s.id === standId);
-      if (!stand) return;
-      const hasHives = stand.slots.some((slot) => slot.hives.length > 0);
-      if (hasHives) {
-        const confirm = window.confirm(
-          `Stand ${stand.label} has hives assigned. Remove stand anyway? (Hives will be unassigned, not deleted.)`
-        );
-        if (!confirm) return;
+  const emptySlotOptions = useMemo(() => {
+    const options: SlotOption[] = [];
+    for (const stand of stands) {
+      const slots = slotsByStand.get(stand.id) ?? [];
+      for (const slot of slots) {
+        if (slot.hives.length === 0) {
+          options.push(slotOptionFor(stand, slot.row, slot.col));
+        }
       }
-      setStands((prev) => prev.filter((s) => s.id !== standId));
-      setHasUnsavedChanges(true);
-      closeContextMenu();
-    },
-    [editMode, stands, closeContextMenu]
-  );
+    }
+    return options;
+  }, [stands, slotsByStand, slotOptionFor]);
 
-  // ============================================
-  // Hive operations
-  // ============================================
+  const moveHive = useCallback(
+    async (hiveId: string, target: SlotOption, placement?: "full" | "top" | "bottom" | "left" | "right") => {
+      try {
+        await assignHiveToSlot({
+          hiveId,
+          apiaryId,
+          standId: target.standId,
+          standLabel: target.standLabel,
+          slotRow: target.row,
+          slotCol: target.col,
+          standCols: target.standCols,
+          placement: placement ?? "full",
+        });
+        refresh();
+      } catch (error) {
+        console.error("Failed to move hive:", error);
+      }
+    },
+    [apiaryId, refresh]
+  );
 
   const handleAddHiveToSlot = useCallback(
     async (standId: string, row: number, col: number) => {
-      if (!editMode) return;
       closeContextMenu();
-
       const stand = stands.find((s) => s.id === standId);
       if (!stand) return;
-      const slotLabel = getSlotLabel(stand.label, row, col, stand.cols);
-
       try {
-        const hive = await createHiveFromCanvas(apiaryId, slotLabel);
-        setStands((prev) =>
-          prev.map((s) => {
-            if (s.id !== standId) return s;
-            return {
-              ...s,
-              slots: s.slots.map((slot) => {
-                if (slot.row !== row || slot.col !== col) return slot;
-                return {
-                  ...slot,
-                  hives: [
-                    ...slot.hives,
-                    { hiveId: hive.id, facingDegrees: 0, placement: "full" as const },
-                  ],
-                };
-              }),
-            };
-          })
-        );
-        setHasUnsavedChanges(true);
-        // Refresh to pick up the new hive in the hives list
-        router.refresh();
+        await createHiveFromCanvas(apiaryId, stand.id, stand.label, row, col, stand.cols);
+        refresh();
       } catch (error) {
         console.error("Failed to create hive:", error);
       }
     },
-    [editMode, stands, apiaryId, router, closeContextMenu]
+    [stands, apiaryId, refresh, closeContextMenu]
   );
 
-  const handleSetFacing = useCallback(
-    (hiveId: string) => {
-      if (!editMode) return;
-      const input = window.prompt("Enter facing direction in degrees (0=North, 90=East, 180=South, 270=West):", "0");
-      if (input === null) return;
-      const degrees = parseFloat(input);
-      if (isNaN(degrees)) return;
+  const handleAddHive = useCallback(() => {
+    const first = emptySlotOptions[0];
+    if (!first) return;
+    void handleAddHiveToSlot(first.standId, first.row, first.col);
+  }, [emptySlotOptions, handleAddHiveToSlot]);
 
-      setStands((prev) =>
-        prev.map((s) => ({
-          ...s,
-          slots: s.slots.map((slot) => ({
-            ...slot,
-            hives: slot.hives.map((h) =>
-              h.hiveId === hiveId ? { ...h, facingDegrees: degrees % 360 } : h
-            ),
-          })),
-        }))
-      );
-      setHasUnsavedChanges(true);
+  const handleRemoveFromSlot = useCallback(
+    async (hiveId: string) => {
       closeContextMenu();
+      try {
+        await removeHiveFromSlot(hiveId, apiaryId);
+        refresh();
+      } catch (error) {
+        console.error("Failed to remove hive from slot:", error);
+      }
     },
-    [editMode, closeContextMenu]
+    [apiaryId, refresh, closeContextMenu]
   );
 
   const handleFlipDirection = useCallback(
-    (hiveId: string) => {
-      setStands((prev) =>
-        prev.map((s) => ({
-          ...s,
-          slots: s.slots.map((slot) => ({
-            ...slot,
-            hives: slot.hives.map((h) =>
-              h.hiveId === hiveId ? { ...h, facingDegrees: (h.facingDegrees + 180) % 360 } : h
-            ),
-          })),
-        }))
-      );
-      setHasUnsavedChanges(true);
+    async (hiveId: string) => {
       closeContextMenu();
+      const current = hiveById.get(hiveId)?.facingDegrees ?? 0;
+      try {
+        await setHiveFacing(hiveId, apiaryId, current + 180);
+        refresh();
+      } catch (error) {
+        console.error("Failed to flip hive direction:", error);
+      }
     },
-    [closeContextMenu]
+    [apiaryId, hiveById, refresh, closeContextMenu]
   );
 
-  const handleSplitHive = useCallback(
-    (hiveId: string) => {
-      closeContextMenu();
-      router.push(`/hives/${hiveId}/split`);
+  const handleStackChoice = useCallback(
+    async (choice: "top-bottom" | "left-right" | "cancel") => {
+      if (dialog?.type !== "stack") return;
+      const { hiveId, target } = dialog;
+      setDialog(null);
+      if (choice === "cancel") return;
+
+      const slots = slotsByStand.get(target.standId);
+      const occupant = slots
+        ?.find((s) => s.row === target.row && s.col === target.col)
+        ?.hives.find((h) => h.hiveId !== hiveId);
+
+      const [existingPlacement, movedPlacement] =
+        choice === "top-bottom" ? (["bottom", "top"] as const) : (["left", "right"] as const);
+
+      try {
+        if (occupant) await setHivePlacement(occupant.hiveId, existingPlacement);
+        await moveHive(hiveId, target, movedPlacement);
+      } catch (error) {
+        console.error("Failed to stack hives:", error);
+      }
     },
-    [router, closeContextMenu]
+    [dialog, slotsByStand, moveHive]
   );
 
-  const handleMoveToSlot = useCallback(
-    (hiveId: string) => {
-      if (!editMode) return;
-      // Build a list of available slots
-      const options: string[] = [];
-      const slotMap: { standId: string; row: number; col: number; label: string }[] = [];
-      stands.forEach((stand) => {
-        stand.slots.forEach((slot) => {
-          if (slot.hives.length === 0) {
-            const label = getSlotLabel(stand.label, slot.row, slot.col, stand.cols);
-            options.push(`${label} (Stand ${stand.label})`);
-            slotMap.push({ standId: stand.id, row: slot.row, col: slot.col, label });
-          }
-        });
-      });
+  // ------------------------------------------------------------------
+  // Drag and drop
+  // ------------------------------------------------------------------
 
-      if (options.length === 0) {
-        window.alert("No empty slots available. Add a stand or resize an existing one.");
-        closeContextMenu();
-        return;
-      }
-
-      const input = window.prompt(
-        `Move hive to which slot?\n\nAvailable:\n${options.join("\n")}\n\nEnter slot label (e.g. ${slotMap[0]?.label ?? "A1"}):`
-      );
-      if (!input) {
-        closeContextMenu();
-        return;
-      }
-
-      const target = slotMap.find(
-        (s) => s.label.toLowerCase() === input.trim().toLowerCase()
-      );
-      if (!target) {
-        window.alert("Slot not found or not empty.");
-        closeContextMenu();
-        return;
-      }
-
-      // Remove hive from current slot, add to target
-      let movedHive: typeof stands[0]["slots"][0]["hives"][0] | undefined;
-
-      setStands((prev) => {
-        const updated = prev.map((s) => ({
-          ...s,
-          slots: s.slots.map((slot) => {
-            const hiveIndex = slot.hives.findIndex((h) => h.hiveId === hiveId);
-            if (hiveIndex >= 0) {
-              movedHive = slot.hives[hiveIndex];
-              const remaining = slot.hives.filter((_, i) => i !== hiveIndex);
-              if (remaining.length === 1) {
-                return { ...slot, hives: remaining.map(h => ({ ...h, placement: "full" as const })) };
-              }
-              return { ...slot, hives: remaining };
-            }
-            return slot;
-          }),
-        }));
-
-        if (!movedHive) return updated;
-
-        return updated.map((s) => {
-          if (s.id !== target.standId) return s;
-          return {
-            ...s,
-            slots: s.slots.map((slot) => {
-              if (slot.row !== target.row || slot.col !== target.col) return slot;
-              return {
-                ...slot,
-                hives: [...slot.hives, { ...movedHive!, placement: "full" as const }],
-              };
-            }),
-          };
-        });
-      });
-
-      setHasUnsavedChanges(true);
-
-      // Sync location to database
-      const targetStand = stands.find(s => s.id === target.standId);
-      if (targetStand) {
-        moveHiveOnCanvas(
-          hiveId,
-          apiaryId,
-          target.label,
-          targetStand.label,
-          target.row,
-          target.col,
-          "full"
-        ).catch(console.error);
-      }
-
-      closeContextMenu();
-    },
-    [editMode, stands, apiaryId, closeContextMenu]
-  );
-
-  const handleRemoveFromSlot = useCallback(
+  const handleHiveDragStart = useCallback(
     (hiveId: string) => {
       if (!editMode) return;
-      setStands((prev) =>
-        prev.map((s) => ({
-          ...s,
-          slots: s.slots.map((slot) => ({
-            ...slot,
-            hives: slot.hives.filter((h) => h.hiveId !== hiveId),
-          })),
-        }))
-      );
-      setHasUnsavedChanges(true);
-      closeContextMenu();
+      setDraggingHiveId(hiveId);
     },
-    [editMode, closeContextMenu]
+    [editMode]
   );
 
-  // Add an unassigned hive to the first empty slot, or prompt
-  const handleAddHive = useCallback(() => {
-    if (!editMode) return;
-    if (stands.length === 0) {
-      window.alert("Add a stand first before adding hives.");
-      return;
-    }
-
-    // Find the first empty slot across all stands
-    for (const stand of stands) {
-      for (const slot of stand.slots) {
-        if (slot.hives.length === 0) {
-          handleAddHiveToSlot(stand.id, slot.row, slot.col);
-          return;
-        }
+  const handleHiveDragMove = useCallback(
+    (hiveId: string, worldX: number, worldY: number) => {
+      if (!editMode) return;
+      for (const stand of stands) {
+        const hit = slotAtPoint(stand, worldX, worldY);
+        if (!hit) continue;
+        const slots = slotsByStand.get(stand.id) ?? [];
+        const slot = slots.find((s) => s.row === hit.row && s.col === hit.col);
+        if (!slot) continue;
+        const others = slot.hives.filter((h) => h.hiveId !== hiveId);
+        setDragOverSlot({
+          standId: stand.id,
+          row: hit.row,
+          col: hit.col,
+          canDrop: others.length < 2,
+          willStack: others.length === 1,
+        });
+        return;
       }
-    }
-    window.alert("No empty slots available. Add a stand or resize an existing one.");
-  }, [editMode, stands, handleAddHiveToSlot]);
+      setDragOverSlot(null);
+    },
+    [editMode, stands, slotsByStand]
+  );
 
-  // ============================================
-  // Drag-and-drop handlers
-  // ============================================
-
-  const handleHiveDragStart = useCallback((hiveId: string) => {
-    if (!editMode) return;
-    setDraggingHiveId(hiveId);
-  }, [editMode]);
-
-  const handleHiveDragMove = useCallback((hiveId: string, absX: number, absY: number) => {
-    if (!editMode) return;
-
-    // Find which slot the hive is over
-    for (const stand of stands) {
-      const totalW = stand.cols * CELL_SIZE;
-      const totalH = stand.rows * CELL_SIZE;
-
-      // Account for stand rotation
-      const rad = -stand.rotation * (Math.PI / 180);
-      const cx = stand.x + totalW / 2;
-      const cy = stand.y + totalH / 2;
-      const dx = absX - cx;
-      const dy = absY - cy;
-      const localX = dx * Math.cos(rad) - dy * Math.sin(rad) + totalW / 2;
-      const localY = dx * Math.sin(rad) + dy * Math.cos(rad) + totalH / 2;
-
-      if (localX >= 0 && localX < totalW && localY >= 0 && localY < totalH) {
-        const col = Math.floor(localX / CELL_SIZE);
-        const row = Math.floor(localY / CELL_SIZE);
-        const slot = stand.slots.find(s => s.row === row && s.col === col);
-        if (slot) {
-          const otherHives = slot.hives.filter(h => h.hiveId !== hiveId);
-          const canDrop = otherHives.length < 2;
-          const willStack = otherHives.length === 1;
-          setDragOverSlot({ standId: stand.id, row, col, canDrop, willStack });
-          return;
-        }
-      }
-    }
-    setDragOverSlot(null);
-  }, [editMode, stands]);
-
-  const handleHiveDragEnd = useCallback((hiveId: string) => {
-    if (!editMode || !dragOverSlot) {
+  const handleHiveDragEnd = useCallback(
+    (hiveId: string) => {
+      const target = dragOverSlot;
       setDraggingHiveId(null);
       setDragOverSlot(null);
-      return;
-    }
+      if (!editMode || !target || !target.canDrop) return;
 
-    if (!dragOverSlot.canDrop) {
-      setDraggingHiveId(null);
-      setDragOverSlot(null);
-      return;
-    }
+      const stand = stands.find((s) => s.id === target.standId);
+      if (!stand) return;
+      const option = slotOptionFor(stand, target.row, target.col);
 
-    // Move hive from source slot to target slot
-    let capturedMovedHive: SlotHive | undefined;
-    const willStack = dragOverSlot.willStack;
-    const targetStandId = dragOverSlot.standId;
-    const targetRow = dragOverSlot.row;
-    const targetCol = dragOverSlot.col;
-
-    setStands(prev => {
-      let movedHive: SlotHive | undefined;
-
-      // Remove from current slot (and reset remaining hive to "full" if only 1 left)
-      const updated = prev.map(s => ({
-        ...s,
-        slots: s.slots.map(slot => {
-          const idx = slot.hives.findIndex(h => h.hiveId === hiveId);
-          if (idx >= 0) {
-            movedHive = slot.hives[idx];
-            const remaining = slot.hives.filter((_, i) => i !== idx);
-            if (remaining.length === 1) {
-              return { ...slot, hives: remaining.map(h => ({ ...h, placement: "full" as const })) };
-            }
-            return { ...slot, hives: remaining };
-          }
-          return slot;
-        }),
-      }));
-
-      if (!movedHive) return updated;
-      capturedMovedHive = movedHive;
-
-      if (willStack) {
-        // Don't add to target yet — show stacking dialog
-        return updated;
+      // Dropping back on the current slot is a no-op
+      const hive = hiveById.get(hiveId);
+      if (
+        hive &&
+        hive.standId === target.standId &&
+        hive.slotRow === target.row &&
+        hive.slotCol === target.col
+      ) {
+        return;
       }
 
-      // Add to empty target slot with "full" placement
-      return updated.map(s => {
-        if (s.id !== targetStandId) return s;
-        return {
-          ...s,
-          slots: s.slots.map(slot => {
-            if (slot.row !== targetRow || slot.col !== targetCol) return slot;
-            return { ...slot, hives: [...slot.hives, { ...movedHive!, placement: "full" as const }] };
-          }),
-        };
-      });
-    });
-
-    setHasUnsavedChanges(true);
-    setDraggingHiveId(null);
-    setDragOverSlot(null);
-
-    // If stacking, show the dialog after state update
-    if (willStack && capturedMovedHive) {
-      setPendingStack({
-        hiveId,
-        targetStandId,
-        targetRow,
-        targetCol,
-        movedHive: capturedMovedHive,
-      });
-    } else {
-      // Sync location to database for non-stack moves
-      const targetStand = stands.find(s => s.id === targetStandId);
-      if (targetStand) {
-        const newLabel = getSlotLabel(targetStand.label, targetRow, targetCol, targetStand.cols);
-        moveHiveOnCanvas(
-          hiveId,
-          apiaryId,
-          newLabel,
-          targetStand.label,
-          targetRow,
-          targetCol,
-          "full"
-        ).catch(console.error);
+      if (target.willStack) {
+        setDialog({ type: "stack", hiveId, target: option });
+      } else {
+        void moveHive(hiveId, option);
       }
-    }
-  }, [editMode, dragOverSlot, stands, apiaryId]);
+    },
+    [editMode, dragOverSlot, stands, hiveById, slotOptionFor, moveHive]
+  );
 
-  const handleStackChoice = useCallback((choice: "top-bottom" | "left-right" | "cancel") => {
-    if (!pendingStack || choice === "cancel") {
-      setPendingStack(null);
-      return;
-    }
+  // ------------------------------------------------------------------
+  // Geometry operations — local until Save
+  // ------------------------------------------------------------------
 
-    const { movedHive, targetStandId, targetRow, targetCol } = pendingStack;
-
-    setStands(prev => prev.map(s => {
-      if (s.id !== targetStandId) return s;
-      return {
-        ...s,
-        slots: s.slots.map(slot => {
-          if (slot.row !== targetRow || slot.col !== targetCol) return slot;
-          if (slot.hives.length !== 1) return slot;
-
-          if (choice === "top-bottom") {
-            return {
-              ...slot,
-              hives: [
-                { ...slot.hives[0], placement: "bottom" as const },
-                { ...movedHive, placement: "top" as const },
-              ],
-            };
-          } else {
-            return {
-              ...slot,
-              hives: [
-                { ...slot.hives[0], placement: "left" as const },
-                { ...movedHive, placement: "right" as const },
-              ],
-            };
-          }
-        }),
-      };
-    }));
-
-    setHasUnsavedChanges(true);
-
-    // Sync location to database
-    const targetStand = stands.find(s => s.id === targetStandId);
-    if (targetStand) {
-      const newLabel = getSlotLabel(targetStand.label, targetRow, targetCol, targetStand.cols);
-      const placement = choice === "top-bottom" ? "top" : "right";
-      moveHiveOnCanvas(
-        pendingStack.hiveId,
-        apiaryId,
-        newLabel,
-        targetStand.label,
-        targetRow,
-        targetCol,
-        placement
-      ).catch(console.error);
-    }
-
-    setPendingStack(null);
-  }, [pendingStack, stands, apiaryId]);
-
-  // ============================================
-  // Context menu event handlers from StandGroup
-  // ============================================
-
-  const handleStandRightClick = useCallback(
-    (standId: string, screenX: number, screenY: number) => {
+  const handleAddStand = useCallback(
+    (rows: number, cols: number) => {
       if (!editMode) return;
-      // Adjust for container offset
-      const containerRect = containerRef.current?.getBoundingClientRect();
-      setContextMenu({
-        type: "stand",
-        position: {
-          x: screenX - (containerRect?.left ?? 0),
-          y: screenY - (containerRect?.top ?? 0),
-        },
-        standId,
+      const centerX = (dimensions.width / 2 - viewport.offset.x) / viewport.zoom;
+      const centerY = (dimensions.height / 2 - viewport.offset.y) / viewport.zoom;
+      dispatch({
+        type: "addStand",
+        rows,
+        cols,
+        x: centerX - (cols * CELL_SIZE) / 2,
+        y: centerY - (rows * CELL_SIZE) / 2,
       });
     },
-    [editMode]
+    [editMode, dimensions, viewport.offset, viewport.zoom, dispatch]
   );
-
-  const handleSlotRightClick = useCallback(
-    (standId: string, row: number, col: number, screenX: number, screenY: number) => {
-      if (!editMode) return;
-      const containerRect = containerRef.current?.getBoundingClientRect();
-      setContextMenu({
-        type: "slot",
-        position: {
-          x: screenX - (containerRect?.left ?? 0),
-          y: screenY - (containerRect?.top ?? 0),
-        },
-        standId,
-        row,
-        col,
-      });
-    },
-    [editMode]
-  );
-
-  const handleHiveRightClick = useCallback(
-    (hiveId: string, screenX: number, screenY: number) => {
-      const containerRect = containerRef.current?.getBoundingClientRect();
-      setContextMenu({
-        type: "hive",
-        position: {
-          x: screenX - (containerRect?.left ?? 0),
-          y: screenY - (containerRect?.top ?? 0),
-        },
-        hiveId,
-      });
-    },
-    []
-  );
-
-  const handleHiveDoubleTap = useCallback(
-    (hiveId: string) => {
-      router.push(`/hives/${hiveId}`);
-    },
-    [router]
-  );
-
-  // ============================================
-  // North arrow handlers
-  // ============================================
-
-  const handleNorthDragEnd = useCallback(
-    (x: number, y: number) => {
-      if (!editMode) return;
-      setNorthArrow((prev) => ({ ...prev, x, y }));
-      setHasUnsavedChanges(true);
-    },
-    [editMode]
-  );
-
-  const handleNorthRotate = useCallback(
-    (rotation: number) => {
-      if (!editMode) return;
-      setNorthArrow((prev) => ({ ...prev, rotation }));
-      setHasUnsavedChanges(true);
-    },
-    [editMode]
-  );
-
-  const handleNorthRightClick = useCallback(
-    (screenX: number, screenY: number) => {
-      const containerRect = containerRef.current?.getBoundingClientRect();
-      setContextMenu({
-        type: "northArrow",
-        position: {
-          x: screenX - (containerRect?.left ?? 0),
-          y: screenY - (containerRect?.top ?? 0),
-        },
-      });
-    },
-    []
-  );
-
-  // ============================================
-  // Zoom / Pan
-  // ============================================
-
-  const handleWheel = useCallback(
-    (e: Konva.KonvaEventObject<WheelEvent>) => {
-      e.evt.preventDefault();
-      const stage = stageRef.current;
-      if (!stage) return;
-
-      const oldScale = zoom;
-      const pointer = stage.getPointerPosition();
-      if (!pointer) return;
-
-      const direction = e.evt.deltaY < 0 ? 1 : -1;
-      const newScale = Math.max(
-        MIN_ZOOM,
-        Math.min(MAX_ZOOM, oldScale + direction * ZOOM_STEP)
-      );
-
-      const mousePointTo = {
-        x: (pointer.x - offset.x) / oldScale,
-        y: (pointer.y - offset.y) / oldScale,
-      };
-
-      setZoom(newScale);
-      setOffset({
-        x: pointer.x - mousePointTo.x * newScale,
-        y: pointer.y - mousePointTo.y * newScale,
-      });
-    },
-    [zoom, offset]
-  );
-
-  const handleStageDragEnd = useCallback(
-    (e: Konva.KonvaEventObject<DragEvent>) => {
-      if (e.target !== stageRef.current) return;
-      setOffset({
-        x: e.target.x(),
-        y: e.target.y(),
-      });
-    },
-    []
-  );
-
-  // ============================================
-  // Toolbar actions
-  // ============================================
-
-  const handleZoomIn = useCallback(() => {
-    setZoom((prev) => Math.min(MAX_ZOOM, prev + ZOOM_STEP * 2));
-  }, []);
-
-  const handleZoomOut = useCallback(() => {
-    setZoom((prev) => Math.max(MIN_ZOOM, prev - ZOOM_STEP * 2));
-  }, []);
-
-  const handleResetView = useCallback(() => {
-    if (stands.length === 0) {
-      setZoom(1);
-      setOffset({ x: 0, y: 0 });
-      return;
-    }
-
-    // Compute bounding box of all stands
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-
-    stands.forEach((stand) => {
-      const w = stand.cols * CELL_SIZE;
-      const h = stand.rows * CELL_SIZE;
-      minX = Math.min(minX, stand.x);
-      minY = Math.min(minY, stand.y);
-      maxX = Math.max(maxX, stand.x + w);
-      maxY = Math.max(maxY, stand.y + h);
-    });
-
-    if (!isFinite(minX)) {
-      setZoom(1);
-      setOffset({ x: 0, y: 0 });
-      return;
-    }
-
-    const contentWidth = maxX - minX;
-    const contentHeight = maxY - minY;
-    const padding = 80;
-    const scaleX = (dimensions.width - padding * 2) / contentWidth;
-    const scaleY = (dimensions.height - padding * 2) / contentHeight;
-    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min(scaleX, scaleY)));
-
-    setZoom(newZoom);
-    setOffset({
-      x: (dimensions.width - contentWidth * newZoom) / 2 - minX * newZoom,
-      y: (dimensions.height - contentHeight * newZoom) / 2 - minY * newZoom,
-    });
-  }, [stands, dimensions]);
-
-  const handleToggleEditMode = useCallback(() => {
-    setEditMode((prev) => !prev);
-    closeContextMenu();
-    setRotatingStandId(null);
-  }, [closeContextMenu]);
-
-  const handleToggleSatellite = useCallback(() => {
-    setSatelliteEnabled((prev) => !prev);
-  }, []);
-
-  const handleSatelliteOpacityChange = useCallback((opacity: number) => {
-    setSatelliteOpacity(opacity);
-  }, []);
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
     try {
-      const layout: CanvasLayout = {
+      await saveCanvasLayout(apiaryId, {
         stands,
         northArrow,
-        zoom,
-        offsetX: offset.x,
-        offsetY: offset.y,
-      };
-      await saveCanvasLayout(apiaryId, layout);
-      setHasUnsavedChanges(false);
+        zoom: viewport.zoom,
+        offsetX: viewport.offset.x,
+        offsetY: viewport.offset.y,
+      });
+      markSaved();
     } finally {
       setIsSaving(false);
     }
-  }, [apiaryId, stands, northArrow, zoom, offset]);
+  }, [apiaryId, stands, northArrow, viewport.zoom, viewport.offset, markSaved]);
 
-  // ============================================
-  // Grid drawing
-  // ============================================
+  // ------------------------------------------------------------------
+  // Context menu plumbing
+  // ------------------------------------------------------------------
 
-  const gridCanvasRef = useRef<HTMLCanvasElement>(null);
+  const screenToLocal = useCallback((screenX: number, screenY: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    return { x: screenX - (rect?.left ?? 0), y: screenY - (rect?.top ?? 0) };
+  }, []);
 
-  useEffect(() => {
-    const canvas = gridCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    canvas.width = dimensions.width;
-    canvas.height = dimensions.height;
-    drawGrid(ctx, dimensions.width, dimensions.height, zoom, offset.x, offset.y);
-  }, [dimensions, zoom, offset]);
+  const handleStandRightClick = useCallback(
+    (standId: string, sx: number, sy: number) => {
+      if (!editMode) return;
+      setContextMenu({ type: "stand", position: screenToLocal(sx, sy), standId });
+    },
+    [editMode, screenToLocal]
+  );
 
-  // ============================================
-  // Render context menu helpers
-  // ============================================
+  const handleSlotRightClick = useCallback(
+    (standId: string, row: number, col: number, sx: number, sy: number) => {
+      if (!editMode) return;
+      setContextMenu({ type: "slot", position: screenToLocal(sx, sy), standId, row, col });
+    },
+    [editMode, screenToLocal]
+  );
+
+  const handleHiveRightClick = useCallback(
+    (hiveId: string, sx: number, sy: number) => {
+      setContextMenu({ type: "hive", position: screenToLocal(sx, sy), hiveId });
+    },
+    [screenToLocal]
+  );
+
+  const handleNorthRightClick = useCallback(
+    (sx: number, sy: number) => {
+      setContextMenu({ type: "northArrow", position: screenToLocal(sx, sy) });
+    },
+    [screenToLocal]
+  );
+
+  const handleHiveDoubleTap = useCallback(
+    (hiveId: string) => router.push(`/hives/${hiveId}`),
+    [router]
+  );
+
+  // ------------------------------------------------------------------
+  // Rotation handle
+  // ------------------------------------------------------------------
+
+  const applyRotationFromPointer = useCallback(
+    (snap: boolean) => {
+      if (!isRotationDragging.current || !rotationPivot || !rotatingStandId) return;
+      const stage = stageRef.current;
+      const pointer = stage?.getPointerPosition();
+      if (!stage || !pointer) return;
+      const world = {
+        x: (pointer.x - stage.x()) / stage.scaleX(),
+        y: (pointer.y - stage.y()) / stage.scaleY(),
+      };
+      let angle = angleFromPivot(rotationPivot, world);
+      if (snap) angle = Math.round(angle / 45) * 45;
+      dispatch({ type: "rotateStand", standId: rotatingStandId, rotation: Math.round(angle) });
+    },
+    [rotationPivot, rotatingStandId, dispatch]
+  );
+
+  // ------------------------------------------------------------------
+  // Render helpers
+  // ------------------------------------------------------------------
 
   function renderContextMenu() {
     if (!contextMenu) return null;
@@ -1066,9 +517,7 @@ export function CanvasInner({
           className="absolute z-50 bg-popover border border-border rounded-md shadow-md py-1 min-w-[160px]"
           style={{ left: contextMenu.position.x, top: contextMenu.position.y }}
         >
-          <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
-            North Arrow
-          </div>
+          <div className="px-3 py-1.5 text-xs font-semibold text-muted-foreground">North Arrow</div>
           <div className="h-px bg-border my-1" />
           {rotationOptions.map((deg) => (
             <button
@@ -1077,8 +526,7 @@ export function CanvasInner({
                 Math.round(northArrow.rotation) === deg ? "font-bold text-primary" : ""
               }`}
               onClick={() => {
-                setNorthArrow(prev => ({ ...prev, rotation: deg }));
-                setHasUnsavedChanges(true);
+                dispatch({ type: "rotateNorthArrow", rotation: deg });
                 closeContextMenu();
               }}
             >
@@ -1090,44 +538,42 @@ export function CanvasInner({
     }
 
     if (contextMenu.type === "hive") {
-      const hiveData = hives.find((h) => h.id === contextMenu.hiveId);
+      const hive = hiveById.get(contextMenu.hiveId);
       return (
         <HiveContextMenu
           position={contextMenu.position}
           hiveId={contextMenu.hiveId}
-          hiveName={hiveData?.positionLabel ?? "Hive"}
+          hiveName={hive?.positionLabel ?? "Hive"}
           onClose={closeContextMenu}
-          onSetFacing={() => handleSetFacing(contextMenu.hiveId)}
-          onMoveToSlot={() => handleMoveToSlot(contextMenu.hiveId)}
-          onRemoveFromSlot={() => handleRemoveFromSlot(contextMenu.hiveId)}
-          onEditHive={() => {
-            const hive = hives.find(h => h.id === contextMenu.hiveId);
-            setEditModalHive({
-              id: contextMenu.hiveId,
-              name: hive?.positionLabel ?? "",
-              status: hive?.status ?? "active",
-              notes: hive?.notes ?? undefined,
-            });
+          onSetFacing={() => {
+            setDialog({ type: "facing", hiveId: contextMenu.hiveId });
             closeContextMenu();
           }}
-          onFlipDirection={() => handleFlipDirection(contextMenu.hiveId)}
-          onSplitHive={() => handleSplitHive(contextMenu.hiveId)}
+          onMoveToSlot={() => {
+            setDialog({ type: "moveToSlot", hiveId: contextMenu.hiveId });
+            closeContextMenu();
+          }}
+          onRemoveFromSlot={() => void handleRemoveFromSlot(contextMenu.hiveId)}
+          onEditHive={() => {
+            setDialog({ type: "editHive", hiveId: contextMenu.hiveId });
+            closeContextMenu();
+          }}
+          onFlipDirection={() => void handleFlipDirection(contextMenu.hiveId)}
+          onSplitHive={() => {
+            closeContextMenu();
+            router.push(`/hives/${contextMenu.hiveId}/split`);
+          }}
         />
       );
     }
 
+    const stand = stands.find((s) => s.id === contextMenu.standId);
+    if (!stand) return null;
+
     if (contextMenu.type === "slot") {
-      const stand = stands.find((s) => s.id === contextMenu.standId);
-      if (!stand) return null;
-      const slot = stand.slots.find(
-        (s) => s.row === contextMenu.row && s.col === contextMenu.col
-      );
-      const slotLabel = getSlotLabel(
-        stand.label,
-        contextMenu.row,
-        contextMenu.col,
-        stand.cols
-      );
+      const slots = slotsByStand.get(stand.id) ?? [];
+      const slot = slots.find((s) => s.row === contextMenu.row && s.col === contextMenu.col);
+      const slotLabel = getSlotLabel(stand.label, contextMenu.row, contextMenu.col, stand.cols);
       const slotOccupied = (slot?.hives.length ?? 0) > 0;
 
       return (
@@ -1138,47 +584,146 @@ export function CanvasInner({
           slotOccupied={slotOccupied}
           isMultiOccupant={(slot?.hives.length ?? 0) > 1}
           onClose={closeContextMenu}
-          onRenameStand={() => handleRenameStand(contextMenu.standId)}
-          onResizeStand={() => handleResizeStand(contextMenu.standId)}
-          onRotateStand={() => handleRotateStand(contextMenu.standId)}
-          onDeleteStand={() => handleDeleteStand(contextMenu.standId)}
+          onRenameStand={() => {
+            setDialog({ type: "standSettings", standId: stand.id });
+            closeContextMenu();
+          }}
+          onResizeStand={() => {
+            setDialog({ type: "standSettings", standId: stand.id });
+            closeContextMenu();
+          }}
+          onRotateStand={() => {
+            setRotatingStandId((prev) => (prev === stand.id ? null : stand.id));
+            closeContextMenu();
+          }}
+          onDeleteStand={() => {
+            setDialog({ type: "deleteStand", standId: stand.id });
+            closeContextMenu();
+          }}
           onAddNewHive={
             !slotOccupied
-              ? () =>
-                  handleAddHiveToSlot(
-                    contextMenu.standId,
-                    contextMenu.row,
-                    contextMenu.col
-                  )
+              ? () => void handleAddHiveToSlot(stand.id, contextMenu.row, contextMenu.col)
               : undefined
           }
           onRemoveHiveFromSlot={
             slotOccupied && slot?.hives[0]
-              ? () => handleRemoveFromSlot(slot!.hives[0].hiveId)
+              ? () => void handleRemoveFromSlot(slot.hives[0].hiveId)
               : undefined
           }
         />
       );
     }
 
-    if (contextMenu.type === "stand") {
-      const stand = stands.find((s) => s.id === contextMenu.standId);
-      if (!stand) return null;
+    return (
+      <StandContextMenu
+        position={contextMenu.position}
+        standLabel={stand.label}
+        onClose={closeContextMenu}
+        onRenameStand={() => {
+          setDialog({ type: "standSettings", standId: stand.id });
+          closeContextMenu();
+        }}
+        onResizeStand={() => {
+          setDialog({ type: "standSettings", standId: stand.id });
+          closeContextMenu();
+        }}
+        onRotateStand={() => {
+          setRotatingStandId((prev) => (prev === stand.id ? null : stand.id));
+          closeContextMenu();
+        }}
+        onDeleteStand={() => {
+          setDialog({ type: "deleteStand", standId: stand.id });
+          closeContextMenu();
+        }}
+      />
+    );
+  }
 
-      return (
-        <StandContextMenu
-          position={contextMenu.position}
-          standLabel={stand.label}
-          onClose={closeContextMenu}
-          onRenameStand={() => handleRenameStand(contextMenu.standId)}
-          onResizeStand={() => handleResizeStand(contextMenu.standId)}
-          onRotateStand={() => handleRotateStand(contextMenu.standId)}
-          onDeleteStand={() => handleDeleteStand(contextMenu.standId)}
+  function renderDialogs() {
+    const dialogStand =
+      dialog?.type === "standSettings" || dialog?.type === "deleteStand"
+        ? stands.find((s) => s.id === dialog.standId) ?? null
+        : null;
+    const dialogHive =
+      dialog?.type === "facing" || dialog?.type === "moveToSlot" || dialog?.type === "editHive"
+        ? hiveById.get(dialog.hiveId)
+        : undefined;
+
+    return (
+      <>
+        <StandSettingsDialog
+          stand={dialogStand}
+          open={dialog?.type === "standSettings"}
+          onOpenChange={(o) => !o && setDialog(null)}
+          onSave={(standId, label, rows, cols) => {
+            dispatch({ type: "renameStand", standId, label });
+            dispatch({ type: "resizeStand", standId, rows, cols });
+            setDialog(null);
+          }}
         />
-      );
-    }
+        <DeleteStandDialog
+          stand={dialogStand}
+          hasHives={
+            dialogStand
+              ? (slotsByStand.get(dialogStand.id) ?? []).some((s) => s.hives.length > 0)
+              : false
+          }
+          open={dialog?.type === "deleteStand"}
+          onOpenChange={(o) => !o && setDialog(null)}
+          onConfirm={(standId) => {
+            dispatch({ type: "deleteStand", standId });
+            setDialog(null);
+          }}
+        />
+        {dialog?.type === "facing" && dialogHive && (
+          <FacingDialog
+            hiveName={dialogHive.positionLabel}
+            initialDegrees={dialogHive.facingDegrees ?? 0}
+            open
+            onOpenChange={(o) => !o && setDialog(null)}
+            onSave={(degrees) => {
+              void setHiveFacing(dialogHive.id, apiaryId, degrees).then(refresh);
+              setDialog(null);
+            }}
+          />
+        )}
+        {dialog?.type === "moveToSlot" && dialogHive && (
+          <MoveToSlotDialog
+            hiveName={dialogHive.positionLabel}
+            options={emptySlotOptions}
+            open
+            onOpenChange={(o) => !o && setDialog(null)}
+            onMove={(option) => {
+              void moveHive(dialogHive.id, option);
+              setDialog(null);
+            }}
+          />
+        )}
+        <StackChoiceDialog
+          open={dialog?.type === "stack"}
+          onOpenChange={() => undefined}
+          onChoice={(choice) => void handleStackChoice(choice)}
+        />
+        {dialog?.type === "editHive" && dialogHive && (
+          <HiveEditModal
+            open
+            onOpenChange={(o) => !o && setDialog(null)}
+            hiveId={dialogHive.id}
+            hiveName={dialogHive.positionLabel}
+            hiveStatus={dialogHive.status}
+            hiveNotes={dialogHive.notes ?? undefined}
+            onSave={async (hiveId, data) => {
+              await updateHiveFromCanvas(hiveId, data);
+              refresh();
+            }}
+          />
+        )}
+      </>
+    );
+  }
 
-    return null;
+  if (hives.length === 0 && stands.length === 0 && !editMode) {
+    // Still render the canvas in edit mode so stands can be laid out first.
   }
 
   return (
@@ -1186,24 +731,27 @@ export function CanvasInner({
       <div className="absolute top-2 left-2 z-10">
         <CanvasToolbar
           editMode={editMode}
-          hasUnsavedChanges={hasUnsavedChanges}
+          hasUnsavedChanges={dirty}
           isSaving={isSaving}
           satelliteEnabled={satelliteEnabled}
           satelliteOpacity={satelliteOpacity}
-          onToggleEditMode={handleToggleEditMode}
-          onZoomIn={handleZoomIn}
-          onZoomOut={handleZoomOut}
-          onResetView={handleResetView}
-          onSave={handleSave}
-          onToggleSatellite={hasSatelliteData ? handleToggleSatellite : undefined}
-          onSatelliteOpacityChange={hasSatelliteData ? handleSatelliteOpacityChange : undefined}
+          onToggleEditMode={() => {
+            setEditMode((prev) => !prev);
+            setRotatingStandId(null);
+            closeContextMenu();
+          }}
+          onZoomIn={() => viewport.zoomBy(ZOOM_STEP * 2)}
+          onZoomOut={() => viewport.zoomBy(-ZOOM_STEP * 2)}
+          onResetView={() => viewport.fitToContent(stands)}
+          onSave={() => void handleSave()}
+          onToggleSatellite={hasSatelliteData ? () => setSatelliteEnabled((p) => !p) : undefined}
+          onSatelliteOpacityChange={hasSatelliteData ? setSatelliteOpacity : undefined}
           onAddStand={handleAddStand}
-          onAddHive={handleAddHive}
+          onAddHive={emptySlotOptions.length > 0 ? handleAddHive : undefined}
         />
       </div>
 
       <div className="relative border rounded-lg overflow-hidden bg-stone-50">
-        {/* Grid background */}
         <canvas
           ref={gridCanvasRef}
           className="absolute inset-0 pointer-events-none"
@@ -1214,139 +762,71 @@ export function CanvasInner({
           ref={stageRef}
           width={dimensions.width}
           height={dimensions.height}
-          scaleX={zoom}
-          scaleY={zoom}
-          x={offset.x}
-          y={offset.y}
+          scaleX={viewport.zoom}
+          scaleY={viewport.zoom}
+          x={viewport.offset.x}
+          y={viewport.offset.y}
           draggable
-          onWheel={handleWheel}
-          onDragEnd={handleStageDragEnd}
-          onClick={() => { closeContextMenu(); setRotatingStandId(null); isRotationDragging.current = false; }}
-          onTap={() => { closeContextMenu(); setRotatingStandId(null); isRotationDragging.current = false; }}
-          onMouseMove={(e) => {
-            if (!isRotationDragging.current || !rotationPivot || !rotatingStandId) return;
-            const stage = stageRef.current;
-            if (!stage) return;
-            const pointer = stage.getPointerPosition();
-            if (!pointer) return;
-            // Convert screen pointer to world/stage coords (account for zoom/pan)
-            const worldX = (pointer.x - stage.x()) / stage.scaleX();
-            const worldY = (pointer.y - stage.y()) / stage.scaleY();
-            const dx = worldX - rotationPivot.x;
-            const dy = worldY - rotationPivot.y;
-            // Compute angle: 0 = north/up, clockwise positive
-            let angle = Math.atan2(dx, -dy) * (180 / Math.PI);
-            angle = ((angle % 360) + 360) % 360;
-            // Snap to 45° only when Ctrl or Shift is held
-            if (e.evt.ctrlKey || e.evt.shiftKey) {
-              angle = Math.round(angle / 45) * 45;
-            }
-            angle = Math.round(angle);
-            setStands((prev) =>
-              prev.map((s) => (s.id === rotatingStandId ? { ...s, rotation: angle } : s))
-            );
-            setHasUnsavedChanges(true);
+          onWheel={viewport.handleWheel}
+          onDragEnd={viewport.handleStageDragEnd}
+          onClick={() => {
+            closeContextMenu();
+            setRotatingStandId(null);
+            isRotationDragging.current = false;
           }}
+          onTap={() => {
+            closeContextMenu();
+            setRotatingStandId(null);
+            isRotationDragging.current = false;
+          }}
+          onMouseMove={(e) => applyRotationFromPointer(e.evt.ctrlKey || e.evt.shiftKey)}
           onMouseUp={() => {
             isRotationDragging.current = false;
           }}
           onTouchMove={(e) => {
-            // Handle rotation drag via touch
-            if (isRotationDragging.current && rotationPivot && rotatingStandId) {
-              const stage = stageRef.current;
-              if (!stage) return;
-              const pointer = stage.getPointerPosition();
-              if (!pointer) return;
-              const worldX = (pointer.x - stage.x()) / stage.scaleX();
-              const worldY = (pointer.y - stage.y()) / stage.scaleY();
-              const dx = worldX - rotationPivot.x;
-              const dy = worldY - rotationPivot.y;
-              let angle = Math.atan2(dx, -dy) * (180 / Math.PI);
-              angle = ((angle % 360) + 360) % 360;
-              angle = Math.round(angle);
-              setStands((prev) =>
-                prev.map((s) => (s.id === rotatingStandId ? { ...s, rotation: angle } : s))
-              );
-              setHasUnsavedChanges(true);
+            if (isRotationDragging.current) {
+              applyRotationFromPointer(false);
               return;
             }
-
-            // Pinch zoom support
-            const touch1 = e.evt.touches[0];
-            const touch2 = e.evt.touches[1];
-            if (!touch1 || !touch2) return;
-
-            e.evt.preventDefault();
-            const dist = Math.sqrt(
-              (touch2.clientX - touch1.clientX) ** 2 +
-                (touch2.clientY - touch1.clientY) ** 2
-            );
-
-            const stage = stageRef.current;
-            if (!stage) return;
-
-            const lastDist = (stage as unknown as { _lastDist?: number })
-              ._lastDist;
-            if (lastDist) {
-              const scale = zoom * (dist / lastDist);
-              setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale)));
-            }
-            (stage as unknown as { _lastDist: number })._lastDist = dist;
+            viewport.handlePinchMove(e);
           }}
           onTouchEnd={() => {
             isRotationDragging.current = false;
-            const stage = stageRef.current;
-            if (stage) {
-              (stage as unknown as { _lastDist: number | undefined })._lastDist =
-                undefined;
-            }
+            viewport.endPinch();
           }}
         >
           <Layer>
-            {/* Transparent background rect to capture drag events */}
-            <Rect
-              width={dimensions.width * 4}
-              height={dimensions.height * 4}
-              x={-dimensions.width * 2}
-              y={-dimensions.height * 2}
-              fill="transparent"
-              listening={false}
-            />
-
-            {/* Satellite overlay - rendered behind everything else */}
             {satelliteEnabled && hasSatelliteData && latitude != null && longitude != null && (
               <SatelliteOverlay
                 latitude={latitude}
                 longitude={longitude}
-                canvasWidth={dimensions.width / zoom}
-                canvasHeight={dimensions.height / zoom}
+                anchor={satelliteAnchor}
                 opacity={satelliteOpacity}
               />
             )}
 
-            {/* North arrow */}
             <NorthArrow
               x={northArrow.x}
               y={northArrow.y}
               rotation={northArrow.rotation}
               draggable={editMode}
-              onDragEnd={handleNorthDragEnd}
-              onRotate={handleNorthRotate}
+              onDragEnd={(x, y) => dispatch({ type: "moveNorthArrow", x, y })}
+              onRotate={(rotation) => dispatch({ type: "rotateNorthArrow", rotation })}
               onRightClick={handleNorthRightClick}
             />
 
-            {/* Stands */}
             {stands.map((stand) => (
               <StandGroup
                 key={stand.id}
                 stand={stand}
+                slots={slotsByStand.get(stand.id) ?? []}
                 hiveStatusMap={hiveStatusMap}
                 hiveLabelMap={hiveLabelMap}
                 editMode={editMode}
                 isRotating={rotatingStandId === stand.id}
                 draggingHiveId={draggingHiveId}
                 dragOverSlot={dragOverSlot?.standId === stand.id ? dragOverSlot : null}
-                onStandDragEnd={handleStandDragEnd}
+                onStandDragEnd={(standId, x, y) => dispatch({ type: "moveStand", standId, x, y })}
                 onHiveRightClick={handleHiveRightClick}
                 onSlotRightClick={handleSlotRightClick}
                 onStandRightClick={handleStandRightClick}
@@ -1357,16 +837,14 @@ export function CanvasInner({
               />
             ))}
 
-            {/* Rotation handle overlay — rendered in stage coords, outside the rotated group */}
             {rotatingStand && rotationPivot && (() => {
               const rad = rotatingStand.rotation * (Math.PI / 180);
               const handleDist =
-                Math.max(rotatingStand.cols, rotatingStand.rows) * CELL_SIZE / 2 + 50;
+                (Math.max(rotatingStand.cols, rotatingStand.rows) * CELL_SIZE) / 2 + 50;
               const hx = rotationPivot.x + Math.sin(rad) * handleDist;
               const hy = rotationPivot.y - Math.cos(rad) * handleDist;
               return (
                 <>
-                  {/* Dashed line from center to handle */}
                   <Line
                     points={[rotationPivot.x, rotationPivot.y, hx, hy]}
                     stroke="#f59e0b"
@@ -1374,15 +852,7 @@ export function CanvasInner({
                     dash={[4, 4]}
                     listening={false}
                   />
-                  {/* Center pivot dot */}
-                  <Circle
-                    x={rotationPivot.x}
-                    y={rotationPivot.y}
-                    radius={4}
-                    fill="#f59e0b"
-                    listening={false}
-                  />
-                  {/* Draggable rotation handle */}
+                  <Circle x={rotationPivot.x} y={rotationPivot.y} radius={4} fill="#f59e0b" listening={false} />
                   <Circle
                     x={hx}
                     y={hy}
@@ -1398,8 +868,12 @@ export function CanvasInner({
                       e.cancelBubble = true;
                       isRotationDragging.current = true;
                     }}
-                    onClick={(e) => { e.cancelBubble = true; }}
-                    onTap={(e) => { e.cancelBubble = true; }}
+                    onClick={(e) => {
+                      e.cancelBubble = true;
+                    }}
+                    onTap={(e) => {
+                      e.cancelBubble = true;
+                    }}
                     onMouseEnter={(e) => {
                       const c = e.target.getStage()?.container();
                       if (c) c.style.cursor = "grab";
@@ -1409,12 +883,11 @@ export function CanvasInner({
                       if (c) c.style.cursor = "default";
                     }}
                   />
-                  {/* Rotation degree label */}
                   <KText
                     x={hx - 20}
                     y={hy + 16}
                     width={40}
-                    text={`${Math.round(rotatingStand.rotation)}\u00B0`}
+                    text={`${Math.round(rotatingStand.rotation)}°`}
                     fontSize={11}
                     fontStyle="bold"
                     fill="#b45309"
@@ -1427,73 +900,45 @@ export function CanvasInner({
           </Layer>
         </Stage>
 
-        {/* Context menus - HTML overlays positioned absolutely over the canvas */}
         {renderContextMenu()}
       </div>
+
+      {/* Unassigned hives — explicit placement instead of silent auto-fill */}
+      {unassigned.length > 0 && (
+        <div className="mt-2 rounded-md border bg-amber-50 px-3 py-2">
+          <p className="text-xs font-medium text-amber-800 mb-1">
+            Unplaced hives — drag stands into place, then assign:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {unassigned.map((hive) => (
+              <button
+                key={hive.id}
+                className="text-xs px-2 py-1 rounded border bg-white hover:bg-accent transition-colors"
+                onClick={() => setDialog({ type: "moveToSlot", hiveId: hive.id })}
+              >
+                {hive.positionLabel} →
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Mode indicator */}
       <div className="absolute bottom-2 right-2 z-10">
         <span
           className={`text-xs px-2 py-1 rounded-full ${
-            editMode
-              ? "bg-amber-100 text-amber-800"
-              : "bg-stone-100 text-stone-600"
+            editMode ? "bg-amber-100 text-amber-800" : "bg-stone-100 text-stone-600"
           }`}
         >
           {editMode
             ? rotatingStandId
-              ? "Rotate Mode - Drag handle to rotate (hold Ctrl/Shift to snap 45\u00B0), click background to confirm"
-              : "Edit Mode - Drag stands to reposition, right-click for options"
-            : "View Mode - Double-click hive to open, right-click for quick actions"}
+              ? "Rotate Mode - Drag handle (Ctrl/Shift snaps 45°), click background to finish"
+              : "Edit Mode - Hive moves save instantly; stand layout saves with Save"
+            : "View Mode - Double-click a hive to open it, right-click for actions"}
         </span>
       </div>
 
-      {/* Edit Hive Modal */}
-      {editModalHive && (
-        <HiveEditModal
-          open={!!editModalHive}
-          onOpenChange={(open) => { if (!open) setEditModalHive(null); }}
-          hiveId={editModalHive.id}
-          hiveName={editModalHive.name}
-          hiveStatus={editModalHive.status}
-          hiveNotes={editModalHive.notes}
-          onSave={handleEditHiveSave}
-        />
-      )}
-
-      {/* Stack Choice Dialog */}
-      {pendingStack && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="bg-popover border rounded-lg shadow-lg p-4 min-w-[240px]">
-            <h3 className="font-semibold mb-3">Stack Hives</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              How should these hives be arranged?
-            </p>
-            <div className="space-y-2">
-              <button
-                className="w-full text-left px-3 py-2 rounded-md border hover:bg-accent transition-colors"
-                onClick={() => handleStackChoice("top-bottom")}
-              >
-                <div className="font-medium text-sm">Top / Bottom Split</div>
-                <div className="text-xs text-muted-foreground">Stack vertically</div>
-              </button>
-              <button
-                className="w-full text-left px-3 py-2 rounded-md border hover:bg-accent transition-colors"
-                onClick={() => handleStackChoice("left-right")}
-              >
-                <div className="font-medium text-sm">Left / Right Split (Nucs)</div>
-                <div className="text-xs text-muted-foreground">Split horizontally for nuc hives</div>
-              </button>
-              <button
-                className="w-full text-center px-3 py-2 rounded-md text-sm text-muted-foreground hover:bg-accent transition-colors"
-                onClick={() => handleStackChoice("cancel")}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {renderDialogs()}
     </div>
   );
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "hives" ADD COLUMN "facing_degrees" integer DEFAULT 0;
