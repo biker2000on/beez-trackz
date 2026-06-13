@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Boxes, Cpu, SlidersHorizontal, Upload, GlassWater } from "lucide-react";
+import { InstallAppSetting } from "@/components/pwa/install-app-setting";
 
 const settingsLinks = [
   {
@@ -53,6 +54,7 @@ export default function SettingsPage() {
             </Card>
           </Link>
         ))}
+        <InstallAppSetting />
       </div>
     </div>
   );

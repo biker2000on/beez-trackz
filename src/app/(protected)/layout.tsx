@@ -4,6 +4,7 @@ import { BottomNav } from "@/components/nav/bottom-nav";
 import { OfflineBanner } from "@/components/offline/offline-banner";
 import { SyncIndicator } from "@/components/offline/sync-indicator";
 import { InstallPrompt } from "@/components/pwa/install-prompt";
+import { PwaInstallProvider } from "@/components/pwa/pwa-install-provider";
 import { AutoSyncInit } from "@/components/offline/auto-sync-init";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,7 @@ export default function ProtectedLayout({
 }) {
   return (
     <ShortcutProvider>
+    <PwaInstallProvider>
     <div className="min-h-screen">
       <Sidebar />
       <main className="md:pl-64 pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0">
@@ -26,6 +28,7 @@ export default function ProtectedLayout({
       <InstallPrompt />
       <AutoSyncInit />
     </div>
+    </PwaInstallProvider>
     </ShortcutProvider>
   );
 }

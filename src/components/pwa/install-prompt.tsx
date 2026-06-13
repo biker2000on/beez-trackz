@@ -1,74 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { X, Share, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-interface BeforeInstallPromptEvent extends Event {
-  prompt(): Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-}
-
-const DISMISS_KEY = "pwa-install-dismissed";
-
-function isStandalone(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    // iOS Safari
-    (window.navigator as unknown as { standalone?: boolean }).standalone === true
-  );
-}
-
-function isIos(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
-    // iPadOS reports as Mac with a touch screen
-    (window.navigator.platform === "MacIntel" && window.navigator.maxTouchPoints > 1)
-  );
-}
+import { usePwaInstall } from "./pwa-install-provider";
 
 export function InstallPrompt() {
-  const [deferredPrompt, setDeferredPrompt] =
-    useState<BeforeInstallPromptEvent | null>(null);
-  const [showPrompt, setShowPrompt] = useState(false);
-  const [iosHint, setIosHint] = useState(false);
+  const { canInstall, isInstalled, isIos, dismissed, promptInstall, dismiss } =
+    usePwaInstall();
 
-  useEffect(() => {
-    if (localStorage.getItem(DISMISS_KEY)) return;
-    if (isStandalone()) return; // already installed
+  // Show once, until the user makes any choice. Dismissal is persisted, so it
+  // never comes back on its own — re-install from Settings → Install app.
+  const show = !dismissed && !isInstalled && (canInstall || isIos);
+  if (!show) return null;
 
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setShowPrompt(true);
-    };
-    window.addEventListener("beforeinstallprompt", handler);
-
-    // iOS Safari never fires beforeinstallprompt — show manual instructions.
-    if (isIos()) {
-      setIosHint(true);
-      setShowPrompt(true);
-    }
-
-    return () => window.removeEventListener("beforeinstallprompt", handler);
-  }, []);
-
-  const handleInstallClick = async () => {
-    if (!deferredPrompt) return;
-    await deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    setDeferredPrompt(null);
-    setShowPrompt(false);
+  const handleInstall = async () => {
+    await promptInstall();
+    dismiss(); // either it installed, or they declined — don't nag again
   };
-
-  const handleDismiss = () => {
-    localStorage.setItem(DISMISS_KEY, "true");
-    setShowPrompt(false);
-  };
-
-  if (!showPrompt) return null;
 
   return (
     <div className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] left-4 right-4 md:bottom-4 md:left-auto md:right-4 md:w-96 z-50 rounded-lg border bg-card p-4 shadow-lg animate-in slide-in-from-bottom-5">
@@ -81,7 +29,7 @@ export function InstallPrompt() {
             <h3 className="font-semibold">Install Beez Trackz</h3>
           </div>
 
-          {iosHint ? (
+          {isIos ? (
             <p className="mb-3 text-sm text-muted-foreground">
               Tap the Share button{" "}
               <Share className="inline h-4 w-4 -mt-0.5" aria-label="Share" /> then{" "}
@@ -98,18 +46,18 @@ export function InstallPrompt() {
           )}
 
           <div className="flex gap-2">
-            {!iosHint && (
-              <Button size="sm" onClick={handleInstallClick}>
+            {!isIos && (
+              <Button size="sm" onClick={handleInstall}>
                 Install
               </Button>
             )}
-            <Button size="sm" variant="outline" onClick={handleDismiss}>
-              {iosHint ? "Got it" : "Not now"}
+            <Button size="sm" variant="outline" onClick={dismiss}>
+              {isIos ? "Got it" : "Not now"}
             </Button>
           </div>
         </div>
         <button
-          onClick={handleDismiss}
+          onClick={dismiss}
           className="text-muted-foreground transition-colors hover:text-foreground"
           aria-label="Close"
         >
