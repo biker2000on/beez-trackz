@@ -13,6 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface QueenFormProps {
   action: (prevState: unknown, formData: FormData) => Promise<unknown>;
@@ -56,6 +58,11 @@ export function QueenForm({
   submitLabel,
 }: QueenFormProps) {
   const [state, formAction, isPending] = useActionState(action, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const errorMessage =
     state && typeof state === "object" && "error" in state
       ? (state as { error: string }).error
@@ -74,7 +81,7 @@ export function QueenForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="hiveId">Hive</Label>
             <Select

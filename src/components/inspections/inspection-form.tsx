@@ -16,6 +16,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { PestInput } from "./pest-input";
 import { TreatmentInput } from "./treatment-input";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface PestRow {
   type: string;
@@ -73,6 +75,11 @@ export function InspectionForm({
   submitLabel,
 }: InspectionFormProps) {
   const [state, formAction, isPending] = useActionState(action, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const errorMessage =
     state && typeof state === "object" && "error" in state
       ? (state as { error: string }).error
@@ -91,7 +98,7 @@ export function InspectionForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form action={formAction} className="space-y-6">
+        <form ref={formRef} action={formAction} className="space-y-6">
           <input type="hidden" name="hiveId" value={hiveId} />
           <input
             type="hidden"

@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface BulkHiveFormProps {
   apiaryId: string;
@@ -13,6 +15,11 @@ interface BulkHiveFormProps {
 
 export function BulkHiveForm({ apiaryId }: BulkHiveFormProps) {
   const [state, formAction, isPending] = useActionState(bulkCreateHives, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const [quantity, setQuantity] = useState(5);
   const [startLabel, setStartLabel] = useState("");
 
@@ -33,7 +40,7 @@ export function BulkHiveForm({ apiaryId }: BulkHiveFormProps) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           <input type="hidden" name="apiaryId" value={apiaryId} />
 
           <div className="space-y-2">

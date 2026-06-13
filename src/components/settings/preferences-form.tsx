@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface PreferencesFormProps {
   preferences: {
@@ -25,6 +27,11 @@ interface PreferencesFormProps {
 
 export function PreferencesForm({ preferences, apiaries }: PreferencesFormProps) {
   const [state, formAction, isPending] = useActionState(updatePreferences, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error
     : null;
@@ -40,7 +47,7 @@ export function PreferencesForm({ preferences, apiaries }: PreferencesFormProps)
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-4">{errorMessage}</p>}
         {successMessage && <p className="text-green-600 text-sm mb-4">{successMessage}</p>}
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="theme">Theme</Label>
             <Select name="theme" defaultValue={preferences?.theme || "system"}>

@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { feedings, hives, apiaries } from "@/db/schema";
 import { eq, isNull, desc } from "drizzle-orm";
@@ -21,19 +22,19 @@ export async function createFeeding(
   const notes = formData.get("notes") as string;
 
   if (!hiveId) {
-    return { error: "Hive is required" };
+    return { error: "Hive is required", values: formValues(formData) };
   }
   if (!dateFed) {
-    return { error: "Date is required" };
+    return { error: "Date is required", values: formValues(formData) };
   }
   if (!type) {
-    return { error: "Feed type is required" };
+    return { error: "Feed type is required", values: formValues(formData) };
   }
   if (!quantity) {
-    return { error: "Quantity is required" };
+    return { error: "Quantity is required", values: formValues(formData) };
   }
   if (!quantityUnit) {
-    return { error: "Unit is required" };
+    return { error: "Unit is required", values: formValues(formData) };
   }
 
   await db.insert(feedings).values({

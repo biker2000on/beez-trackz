@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { userSettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -20,7 +21,7 @@ export async function updatePreferences(_prevState: unknown, formData: FormData)
   const weightUnit = formData.get("weightUnit") as string;
 
   const existing = await db.select().from(userSettings).limit(1);
-  if (!existing[0]) return { error: "No settings found" };
+  if (!existing[0]) return { error: "No settings found", values: formValues(formData) };
 
   await db.update(userSettings).set({
     theme: theme || "system",

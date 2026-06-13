@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { HiveMultiSelector } from "@/components/bulk/hive-multi-selector";
 import { CheckCircle } from "lucide-react";
 import { bulkCreateInspections } from "@/actions/bulk";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface HiveOption {
   id: string;
@@ -23,6 +25,11 @@ interface BulkInspectionFormProps {
 export function BulkInspectionForm({ hives }: BulkInspectionFormProps) {
   const [selectedHiveIds, setSelectedHiveIds] = useState<string[]>([]);
   const [state, formAction, isPending] = useActionState(bulkCreateInspections, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
 
   const errorMessage =
     state && typeof state === "object" && "error" in state
@@ -51,7 +58,7 @@ export function BulkInspectionForm({ hives }: BulkInspectionFormProps) {
             <span>Successfully created {successCount} inspection(s)</span>
           </div>
         )}
-        <form action={formAction} className="space-y-6">
+        <form ref={formRef} action={formAction} className="space-y-6">
           <input type="hidden" name="hiveIds" value={JSON.stringify(selectedHiveIds)} />
 
           <HiveMultiSelector

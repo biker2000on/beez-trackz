@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { inspections, hives, apiaries } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -45,10 +46,10 @@ export async function createInspection(
   const notes = formData.get("notes") as string;
 
   if (!hiveId) {
-    return { error: "Hive is required" };
+    return { error: "Hive is required", values: formValues(formData) };
   }
   if (!date) {
-    return { error: "Date is required" };
+    return { error: "Date is required", values: formValues(formData) };
   }
 
   await createInspectionRecord({
@@ -90,7 +91,7 @@ export async function updateInspection(
   const notes = formData.get("notes") as string;
 
   if (!date) {
-    return { error: "Date is required" };
+    return { error: "Date is required", values: formValues(formData) };
   }
 
   // Get hiveId for revalidation

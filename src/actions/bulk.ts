@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { inspections, feedings } from "@/db/schema";
 import { revalidatePath } from "next/cache";
@@ -14,10 +15,10 @@ export async function bulkCreateInspections(
   const date = formData.get("date") as string;
   const notes = formData.get("notes") as string;
 
-  if (!hiveIdsJson || !date) return { error: "Hives and date are required" };
+  if (!hiveIdsJson || !date) return { error: "Hives and date are required", values: formValues(formData) };
 
   const hiveIds: string[] = JSON.parse(hiveIdsJson);
-  if (hiveIds.length === 0) return { error: "Select at least one hive" };
+  if (hiveIds.length === 0) return { error: "Select at least one hive", values: formValues(formData) };
 
   await db.transaction(async (tx) => {
     for (const hiveId of hiveIds) {
@@ -47,11 +48,11 @@ export async function bulkCreateFeedings(
   const notes = formData.get("notes") as string;
 
   if (!hiveIdsJson || !dateFed || !type || !quantity || !quantityUnit) {
-    return { error: "Required fields missing" };
+    return { error: "Required fields missing", values: formValues(formData) };
   }
 
   const hiveIds: string[] = JSON.parse(hiveIdsJson);
-  if (hiveIds.length === 0) return { error: "Select at least one hive" };
+  if (hiveIds.length === 0) return { error: "Select at least one hive", values: formValues(formData) };
 
   await db.transaction(async (tx) => {
     for (const hiveId of hiveIds) {

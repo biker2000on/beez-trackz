@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { queens, hives, apiaries } from "@/db/schema";
 import { eq, sql, desc } from "drizzle-orm";
@@ -21,7 +22,7 @@ export async function createQueen(_prevState: unknown, formData: FormData) {
   const notes = formData.get("notes") as string;
 
   if (!origin) {
-    return { error: "Origin is required" };
+    return { error: "Origin is required", values: formValues(formData) };
   }
 
   await db
@@ -60,7 +61,7 @@ export async function updateQueen(
   const notes = formData.get("notes") as string;
 
   if (!origin) {
-    return { error: "Origin is required" };
+    return { error: "Origin is required", values: formValues(formData) };
   }
 
   await db

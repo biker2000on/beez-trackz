@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { harvestSessions, honeyHarvests, hives, apiaries } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
@@ -16,8 +17,8 @@ export async function createHarvestSession(
   const date = formData.get("date") as string;
   const notes = formData.get("notes") as string;
 
-  if (!apiaryId) return { error: "Apiary is required" };
-  if (!date) return { error: "Date is required" };
+  if (!apiaryId) return { error: "Apiary is required", values: formValues(formData) };
+  if (!date) return { error: "Date is required", values: formValues(formData) };
 
   const [session] = await db
     .insert(harvestSessions)
@@ -43,14 +44,14 @@ export async function addHarvestEntry(
   const superWeightAfter = formData.get("superWeightAfter") as string;
   const notes = formData.get("notes") as string;
 
-  if (!hiveId) return { error: "Hive is required" };
-  if (!superWeightBefore || !superWeightAfter) return { error: "Both weights are required" };
+  if (!hiveId) return { error: "Hive is required", values: formValues(formData) };
+  if (!superWeightBefore || !superWeightAfter) return { error: "Both weights are required", values: formValues(formData) };
 
   const before = parseFloat(superWeightBefore);
   const after = parseFloat(superWeightAfter);
   const honeyWeight = before - after;
 
-  if (honeyWeight < 0) return { error: "Weight before must be greater than weight after" };
+  if (honeyWeight < 0) return { error: "Weight before must be greater than weight after", values: formValues(formData) };
 
   const session = await db
     .select({ date: harvestSessions.date })
@@ -58,7 +59,7 @@ export async function addHarvestEntry(
     .where(eq(harvestSessions.id, sessionId))
     .limit(1);
 
-  if (!session[0]) return { error: "Session not found" };
+  if (!session[0]) return { error: "Session not found", values: formValues(formData) };
 
   await db.insert(honeyHarvests).values({
     sessionId,
@@ -82,7 +83,7 @@ export async function trueUpHarvestSession(
   await requireSession();
   const totalWeight = formData.get("totalExtractedWeight") as string;
 
-  if (!totalWeight) return { error: "Total weight is required" };
+  if (!totalWeight) return { error: "Total weight is required", values: formValues(formData) };
 
   await db
     .update(harvestSessions)

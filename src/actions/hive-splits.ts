@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { hiveSplits, hives, hiveLocationHistory } from "@/db/schema";
 import { eq, or, desc } from "drizzle-orm";
@@ -18,7 +19,7 @@ export async function createSplit(_prevState: unknown, formData: FormData) {
   const notes = formData.get("notes") as string;
 
   if (!parentHiveId || !apiaryId || !positionLabel || !splitDate || !splitType) {
-    return { error: "Parent hive, apiary, position, date, and split type are required" };
+    return { error: "Parent hive, apiary, position, date, and split type are required", values: formValues(formData) };
   }
 
   const result = await db.transaction(async (tx) => {

@@ -16,6 +16,8 @@ import {
 import { HiveMultiSelector } from "@/components/bulk/hive-multi-selector";
 import { CheckCircle } from "lucide-react";
 import { bulkCreateFeedings } from "@/actions/bulk";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface HiveOption {
   id: string;
@@ -55,6 +57,11 @@ const FEEDER_TYPE_OPTIONS = [
 export function BulkFeedingForm({ hives }: BulkFeedingFormProps) {
   const [selectedHiveIds, setSelectedHiveIds] = useState<string[]>([]);
   const [state, formAction, isPending] = useActionState(bulkCreateFeedings, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
 
   const errorMessage =
     state && typeof state === "object" && "error" in state
@@ -83,7 +90,7 @@ export function BulkFeedingForm({ hives }: BulkFeedingFormProps) {
             <span>Successfully created {successCount} feeding(s)</span>
           </div>
         )}
-        <form action={formAction} className="space-y-6">
+        <form ref={formRef} action={formAction} className="space-y-6">
           <input type="hidden" name="hiveIds" value={JSON.stringify(selectedHiveIds)} />
 
           <HiveMultiSelector

@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { bloomObservations } from "@/db/schema";
 import { eq, desc, and, isNull, sql } from "drizzle-orm";
@@ -18,7 +19,7 @@ export async function createBloomObservation(
   const notes = formData.get("notes") as string;
 
   if (!apiaryId || !species || !dateFirstSeen) {
-    return { error: "Apiary, species, and date are required" };
+    return { error: "Apiary, species, and date are required", values: formValues(formData) };
   }
 
   const year = new Date(dateFirstSeen).getFullYear();

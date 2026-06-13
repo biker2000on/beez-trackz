@@ -14,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface HarvestEntryFormProps {
   action: (prevState: unknown, formData: FormData) => Promise<{ error?: string; success?: boolean } | void>;
@@ -22,6 +24,11 @@ interface HarvestEntryFormProps {
 
 export function HarvestEntryForm({ action, hives }: HarvestEntryFormProps) {
   const [state, formAction, isPending] = useActionState(action, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const [weightBefore, setWeightBefore] = useState<number>(0);
   const [weightAfter, setWeightAfter] = useState<number>(0);
 
@@ -33,7 +40,7 @@ export function HarvestEntryForm({ action, hives }: HarvestEntryFormProps) {
         <CardTitle>Add Harvest Entry</CardTitle>
       </CardHeader>
       <CardContent>
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           {state?.error && (
             <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
               {state.error}

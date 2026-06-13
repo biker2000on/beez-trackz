@@ -13,6 +13,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface SplitHiveFormProps {
   action: (prevState: unknown, formData: FormData) => Promise<unknown>;
@@ -36,6 +38,11 @@ export function SplitHiveForm({
   apiaries,
 }: SplitHiveFormProps) {
   const [state, formAction, isPending] = useActionState(action, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const errorMessage =
     state && typeof state === "object" && "error" in state
       ? (state as { error: string }).error
@@ -52,7 +59,7 @@ export function SplitHiveForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form action={formAction} className="space-y-6">
+        <form ref={formRef} action={formAction} className="space-y-6">
           <input type="hidden" name="parentHiveId" value={parentHiveId} />
 
           {/* Apiary & Position */}

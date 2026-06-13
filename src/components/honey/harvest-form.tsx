@@ -14,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface HarvestFormProps {
   action: (prevState: unknown, formData: FormData) => Promise<unknown>;
@@ -29,6 +31,11 @@ export function HarvestForm({
   submitLabel,
 }: HarvestFormProps) {
   const [state, formAction, isPending] = useActionState(action, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const [weightBefore, setWeightBefore] = useState("");
   const [weightAfter, setWeightAfter] = useState("");
 
@@ -52,7 +59,7 @@ export function HarvestForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form action={formAction} className="space-y-6">
+        <form ref={formRef} action={formAction} className="space-y-6">
           {/* Hive & Date */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">

@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import { adjustStock } from "@/actions/equipment-v2";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +32,8 @@ export function AdjustStockDialog({ stockId, typeName, open, onOpenChange }: Adj
   const [state, formAction, isPending] = useActionState(adjustStock, null);
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(formRef, (state as { values?: Record<string, string> } | null)?.values);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -39,7 +42,7 @@ export function AdjustStockDialog({ stockId, typeName, open, onOpenChange }: Adj
           <DialogTitle>Adjust Stock: {typeName}</DialogTitle>
         </DialogHeader>
         {errorMessage && <p className="text-destructive text-sm">{errorMessage}</p>}
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           <input type="hidden" name="stockId" value={stockId} />
           <div className="space-y-2">
             <Label>Quantity (positive to add, negative to remove)</Label>

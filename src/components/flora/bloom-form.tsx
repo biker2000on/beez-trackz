@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/select";
 import { createBloomObservation } from "@/actions/bloom-observations";
 import { Plus } from "lucide-react";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface BloomFormProps {
   apiaryId: string;
@@ -22,6 +24,11 @@ interface BloomFormProps {
 
 export function BloomForm({ apiaryId, speciesList }: BloomFormProps) {
   const [state, formAction, isPending] = useActionState(createBloomObservation, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const [speciesInput, setSpeciesInput] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -45,7 +52,7 @@ export function BloomForm({ apiaryId, speciesList }: BloomFormProps) {
   }
 
   return (
-    <form action={formAction} className="border rounded-lg p-4 space-y-3">
+    <form ref={formRef} action={formAction} className="border rounded-lg p-4 space-y-3">
       <input type="hidden" name="apiaryId" value={apiaryId} />
       {errorMessage && (
         <p className="text-destructive text-sm">{errorMessage}</p>

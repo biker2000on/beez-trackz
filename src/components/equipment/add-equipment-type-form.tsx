@@ -14,9 +14,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 export function AddEquipmentTypeForm() {
   const [state, formAction, isPending] = useActionState(createEquipmentType, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const [category, setCategory] = useState("accessory");
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
@@ -28,7 +35,7 @@ export function AddEquipmentTypeForm() {
       </CardHeader>
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
-        <form action={formAction} className="flex gap-2 items-end flex-wrap">
+        <form ref={formRef} action={formAction} className="flex gap-2 items-end flex-wrap">
           <div className="flex-1 space-y-1">
             <Label className="text-xs">Name</Label>
             <Input name="name" placeholder="e.g. Pollen Trap" required />

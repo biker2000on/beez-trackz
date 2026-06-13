@@ -6,6 +6,7 @@ import { apiaries, hives } from "@/db/schema";
 import { eq, sql, and, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { formValues } from "@/lib/form-values";
 
 export async function createApiary(_prevState: unknown, formData: FormData) {
   await requireSession();
@@ -15,7 +16,9 @@ export async function createApiary(_prevState: unknown, formData: FormData) {
   const notes = formData.get("notes") as string;
 
   if (!name?.trim()) {
-    return { error: "Apiary name is required" };
+    // React 19 resets the form after an action runs; return the submitted
+    // values so the form can re-seed them instead of clearing user input.
+    return { error: "Apiary name is required", values: formValues(formData) };
   }
 
   const [apiary] = await db
@@ -44,7 +47,7 @@ export async function updateApiary(
   const notes = formData.get("notes") as string;
 
   if (!name?.trim()) {
-    return { error: "Apiary name is required" };
+    return { error: "Apiary name is required", values: formValues(formData) };
   }
 
   await db

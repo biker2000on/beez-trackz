@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import {
   honeyHarvests,
@@ -45,17 +46,17 @@ export async function createHarvest(_prevState: unknown, formData: FormData) {
   const superWeightAfter = formData.get("superWeightAfter") as string;
   const notes = formData.get("notes") as string;
 
-  if (!hiveId) return { error: "Hive is required" };
-  if (!date) return { error: "Date is required" };
+  if (!hiveId) return { error: "Hive is required", values: formValues(formData) };
+  if (!date) return { error: "Date is required", values: formValues(formData) };
   if (!superWeightBefore || !superWeightAfter)
-    return { error: "Both weights are required" };
+    return { error: "Both weights are required", values: formValues(formData) };
 
   const before = parseFloat(superWeightBefore);
   const after = parseFloat(superWeightAfter);
   const honeyWeight = before - after;
 
   if (honeyWeight < 0)
-    return { error: "Weight before must be greater than weight after" };
+    return { error: "Weight before must be greater than weight after", values: formValues(formData) };
 
   await db.insert(honeyHarvests).values({
     hiveId,

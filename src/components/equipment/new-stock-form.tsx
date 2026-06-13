@@ -14,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface NewStockFormProps {
   types: { id: string; name: string; category: string }[];
@@ -21,6 +23,11 @@ interface NewStockFormProps {
 
 export function NewStockForm({ types }: NewStockFormProps) {
   const [state, formAction, isPending] = useActionState(createStock, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
   const [selectedTypeId, setSelectedTypeId] = useState<string>("");
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
@@ -35,7 +42,7 @@ export function NewStockForm({ types }: NewStockFormProps) {
       </CardHeader>
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
-        <form action={formAction} className="flex gap-2 items-end flex-wrap">
+        <form ref={formRef} action={formAction} className="flex gap-2 items-end flex-wrap">
           <div className="w-48 space-y-1">
             <Label className="text-xs">Equipment Type</Label>
             <Select name="typeId" required onValueChange={setSelectedTypeId}>

@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { equipmentTypes, equipmentStock, equipmentStockAdjustments, equipmentDeployments, hives } from "@/db/schema";
 import { eq, isNull, desc, sql, and } from "drizzle-orm";
@@ -23,8 +24,8 @@ export async function createEquipmentType(_prevState: unknown, formData: FormDat
 
   const framesPerBox = formData.get("framesPerBox") as string;
 
-  if (!name?.trim()) return { error: "Name is required" };
-  if (!category) return { error: "Category is required" };
+  if (!name?.trim()) return { error: "Name is required", values: formValues(formData) };
+  if (!category) return { error: "Category is required", values: formValues(formData) };
 
   await db.insert(equipmentTypes).values({
     name: name.trim(),
@@ -87,9 +88,9 @@ export async function adjustStock(_prevState: unknown, formData: FormData) {
   const notes = formData.get("notes") as string;
   const date = formData.get("date") as string;
 
-  if (!stockId) return { error: "Stock item is required" };
-  if (!quantity || quantity === 0) return { error: "Quantity must be non-zero" };
-  if (!reason) return { error: "Reason is required" };
+  if (!stockId) return { error: "Stock item is required", values: formValues(formData) };
+  if (!quantity || quantity === 0) return { error: "Quantity must be non-zero", values: formValues(formData) };
+  if (!reason) return { error: "Reason is required", values: formValues(formData) };
 
   await db.transaction(async (tx) => {
     // Create adjustment record
@@ -134,7 +135,7 @@ export async function createStock(_prevState: unknown, formData: FormData) {
   const notes = formData.get("notes") as string;
   const frameCondition = formData.get("frameCondition") as string;
 
-  if (!typeId) return { error: "Equipment type is required" };
+  if (!typeId) return { error: "Equipment type is required", values: formValues(formData) };
 
   await db.transaction(async (tx) => {
     const [stock] = await tx.insert(equipmentStock).values({
@@ -172,9 +173,9 @@ export async function deployEquipment(_prevState: unknown, formData: FormData) {
   const quantity = parseInt(formData.get("quantity") as string) || 1;
   const notes = formData.get("notes") as string;
 
-  if (!stockId) return { error: "Equipment stock is required" };
-  if (!hiveId) return { error: "Hive is required" };
-  if (quantity < 1) return { error: "Quantity must be at least 1" };
+  if (!stockId) return { error: "Equipment stock is required", values: formValues(formData) };
+  if (!hiveId) return { error: "Hive is required", values: formValues(formData) };
+  if (quantity < 1) return { error: "Quantity must be at least 1", values: formValues(formData) };
 
   await db.insert(equipmentDeployments).values({
     stockId,

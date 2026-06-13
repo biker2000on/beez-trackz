@@ -13,6 +13,9 @@ import {
 
 export type AuthFormState = {
   error?: string;
+  // Non-secret field values echoed back so the form can re-seed them after
+  // React resets it on a failed submit. Passwords are intentionally omitted.
+  values?: { displayName?: string };
 };
 
 export async function setup(
@@ -24,15 +27,15 @@ export async function setup(
   const confirmPassword = formData.get("confirmPassword") as string;
 
   if (!displayName || !password) {
-    return { error: "Display name and password are required" };
+    return { error: "Display name and password are required", values: { displayName } };
   }
 
   if (password !== confirmPassword) {
-    return { error: "Passwords do not match" };
+    return { error: "Passwords do not match", values: { displayName } };
   }
 
   if (password.length < 8) {
-    return { error: "Password must be at least 8 characters" };
+    return { error: "Password must be at least 8 characters", values: { displayName } };
   }
 
   // Check if user already exists. An OIDC-bootstrapped instance has a

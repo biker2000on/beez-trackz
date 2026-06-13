@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
+import { useRef } from "react";
 
 interface TrueUpFormProps {
   action: (prevState: unknown, formData: FormData) => Promise<{ error?: string } | void>;
@@ -15,6 +17,11 @@ interface TrueUpFormProps {
 
 export function TrueUpForm({ action, currentTotal, currentTrueUp }: TrueUpFormProps) {
   const [state, formAction, isPending] = useActionState(action, null);
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(
+    formRef,
+    (state as { values?: Record<string, string> } | null)?.values
+  );
 
   return (
     <Card>
@@ -22,7 +29,7 @@ export function TrueUpForm({ action, currentTotal, currentTrueUp }: TrueUpFormPr
         <CardTitle>True-Up Total Weight</CardTitle>
       </CardHeader>
       <CardContent>
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           {state?.error && (
             <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
               {state.error}

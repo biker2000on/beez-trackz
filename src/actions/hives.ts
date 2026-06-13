@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
+import { formValues } from "@/lib/form-values";
 import { db } from "@/db";
 import { hives, hiveLocationHistory, apiaries } from "@/db/schema";
 import { eq, and, isNull, desc, inArray } from "drizzle-orm";
@@ -22,7 +23,7 @@ export async function createHive(_prevState: unknown, formData: FormData) {
   const notes = formData.get("notes") as string;
 
   if (!apiaryId) {
-    return { error: "Apiary is required" };
+    return { error: "Apiary is required", values: formValues(formData) };
   }
 
   // Auto-generate position label if not provided
@@ -36,7 +37,7 @@ export async function createHive(_prevState: unknown, formData: FormData) {
     );
   }
   if (!label) {
-    return { error: "Position label or location is required" };
+    return { error: "Position label or location is required", values: formValues(formData) };
   }
 
   const [hive] = await db.transaction(async (tx) => {
@@ -98,7 +99,7 @@ export async function updateHive(
     );
   }
   if (!label) {
-    return { error: "Position label or location is required" };
+    return { error: "Position label or location is required", values: formValues(formData) };
   }
 
   await db
@@ -132,10 +133,10 @@ export async function moveHive(
   const newPositionLabel = formData.get("positionLabel") as string;
 
   if (!newApiaryId) {
-    return { error: "New apiary is required" };
+    return { error: "New apiary is required", values: formValues(formData) };
   }
   if (!newPositionLabel?.trim()) {
-    return { error: "New position label is required" };
+    return { error: "New position label is required", values: formValues(formData) };
   }
 
   const now = new Date();
@@ -337,7 +338,7 @@ export async function bulkCreateHives(
   const startLabel = formData.get("startLabel") as string;
 
   if (!apiaryId || !quantity || quantity < 1) {
-    return { error: "Apiary and valid quantity required" };
+    return { error: "Apiary and valid quantity required", values: formValues(formData) };
   }
 
   await db.transaction(async (tx) => {

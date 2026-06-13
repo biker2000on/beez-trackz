@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import { redirect } from "next/navigation";
 import { setup, isSetupComplete, type AuthFormState } from "@/actions/auth";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,6 +22,8 @@ export default function SetupPage() {
     setup,
     {}
   );
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(formRef, state?.values);
 
   useEffect(() => {
     isSetupComplete().then((complete) => {
@@ -50,7 +53,7 @@ export default function SetupPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form action={formAction} className="space-y-4">
+          <form ref={formRef} action={formAction} className="space-y-4">
             {state.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                 {state.error}

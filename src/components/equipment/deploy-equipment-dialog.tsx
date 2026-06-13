@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef } from "react";
 import { deployEquipment } from "@/actions/equipment-v2";
+import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +32,8 @@ export function DeployEquipmentDialog({ hiveId, stock, open, onOpenChange }: Dep
   const [state, formAction, isPending] = useActionState(deployEquipment, null);
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
+  const formRef = useRef<HTMLFormElement>(null);
+  useRestoreOnError(formRef, (state as { values?: Record<string, string> } | null)?.values);
 
   const availableStock = stock.filter(s => s.available > 0);
 
@@ -41,7 +44,7 @@ export function DeployEquipmentDialog({ hiveId, stock, open, onOpenChange }: Dep
           <DialogTitle>Deploy Equipment to Hive</DialogTitle>
         </DialogHeader>
         {errorMessage && <p className="text-destructive text-sm">{errorMessage}</p>}
-        <form action={formAction} className="space-y-4">
+        <form ref={formRef} action={formAction} className="space-y-4">
           <input type="hidden" name="hiveId" value={hiveId} />
           <div className="space-y-2">
             <Label>Equipment Type</Label>
