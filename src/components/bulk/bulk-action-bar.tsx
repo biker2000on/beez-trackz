@@ -18,7 +18,7 @@ export function BulkActionBar({
 }) {
   if (count === 0) return null;
   return (
-    <div className="fixed inset-x-0 bottom-16 md:bottom-4 z-40 flex justify-center px-4 pointer-events-none">
+    <div className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] md:bottom-4 z-40 flex justify-center px-4 pointer-events-none">
       <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-lg">
         <span className="text-sm font-medium tabular-nums px-1">
           {count} selected

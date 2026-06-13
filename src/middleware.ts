@@ -45,5 +45,10 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js).*)"],
+  // Public PWA assets (manifest, service worker, icons) must stay reachable
+  // without a session — the OS fetches them while logged out during install.
+  // Listed explicitly so /api/photos/*.jpg stays auth-protected.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|favicon-32.png|manifest.webmanifest|sw.js|icon-192.png|icon-512.png|icon-maskable-512.png|apple-icon.png).*)",
+  ],
 };

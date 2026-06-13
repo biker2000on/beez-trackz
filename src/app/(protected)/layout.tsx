@@ -17,7 +17,7 @@ export default function ProtectedLayout({
     <ShortcutProvider>
     <div className="min-h-screen">
       <Sidebar />
-      <main className="md:pl-64 pb-16 md:pb-0">
+      <main className="md:pl-64 pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0">
         <OfflineBanner />
         {children}
       </main>

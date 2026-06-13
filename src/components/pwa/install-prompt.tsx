@@ -1,95 +1,119 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { X, Share, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+const DISMISS_KEY = "pwa-install-dismissed";
+
+function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    // iOS Safari
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true
+  );
+}
+
+function isIos(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
+    // iPadOS reports as Mac with a touch screen
+    (window.navigator.platform === "MacIntel" && window.navigator.maxTouchPoints > 1)
+  );
+}
+
 export function InstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] =
     useState<BeforeInstallPromptEvent | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [iosHint, setIosHint] = useState(false);
 
   useEffect(() => {
-    // Check if user has already dismissed the prompt
-    const isDismissed = localStorage.getItem("pwa-install-dismissed");
-    if (isDismissed) return;
+    if (localStorage.getItem(DISMISS_KEY)) return;
+    if (isStandalone()) return; // already installed
 
     const handler = (e: Event) => {
-      // Prevent the mini-infobar from appearing on mobile
       e.preventDefault();
-      // Stash the event so it can be triggered later
       setDeferredPrompt(e as BeforeInstallPromptEvent);
       setShowPrompt(true);
     };
-
     window.addEventListener("beforeinstallprompt", handler);
 
-    return () => {
-      window.removeEventListener("beforeinstallprompt", handler);
-    };
+    // iOS Safari never fires beforeinstallprompt — show manual instructions.
+    if (isIos()) {
+      setIosHint(true);
+      setShowPrompt(true);
+    }
+
+    return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
   const handleInstallClick = async () => {
     if (!deferredPrompt) return;
-
-    // Show the install prompt
     await deferredPrompt.prompt();
-
-    // Wait for the user to respond to the prompt
-    const { outcome } = await deferredPrompt.userChoice;
-
-    console.log(`User response to the install prompt: ${outcome}`);
-
-    // Clear the deferredPrompt
+    await deferredPrompt.userChoice;
     setDeferredPrompt(null);
     setShowPrompt(false);
   };
 
   const handleDismiss = () => {
-    localStorage.setItem("pwa-install-dismissed", "true");
+    localStorage.setItem(DISMISS_KEY, "true");
     setShowPrompt(false);
   };
 
   if (!showPrompt) return null;
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-4 z-50 animate-in slide-in-from-bottom-5">
+    <div className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] left-4 right-4 md:bottom-4 md:left-auto md:right-4 md:w-96 z-50 rounded-lg border bg-card p-4 shadow-lg animate-in slide-in-from-bottom-5">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-2xl">🐝</span>
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100">
-              Install Beez Trackz
-            </h3>
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-2xl" aria-hidden>
+              🐝
+            </span>
+            <h3 className="font-semibold">Install Beez Trackz</h3>
           </div>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-            Install our app for quick access to your beehive data, even offline!
-          </p>
+
+          {iosHint ? (
+            <p className="mb-3 text-sm text-muted-foreground">
+              Tap the Share button{" "}
+              <Share className="inline h-4 w-4 -mt-0.5" aria-label="Share" /> then{" "}
+              <span className="whitespace-nowrap font-medium text-foreground">
+                Add to Home Screen{" "}
+                <Plus className="inline h-3.5 w-3.5 -mt-0.5" aria-hidden />
+              </span>{" "}
+              to install the app.
+            </p>
+          ) : (
+            <p className="mb-3 text-sm text-muted-foreground">
+              Install for quick access to your hives — works offline, too.
+            </p>
+          )}
+
           <div className="flex gap-2">
-            <button
-              onClick={handleInstallClick}
-              className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-md text-sm font-medium transition-colors"
-            >
-              Install
-            </button>
-            <button
-              onClick={handleDismiss}
-              className="px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-md text-sm font-medium transition-colors"
-            >
-              Not now
-            </button>
+            {!iosHint && (
+              <Button size="sm" onClick={handleInstallClick}>
+                Install
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={handleDismiss}>
+              {iosHint ? "Got it" : "Not now"}
+            </Button>
           </div>
         </div>
         <button
           onClick={handleDismiss}
-          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+          className="text-muted-foreground transition-colors hover:text-foreground"
           aria-label="Close"
         >
-          <X className="w-5 h-5" />
+          <X className="h-5 w-5" />
         </button>
       </div>
     </div>
