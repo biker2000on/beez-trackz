@@ -8,6 +8,14 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { formValues } from "@/lib/form-values";
 
+/** Parse a coordinate string to a number rounded to 6 decimals (~0.1 m). */
+function parseCoord(value: string): number | null {
+  if (!value?.trim()) return null;
+  const n = parseFloat(value);
+  if (Number.isNaN(n)) return null;
+  return Math.round(n * 1e6) / 1e6;
+}
+
 export async function createApiary(_prevState: unknown, formData: FormData) {
   await requireSession();
   const name = formData.get("name") as string;
@@ -25,8 +33,8 @@ export async function createApiary(_prevState: unknown, formData: FormData) {
     .insert(apiaries)
     .values({
       name: name.trim(),
-      latitude: latitude ? parseFloat(latitude) : null,
-      longitude: longitude ? parseFloat(longitude) : null,
+      latitude: parseCoord(latitude),
+      longitude: parseCoord(longitude),
       notes: notes?.trim() || null,
     })
     .returning();
@@ -54,8 +62,8 @@ export async function updateApiary(
     .update(apiaries)
     .set({
       name: name.trim(),
-      latitude: latitude ? parseFloat(latitude) : null,
-      longitude: longitude ? parseFloat(longitude) : null,
+      latitude: parseCoord(latitude),
+      longitude: parseCoord(longitude),
       notes: notes?.trim() || null,
       updatedAt: new Date(),
     })

@@ -15,7 +15,11 @@ export function Sidebar() {
   return (
     <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-r bg-card">
       <div className="flex h-16 items-center justify-between px-6 border-b">
-        <h1 className="text-xl font-bold">Beez Trackz</h1>
+        <div className="flex items-center gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/icon-192.png" alt="" className="h-7 w-7 rounded-md" />
+          <h1 className="text-xl font-bold">Beez Trackz</h1>
+        </div>
         <div className="flex items-center gap-1">
           <ThemeToggle />
           <SyncIndicator />
