@@ -69,7 +69,7 @@ export async function createHive(_prevState: unknown, formData: FormData) {
 
   revalidatePath("/hives");
   revalidatePath(`/apiaries/${apiaryId}`);
-  redirect(`/hives/${hive.id}`);
+  return { success: true, id: hive.id };
 }
 
 // Update hive details (not location)

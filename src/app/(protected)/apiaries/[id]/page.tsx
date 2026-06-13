@@ -11,6 +11,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { HiveCard } from "@/components/hives/hive-card";
+import { NewHiveDialog } from "@/components/hives/new-hive-dialog";
 import { ApiaryCanvas } from "@/components/canvas/apiary-canvas";
 import { PhotoGallery } from "@/components/photos/photo-gallery";
 import { PhotoUpload } from "@/components/photos/photo-upload";
@@ -116,12 +117,11 @@ export default async function ApiaryDetailPage({
               <h2 className="text-lg font-semibold">
                 {hives.length} {hives.length === 1 ? "Hive" : "Hives"}
               </h2>
-              <Link href={`/hives/new?apiaryId=${id}`}>
-                <Button size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Add Hive
-                </Button>
-              </Link>
+              <NewHiveDialog
+                apiaries={[{ id, name: apiary.name }]}
+                defaultApiaryId={id}
+                triggerSize="sm"
+              />
             </div>
 
             <BulkHiveForm apiaryId={id} />

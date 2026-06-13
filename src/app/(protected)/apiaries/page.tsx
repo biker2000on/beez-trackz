@@ -1,24 +1,15 @@
-import Link from "next/link";
 import { getApiaries } from "@/actions/apiaries";
 import { ApiaryCard } from "@/components/apiaries/apiary-card";
-import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
-import { NavShortcut } from "@/components/keyboard/nav-shortcut";
+import { NewApiaryDialog } from "@/components/apiaries/new-apiary-dialog";
 
 export default async function ApiariesPage() {
   const apiaries = await getApiaries();
 
   return (
     <div className="p-6">
-      <NavShortcut keys="n" href="/apiaries/new" description="New apiary" group="Apiaries" />
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Apiaries</h1>
-        <Link href="/apiaries/new">
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            New Apiary
-          </Button>
-        </Link>
+        <NewApiaryDialog />
       </div>
       {apiaries.length === 0 ? (
         <p className="text-muted-foreground">

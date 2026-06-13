@@ -40,7 +40,7 @@ export async function createApiary(_prevState: unknown, formData: FormData) {
     .returning();
 
   revalidatePath("/apiaries");
-  redirect(`/apiaries/${apiary.id}`);
+  return { success: true, id: apiary.id };
 }
 
 export async function updateApiary(

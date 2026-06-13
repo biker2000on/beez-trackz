@@ -1,9 +1,7 @@
-import Link from "next/link";
 import { getHives } from "@/actions/hives";
+import { getApiaries } from "@/actions/apiaries";
 import { HiveListView } from "@/components/hives/hive-list-view";
-import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
-import { NavShortcut } from "@/components/keyboard/nav-shortcut";
+import { NewHiveDialog } from "@/components/hives/new-hive-dialog";
 
 export default async function HivesPage({
   searchParams,
@@ -12,21 +10,19 @@ export default async function HivesPage({
 }) {
   const { apiaryId, status, showArchived } = await searchParams;
   const includeArchived = showArchived === "true";
-  const hives = await getHives(apiaryId, status, includeArchived);
+  const [hives, apiaries] = await Promise.all([
+    getHives(apiaryId, status, includeArchived),
+    getApiaries(),
+  ]);
 
   return (
     <div className="p-6">
-      <NavShortcut keys="n" href="/hives/new" description="New hive" group="Hives" />
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Hives</h1>
-        <Link
-          href={apiaryId ? `/hives/new?apiaryId=${apiaryId}` : "/hives/new"}
-        >
-          <Button>
-            <Plus className="h-4 w-4 mr-2" />
-            New Hive
-          </Button>
-        </Link>
+        <NewHiveDialog
+          apiaries={apiaries.map((a) => ({ id: a.id, name: a.name }))}
+          defaultApiaryId={apiaryId}
+        />
       </div>
       {hives.length === 0 ? (
         <p className="text-muted-foreground">
