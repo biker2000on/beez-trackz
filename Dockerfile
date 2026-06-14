@@ -5,6 +5,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# Install only locked production dependencies for runtime code that lives
+# outside Next's standalone trace, such as the background worker.
+FROM node:22-alpine AS prod-deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
 # Build the app
 FROM node:22-alpine AS builder
 WORKDIR /app
@@ -53,17 +61,15 @@ COPY --from=builder /app/public ./public
 RUN mkdir -p .next data/photos data/audio \
  && chown -R nextjs:nodejs .next data
 
-# Next.js standalone output: server.js + traced node_modules, plus the
-# bundled migrate.js. Drizzle SQL migrations ride along for migrate.js.
+# Next.js standalone output: server.js + traced node_modules, plus the bundled
+# migrate.js. Drizzle SQL migrations ride along for migrate.js. Copy the full
+# lockfile-resolved production dependency tree first so worker-only native
+# imports keep their dependency closure without resolving different Next/React
+# versions at image build time.
+COPY --from=prod-deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
-# The worker imports sharp directly. Next's standalone trace may omit it, so
-# copy only sharp and its locked native packages from the npm-ci deps stage.
-# Do not overlay a separately resolved node_modules tree here; server actions
-# are sensitive to Next/React build-vs-runtime version drift.
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules/sharp ./node_modules/sharp
-COPY --from=deps --chown=nextjs:nodejs /app/node_modules/@img ./node_modules/@img
 
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
