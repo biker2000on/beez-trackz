@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+
 import { login, type AuthFormState } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,7 +31,7 @@ export function LoginForm({
   oidcProviderName?: string | null;
   oidcError?: string | null;
 }) {
-  const [state, formAction, isPending] = useActionState<AuthFormState, FormData>(
+  const [state, formAction, isPending] = useServerActionForm<AuthFormState>(
     login,
     {}
   );
@@ -46,7 +47,7 @@ export function LoginForm({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={formAction} className="space-y-4">
+        <form onSubmit={formAction} className="space-y-4">
           {state.error && (
             <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               {state.error}

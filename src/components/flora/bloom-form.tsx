@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,7 +24,7 @@ interface BloomFormProps {
 }
 
 export function BloomForm({ apiaryId, speciesList }: BloomFormProps) {
-  const [state, formAction, isPending] = useActionState(createBloomObservation, null);
+  const [state, formAction, isPending] = useServerActionForm(createBloomObservation, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -52,7 +53,7 @@ export function BloomForm({ apiaryId, speciesList }: BloomFormProps) {
   }
 
   return (
-    <form ref={formRef} action={formAction} className="border rounded-lg p-4 space-y-3">
+    <form ref={formRef} onSubmit={formAction} className="border rounded-lg p-4 space-y-3">
       <input type="hidden" name="apiaryId" value={apiaryId} />
       {errorMessage && (
         <p className="text-destructive text-sm">{errorMessage}</p>

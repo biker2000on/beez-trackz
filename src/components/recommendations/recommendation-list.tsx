@@ -1,10 +1,11 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { RecommendationCard } from "./recommendation-card";
 import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { runRecommendationCheck } from "@/actions/recommendations";
-import { useActionState } from "react";
+
 
 interface Recommendation {
   id: string;
@@ -29,7 +30,7 @@ export function RecommendationList({
   recommendations,
   hiveNames = {},
 }: RecommendationListProps) {
-  const [_state, checkAction, isPending] = useActionState(
+  const [_state, checkAction, isPending] = useServerActionForm(
     async () => {
       await runRecommendationCheck();
       return null;
@@ -51,7 +52,7 @@ export function RecommendationList({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl font-bold">Recommendations</h2>
-        <form action={checkAction}>
+        <form onSubmit={checkAction}>
           <Button
             type="submit"
             variant="outline"

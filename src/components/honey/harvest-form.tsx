@@ -1,7 +1,8 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { useState } from "react";
-import { useActionState } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +31,7 @@ export function HarvestForm({
   title,
   submitLabel,
 }: HarvestFormProps) {
-  const [state, formAction, isPending] = useActionState(action, null);
+  const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -59,7 +60,7 @@ export function HarvestForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form ref={formRef} action={formAction} className="space-y-6">
+        <form ref={formRef} onSubmit={formAction} className="space-y-6">
           {/* Hive & Date */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">

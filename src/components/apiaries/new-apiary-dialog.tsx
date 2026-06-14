@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createApiary } from "@/actions/apiaries";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ import { Plus, LocateFixed, Loader2 } from "lucide-react";
 export function NewApiaryDialog() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [state, formAction, isPending] = useActionState(createApiary, null);
+  const [state, formAction, isPending] = useServerActionForm(createApiary, null);
   const result = state as { error?: string; success?: boolean } | null;
 
   const [name, setName] = useState("");
@@ -85,7 +86,7 @@ export function NewApiaryDialog() {
         <DialogHeader>
           <DialogTitle>New Apiary</DialogTitle>
         </DialogHeader>
-        <form action={formAction} className="space-y-4">
+        <form onSubmit={formAction} className="space-y-4">
           {result?.error && (
             <p className="text-destructive text-sm">{result.error}</p>
           )}

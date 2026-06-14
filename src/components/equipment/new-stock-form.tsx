@@ -1,7 +1,8 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { useState } from "react";
-import { useActionState } from "react";
+
 import { createStock } from "@/actions/equipment-v2";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,7 @@ interface NewStockFormProps {
 }
 
 export function NewStockForm({ types }: NewStockFormProps) {
-  const [state, formAction, isPending] = useActionState(createStock, null);
+  const [state, formAction, isPending] = useServerActionForm(createStock, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -42,7 +43,7 @@ export function NewStockForm({ types }: NewStockFormProps) {
       </CardHeader>
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
-        <form ref={formRef} action={formAction} className="flex gap-2 items-end flex-wrap">
+        <form ref={formRef} onSubmit={formAction} className="flex gap-2 items-end flex-wrap">
           <div className="w-48 space-y-1">
             <Label className="text-xs">Equipment Type</Label>
             <Select name="typeId" required onValueChange={setSelectedTypeId}>

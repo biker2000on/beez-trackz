@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useActionState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -56,7 +57,7 @@ const FEEDER_TYPE_OPTIONS = [
 
 export function BulkFeedingForm({ hives }: BulkFeedingFormProps) {
   const [selectedHiveIds, setSelectedHiveIds] = useState<string[]>([]);
-  const [state, formAction, isPending] = useActionState(bulkCreateFeedings, null);
+  const [state, formAction, isPending] = useServerActionForm(bulkCreateFeedings, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -90,7 +91,7 @@ export function BulkFeedingForm({ hives }: BulkFeedingFormProps) {
             <span>Successfully created {successCount} feeding(s)</span>
           </div>
         )}
-        <form ref={formRef} action={formAction} className="space-y-6">
+        <form ref={formRef} onSubmit={formAction} className="space-y-6">
           <input type="hidden" name="hiveIds" value={JSON.stringify(selectedHiveIds)} />
 
           <HiveMultiSelector

@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,7 +38,7 @@ export function SplitHiveForm({
   apiaryId,
   apiaries,
 }: SplitHiveFormProps) {
-  const [state, formAction, isPending] = useActionState(action, null);
+  const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -59,7 +60,7 @@ export function SplitHiveForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form ref={formRef} action={formAction} className="space-y-6">
+        <form ref={formRef} onSubmit={formAction} className="space-y-6">
           <input type="hidden" name="parentHiveId" value={parentHiveId} />
 
           {/* Apiary & Position */}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,7 +28,7 @@ export function ApiaryForm({
   title,
   submitLabel,
 }: ApiaryFormProps) {
-  const [state, formAction, isPending] = useActionState(action, null);
+  const [state, formAction, isPending] = useServerActionForm(action, null);
   const result = state as { error?: string; values?: Record<string, string> } | null;
   const errorMessage = result?.error ?? null;
   const formRef = useRef<HTMLFormElement>(null);
@@ -82,7 +83,7 @@ export function ApiaryForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form ref={formRef} onSubmit={formAction} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="name">Name *</Label>
             <Input id="name" name="name" required defaultValue={defaultValues?.name} />

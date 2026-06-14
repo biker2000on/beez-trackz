@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createHive } from "@/actions/hives";
 import { Button } from "@/components/ui/button";
@@ -40,7 +41,7 @@ export function NewHiveDialog({
 }: NewHiveDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [state, formAction, isPending] = useActionState(createHive, null);
+  const [state, formAction, isPending] = useServerActionForm(createHive, null);
   const result = state as { error?: string; success?: boolean } | null;
 
   const [apiaryId, setApiaryId] = useState(defaultApiaryId ?? "");
@@ -102,7 +103,7 @@ export function NewHiveDialog({
         <DialogHeader>
           <DialogTitle>New Hive</DialogTitle>
         </DialogHeader>
-        <form action={formAction} className="space-y-4">
+        <form onSubmit={formAction} className="space-y-4">
           {result?.error && (
             <p className="text-destructive text-sm">{result.error}</p>
           )}

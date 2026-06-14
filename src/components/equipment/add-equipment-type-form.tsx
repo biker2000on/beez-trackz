@@ -1,7 +1,8 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { useState } from "react";
-import { useActionState } from "react";
+
 import { createEquipmentType } from "@/actions/equipment-v2";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +19,7 @@ import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
 import { useRef } from "react";
 
 export function AddEquipmentTypeForm() {
-  const [state, formAction, isPending] = useActionState(createEquipmentType, null);
+  const [state, formAction, isPending] = useServerActionForm(createEquipmentType, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -35,7 +36,7 @@ export function AddEquipmentTypeForm() {
       </CardHeader>
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
-        <form ref={formRef} action={formAction} className="flex gap-2 items-end flex-wrap">
+        <form ref={formRef} onSubmit={formAction} className="flex gap-2 items-end flex-wrap">
           <div className="flex-1 space-y-1">
             <Label className="text-xs">Name</Label>
             <Input name="name" placeholder="e.g. Pollen Trap" required />

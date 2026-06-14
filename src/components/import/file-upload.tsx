@@ -1,7 +1,8 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { useState, useCallback, useEffect } from "react";
-import { useActionState } from "react";
+
 import { parseImportedFile } from "@/actions/import";
 import type { ParsedImportData } from "@/lib/import/parser";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,7 @@ interface FileUploadProps {
 export function FileUpload({ onParsed }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [state, formAction, isPending] = useActionState(parseImportedFile, null);
+  const [state, formAction, isPending] = useServerActionForm(parseImportedFile, null);
 
   useEffect(() => {
     if (state && "success" in state && state.success && "data" in state) {

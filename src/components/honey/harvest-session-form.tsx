@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,7 @@ interface HarvestSessionFormProps {
 }
 
 export function HarvestSessionForm({ action, apiaries }: HarvestSessionFormProps) {
-  const [state, formAction, isPending] = useActionState(action, null);
+  const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -35,7 +36,7 @@ export function HarvestSessionForm({ action, apiaries }: HarvestSessionFormProps
         <CardTitle>New Harvest Session</CardTitle>
       </CardHeader>
       <CardContent>
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form ref={formRef} onSubmit={formAction} className="space-y-4">
           {state?.error && (
             <div className="rounded-md bg-destructive/15 p-3 text-sm text-destructive">
               {state.error}

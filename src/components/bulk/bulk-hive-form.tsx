@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useEffect, useState } from "react";
 import { bulkCreateHives } from "@/actions/hives";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,7 +15,7 @@ interface BulkHiveFormProps {
 }
 
 export function BulkHiveForm({ apiaryId }: BulkHiveFormProps) {
-  const [state, formAction, isPending] = useActionState(bulkCreateHives, null);
+  const [state, formAction, isPending] = useServerActionForm(bulkCreateHives, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -40,7 +41,7 @@ export function BulkHiveForm({ apiaryId }: BulkHiveFormProps) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form ref={formRef} onSubmit={formAction} className="space-y-4">
           <input type="hidden" name="apiaryId" value={apiaryId} />
 
           <div className="space-y-2">

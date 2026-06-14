@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useState, useTransition } from "react";
 import { updateAISettings, testAIConnection, getOllamaModels } from "@/actions/ai-settings";
 import type { AIProviderConfig as AIProviderConfigType } from "@/lib/ai/types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -15,7 +16,7 @@ interface AIProviderConfigProps {
 }
 
 export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
-  const [state, formAction, isPending] = useActionState(updateAISettings, null);
+  const [state, formAction, isPending] = useServerActionForm(updateAISettings, null);
   const [testResults, setTestResults] = useState<Record<string, { success?: boolean; message?: string; error?: string }>>({});
   const [isPendingTest, startTestTransition] = useTransition();
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
@@ -51,7 +52,7 @@ export function AIProviderConfig({ initialSettings }: AIProviderConfigProps) {
   };
 
   return (
-    <form action={formAction} className="space-y-6">
+    <form onSubmit={formAction} className="space-y-6">
       {state?.error && (
         <p className="text-destructive text-sm mb-4 flex items-center gap-2">
           <XCircle className="h-4 w-4" />

@@ -1,7 +1,8 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { useState, useRef, useEffect } from "react";
-import { useActionState } from "react";
+
 import { uploadPhoto } from "@/actions/photos";
 import { Button } from "@/components/ui/button";
 import { Upload, X } from "lucide-react";
@@ -17,7 +18,7 @@ export function PhotoUpload({ ownerType, ownerId }: PhotoUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
-  const [state, formAction, isPending] = useActionState(uploadPhoto, null);
+  const [state, formAction, isPending] = useServerActionForm(uploadPhoto, null);
 
   // Clear form on successful upload
   useEffect(() => {
@@ -72,7 +73,7 @@ export function PhotoUpload({ ownerType, ownerId }: PhotoUploadProps) {
   };
 
   return (
-    <form ref={formRef} action={formAction} className="space-y-4">
+    <form ref={formRef} onSubmit={formAction} className="space-y-4">
       <input type="hidden" name="ownerType" value={ownerType} />
       <input type="hidden" name="ownerId" value={ownerId} />
 

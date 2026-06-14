@@ -1,5 +1,6 @@
 "use client";
 
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { dismissRecommendation } from "@/actions/recommendations";
-import { useActionState } from "react";
+
 
 interface RecommendationCardProps {
   recommendation: {
@@ -72,7 +73,7 @@ export function RecommendationCard({
   recommendation,
   hiveName,
 }: RecommendationCardProps) {
-  const [_state, dismissAction, isPending] = useActionState(
+  const [_state, dismissAction, isPending] = useServerActionForm(
     async () => {
       await dismissRecommendation(recommendation.id);
       return null;
@@ -112,7 +113,7 @@ export function RecommendationCard({
             </div>
           </div>
 
-          <form action={dismissAction}>
+          <form onSubmit={dismissAction}>
             <Button
               type="submit"
               variant="ghost"

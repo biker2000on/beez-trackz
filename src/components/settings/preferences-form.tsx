@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+
 import { updatePreferences } from "@/actions/preferences";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -26,7 +27,7 @@ interface PreferencesFormProps {
 }
 
 export function PreferencesForm({ preferences, apiaries }: PreferencesFormProps) {
-  const [state, formAction, isPending] = useActionState(updatePreferences, null);
+  const [state, formAction, isPending] = useServerActionForm(updatePreferences, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -47,7 +48,7 @@ export function PreferencesForm({ preferences, apiaries }: PreferencesFormProps)
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-4">{errorMessage}</p>}
         {successMessage && <p className="text-green-600 text-sm mb-4">{successMessage}</p>}
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form ref={formRef} onSubmit={formAction} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="theme">Theme</Label>
             <Select name="theme" defaultValue={preferences?.theme || "system"}>

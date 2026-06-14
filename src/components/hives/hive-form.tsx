@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState, useEffect } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,7 +45,7 @@ export function HiveForm({
   title,
   submitLabel,
 }: HiveFormProps) {
-  const [state, formAction, isPending] = useActionState(action, null);
+  const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
     formRef,
@@ -88,7 +89,7 @@ export function HiveForm({
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
         )}
-        <form ref={formRef} action={formAction} className="space-y-4">
+        <form ref={formRef} onSubmit={formAction} className="space-y-4">
           {showApiarySelect && apiaries && (
             <div className="space-y-2">
               <Label htmlFor="apiaryId">Apiary *</Label>

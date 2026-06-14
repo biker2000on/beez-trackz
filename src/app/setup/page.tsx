@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useRef } from "react";
+import { useServerActionForm } from "@/components/forms/use-server-action-form";
+import { useRef } from "react";
 import { redirect } from "next/navigation";
 import { setup, isSetupComplete, type AuthFormState } from "@/actions/auth";
 import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
@@ -18,7 +19,7 @@ import { useEffect, useState } from "react";
 
 export default function SetupPage() {
   const [checking, setChecking] = useState(true);
-  const [state, formAction, isPending] = useActionState<AuthFormState, FormData>(
+  const [state, formAction, isPending] = useServerActionForm<AuthFormState>(
     setup,
     {}
   );
@@ -53,7 +54,7 @@ export default function SetupPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form ref={formRef} action={formAction} className="space-y-4">
+          <form ref={formRef} onSubmit={formAction} className="space-y-4">
             {state.error && (
               <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                 {state.error}
