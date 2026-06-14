@@ -41,7 +41,7 @@ export function PreferencesForm({ preferences, apiaries }: PreferencesFormProps)
     : null;
 
   return (
-    <Card className="max-w-lg">
+    <Card className="w-full">
       <CardHeader>
         <CardTitle>Display Preferences</CardTitle>
       </CardHeader>

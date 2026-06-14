@@ -1,4 +1,4 @@
-import { Home, TreePine, Bug, Crown, Bell, Droplets, Boxes, Settings } from "lucide-react";
+import { Home, MapPinned, Hexagon, Crown, Bell, Droplets, Boxes, Settings } from "lucide-react";
 
 /**
  * `label` is used by the desktop sidebar and the shortcut help dialog.
@@ -7,8 +7,8 @@ import { Home, TreePine, Bug, Crown, Bell, Droplets, Boxes, Settings } from "luc
  */
 export const navItems = [
   { label: "Home", short: "Home", href: "/dashboard", icon: Home },
-  { label: "Apiaries", short: "Yards", href: "/apiaries", icon: TreePine },
-  { label: "Hives", short: "Hives", href: "/hives", icon: Bug },
+  { label: "Apiaries", short: "Yards", href: "/apiaries", icon: MapPinned },
+  { label: "Hives", short: "Hives", href: "/hives", icon: Hexagon },
   { label: "Queens", short: "Queens", href: "/genealogy", icon: Crown },
   { label: "Recommendations", short: "Recs", href: "/recommendations", icon: Bell },
   { label: "Honey", short: "Honey", href: "/harvest", icon: Droplets },

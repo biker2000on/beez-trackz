@@ -1,10 +1,8 @@
-import Link from "next/link";
 import { getApiaries } from "@/actions/apiaries";
 import { getAISettings } from "@/actions/ai-settings";
 import { getJarSizes } from "@/actions/jar-sizes";
 import { getPreferences } from "@/actions/preferences";
-import { Button } from "@/components/ui/button";
-import { Boxes, Cpu, Download, GlassWater, SlidersHorizontal, Upload } from "lucide-react";
+import { Cpu, Download, GlassWater, SlidersHorizontal, Upload } from "lucide-react";
 import { AIProviderConfig } from "@/components/settings/ai-provider-config";
 import { ImportRecordsSection } from "@/components/settings/import-records-section";
 import { JarSizeSettings } from "@/components/settings/jar-size-settings";
@@ -40,21 +38,6 @@ export default async function SettingsPage() {
             preferences={preferences}
             apiaries={apiaries.map((a) => ({ id: a.id, name: a.name }))}
           />
-        </SettingsSection>
-
-        <SettingsSection
-          title="Equipment Inventory"
-          description="Manage hive bodies, supers, covers, and accessories"
-          icon={Boxes}
-        >
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground">
-              Equipment lives in Inventory so stock counts, deployments, and hive assignments stay together.
-            </p>
-            <Button asChild>
-              <Link href="/inventory">Open Inventory</Link>
-            </Button>
-          </div>
         </SettingsSection>
 
         <SettingsSection
