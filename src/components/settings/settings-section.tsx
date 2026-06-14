@@ -20,6 +20,7 @@ export function SettingsSection({
 }: SettingsSectionProps) {
   return (
     <details
+      data-close-on-escape
       className="group border rounded-lg bg-card"
       open={defaultOpen}
     >

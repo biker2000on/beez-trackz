@@ -44,7 +44,8 @@ export function ShortcutsHelpDialog({
   }
   groups.set("General", [
     { keys: "?", description: "Show or hide this help" },
-    { keys: "Escape", description: "Close dialogs" },
+    { keys: "Ctrl Enter", description: "Submit the active form" },
+    { keys: "Escape", description: "Close dialogs or active form sections" },
   ]);
 
   return (
