@@ -57,7 +57,7 @@ export async function createJarSize(data: {
     defaultPrice: data.defaultPrice ?? null,
     sortOrder: maxOrder + 1,
   });
-  revalidatePath("/settings/jar-sizes");
+  revalidatePath("/settings");
   revalidatePath("/harvest");
   return { success: true };
 }
@@ -76,7 +76,7 @@ export async function updateJarSize(
       ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
     })
     .where(eq(jarSizes.id, id));
-  revalidatePath("/settings/jar-sizes");
+  revalidatePath("/settings");
   revalidatePath("/harvest");
   return { success: true };
 }

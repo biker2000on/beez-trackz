@@ -32,6 +32,6 @@ export async function updatePreferences(_prevState: unknown, formData: FormData)
     updatedAt: new Date(),
   }).where(eq(userSettings.id, existing[0].id));
 
-  revalidatePath("/settings/preferences");
+  revalidatePath("/settings");
   return { success: true };
 }
