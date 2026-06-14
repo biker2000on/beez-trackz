@@ -29,15 +29,6 @@ RUN npx --yes esbuild scripts/migrate.ts \
       --alias:@=./src --external:sharp \
       --outfile=.next/standalone/worker.js
 
-# sharp is only imported by the background worker, so Next's file tracing
-# never pulls it into standalone's node_modules. Install it (and its full
-# dependency closure, musl binaries included) in its own stage and overlay
-# it into the runtime node_modules. Version pinned from package.json.
-FROM node:22-alpine AS sharp-runtime
-WORKDIR /sharp
-COPY package.json ./
-RUN npm install --omit=dev --no-save sharp@"$(node -p "require('./package.json').dependencies.sharp")"
-
 # Production image. Plain Alpine + the distro nodejs package (stripped,
 # shared-lib build) is markedly lighter than node:22-alpine and drops
 # npm/yarn, which the runtime never uses. sharp is NAPI (ABI-stable).
@@ -67,8 +58,12 @@ RUN mkdir -p .next data/photos data/audio \
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
-# Overlay sharp + its dependency closure for the worker (see sharp-runtime)
-COPY --from=sharp-runtime --chown=nextjs:nodejs /sharp/node_modules ./node_modules
+# The worker imports sharp directly. Next's standalone trace may omit it, so
+# copy only sharp and its locked native packages from the npm-ci deps stage.
+# Do not overlay a separately resolved node_modules tree here; server actions
+# are sensitive to Next/React build-vs-runtime version drift.
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/sharp ./node_modules/sharp
+COPY --from=deps --chown=nextjs:nodejs /app/node_modules/@img ./node_modules/@img
 
 COPY --chown=nextjs:nodejs docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
