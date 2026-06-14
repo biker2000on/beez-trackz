@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { feedings, hives, apiaries } from "@/db/schema";
 import { eq, isNull, desc } from "drizzle-orm";
@@ -13,6 +13,7 @@ export async function createFeeding(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveId = formData.get("hiveId") as string;
   const dateFed = formData.get("dateFed") as string;
   const type = formData.get("type") as string;

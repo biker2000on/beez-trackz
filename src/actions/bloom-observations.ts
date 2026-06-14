@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { bloomObservations } from "@/db/schema";
 import { eq, desc, and, isNull, sql } from "drizzle-orm";
@@ -12,6 +12,7 @@ export async function createBloomObservation(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const apiaryId = formData.get("apiaryId") as string;
   const species = formData.get("species") as string;
   const dateFirstSeen = formData.get("dateFirstSeen") as string;

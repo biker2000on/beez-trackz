@@ -10,11 +10,13 @@ import path from "path";
 import { transcriptionQueue } from "@/lib/queue/transcription";
 import type { ParsedInspection, TranscriptionResult } from "@/lib/ai/transcription-parser";
 import { parseTranscription } from "@/lib/ai/transcription-parser";
+import { normalizeFormData } from "@/lib/form-values";
 
 const AUDIO_DIR = path.resolve("./data/audio");
 
 export async function uploadAudioForTranscription(formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const audioBlob = formData.get("audioBlob") as File | null;
   const ownerType = formData.get("ownerType") as string;
   const ownerId = formData.get("ownerId") as string;

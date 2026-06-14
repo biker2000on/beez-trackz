@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { inspections, hives, apiaries } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -32,6 +32,7 @@ export async function createInspection(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveId = formData.get("hiveId") as string;
   const date = formData.get("date") as string;
   const inspectorName = formData.get("inspectorName") as string;
@@ -78,6 +79,7 @@ export async function updateInspection(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const date = formData.get("date") as string;
   const inspectorName = formData.get("inspectorName") as string;
   const queenSeen = formData.get("queenSeen") === "true";

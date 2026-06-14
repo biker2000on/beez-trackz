@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { inspections, feedings } from "@/db/schema";
 import { revalidatePath } from "next/cache";
@@ -11,6 +11,7 @@ export async function bulkCreateInspections(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveIdsJson = formData.get("hiveIds") as string;
   const date = formData.get("date") as string;
   const notes = formData.get("notes") as string;
@@ -39,6 +40,7 @@ export async function bulkCreateFeedings(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveIdsJson = formData.get("hiveIds") as string;
   const dateFed = formData.get("dateFed") as string;
   const type = formData.get("type") as string;

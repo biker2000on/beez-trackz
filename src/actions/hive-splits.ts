@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { hiveSplits, hives, hiveLocationHistory } from "@/db/schema";
 import { eq, or, desc } from "drizzle-orm";
@@ -10,6 +10,7 @@ import { redirect } from "next/navigation";
 
 export async function createSplit(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const parentHiveId = formData.get("parentHiveId") as string;
   const apiaryId = formData.get("apiaryId") as string;
   const positionLabel = formData.get("positionLabel") as string;

@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { harvestSessions, honeyHarvests, hives, apiaries } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
@@ -13,6 +13,7 @@ export async function createHarvestSession(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const apiaryId = formData.get("apiaryId") as string;
   const date = formData.get("date") as string;
   const notes = formData.get("notes") as string;
@@ -39,6 +40,7 @@ export async function addHarvestEntry(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveId = formData.get("hiveId") as string;
   const superWeightBefore = formData.get("superWeightBefore") as string;
   const superWeightAfter = formData.get("superWeightAfter") as string;
@@ -81,6 +83,7 @@ export async function trueUpHarvestSession(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const totalWeight = formData.get("totalExtractedWeight") as string;
 
   if (!totalWeight) return { error: "Total weight is required", values: formValues(formData) };

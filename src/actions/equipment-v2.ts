@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { equipmentTypes, equipmentStock, equipmentStockAdjustments, equipmentDeployments, hives } from "@/db/schema";
 import { eq, isNull, desc, sql, and } from "drizzle-orm";
@@ -19,6 +19,7 @@ export async function getEquipmentTypes() {
 
 export async function createEquipmentType(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const name = formData.get("name") as string;
   const category = formData.get("category") as string;
 
@@ -82,6 +83,7 @@ export async function getEquipmentStock() {
 
 export async function adjustStock(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const stockId = formData.get("stockId") as string;
   const quantity = parseInt(formData.get("quantity") as string);
   const reason = formData.get("reason") as string;
@@ -129,6 +131,7 @@ export async function getStockAdjustments(stockId: string) {
 // Initialize stock for a type (when first adding stock for a type)
 export async function createStock(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const typeId = formData.get("typeId") as string;
   const initialQuantity = parseInt(formData.get("initialQuantity") as string) || 0;
   const storageLocation = formData.get("storageLocation") as string;
@@ -168,6 +171,7 @@ export async function createStock(_prevState: unknown, formData: FormData) {
 
 export async function deployEquipment(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const stockId = formData.get("stockId") as string;
   const hiveId = formData.get("hiveId") as string;
   const quantity = parseInt(formData.get("quantity") as string) || 1;

@@ -6,6 +6,7 @@ import { userSettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { AIProviderConfig } from "@/lib/ai/types";
+import { normalizeFormData } from "@/lib/form-values";
 
 export async function getAISettings(): Promise<AIProviderConfig | null> {
   await requireSession();
@@ -32,6 +33,7 @@ export async function updateAISettings(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const users = await db.select().from(userSettings).limit(1);
 
   if (users.length === 0) {

@@ -8,6 +8,7 @@ import { revalidatePath } from "next/cache";
 import fs from "fs/promises";
 import path from "path";
 import { imageProcessingQueue } from "@/lib/queue/setup";
+import { normalizeFormData } from "@/lib/form-values";
 
 const DATA_DIR = path.resolve("./data/photos");
 
@@ -17,6 +18,7 @@ function sanitizeFilename(name: string): string {
 
 export async function uploadPhoto(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const file = formData.get("file") as File | null;
   const ownerType = formData.get("ownerType") as string;
   const ownerId = formData.get("ownerId") as string;

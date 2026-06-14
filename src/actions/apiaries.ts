@@ -6,7 +6,7 @@ import { apiaries, hives } from "@/db/schema";
 import { eq, sql, and, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 
 /** Parse a coordinate string to a number rounded to 6 decimals (~0.1 m). */
 function parseCoord(value: string): number | null {
@@ -18,6 +18,7 @@ function parseCoord(value: string): number | null {
 
 export async function createApiary(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const name = formData.get("name") as string;
   const latitude = formData.get("latitude") as string;
   const longitude = formData.get("longitude") as string;
@@ -49,6 +50,7 @@ export async function updateApiary(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const name = formData.get("name") as string;
   const latitude = formData.get("latitude") as string;
   const longitude = formData.get("longitude") as string;

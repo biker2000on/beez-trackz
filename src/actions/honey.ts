@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import {
   honeyHarvests,
@@ -40,6 +40,7 @@ function parseLocalDate(value: string): Date {
 
 export async function createHarvest(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveId = formData.get("hiveId") as string;
   const date = formData.get("date") as string;
   const superWeightBefore = formData.get("superWeightBefore") as string;

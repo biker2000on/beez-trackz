@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { hives, hiveLocationHistory, apiaries } from "@/db/schema";
 import { eq, and, isNull, desc, inArray } from "drizzle-orm";
@@ -12,6 +12,7 @@ import { generatePositionLabel } from "@/lib/hive-location";
 // Create hive — also creates initial location history entry
 export async function createHive(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const apiaryId = formData.get("apiaryId") as string;
   const positionLabel = formData.get("positionLabel") as string;
   const standId = formData.get("standId") as string;
@@ -79,6 +80,7 @@ export async function updateHive(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const positionLabel = formData.get("positionLabel") as string;
   const standId = formData.get("standId") as string;
   const slotRow = formData.get("slotRow") as string;
@@ -129,6 +131,7 @@ export async function moveHive(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const newApiaryId = formData.get("apiaryId") as string;
   const newPositionLabel = formData.get("positionLabel") as string;
 
@@ -333,6 +336,7 @@ export async function bulkCreateHives(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const apiaryId = formData.get("apiaryId") as string;
   const quantity = parseInt(formData.get("quantity") as string);
   const startLabel = formData.get("startLabel") as string;

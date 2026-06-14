@@ -1,7 +1,7 @@
 "use server";
 
 import { requireSession } from "@/lib/require-session";
-import { formValues } from "@/lib/form-values";
+import { formValues, normalizeFormData } from "@/lib/form-values";
 import { db } from "@/db";
 import { queens, hives, apiaries } from "@/db/schema";
 import { eq, sql, desc } from "drizzle-orm";
@@ -13,6 +13,7 @@ type QueenStatus = "active" | "superseded" | "dead" | "missing";
 
 export async function createQueen(_prevState: unknown, formData: FormData) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveId = formData.get("hiveId") as string;
   const origin = formData.get("origin") as string;
   const originHiveId = formData.get("originHiveId") as string;
@@ -52,6 +53,7 @@ export async function updateQueen(
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   const hiveId = formData.get("hiveId") as string;
   const origin = formData.get("origin") as string;
   const originHiveId = formData.get("originHiveId") as string;

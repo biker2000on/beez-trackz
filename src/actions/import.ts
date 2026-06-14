@@ -5,12 +5,14 @@ import { db } from "@/db";
 import { apiaries, hives, inspections, equipmentTypes, equipmentStock, equipmentDeployments } from "@/db/schema";
 import { parseImportFile, type ParsedImportData } from "@/lib/import/parser";
 import { eq } from "drizzle-orm";
+import { normalizeFormData } from "@/lib/form-values";
 
 export async function parseImportedFile(
   _prevState: unknown,
   formData: FormData
 ) {
   await requireSession();
+  formData = normalizeFormData(formData);
   try {
     const file = formData.get("file") as File | null;
 

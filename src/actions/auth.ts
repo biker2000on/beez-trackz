@@ -10,6 +10,7 @@ import {
   setSessionCookie,
   deleteSessionCookie,
 } from "@/lib/session";
+import { normalizeFormData } from "@/lib/form-values";
 
 export type AuthFormState = {
   error?: string;
@@ -22,6 +23,7 @@ export async function setup(
   _prevState: AuthFormState,
   formData: FormData
 ): Promise<AuthFormState> {
+  formData = normalizeFormData(formData);
   const displayName = formData.get("displayName") as string;
   const password = formData.get("password") as string;
   const confirmPassword = formData.get("confirmPassword") as string;
@@ -65,6 +67,7 @@ export async function login(
   _prevState: AuthFormState,
   formData: FormData
 ): Promise<AuthFormState> {
+  formData = normalizeFormData(formData);
   const password = formData.get("password") as string;
 
   if (!password) {
