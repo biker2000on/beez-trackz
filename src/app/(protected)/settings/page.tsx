@@ -1,60 +1,93 @@
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Boxes, Cpu, SlidersHorizontal, Upload, GlassWater } from "lucide-react";
+import { getApiaries } from "@/actions/apiaries";
+import { getAISettings } from "@/actions/ai-settings";
+import { getJarSizes } from "@/actions/jar-sizes";
+import { getPreferences } from "@/actions/preferences";
+import { Button } from "@/components/ui/button";
+import { Boxes, Cpu, Download, GlassWater, SlidersHorizontal, Upload } from "lucide-react";
+import { AIProviderConfig } from "@/components/settings/ai-provider-config";
+import { ImportRecordsSection } from "@/components/settings/import-records-section";
+import { JarSizeSettings } from "@/components/settings/jar-size-settings";
+import { PreferencesForm } from "@/components/settings/preferences-form";
+import { SettingsSection } from "@/components/settings/settings-section";
 import { InstallAppSetting } from "@/components/pwa/install-app-setting";
 
-const settingsLinks = [
-  {
-    title: "Equipment Inventory",
-    description: "Manage hive bodies, supers, covers, and accessories",
-    href: "/settings/equipment",
-    icon: Boxes,
-  },
-  {
-    title: "AI Configuration",
-    description: "Configure AI assistant recommendations",
-    href: "/settings/ai",
-    icon: Cpu,
-  },
-  {
-    title: "Preferences",
-    description: "Units, notifications, and display settings",
-    href: "/settings/preferences",
-    icon: SlidersHorizontal,
-  },
-  {
-    title: "Jar Sizes",
-    description: "Configure honey jar sizes and weights",
-    href: "/settings/jar-sizes",
-    icon: GlassWater,
-  },
-  {
-    title: "Import Records",
-    description: "Import old beekeeping records from any format",
-    href: "/settings/import",
-    icon: Upload,
-  },
-];
+export default async function SettingsPage() {
+  const [preferences, apiaries, aiSettings, jarSizes] = await Promise.all([
+    getPreferences(),
+    getApiaries(),
+    getAISettings(),
+    getJarSizes(true),
+  ]);
 
-export default function SettingsPage() {
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Settings</h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {settingsLinks.map((item) => (
-          <Link key={item.href} href={item.href}>
-            <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
-              <CardHeader className="flex flex-row items-center gap-3 pb-2">
-                <item.icon className="h-5 w-5 text-muted-foreground" />
-                <CardTitle className="text-base">{item.title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <CardDescription>{item.description}</CardDescription>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
-        <InstallAppSetting />
+    <div className="p-4 md:p-6 max-w-5xl">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold">Settings</h1>
+        <p className="text-sm text-muted-foreground">
+          Manage app configuration without leaving this page.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <SettingsSection
+          title="Preferences"
+          description="Units, default apiary, and display settings"
+          icon={SlidersHorizontal}
+          defaultOpen
+        >
+          <PreferencesForm
+            preferences={preferences}
+            apiaries={apiaries.map((a) => ({ id: a.id, name: a.name }))}
+          />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Equipment Inventory"
+          description="Manage hive bodies, supers, covers, and accessories"
+          icon={Boxes}
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">
+              Equipment lives in Inventory so stock counts, deployments, and hive assignments stay together.
+            </p>
+            <Button asChild>
+              <Link href="/inventory">Open Inventory</Link>
+            </Button>
+          </div>
+        </SettingsSection>
+
+        <SettingsSection
+          title="AI Configuration"
+          description="Configure providers for transcription, recommendations, and image analysis"
+          icon={Cpu}
+        >
+          <AIProviderConfig initialSettings={aiSettings} />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Jar Sizes"
+          description="Configure honey jar sizes, weights, and default prices"
+          icon={GlassWater}
+        >
+          <JarSizeSettings initialSizes={jarSizes} />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Import Records"
+          description="Import old beekeeping records from files or transcripts"
+          icon={Upload}
+        >
+          <ImportRecordsSection />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Install App"
+          description="Add Beez Trackz to this device"
+          icon={Download}
+        >
+          <InstallAppSetting />
+        </SettingsSection>
       </div>
     </div>
   );
