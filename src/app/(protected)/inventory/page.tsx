@@ -7,8 +7,10 @@ import {
 } from "@/actions/equipment-v2";
 import { getHives } from "@/actions/hives";
 import { InventoryTable } from "@/components/equipment/inventory-table";
-import { AddEquipmentTypeForm } from "@/components/equipment/add-equipment-type-form";
-import { NewStockForm } from "@/components/equipment/new-stock-form";
+import {
+  AddEquipmentTypeDialog,
+  NewStockDialog,
+} from "@/components/equipment/equipment-management-dialogs";
 import { Card, CardContent } from "@/components/ui/card";
 
 export default async function InventoryPage() {
@@ -31,7 +33,19 @@ export default async function InventoryPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Equipment Inventory</h1>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-bold">Equipment Inventory</h1>
+        <div className="flex flex-wrap gap-2">
+          <NewStockDialog
+            types={typesWithoutStock.map((t) => ({
+              id: t.id,
+              name: t.name,
+              category: t.category,
+            }))}
+          />
+          <AddEquipmentTypeDialog />
+        </div>
+      </div>
 
       {/* Stat strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -62,19 +76,6 @@ export default async function InventoryPage() {
             }))}
         />
       )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {typesWithoutStock.length > 0 && (
-          <NewStockForm
-            types={typesWithoutStock.map((t) => ({
-              id: t.id,
-              name: t.name,
-              category: t.category,
-            }))}
-          />
-        )}
-        <AddEquipmentTypeForm />
-      </div>
     </div>
   );
 }

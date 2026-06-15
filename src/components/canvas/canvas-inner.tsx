@@ -21,6 +21,19 @@ import {
   StackChoiceDialog,
   type SlotOption,
 } from "./canvas-dialogs";
+import { createFeeding } from "@/actions/feedings";
+import { createSplit } from "@/actions/hive-splits";
+import { createInspection } from "@/actions/inspections";
+import { FeedingForm } from "@/components/feedings/feeding-form";
+import { SplitHiveForm } from "@/components/hives/split-hive-form";
+import { InspectionForm } from "@/components/inspections/inspection-form";
+import { PhotoUpload } from "@/components/photos/photo-upload";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   saveCanvasLayout,
   createHiveFromCanvas,
@@ -44,6 +57,7 @@ import {
 
 interface CanvasInnerProps {
   apiaryId: string;
+  apiaryName: string;
   hives: CanvasHive[];
   initialLayout: CanvasLayout | null;
   latitude?: number | null;
@@ -64,7 +78,12 @@ type DialogState =
   | { type: "facing"; hiveId: string }
   | { type: "moveToSlot"; hiveId: string }
   | { type: "stack"; hiveId: string; target: SlotOption }
-  | { type: "editHive"; hiveId: string };
+  | { type: "editHive"; hiveId: string }
+  | { type: "newInspection"; hiveId: string }
+  | { type: "quickInspection"; hiveId: string }
+  | { type: "feeding"; hiveId: string }
+  | { type: "photo"; hiveId: string }
+  | { type: "split"; hiveId: string };
 
 function drawGrid(
   ctx: CanvasRenderingContext2D,
@@ -96,6 +115,7 @@ function drawGrid(
 
 export function CanvasInner({
   apiaryId,
+  apiaryName,
   hives,
   initialLayout,
   latitude,
@@ -571,9 +591,25 @@ export function CanvasInner({
             closeContextMenu();
           }}
           onFlipDirection={() => void handleFlipDirection(contextMenu.hiveId)}
-          onSplitHive={() => {
+          onNewInspection={() => {
+            setDialog({ type: "newInspection", hiveId: contextMenu.hiveId });
             closeContextMenu();
-            router.push(`/hives/${contextMenu.hiveId}/split`);
+          }}
+          onQuickInspection={() => {
+            setDialog({ type: "quickInspection", hiveId: contextMenu.hiveId });
+            closeContextMenu();
+          }}
+          onFeed={() => {
+            setDialog({ type: "feeding", hiveId: contextMenu.hiveId });
+            closeContextMenu();
+          }}
+          onPhoto={() => {
+            setDialog({ type: "photo", hiveId: contextMenu.hiveId });
+            closeContextMenu();
+          }}
+          onSplitHive={() => {
+            setDialog({ type: "split", hiveId: contextMenu.hiveId });
+            closeContextMenu();
           }}
         />
       );
@@ -657,7 +693,14 @@ export function CanvasInner({
         ? stands.find((s) => s.id === dialog.standId) ?? null
         : null;
     const dialogHive =
-      dialog?.type === "facing" || dialog?.type === "moveToSlot" || dialog?.type === "editHive"
+      dialog?.type === "facing" ||
+      dialog?.type === "moveToSlot" ||
+      dialog?.type === "editHive" ||
+      dialog?.type === "newInspection" ||
+      dialog?.type === "quickInspection" ||
+      dialog?.type === "feeding" ||
+      dialog?.type === "photo" ||
+      dialog?.type === "split"
         ? hiveById.get(dialog.hiveId)
         : undefined;
 
@@ -729,6 +772,80 @@ export function CanvasInner({
               refresh();
             }}
           />
+        )}
+        {dialog?.type === "newInspection" && dialogHive && (
+          <Dialog open onOpenChange={(o) => !o && setDialog(null)}>
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>New Inspection - {dialogHive.positionLabel}</DialogTitle>
+              </DialogHeader>
+              <InspectionForm
+                action={createInspection}
+                hiveId={dialogHive.id}
+                title={`New Inspection - ${dialogHive.positionLabel}`}
+                submitLabel="Record Inspection"
+                embedded
+              />
+            </DialogContent>
+          </Dialog>
+        )}
+        {dialog?.type === "quickInspection" && dialogHive && (
+          <Dialog open onOpenChange={(o) => !o && setDialog(null)}>
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Quick Inspection - {dialogHive.positionLabel}</DialogTitle>
+              </DialogHeader>
+              <InspectionForm
+                action={createInspection}
+                hiveId={dialogHive.id}
+                title={`Quick Inspection - ${dialogHive.positionLabel}`}
+                submitLabel="Save Quick Inspection"
+                embedded
+              />
+            </DialogContent>
+          </Dialog>
+        )}
+        {dialog?.type === "feeding" && dialogHive && (
+          <Dialog open onOpenChange={(o) => !o && setDialog(null)}>
+            <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Record Feeding - {dialogHive.positionLabel}</DialogTitle>
+              </DialogHeader>
+              <FeedingForm
+                action={createFeeding}
+                hiveId={dialogHive.id}
+                title={`Record Feeding - ${dialogHive.positionLabel}`}
+                submitLabel="Record Feeding"
+                embedded
+              />
+            </DialogContent>
+          </Dialog>
+        )}
+        {dialog?.type === "photo" && dialogHive && (
+          <Dialog open onOpenChange={(o) => !o && setDialog(null)}>
+            <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Photo - {dialogHive.positionLabel}</DialogTitle>
+              </DialogHeader>
+              <PhotoUpload ownerType="hive" ownerId={dialogHive.id} />
+            </DialogContent>
+          </Dialog>
+        )}
+        {dialog?.type === "split" && dialogHive && (
+          <Dialog open onOpenChange={(o) => !o && setDialog(null)}>
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Split Hive - {dialogHive.positionLabel}</DialogTitle>
+              </DialogHeader>
+              <SplitHiveForm
+                action={createSplit}
+                parentHiveId={dialogHive.id}
+                apiaryId={apiaryId}
+                apiaries={[{ id: apiaryId, name: apiaryName }]}
+                embedded
+              />
+            </DialogContent>
+          </Dialog>
         )}
       </>
     );

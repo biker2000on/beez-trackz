@@ -1,7 +1,10 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getHive, getHiveLocationHistory } from "@/actions/hives";
+import { getApiaries } from "@/actions/apiaries";
+import { getHives } from "@/actions/hives";
 import { getQueensForHive } from "@/actions/queens";
+import { getAllQueens } from "@/actions/queens";
 import { getInspectionsForHive } from "@/actions/inspections";
 import { getDeploymentsForHive } from "@/actions/equipment-v2";
 import { getFeedingsForHive } from "@/actions/feedings";
@@ -12,6 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { HiveDetailTabs } from "@/components/hives/hive-detail-tabs";
 import { HiveEditModal } from "@/components/hives/hive-edit-modal-page";
+import {
+  FeedingDialog,
+  HivePhotoDialog,
+  NewInspectionDialog,
+  QuickInspectionDialog,
+  SplitHiveDialog,
+} from "@/components/hives/hive-action-dialogs";
 import { archiveHive, unarchiveHive, markDeadout } from "@/actions/hives";
 import { ClipboardList, Camera, Droplets, Mic, GitBranch, Archive, ArchiveRestore, Skull } from "lucide-react";
 
@@ -28,7 +38,19 @@ export default async function HiveDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [hive, locationHistory, queens, inspections, equipment, feedings, photos, splits] = await Promise.all([
+  const [
+    hive,
+    locationHistory,
+    queens,
+    inspections,
+    equipment,
+    feedings,
+    photos,
+    splits,
+    allHives,
+    allQueens,
+    apiaries,
+  ] = await Promise.all([
     getHive(id),
     getHiveLocationHistory(id),
     getQueensForHive(id),
@@ -37,11 +59,27 @@ export default async function HiveDetailPage({
     getFeedingsForHive(id),
     getPhotosForOwner("hive", id),
     getSplitsForHive(id),
+    getHives(),
+    getAllQueens(),
+    getApiaries(),
   ]);
 
   if (!hive) {
     notFound();
   }
+
+  const hiveOptions = allHives.map((h) => ({
+    id: h.id,
+    name: `${h.apiaryName} - ${h.positionLabel}`,
+  }));
+  const queenOptions = allQueens.map((q) => ({
+    id: q.id,
+    label: `${q.hiveName || q.origin} (${q.status})`,
+  }));
+  const apiaryOptions = apiaries.map((apiary) => ({
+    id: apiary.id,
+    name: apiary.name,
+  }));
 
   return (
     <div className="p-6">
@@ -78,42 +116,47 @@ export default async function HiveDetailPage({
 
       {/* Quick actions */}
       <div className="flex flex-wrap gap-2 mb-6">
-        <Button variant="outline" size="sm" asChild>
-          <Link href={`/hives/${id}/inspections/new`}>
+        <NewInspectionDialog hiveId={id} hiveLabel={hive.positionLabel}>
+          <>
             <ClipboardList className="h-4 w-4 mr-2" />
             New Inspection
-          </Link>
-        </Button>
+          </>
+        </NewInspectionDialog>
         <Button variant="outline" size="sm" asChild>
           <Link href={`/hives/${id}/transcribe`}>
             <Mic className="h-4 w-4 mr-2" />
             Record Inspection
           </Link>
         </Button>
-        <Button variant="outline" size="sm" asChild>
-          <Link href={`/hives/${id}/inspections/quick`}>
+        <QuickInspectionDialog hiveId={id} hiveLabel={hive.positionLabel}>
+          <>
             <ClipboardList className="h-4 w-4 mr-2" />
             Quick Inspection
-          </Link>
-        </Button>
-        <Button variant="outline" size="sm" asChild>
-          <Link href={`/hives/${id}/photos/new`}>
+          </>
+        </QuickInspectionDialog>
+        <HivePhotoDialog hiveId={id} hiveLabel={hive.positionLabel}>
+          <>
             <Camera className="h-4 w-4 mr-2" />
             Take Photo
-          </Link>
-        </Button>
-        <Button variant="outline" size="sm" asChild>
-          <Link href={`/hives/${id}/feedings/new`}>
+          </>
+        </HivePhotoDialog>
+        <FeedingDialog hiveId={id} hiveLabel={hive.positionLabel}>
+          <>
             <Droplets className="h-4 w-4 mr-2" />
             Feed
-          </Link>
-        </Button>
-        <Button variant="outline" size="sm" asChild>
-          <Link href={`/hives/${id}/split`}>
+          </>
+        </FeedingDialog>
+        <SplitHiveDialog
+          hiveId={id}
+          hiveLabel={hive.positionLabel}
+          apiaryId={hive.apiaryId}
+          apiaries={apiaryOptions}
+        >
+          <>
             <GitBranch className="h-4 w-4 mr-2" />
             Split Hive
-          </Link>
-        </Button>
+          </>
+        </SplitHiveDialog>
         {!hive.isArchived && hive.status === "active" && (
           <>
             <form action={async () => { "use server"; await archiveHive(id); }}>
@@ -143,7 +186,19 @@ export default async function HiveDetailPage({
       <Separator className="mb-6" />
 
       {/* Tabs */}
-      <HiveDetailTabs hiveId={id} locationHistory={locationHistory} queens={queens} inspections={inspections} equipment={equipment} feedings={feedings} photos={photos} splits={splits} />
+      <HiveDetailTabs
+        hiveId={id}
+        hiveLabel={hive.positionLabel}
+        hives={hiveOptions}
+        queenOptions={queenOptions}
+        locationHistory={locationHistory}
+        queens={queens}
+        inspections={inspections}
+        equipment={equipment}
+        feedings={feedings}
+        photos={photos}
+        splits={splits}
+      />
     </div>
   );
 }

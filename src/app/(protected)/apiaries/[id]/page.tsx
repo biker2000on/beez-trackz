@@ -94,6 +94,7 @@ export default async function ApiaryDetailPage({
           <div className="p-4">
             <ApiaryCanvas
               apiaryId={id}
+              apiaryName={apiary.name}
               hives={hives.map((h) => ({
                 id: h.id,
                 positionLabel: h.positionLabel,

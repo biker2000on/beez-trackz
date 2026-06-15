@@ -3,8 +3,6 @@
 import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
 import {
   QUEEN_COLOR_HEX,
   getQueenColorForDate,
@@ -15,6 +13,11 @@ import { FeedingList } from "@/components/feedings/feeding-list";
 import { PhotoGallery } from "@/components/photos/photo-gallery";
 import { PhotoUpload } from "@/components/photos/photo-upload";
 import { EquipmentDeployModal } from "@/components/hives/equipment-deploy-modal";
+import {
+  AddQueenDialog,
+  FeedingDialog,
+  NewInspectionDialog,
+} from "@/components/hives/hive-action-dialogs";
 
 interface LocationHistoryEntry {
   apiaryName: string;
@@ -92,6 +95,9 @@ interface SplitEntry {
 
 interface HiveDetailTabsProps {
   hiveId: string;
+  hiveLabel: string;
+  hives: { id: string; name: string }[];
+  queenOptions: { id: string; label: string }[];
   locationHistory: LocationHistoryEntry[];
   queens: QueenEntry[];
   inspections: InspectionEntry[];
@@ -125,6 +131,9 @@ const statusColors: Record<string, string> = {
 
 export function HiveDetailTabs({
   hiveId,
+  hiveLabel,
+  hives,
+  queenOptions,
   locationHistory,
   queens,
   inspections,
@@ -159,12 +168,7 @@ export function HiveDetailTabs({
               <p className="text-muted-foreground mb-3">
                 No inspections yet. Record your first inspection.
               </p>
-              <Link href={`/hives/${hiveId}/inspections/new`}>
-                <Button variant="outline" size="sm">
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Inspection
-                </Button>
-              </Link>
+              <NewInspectionDialog hiveId={hiveId} hiveLabel={hiveLabel} />
             </div>
           ) : (
             <>
@@ -172,12 +176,7 @@ export function HiveDetailTabs({
                 <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
                   {inspections.length} inspection{inspections.length !== 1 ? "s" : ""}
                 </h3>
-                <Link href={`/hives/${hiveId}/inspections/new`}>
-                  <Button variant="outline" size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
-                    New Inspection
-                  </Button>
-                </Link>
+                <NewInspectionDialog hiveId={hiveId} hiveLabel={hiveLabel} />
               </div>
               <div className="space-y-2">
                 {inspections.map((inspection) => (
@@ -210,12 +209,7 @@ export function HiveDetailTabs({
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               {feedings.length} feeding{feedings.length !== 1 ? "s" : ""}
             </h3>
-            <Link href={`/hives/${hiveId}/feedings/new`}>
-              <Button variant="outline" size="sm">
-                <Plus className="h-4 w-4 mr-2" />
-                Record Feeding
-              </Button>
-            </Link>
+            <FeedingDialog hiveId={hiveId} hiveLabel={hiveLabel} />
           </div>
           <FeedingList feedings={feedings} hiveId={hiveId} />
         </div>
@@ -267,12 +261,12 @@ export function HiveDetailTabs({
           )}
 
           {/* Add queen button */}
-          <Link href={`/hives/${hiveId}/queens/new`}>
-            <Button variant="outline" size="sm">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Queen
-            </Button>
-          </Link>
+          <AddQueenDialog
+            hiveId={hiveId}
+            hiveLabel={hiveLabel}
+            hives={hives}
+            queens={queenOptions}
+          />
         </div>
       </TabsContent>
 

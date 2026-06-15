@@ -13,10 +13,29 @@ interface HiveContextMenuProps {
   onRemoveFromSlot: () => void;
   onEditHive?: () => void;
   onFlipDirection: () => void;
+  onNewInspection?: () => void;
+  onQuickInspection?: () => void;
+  onFeed?: () => void;
+  onPhoto?: () => void;
   onSplitHive?: () => void;
 }
 
-export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFacing, onMoveToSlot, onRemoveFromSlot, onEditHive, onFlipDirection, onSplitHive }: HiveContextMenuProps) {
+export function HiveContextMenu({
+  position,
+  hiveId,
+  hiveName,
+  onClose,
+  onSetFacing,
+  onMoveToSlot,
+  onRemoveFromSlot,
+  onEditHive,
+  onFlipDirection,
+  onNewInspection,
+  onQuickInspection,
+  onFeed,
+  onPhoto,
+  onSplitHive,
+}: HiveContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -45,11 +64,11 @@ export function HiveContextMenu({ position, hiveId, hiveName, onClose, onSetFaci
       <div className="h-px bg-border my-1" />
 
       {/* Quick actions - navigation */}
-      <MenuItem label="New Inspection" onClick={() => navigate(`/hives/${hiveId}/inspections/new`)} />
-      <MenuItem label="Quick Inspection" onClick={() => navigate(`/hives/${hiveId}/inspections/quick`)} />
+      <MenuItem label="New Inspection" onClick={onNewInspection} />
+      <MenuItem label="Quick Inspection" onClick={onQuickInspection} />
       <MenuItem label="Record Inspection" onClick={() => navigate(`/hives/${hiveId}/transcribe`)} />
-      <MenuItem label="Feed" onClick={() => navigate(`/hives/${hiveId}/feedings/new`)} />
-      <MenuItem label="Add Equipment" onClick={() => navigate(`/hives/${hiveId}/equipment/new`)} />
+      <MenuItem label="Feed" onClick={onFeed} />
+      <MenuItem label="Photo" onClick={onPhoto} />
       <MenuItem label="View Hive" onClick={() => navigate(`/hives/${hiveId}`)} />
 
       <div className="h-px bg-border my-1" />

@@ -22,6 +22,7 @@ interface FeedingFormProps {
   hiveId: string;
   title: string;
   submitLabel: string;
+  embedded?: boolean;
 }
 
 const FEED_TYPE_OPTIONS = [
@@ -54,6 +55,7 @@ export function FeedingForm({
   hiveId,
   title,
   submitLabel,
+  embedded = false,
 }: FeedingFormProps) {
   const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -68,11 +70,13 @@ export function FeedingForm({
 
   const dateValue = new Date().toISOString().split("T")[0];
 
-  return (
-    <Card className="max-w-2xl mx-auto">
+  const content = (
+    <>
+      {!embedded && (
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
+      )}
       <CardContent>
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
@@ -173,6 +177,16 @@ export function FeedingForm({
           </Button>
         </form>
       </CardContent>
+    </>
+  );
+
+  if (embedded) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Card className="max-w-2xl mx-auto">
+      {content}
     </Card>
   );
 }

@@ -50,6 +50,7 @@ interface InspectionFormProps {
   hiveId: string;
   title: string;
   submitLabel: string;
+  embedded?: boolean;
 }
 
 const RATING_OPTIONS = [
@@ -74,6 +75,7 @@ export function InspectionForm({
   hiveId,
   title,
   submitLabel,
+  embedded = false,
 }: InspectionFormProps) {
   const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -90,11 +92,13 @@ export function InspectionForm({
     ? new Date(defaultValues.date).toISOString().split("T")[0]
     : new Date().toISOString().split("T")[0];
 
-  return (
-    <Card className="max-w-2xl mx-auto">
+  const content = (
+    <>
+      {!embedded && (
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
+      )}
       <CardContent>
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
@@ -288,6 +292,16 @@ export function InspectionForm({
           </Button>
         </form>
       </CardContent>
+    </>
+  );
+
+  if (embedded) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Card className="max-w-2xl mx-auto">
+      {content}
     </Card>
   );
 }

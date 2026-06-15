@@ -40,11 +40,11 @@ export async function createQueen(_prevState: unknown, formData: FormData) {
     .returning();
 
   revalidatePath("/hives");
-  if (hiveId) {
+  if (hiveId && hiveId !== "__none__") {
     revalidatePath(`/hives/${hiveId}`);
   }
   revalidatePath("/genealogy");
-  redirect(`/genealogy`);
+  redirect(hiveId && hiveId !== "__none__" ? `/hives/${hiveId}` : "/genealogy");
 }
 
 export async function updateQueen(

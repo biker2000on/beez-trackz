@@ -32,6 +32,7 @@ interface QueenFormProps {
   queens: { id: string; label: string }[];
   title: string;
   submitLabel: string;
+  embedded?: boolean;
 }
 
 const ORIGIN_OPTIONS = [
@@ -57,6 +58,7 @@ export function QueenForm({
   queens,
   title,
   submitLabel,
+  embedded = false,
 }: QueenFormProps) {
   const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -73,11 +75,13 @@ export function QueenForm({
     ? new Date(defaultValues.introducedDate).toISOString().split("T")[0]
     : "";
 
-  return (
-    <Card className="max-w-lg mx-auto">
+  const content = (
+    <>
+      {!embedded && (
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
+      )}
       <CardContent>
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
@@ -206,6 +210,16 @@ export function QueenForm({
           </Button>
         </form>
       </CardContent>
+    </>
+  );
+
+  if (embedded) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Card className="max-w-lg mx-auto">
+      {content}
     </Card>
   );
 }

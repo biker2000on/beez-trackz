@@ -18,7 +18,7 @@ import {
 import { useRestoreOnError } from "@/components/forms/use-restore-on-error";
 import { useRef } from "react";
 
-export function AddEquipmentTypeForm() {
+export function AddEquipmentTypeForm({ embedded = false }: { embedded?: boolean }) {
   const [state, formAction, isPending] = useServerActionForm(createEquipmentType, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
@@ -29,11 +29,13 @@ export function AddEquipmentTypeForm() {
   const errorMessage = state && typeof state === "object" && "error" in state
     ? (state as { error: string }).error : null;
 
-  return (
-    <Card>
+  const content = (
+    <>
+      {!embedded && (
       <CardHeader>
         <CardTitle className="text-base">Add Equipment Type</CardTitle>
       </CardHeader>
+      )}
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
         <form ref={formRef} onSubmit={formAction} className="flex gap-2 items-end flex-wrap">
@@ -66,6 +68,16 @@ export function AddEquipmentTypeForm() {
           </Button>
         </form>
       </CardContent>
+    </>
+  );
+
+  if (embedded) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Card>
+      {content}
     </Card>
   );
 }

@@ -20,9 +20,10 @@ import { useRef } from "react";
 
 interface NewStockFormProps {
   types: { id: string; name: string; category: string }[];
+  embedded?: boolean;
 }
 
-export function NewStockForm({ types }: NewStockFormProps) {
+export function NewStockForm({ types, embedded = false }: NewStockFormProps) {
   const [state, formAction, isPending] = useServerActionForm(createStock, null);
   const formRef = useRef<HTMLFormElement>(null);
   useRestoreOnError(
@@ -36,11 +37,13 @@ export function NewStockForm({ types }: NewStockFormProps) {
   const selectedType = types.find(t => t.id === selectedTypeId);
   const isFrameType = selectedType?.category === "frame";
 
-  return (
-    <Card>
+  const content = (
+    <>
+      {!embedded && (
       <CardHeader>
         <CardTitle className="text-base">Initialize Stock</CardTitle>
       </CardHeader>
+      )}
       <CardContent>
         {errorMessage && <p className="text-destructive text-sm mb-2">{errorMessage}</p>}
         <form ref={formRef} onSubmit={formAction} className="flex gap-2 items-end flex-wrap">
@@ -80,6 +83,16 @@ export function NewStockForm({ types }: NewStockFormProps) {
           </Button>
         </form>
       </CardContent>
+    </>
+  );
+
+  if (embedded) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Card>
+      {content}
     </Card>
   );
 }

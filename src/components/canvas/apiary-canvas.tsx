@@ -19,6 +19,7 @@ const CanvasInner = dynamic(
 
 interface ApiaryCanvasProps {
   apiaryId: string;
+  apiaryName: string;
   hives: CanvasHive[];
   initialLayout: CanvasLayout | null;
   latitude?: number | null;
@@ -27,6 +28,7 @@ interface ApiaryCanvasProps {
 
 export function ApiaryCanvas({
   apiaryId,
+  apiaryName,
   hives,
   initialLayout,
   latitude,
@@ -35,6 +37,7 @@ export function ApiaryCanvas({
   return (
     <CanvasInner
       apiaryId={apiaryId}
+      apiaryName={apiaryName}
       hives={hives}
       initialLayout={initialLayout}
       latitude={latitude}

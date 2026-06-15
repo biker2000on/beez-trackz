@@ -22,6 +22,7 @@ interface SplitHiveFormProps {
   parentHiveId: string;
   apiaryId: string;
   apiaries: { id: string; name: string }[];
+  embedded?: boolean;
 }
 
 const SPLIT_TYPE_OPTIONS = [
@@ -37,6 +38,7 @@ export function SplitHiveForm({
   parentHiveId,
   apiaryId,
   apiaries,
+  embedded = false,
 }: SplitHiveFormProps) {
   const [state, formAction, isPending] = useServerActionForm(action, null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -51,11 +53,13 @@ export function SplitHiveForm({
 
   const dateValue = new Date().toISOString().split("T")[0];
 
-  return (
-    <Card className="max-w-2xl mx-auto">
+  const content = (
+    <>
+      {!embedded && (
       <CardHeader>
         <CardTitle>Split Hive</CardTitle>
       </CardHeader>
+      )}
       <CardContent>
         {errorMessage && (
           <p className="text-destructive text-sm mb-4">{errorMessage}</p>
@@ -149,6 +153,16 @@ export function SplitHiveForm({
           </Button>
         </form>
       </CardContent>
+    </>
+  );
+
+  if (embedded) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <Card className="max-w-2xl mx-auto">
+      {content}
     </Card>
   );
 }
