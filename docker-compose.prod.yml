@@ -45,7 +45,9 @@ services:
         condition: service_healthy
     labels:
       traefik.enable: "true"
-      traefik.http.routers.beez-trackz-api.rule: Host(`beez.adventureintandem.com`) && PathPrefix(`/api`)
+      # Keep the API route on a path-segment boundary so frontend routes such
+      # as /apiaries are not captured by Traefik and sent to the Go service.
+      traefik.http.routers.beez-trackz-api.rule: Host(`beez.adventureintandem.com`) && PathPrefix(`/api/`)
       traefik.http.routers.beez-trackz-api.entrypoints: websecure
       traefik.http.routers.beez-trackz-api.tls: "true"
       traefik.http.routers.beez-trackz-api.tls.certresolver: cloudflare
