@@ -1,45 +1,77 @@
-# Beez Trackz - Production Docker Compose (TrueNAS / dockhand)
+# Beez Trackz — Production Docker Compose (TrueNAS / dockhand)
 #
-# Uses the pre-built image from ghcr.io and publishes the app through
-# traefik at https://beez.adventureintandem.com.
+# Go API + worker, Next.js web (view layer), Postgres, Redis, MinIO.
+# Traefik routes /api/* straight to the Go API and everything else to the
+# Next server at https://beez.adventureintandem.com.
 #
-# Required: a .env file (dockhand: .env.dockhand) with:
+# Required in .env (dockhand: .env.dockhand):
 #   POSTGRES_PASSWORD=<password>
-#   SESSION_SECRET=<generate with: openssl rand -base64 32>
-#
+#   SESSION_SECRET=<openssl rand -base64 32>
 # Optional:
-#   ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY / OLLAMA_URL  # AI transcription parsing
-#   OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET   # OIDC login (Pocket ID)
-#
-# Usage:
-#   docker compose -f docker-compose.prod.yml up -d
+#   OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET  (Pocket ID; empty = disabled)
+#   ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY / OLLAMA_URL (AI fallback keys)
+
+x-api-env: &api-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}
+  REDIS_URL: redis://redis:6379
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-beeztrackz}
+  # Reuse the existing Dockhand-managed application secret for MinIO. This
+  # keeps the cutover self-contained: the legacy stack already has
+  # SESSION_SECRET configured as a Dockhand secret, while MINIO is new.
+  MINIO_SECRET_KEY: ${SESSION_SECRET:?SESSION_SECRET is required}
+  MINIO_BUCKET: ${MINIO_BUCKET:-beeztrackz-media}
+  SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+  APP_URL: ${APP_URL:-https://beez.adventureintandem.com}
+  OIDC_ISSUER: ${OIDC_ISSUER:-}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+  OLLAMA_URL: ${OLLAMA_URL:-}
 
 services:
-  app:
-    image: ghcr.io/biker2000on/beez-trackz:${BEEZ_IMAGE_TAG:-latest}
+  api:
+    image: ghcr.io/biker2000on/beez-trackz-api:${BEEZ_IMAGE_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}
-      - REDIS_URL=redis://redis:6379
-      - SESSION_SECRET=${SESSION_SECRET:?SESSION_SECRET is required}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-}
-      - OLLAMA_URL=${OLLAMA_URL:-}
-      # Optional OIDC login (all empty = OIDC disabled)
-      - OIDC_ISSUER=${OIDC_ISSUER:-}
-      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-}
-      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
-      - OIDC_PROVIDER_NAME=${OIDC_PROVIDER_NAME:-Pocket ID}
-      - OIDC_REDIRECT_URI=${OIDC_REDIRECT_URI:-https://beez.adventureintandem.com/api/auth/oidc/callback}
-    volumes:
-      # /app/data holds photos/ and audio/ uploads
-      - ${APP_DATA_DIR:-/mnt/docker/volumes/beez-trackz/data}:/app/data
+    environment: *api-env
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.beez-trackz-api.rule: Host(`beez.adventureintandem.com`) && PathPrefix(`/api`)
+      traefik.http.routers.beez-trackz-api.entrypoints: websecure
+      traefik.http.routers.beez-trackz-api.tls: "true"
+      traefik.http.routers.beez-trackz-api.tls.certresolver: cloudflare
+      traefik.http.routers.beez-trackz-api.tls.domains[0].main: adventureintandem.com
+      traefik.http.routers.beez-trackz-api.tls.domains[0].sans: "*.adventureintandem.com"
+      traefik.http.services.beez-trackz-api.loadbalancer.server.port: "8080"
+
+  worker:
+    image: ghcr.io/biker2000on/beez-trackz-api:${BEEZ_IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    command: ["worker"]
+    environment: *api-env
+    depends_on:
+      api:
+        condition: service_started
+
+  web:
+    image: ghcr.io/biker2000on/beez-trackz-web:${BEEZ_IMAGE_TAG:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8080
+    depends_on:
+      api:
+        condition: service_started
     labels:
       traefik.enable: "true"
       traefik.http.routers.beez-trackz.rule: Host(`beez.adventureintandem.com`)
@@ -50,28 +82,6 @@ services:
       traefik.http.routers.beez-trackz.tls.domains[0].sans: "*.adventureintandem.com"
       traefik.http.services.beez-trackz.loadbalancer.server.port: "3000"
 
-  worker:
-    image: ghcr.io/biker2000on/beez-trackz:${BEEZ_IMAGE_TAG:-latest}
-    pull_policy: always
-    restart: unless-stopped
-    # Skip the migration entrypoint — the app container owns migrations.
-    entrypoint: ["node", "worker.js"]
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}
-      - REDIS_URL=redis://redis:6379
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY:-}
-      - OLLAMA_URL=${OLLAMA_URL:-}
-    volumes:
-      - ${APP_DATA_DIR:-/mnt/docker/volumes/beez-trackz/data}:/app/data
-    depends_on:
-      app:
-        condition: service_started
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -80,7 +90,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:-beeztrackz}
     volumes:
-      - ${POSTGRES_DATA_DIR:-/mnt/docker/volumes/beez-trackz/postgres}:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_DIR:-/mnt/docker/volumes/beez-trackz/postgres-go}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beeztrackz}"]
       interval: 10s
@@ -95,6 +105,21 @@ services:
       - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-beeztrackz}
+      MINIO_ROOT_PASSWORD: ${SESSION_SECRET:?SESSION_SECRET is required}
+    volumes:
+      - ${MINIO_DATA_DIR:-/mnt/docker/volumes/beez-trackz/minio}:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
       interval: 10s
       timeout: 5s
       retries: 5

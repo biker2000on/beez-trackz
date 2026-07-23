@@ -1,19 +1,6 @@
+# Dev infrastructure for the Go rewrite. The API (backend/) and web app
+# (frontend/) run locally; this provides Postgres, Redis, and MinIO.
 services:
-  app:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - DATABASE_URL=postgresql://beeztrackz:beeztrackz@db:5432/beeztrackz
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    volumes:
-      - photo_storage:/app/data/photos
-
   db:
     image: postgres:16-alpine
     environment:
@@ -42,7 +29,24 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=beeztrackz
+      - MINIO_ROOT_PASSWORD=beeztrackz
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   redis_data:
-  photo_storage:
+  minio_data:
