@@ -859,8 +859,28 @@ function cleanupSql() {
   ];
 }
 
+// The legacy database can be entirely empty on a first deployment. The
+// curated history is organized around this yard and these hive labels, so
+// create the minimal stable records it references before importing events.
+function bootstrapSql() {
+  const hives = allCurrentHives.map(
+    (label) =>
+      `insert into hives (apiary_id, position_label)
+       select ${apiaryId()}, ${q(label)}
+       where not exists (
+         select 1 from hives where apiary_id = ${apiaryId()} and position_label = ${q(label)}
+       );`,
+  );
+  return [
+    `insert into apiaries (name, notes)
+     select 'Lenoir Apiary', 'Created by the curated Obsidian history import.'
+     where not exists (select 1 from apiaries where name = 'Lenoir Apiary');`,
+    ...hives,
+  ];
+}
+
 function buildSql() {
-  const statements = ["begin;", ...cleanupSql()];
+  const statements = ["begin;", ...bootstrapSql(), ...cleanupSql()];
   for (const event of inspections) statements.push(...inspectionSql(event));
   for (const treatment of treatments) statements.push(...treatmentSql(treatment));
   for (const event of feedings) statements.push(...feedingSql(event));
