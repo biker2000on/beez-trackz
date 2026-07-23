@@ -27,5 +27,6 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountHarvestSessions(r)
 	s.mountJarSizes(r)
 	s.mountEquipment(r)
-	s.mountMedia(r)
+	s.mountPhotos(r)
+	s.mountTranscriptions(r)
 }
