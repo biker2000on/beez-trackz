@@ -28,7 +28,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	// The API owns schema migrations. Starting them here as well can race the
+	// API during a fresh deployment.
+	pool, err := db.ConnectWithoutMigrations(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("database", "err", err)
 		os.Exit(1)
