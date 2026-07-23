@@ -9,35 +9,40 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const SessionCookieName = "session"
+const (
+	SessionCookieName = "session"
+	SessionDuration   = 30 * 24 * time.Hour
+)
 
-// Session mirrors the JWT claims carried in the session cookie.
+// Session mirrors the legacy JWT claims: {authenticated: true, sub, name}.
+// sub is "password" for password logins or the OIDC subject.
 type Session struct {
-	UserID   string
-	Username string
+	Sub  string `json:"sub"`
+	Name string `json:"name"`
 }
 
 type claims struct {
-	Username string `json:"username"`
+	Authenticated bool   `json:"authenticated"`
+	Name          string `json:"name,omitempty"`
 	jwt.RegisteredClaims
 }
 
-// IssueToken signs a session JWT (HS256) valid for the given duration.
-func IssueToken(secret, userID, username string, ttl time.Duration) (string, error) {
+func IssueToken(secret, sub, name string) (string, error) {
 	now := time.Now()
 	c := claims{
-		Username: username,
+		Authenticated: true,
+		Name:          name,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   userID,
+			Subject:   sub,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(SessionDuration)),
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, c).SignedString([]byte(secret))
 }
 
 // SessionFromRequest accepts either the session cookie or an
-// Authorization: Bearer token holding the same JWT (used by the MCP surface).
+// Authorization: Bearer token holding the same JWT (used by MCP clients).
 func SessionFromRequest(r *http.Request, secret string) (*Session, error) {
 	token := ""
 	if c, err := r.Cookie(SessionCookieName); err == nil {
@@ -60,8 +65,34 @@ func ParseToken(secret, token string) (*Session, error) {
 		}
 		return []byte(secret), nil
 	})
-	if err != nil || !parsed.Valid {
+	if err != nil || !parsed.Valid || !c.Authenticated {
 		return nil, errors.New("invalid session")
 	}
-	return &Session{UserID: c.Subject, Username: c.Username}, nil
+	return &Session{Sub: c.Subject, Name: c.Name}, nil
+}
+
+// NewSessionCookie builds the session cookie with legacy-compatible attributes.
+func NewSessionCookie(token string, secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int(SessionDuration.Seconds()),
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// ClearSessionCookie expires the session cookie.
+func ClearSessionCookie(secure bool) *http.Cookie {
+	return &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	}
 }

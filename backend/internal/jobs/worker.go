@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"context"
 	"log/slog"
 
 	"github.com/hibiken/asynq"
@@ -44,19 +43,3 @@ func (asynqLogger) Info(args ...any)  { slog.Info("asynq", "msg", args) }
 func (asynqLogger) Warn(args ...any)  { slog.Warn("asynq", "msg", args) }
 func (asynqLogger) Error(args ...any) { slog.Error("asynq", "msg", args) }
 func (asynqLogger) Fatal(args ...any) { slog.Error("asynq fatal", "msg", args) }
-
-// Placeholder handlers — real implementations land with the media/AI ports.
-func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error {
-	slog.Info("process image", "payload", string(t.Payload()))
-	return nil
-}
-
-func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) error {
-	slog.Info("transcribe audio", "payload", string(t.Payload()))
-	return nil
-}
-
-func (h *Handlers) handleGenerateRecs(ctx context.Context, t *asynq.Task) error {
-	slog.Info("generate recommendations", "payload", string(t.Payload()))
-	return nil
-}
