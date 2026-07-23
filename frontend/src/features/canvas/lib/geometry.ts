@@ -58,7 +58,10 @@ export function angleFromPivot(
   return ((angle % 360) + 360) % 360;
 }
 
-/** Bounding box of all stands, or null when there are none. */
+/**
+ * Bounding box of all stands (rotation-aware — stands rotate about their
+ * center), or null when there are none.
+ */
 export function standsBoundingBox(
   stands: StandGeometry[],
 ): { minX: number; minY: number; maxX: number; maxY: number } | null {
@@ -69,10 +72,23 @@ export function standsBoundingBox(
   let maxY = -Infinity;
   for (const stand of stands) {
     const { w, h } = standSize(stand);
-    minX = Math.min(minX, stand.x);
-    minY = Math.min(minY, stand.y);
-    maxX = Math.max(maxX, stand.x + w);
-    maxY = Math.max(maxY, stand.y + h);
+    const center = standCenter(stand);
+    const rad = ((stand.rotation ?? 0) * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    for (const [dx, dy] of [
+      [-w / 2, -h / 2],
+      [w / 2, -h / 2],
+      [w / 2, h / 2],
+      [-w / 2, h / 2],
+    ]) {
+      const x = center.x + dx * cos - dy * sin;
+      const y = center.y + dx * sin + dy * cos;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
   }
   return { minX, minY, maxX, maxY };
 }

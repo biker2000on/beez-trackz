@@ -37,7 +37,7 @@ import {
 import { useShortcut } from "@/components/shortcuts/provider";
 import { cn } from "@/lib/utils";
 
-import { parseNum } from "./format";
+import { parseNum, todayISO } from "./format";
 import { useBulkAdjustStock } from "./hooks";
 import {
   AdjustStockDialog,
@@ -94,6 +94,9 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
     if (changes.length === 0) return;
     bulkAdjust.mutate(
       {
+        // Send the user's local calendar date; the server-side now() fallback
+        // stamps adjustments with the server-timezone day instead.
+        date: todayISO(),
         reason: reason.trim() || undefined,
         lines: changes.map((row) => ({
           stockId: row.id,

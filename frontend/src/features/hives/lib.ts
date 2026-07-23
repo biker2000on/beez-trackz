@@ -67,12 +67,15 @@ export function formatDate(value: string | null | undefined): string {
 }
 
 /**
- * Parse an API date. Date-only strings (YYYY-MM-DD) are treated as local
- * dates so they don't shift a day in western timezones.
+ * Parse an API date as a calendar date. Date-only fields are stored at
+ * midnight in the API server's timezone and serialized as RFC3339 with the
+ * server's offset, so converting them through the browser's timezone can
+ * shift them a day (e.g. UTC server, US browser). The leading YYYY-MM-DD of
+ * the string IS the server-local calendar date — use it directly.
  */
 export function parseApiDate(value: string): Date {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const [y, m, d] = value.split("-").map(Number);
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
+    const [y, m, d] = value.slice(0, 10).split("-").map(Number);
     return new Date(y, m - 1, d);
   }
   return new Date(value);

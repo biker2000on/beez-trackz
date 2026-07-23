@@ -64,8 +64,18 @@ export function useCanvasApi(apiaryId: string) {
   const saveLayout = useCallback(
     async (layout: CanvasLayout) => {
       await api.put(`/apiaries/${apiaryId}/canvas-layout`, layout);
+      // Sync every cached copy of this apiary; otherwise a remount within
+      // staleTime restores the stale blob and the next autosave overwrites
+      // the geometry we just saved. (The apiaries feature caches the same
+      // resource under a second key.)
+      const patch = (old: unknown) =>
+        old && typeof old === "object"
+          ? { ...(old as ApiaryDetail), canvasLayout: layout }
+          : old;
+      queryClient.setQueryData(apiaryQueryKey(apiaryId), patch);
+      queryClient.setQueryData(["apiaries", "detail", apiaryId], patch);
     },
-    [apiaryId],
+    [apiaryId, queryClient],
   );
 
   const createHiveInSlot = useCallback(

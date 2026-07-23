@@ -65,11 +65,13 @@ function toFormValues(queen?: Queen): QueenFormValues {
   };
 }
 
-function toPayload(values: QueenFormValues): QueenPayload {
+function toPayload(values: QueenFormValues, existing?: Queen): QueenPayload {
   return {
     hiveId: values.hiveId === NONE ? null : values.hiveId,
     parentQueenId: values.parentQueenId === NONE ? null : values.parentQueenId,
-    originHiveId: null,
+    // The API PUT is a full replace and this form has no originHiveId field —
+    // carry the stored value through so editing a queen never wipes it.
+    originHiveId: existing?.originHiveId ?? null,
     origin: values.origin,
     introducedDate: values.introducedDate || null,
     status: values.status,
@@ -118,7 +120,7 @@ export function QueenFormDialog({
   const parentCandidates = queens.filter((q) => q.id !== queen?.id);
 
   async function onSubmit(values: QueenFormValues) {
-    const payload = toPayload(values);
+    const payload = toPayload(values, queen);
     try {
       if (queen) {
         await updateQueen.mutateAsync({ id: queen.id, ...payload });

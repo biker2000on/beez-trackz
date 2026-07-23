@@ -44,7 +44,7 @@ import {
   type QueenStatus,
 } from "./api";
 import { layoutQueenTree, type QueenFlowNode } from "./layout";
-import { markingColorForYear } from "./marking";
+import { markingColorForDate, markingColorForYear } from "./marking";
 import { QueenDetailsSheet } from "./queen-details-sheet";
 import { QueenFormDialog } from "./queen-form-dialog";
 import { QueenNode } from "./queen-node";
@@ -235,11 +235,7 @@ export function GenealogyView() {
       ) : manageMode ? (
         <div className="grid gap-2">
           {queens.map((queen) => {
-            const marking = queen.introducedDate
-              ? markingColorForYear(
-                  new Date(queen.introducedDate).getFullYear(),
-                )
-              : null;
+            const marking = markingColorForDate(queen.introducedDate);
             return (
               <button
                 key={queen.id}
@@ -269,9 +265,7 @@ export function GenealogyView() {
                   </span>
                   <span className="block text-xs capitalize text-muted-foreground">
                     {queen.origin.replaceAll("_", " ")}
-                    {queen.introducedDate
-                      ? ` · ${new Date(queen.introducedDate).getFullYear()}`
-                      : ""}
+                    {marking ? ` · ${marking.year}` : ""}
                   </span>
                 </span>
                 <span className="text-xs text-muted-foreground">

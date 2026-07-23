@@ -816,24 +816,26 @@ func (s *Server) honeyInventoryHandler(w http.ResponseWriter, r *http.Request) {
 // GET /honey/overview
 func (s *Server) honeyOverviewHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var sessionTotal, harvestTotal, totalRevenue float64
+	var totalHarvested, totalRevenue float64
 	var jarsSold int
+	// Per session, the trued-up extracted weight is authoritative when set;
+	// otherwise fall back to that session's calculated entry sum. Harvests
+	// recorded outside any session always count. (The legacy app discarded
+	// both fallbacks as soon as ANY session was trued up.)
 	err := s.pool.QueryRow(ctx, `SELECT
-		(SELECT COALESCE(SUM(total_extracted_weight), 0) FROM harvest_sessions),
-		(SELECT COALESCE(SUM(calculated_honey_weight), 0) FROM honey_harvests),
+		(SELECT COALESCE(SUM(session_lbs), 0) FROM (
+			SELECT COALESCE(NULLIF(hs.total_extracted_weight, 0),
+			                (SELECT COALESCE(SUM(hh.calculated_honey_weight), 0)
+			                 FROM honey_harvests hh WHERE hh.session_id = hs.id)) AS session_lbs
+			FROM harvest_sessions hs) sessions) +
+		(SELECT COALESCE(SUM(calculated_honey_weight), 0)
+		 FROM honey_harvests WHERE session_id IS NULL),
 		(SELECT COALESCE(SUM(total_amount), 0) FROM honey_sales),
 		(SELECT COALESCE(SUM(quantity), 0) FROM honey_sale_items)`).
-		Scan(&sessionTotal, &harvestTotal, &totalRevenue, &jarsSold)
+		Scan(&totalHarvested, &totalRevenue, &jarsSold)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
-	}
-
-	// Sessions hold the authoritative extracted weight when used; per-hive
-	// harvest entries are the fallback.
-	totalHarvested := harvestTotal
-	if sessionTotal > 0 {
-		totalHarvested = sessionTotal
 	}
 
 	lbsByKind := make(map[string]float64)

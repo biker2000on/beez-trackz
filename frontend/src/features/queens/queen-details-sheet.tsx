@@ -39,7 +39,12 @@ import { MarkingDot } from "./queen-node";
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
-  const date = new Date(value);
+  // Use the server-local calendar date (leading YYYY-MM-DD) so date-only
+  // fields don't shift a day across timezones.
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  const date = match
+    ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    : new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString(undefined, {
     year: "numeric",

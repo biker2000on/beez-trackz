@@ -188,6 +188,7 @@ export function useCreateJarSize() {
     }) => api.post<JarSize>("/jar-sizes", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jar-sizes"] });
+      queryClient.invalidateQueries({ queryKey: ["honey"] });
     },
   });
 }
@@ -199,6 +200,7 @@ export function useUpdateJarSize() {
       api.put<{ success: boolean }>(`/jar-sizes/${id}`, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jar-sizes"] });
+      queryClient.invalidateQueries({ queryKey: ["honey"] });
     },
   });
 }

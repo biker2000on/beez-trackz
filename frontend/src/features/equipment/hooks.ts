@@ -106,6 +106,8 @@ export function useDeployEquipment() {
   return useEquipmentMutation({
     mutationFn: (body: DeployBody) => api.post("/equipment/deployments", body),
     successMessage: "Equipment deployed",
+    // The hive detail Equipment tab caches deployments under the hives key.
+    invalidate: [["hives"]],
   });
 }
 
@@ -113,6 +115,7 @@ export function useRemoveDeployment() {
   return useEquipmentMutation({
     mutationFn: (id: string) => api.post(`/equipment/deployments/${id}/remove`),
     successMessage: "Returned to storage",
+    invalidate: [["hives"]],
   });
 }
 

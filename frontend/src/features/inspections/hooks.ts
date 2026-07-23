@@ -12,7 +12,8 @@ import { api } from "@/lib/api";
 
 export interface InspectionPest {
   type: string;
-  count?: number | null;
+  /** Free-text count/severity ("12", "low", "heavy"). */
+  count?: string | null;
 }
 
 export interface InspectionTreatment {

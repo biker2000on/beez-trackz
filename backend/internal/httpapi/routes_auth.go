@@ -120,7 +120,13 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "Setup already completed")
 		return
 	case row != nil:
-		// OIDC-bootstrapped instance gaining a password.
+		// OIDC-bootstrapped instance gaining a password. The instance already
+		// has an owner, so this MUST NOT be reachable anonymously — otherwise
+		// anyone could claim a password on a public SSO-only deployment.
+		if _, authErr := auth.SessionFromRequest(r, s.cfg.SessionSecret); authErr != nil {
+			writeError(w, http.StatusUnauthorized, "Sign in with SSO first to add a password")
+			return
+		}
 		_, err = s.pool.Exec(r.Context(),
 			`UPDATE user_settings SET password_hash = $1, display_name = $2 WHERE id = $3`,
 			string(hash), req.DisplayName, row.ID)

@@ -142,23 +142,41 @@ func (s *Server) handleAISettingsTest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	// The settings form leaves key fields blank when a key is already stored
+	// ("leave blank to keep it"), so an empty test request means "test the
+	// configured key", not "no key".
+	storedKey := func(pick func(*ai.AIProviderConfig) string) string {
+		cfg, err := ai.LoadConfig(ctx, s.pool)
+		if err != nil {
+			return ""
+		}
+		return pick(cfg)
+	}
 	switch req.Provider {
 	case "claude":
-		if req.APIKey == "" {
+		key := req.APIKey
+		if key == "" {
+			key = storedKey(func(c *ai.AIProviderConfig) string { return c.APIKeys.Anthropic })
+		}
+		if key == "" {
 			writeJSON(w, http.StatusOK, map[string]any{"error": "API key is required for Claude"})
 			return
 		}
-		if _, err := ai.NewClaude(req.APIKey, "").Chat(ctx, "Hi", ""); err != nil {
+		if _, err := ai.NewClaude(key, "").Chat(ctx, "Hi", ""); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"error": "Connection failed: " + err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Claude connection successful"})
 	case "gemini":
-		if req.APIKey == "" {
+		key := req.APIKey
+		if key == "" {
+			key = storedKey(func(c *ai.AIProviderConfig) string { return c.APIKeys.Google })
+		}
+		if key == "" {
 			writeJSON(w, http.StatusOK, map[string]any{"error": "API key is required for Gemini"})
 			return
 		}
-		if _, err := ai.NewGemini(req.APIKey, "").Chat(ctx, "Hi", ""); err != nil {
+		if _, err := ai.NewGemini(key, "").Chat(ctx, "Hi", ""); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"error": "Connection failed: " + err.Error()})
 			return
 		}

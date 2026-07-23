@@ -95,6 +95,7 @@ export function useCreateQueen() {
     mutationFn: (payload: QueenPayload) => api.post<Queen>("/queens", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["queens"] });
+      queryClient.invalidateQueries({ queryKey: ["hives"] });
     },
   });
 }
@@ -106,6 +107,7 @@ export function useUpdateQueen() {
       api.put<Queen>(`/queens/${id}`, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["queens"] });
+      queryClient.invalidateQueries({ queryKey: ["hives"] });
     },
   });
 }
@@ -117,6 +119,7 @@ export function useDeleteQueen() {
       api.delete<{ success: boolean }>(`/queens/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["queens"] });
+      queryClient.invalidateQueries({ queryKey: ["hives"] });
     },
   });
 }
@@ -154,6 +157,7 @@ export function useBulkUpdateQueens() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["queens"] });
+      queryClient.invalidateQueries({ queryKey: ["hives"] });
     },
   });
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { MonitorSmartphone, Moon, Sun } from "lucide-react";
 
@@ -11,9 +12,36 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  usePreferences,
+  useUpdatePreferences,
+  type Preferences,
+} from "@/features/settings/api";
 
 export function ThemeToggle() {
   const { setTheme } = useTheme();
+  const prefs = usePreferences();
+  const updatePrefs = useUpdatePreferences();
+  const queryClient = useQueryClient();
+
+  // Persist theme changes to the API too — the Settings page treats the API
+  // value as the source of truth on load, so a toggle that only touched
+  // next-themes would get silently reverted the next time Settings mounts.
+  function choose(theme: "light" | "dark" | "system") {
+    setTheme(theme);
+    const current = prefs.data;
+    if (!current || current.theme === theme) return;
+    queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+      ...current,
+      theme,
+    });
+    updatePrefs.mutate({
+      theme,
+      defaultApiaryId: current.defaultApiaryId,
+      dateFormat: current.dateFormat,
+      weightUnit: current.weightUnit,
+    });
+  }
 
   return (
     <DropdownMenu>
@@ -24,13 +52,13 @@ export function ThemeToggle() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => setTheme("light")}>
+        <DropdownMenuItem onClick={() => choose("light")}>
           <Sun /> Light
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("dark")}>
+        <DropdownMenuItem onClick={() => choose("dark")}>
           <Moon /> Dark
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("system")}>
+        <DropdownMenuItem onClick={() => choose("system")}>
           <MonitorSmartphone /> System
         </DropdownMenuItem>
       </DropdownMenuContent>

@@ -307,6 +307,31 @@ func (s *Server) handleCanvasAssignSlot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// A slot holds at most two hives, split by placement. Enforce here so
+	// concurrent tabs (or clients with stale occupancy) can't pile hives on
+	// top of each other. The client's stack-choice dialog picks the pair.
+	var occupants int
+	var placementTaken bool
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*),
+		       COALESCE(bool_or(placement = $1), false)
+		FROM hives
+		WHERE stand_id = $2 AND slot_row = $3 AND slot_col = $4 AND id <> $5
+		  AND status = 'active' AND NOT is_archived`,
+		placement, strings.TrimSpace(req.StandID), *req.SlotRow, *req.SlotCol, id).
+		Scan(&occupants, &placementTaken); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if occupants >= 2 {
+		writeError(w, http.StatusConflict, "That slot already holds two hives")
+		return
+	}
+	if occupants == 1 && (placement == "full" || placementTaken) {
+		writeError(w, http.StatusConflict, "That slot position is already taken — pick the other half")
+		return
+	}
+
 	now := time.Now()
 	if _, err := tx.Exec(ctx, `
 		UPDATE hive_location_history SET date_to = $1

@@ -193,7 +193,8 @@ export function InspectionFormDialog({
       temperament: rating(values.temperament),
       pests: values.pests.map((pest) => ({
         type: pest.type,
-        count: pest.count === "" ? null : Number(pest.count),
+        // The API stores count as free text ("12", "low", "heavy") — never a number.
+        count: pest.count.trim() === "" ? null : pest.count,
       })),
       treatments: values.treatments.map((treatment) => ({
         product: treatment.product,

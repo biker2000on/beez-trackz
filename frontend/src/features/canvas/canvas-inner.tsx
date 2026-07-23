@@ -138,13 +138,24 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     apiary.latitude != null && apiary.longitude != null;
 
   // Geometry — local reducer state, persisted via Save / autosave
-  const { stands, northArrow, dirty, dispatch, markSaved } = useLayoutState({
-    stands: initialLayout.stands ?? [],
-    northArrow: initialLayout.northArrow,
-  });
+  const { stands, northArrow, dirty, generation, dispatch, markSaved } =
+    useLayoutState({
+      stands: initialLayout.stands ?? [],
+      northArrow: initialLayout.northArrow,
+    });
 
-  // Viewport
-  const viewport = useViewport(stageRef, dimensions, initialLayout);
+  // Viewport — user zoom/pan is part of the saved layout blob, so viewport
+  // changes flow through the same dirty/autosave path as geometry edits.
+  const markViewportDirty = useCallback(
+    () => dispatch({ type: "markViewportDirty" }),
+    [dispatch],
+  );
+  const viewport = useViewport(
+    stageRef,
+    dimensions,
+    initialLayout,
+    markViewportDirty,
+  );
 
   // Derived occupancy — the hives table is the source of truth
   const { slotsByStand, unassigned } = useMemo(
@@ -244,6 +255,9 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   // ------------------------------------------------------------------
 
   const handleSave = useCallback(async () => {
+    // Capture the edit generation up front: if more edits land while the PUT
+    // is in flight, markSaved leaves dirty set and the autosave reruns.
+    const savedGeneration = generation;
     setSaving(true);
     try {
       await canvasApi.saveLayout({
@@ -253,13 +267,21 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         offsetX: viewport.offset.x,
         offsetY: viewport.offset.y,
       });
-      markSaved();
+      markSaved(savedGeneration);
     } catch {
       toast.error("Could not save the layout. Your changes are still local.");
     } finally {
       setSaving(false);
     }
-  }, [canvasApi, stands, northArrow, viewport.zoom, viewport.offset, markSaved]);
+  }, [
+    canvasApi,
+    generation,
+    stands,
+    northArrow,
+    viewport.zoom,
+    viewport.offset,
+    markSaved,
+  ]);
 
   const handleSaveRef = useRef(handleSave);
   useEffect(() => {
@@ -270,7 +292,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     if (!dirty) return;
     const timer = setTimeout(() => void handleSaveRef.current(), 1000);
     return () => clearTimeout(timer);
-  }, [dirty, stands, northArrow]);
+  }, [dirty, generation]);
 
   const saveState: SaveState = saving ? "saving" : dirty ? "dirty" : "saved";
 

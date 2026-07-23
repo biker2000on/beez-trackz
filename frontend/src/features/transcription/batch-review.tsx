@@ -47,13 +47,23 @@ interface BatchItem {
   fields: EditableInspection;
 }
 
-function toItems(parsed: ParsedResult | undefined): BatchItem[] {
-  return (parsed?.inspections ?? []).map((inspection) => ({
-    include: true,
-    hiveId: inspection.matchedHiveId ?? "",
-    hiveReference: inspection.hiveReference ?? null,
-    fields: toEditable(inspection),
-  }));
+function toItems(
+  parsed: ParsedResult | undefined,
+  hives: HiveSummary[],
+): BatchItem[] {
+  return (parsed?.inspections ?? []).map((inspection) => {
+    // The server matcher considers all non-archived hives, but the select
+    // only offers active ones — drop a preseed the user couldn't see or
+    // re-pick (e.g. a dead hive), so the card visibly asks for a hive.
+    const matched = inspection.matchedHiveId ?? "";
+    const selectable = hives.some((hive) => hive.id === matched);
+    return {
+      include: true,
+      hiveId: selectable ? matched : "",
+      hiveReference: inspection.hiveReference ?? null,
+      fields: toEditable(inspection),
+    };
+  });
 }
 
 interface BatchReviewPanelProps {
@@ -80,7 +90,7 @@ export function BatchReviewPanel({
     transcription.parseError,
   );
   const [items, setItems] = React.useState<BatchItem[]>(() =>
-    toItems(transcription.parsed),
+    toItems(transcription.parsed, hives),
   );
 
   const reparse = useMutation({
@@ -88,7 +98,7 @@ export function BatchReviewPanel({
     onSuccess: (result) => {
       setParsed(result);
       setParseError(undefined);
-      setItems(toItems(result));
+      setItems(toItems(result, hives));
       toast.success("Transcript re-parsed");
     },
     onError: (error) => toast.error(error.message),

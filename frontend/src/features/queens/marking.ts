@@ -29,7 +29,11 @@ export function markingColorForDate(
   date: string | null,
 ): (MarkingColor & { year: number }) | null {
   if (!date) return null;
-  const year = new Date(date).getFullYear();
+  // Take the year from the string's server-local date part — converting
+  // through the browser timezone can shift New Year's-adjacent dates.
+  const year = /^\d{4}/.test(date)
+    ? Number(date.slice(0, 4))
+    : new Date(date).getFullYear();
   if (Number.isNaN(year)) return null;
   return { ...markingColorForYear(year), year };
 }
