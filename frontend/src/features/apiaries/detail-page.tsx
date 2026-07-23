@@ -123,7 +123,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
         </div>
       </header>
 
-      <Tabs defaultValue="layout">
+      <Tabs defaultValue="layout" className="min-w-0">
         <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
           <TabsList className="h-11 min-w-max">
             <TabsTrigger value="layout" className="h-9">
@@ -144,7 +144,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
             </TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="layout">
+        <TabsContent value="layout" className="min-w-0">
           <ApiaryCanvas apiaryId={apiaryId} />
         </TabsContent>
         <TabsContent value="flora">

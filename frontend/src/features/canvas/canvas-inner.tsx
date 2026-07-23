@@ -31,6 +31,7 @@ import {
 } from "./lib/types";
 import { useCanvasApi, type ApiaryDetail } from "./lib/use-canvas-data";
 import { useLayoutState } from "./lib/use-layout-state";
+import { measureCanvasSurface } from "./lib/sizing";
 import { useViewport } from "./lib/use-viewport";
 import { NorthArrow } from "./stage/north-arrow";
 import { RotationGizmo } from "./stage/rotation-gizmo";
@@ -123,6 +124,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
@@ -207,18 +209,14 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   // ------------------------------------------------------------------
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const surface = surfaceRef.current;
+    if (!surface) return;
     const updateSize = () => {
-      const rect = container.getBoundingClientRect();
-      setDimensions({
-        width: Math.max(320, Math.floor(rect.width)),
-        height: Math.max(400, Math.floor(window.innerHeight - rect.top - 40)),
-      });
+      setDimensions(measureCanvasSurface(surface, window.innerHeight));
     };
     updateSize();
     const observer = new ResizeObserver(updateSize);
-    observer.observe(container);
+    observer.observe(surface);
     window.addEventListener("resize", updateSize);
     return () => {
       observer.disconnect();
@@ -914,7 +912,10 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   }[mode];
 
   return (
-    <div ref={containerRef} className="relative">
+    <div
+      ref={containerRef}
+      className="relative w-full min-w-0 max-w-full"
+    >
       <div className="absolute left-2 top-2 z-10">
         <CanvasToolbar
           editMode={editMode}
@@ -940,7 +941,10 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         />
       </div>
 
-      <div className="relative overflow-hidden rounded-lg border bg-muted/30">
+      <div
+        ref={surfaceRef}
+        className="relative w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-muted/30"
+      >
         <canvas
           ref={gridCanvasRef}
           className="pointer-events-none absolute inset-0"
