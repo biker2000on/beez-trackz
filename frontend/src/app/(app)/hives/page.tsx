@@ -1,14 +1,9 @@
 import type { Metadata } from "next";
 
-import { PagePlaceholder } from "@/components/shell/page-placeholder";
+import { HivesListPage } from "@/features/hives/list-page";
 
 export const metadata: Metadata = { title: "Hives" };
 
 export default function HivesPage() {
-  return (
-    <PagePlaceholder
-      title="Hives"
-      description="Browse, filter, and inspect your hives here soon."
-    />
-  );
+  return <HivesListPage />;
 }

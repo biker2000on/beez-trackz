@@ -1,0 +1,139 @@
+"use client";
+
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+
+import { api } from "@/lib/api";
+
+// --- types (mirror backend/internal/httpapi/routes_inspections.go) ---
+
+export interface InspectionPest {
+  type: string;
+  count?: number | null;
+}
+
+export interface InspectionTreatment {
+  product: string;
+  method?: string | null;
+}
+
+export interface Inspection {
+  id: string;
+  hiveId: string;
+  date: string;
+  inspectorName: string | null;
+  queenSeen: boolean | null;
+  queenHealth: string | null;
+  broodPattern: string | null;
+  storesHoney: number | null;
+  storesPollen: number | null;
+  temperament: number | null;
+  pests: InspectionPest[] | null;
+  treatments: InspectionTreatment[] | null;
+  notes: string | null;
+  sourceMedia: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecentInspection {
+  id: string;
+  hiveId: string;
+  date: string;
+  queenSeen: boolean | null;
+  notes: string | null;
+  hiveName: string;
+  apiaryName: string;
+}
+
+export interface InspectionPayload {
+  date: string;
+  inspectorName?: string | null;
+  queenSeen?: boolean | null;
+  queenHealth?: string | null;
+  broodPattern?: string | null;
+  storesHoney?: number | null;
+  storesPollen?: number | null;
+  temperament?: number | null;
+  pests?: InspectionPest[] | null;
+  treatments?: InspectionTreatment[] | null;
+  notes?: string | null;
+}
+
+// --- queries ---
+
+export function useHiveInspections(hiveId: string) {
+  return useQuery({
+    queryKey: ["hives", "detail", hiveId, "inspections"],
+    queryFn: () => api.get<Inspection[]>(`/hives/${hiveId}/inspections`),
+  });
+}
+
+export function useRecentInspections(limit = 5) {
+  return useQuery({
+    queryKey: ["inspections", "recent", limit],
+    queryFn: () =>
+      api.get<RecentInspection[]>("/inspections/recent", {
+        params: { limit },
+      }),
+  });
+}
+
+// --- mutations ---
+
+function useInvalidateInspections() {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ["hives"] });
+    void queryClient.invalidateQueries({ queryKey: ["inspections"] });
+  };
+}
+
+export function useCreateInspection() {
+  const invalidate = useInvalidateInspections();
+  return useMutation({
+    mutationFn: (payload: InspectionPayload & { hiveId: string }) =>
+      api.post<Inspection>("/inspections", payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateInspection() {
+  const invalidate = useInvalidateInspections();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...payload
+    }: InspectionPayload & { id: string }) =>
+      api.put<Inspection>(`/inspections/${id}`, payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteInspection() {
+  const invalidate = useInvalidateInspections();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.delete<{ success: boolean }>(`/inspections/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useBulkInspections() {
+  const invalidate = useInvalidateInspections();
+  return useMutation({
+    mutationFn: (payload: {
+      hiveIds: string[];
+      date: string;
+      notes?: string | null;
+    }) =>
+      api.post<{ success: boolean; count: number }>(
+        "/inspections/bulk",
+        payload,
+      ),
+    onSuccess: invalidate,
+  });
+}

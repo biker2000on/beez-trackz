@@ -1,14 +1,9 @@
 import type { Metadata } from "next";
 
-import { PagePlaceholder } from "@/components/shell/page-placeholder";
+import { RecommendationsView } from "@/features/recommendations/recommendations-view";
 
 export const metadata: Metadata = { title: "Recommendations" };
 
 export default function RecommendationsPage() {
-  return (
-    <PagePlaceholder
-      title="Recommendations"
-      description="Smart hive-care recommendations will appear here."
-    />
-  );
+  return <RecommendationsView />;
 }

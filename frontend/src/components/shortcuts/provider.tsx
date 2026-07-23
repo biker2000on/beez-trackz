@@ -2,9 +2,10 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Keyboard } from "lucide-react";
+import { ArrowRight, Command, Keyboard, Search } from "lucide-react";
 
 import { NAV_ITEMS } from "@/components/shell/nav-items";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 
 interface ShortcutEntry {
   key: string;
@@ -21,6 +23,7 @@ interface ShortcutEntry {
 
 interface ShortcutsContextValue {
   register: (entry: ShortcutEntry) => () => void;
+  openCommands: () => void;
 }
 
 const ShortcutsContext = React.createContext<ShortcutsContextValue | null>(
@@ -57,6 +60,9 @@ export function ShortcutsProvider({
 }) {
   const router = useRouter();
   const [helpOpen, setHelpOpen] = React.useState(false);
+  const [commandOpen, setCommandOpen] = React.useState(false);
+  const [commandQuery, setCommandQuery] = React.useState("");
+  const [activeCommand, setActiveCommand] = React.useState(0);
   const [entries, setEntries] = React.useState<Map<string, ShortcutEntry>>(
     () => new Map(),
   );
@@ -83,6 +89,15 @@ export function ShortcutsProvider({
       });
     };
   }, []);
+  const openCommands = React.useCallback(() => {
+    setActiveCommand(0);
+    setCommandQuery("");
+    setCommandOpen(true);
+  }, []);
+  const shortcutsContext = React.useMemo(
+    () => ({ register, openCommands }),
+    [register, openCommands],
+  );
 
   React.useEffect(() => {
     function clearGoto() {
@@ -95,6 +110,12 @@ export function ShortcutsProvider({
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        clearGoto();
+        setCommandOpen((open) => !open);
+        return;
+      }
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (isTypingTarget(event.target)) return;
       if (isDialogOpen()) return;
@@ -142,9 +163,35 @@ export function ShortcutsProvider({
   }, [router]);
 
   const pageShortcuts = Array.from(entries.values());
+  const commands = [
+    ...NAV_ITEMS.map((item) => ({
+      id: `nav:${item.href}`,
+      label: `Go to ${item.label}`,
+      hint: `g ${item.shortcutKey}`,
+      run: () => router.push(item.href),
+    })),
+    ...pageShortcuts.map((entry) => ({
+      id: `page:${entry.key}`,
+      label: entry.description,
+      hint: entry.key,
+      run: entry.handler,
+    })),
+  ];
+  const normalizedQuery = commandQuery.trim().toLowerCase();
+  const filteredCommands = normalizedQuery
+    ? commands.filter((command) =>
+        command.label.toLowerCase().includes(normalizedQuery),
+      )
+    : commands;
+
+  function runCommand(command: (typeof commands)[number]) {
+    setCommandOpen(false);
+    setCommandQuery("");
+    command.run();
+  }
 
   return (
-    <ShortcutsContext.Provider value={{ register }}>
+    <ShortcutsContext.Provider value={shortcutsContext}>
       {children}
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
         <DialogContent className="max-w-md">
@@ -154,7 +201,8 @@ export function ShortcutsProvider({
               Keyboard shortcuts
             </DialogTitle>
             <DialogDescription>
-              Press <Kbd>g</Kbd> then a letter to jump between pages.
+              Press <Kbd>g</Kbd> then a letter to jump between pages, or{" "}
+              <Kbd>Ctrl/⌘ K</Kbd> for the command palette.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -201,11 +249,92 @@ export function ShortcutsProvider({
               </h3>
               <ul className="grid gap-1.5">
                 <li className="flex items-center justify-between text-sm">
+                  <span>Open command palette</span>
+                  <Kbd>Ctrl/⌘ K</Kbd>
+                </li>
+                <li className="flex items-center justify-between text-sm">
                   <span>Show this help</span>
                   <Kbd>?</Kbd>
                 </li>
               </ul>
             </section>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={commandOpen}
+        onOpenChange={(open) => {
+          setCommandOpen(open);
+          setActiveCommand(0);
+          if (!open) setCommandQuery("");
+        }}
+      >
+        <DialogContent className="top-[18%] max-w-lg translate-y-0 gap-2 p-3">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Command palette</DialogTitle>
+            <DialogDescription>
+              Search navigation and actions available on this page.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2 border-b px-1 pb-3">
+            <Search className="size-4 shrink-0 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={commandQuery}
+              onChange={(event) => {
+                setCommandQuery(event.target.value);
+                setActiveCommand(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setActiveCommand((current) =>
+                    Math.min(current + 1, filteredCommands.length - 1),
+                  );
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setActiveCommand((current) => Math.max(current - 1, 0));
+                } else if (
+                  event.key === "Enter" &&
+                  filteredCommands[activeCommand]
+                ) {
+                  event.preventDefault();
+                  runCommand(filteredCommands[activeCommand]);
+                }
+              }}
+              placeholder="Type a page or action…"
+              aria-label="Search commands"
+              className="h-10 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+            />
+            <Kbd>Esc</Kbd>
+          </div>
+          <div className="max-h-80 overflow-y-auto py-1">
+            {filteredCommands.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                No matching commands
+              </p>
+            ) : (
+              <ul className="grid gap-1">
+                {filteredCommands.map((command, index) => (
+                  <li key={command.id}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={`h-11 w-full justify-start px-3 ${
+                        index === activeCommand ? "bg-secondary" : ""
+                      }`}
+                      onMouseEnter={() => setActiveCommand(index)}
+                      onClick={() => runCommand(command)}
+                    >
+                      <Command className="size-4 text-muted-foreground" />
+                      <span className="flex-1 text-left">{command.label}</span>
+                      <Kbd>{command.hint}</Kbd>
+                      <ArrowRight className="size-3 text-muted-foreground" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -246,4 +375,24 @@ export function useShortcut(
       handler: () => handlerRef.current(),
     });
   }, [context, key, description]);
+}
+
+export function CommandPaletteButton() {
+  const context = React.useContext(ShortcutsContext);
+  if (!context) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className="w-full justify-start text-muted-foreground"
+      onClick={context.openCommands}
+    >
+      <Search />
+      Quick actions
+      <span className="ml-auto">
+        <Kbd>Ctrl/⌘ K</Kbd>
+      </span>
+    </Button>
+  );
 }
