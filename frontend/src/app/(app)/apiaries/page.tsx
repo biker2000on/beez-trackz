@@ -1,14 +1,9 @@
 import type { Metadata } from "next";
 
-import { PagePlaceholder } from "@/components/shell/page-placeholder";
+import { ApiariesListPage } from "@/features/apiaries/list-page";
 
 export const metadata: Metadata = { title: "Apiaries" };
 
 export default function ApiariesPage() {
-  return (
-    <PagePlaceholder
-      title="Apiaries"
-      description="Manage your bee yards, layouts, and blooms here soon."
-    />
-  );
+  return <ApiariesListPage />;
 }

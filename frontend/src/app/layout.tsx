@@ -5,6 +5,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/lib/query";
 import { Toaster } from "@/components/ui/toaster";
+import { PwaRegister } from "@/components/pwa-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,6 +32,9 @@ export const metadata: Metadata = {
   },
   formatDetection: {
     telephone: false,
+  },
+  icons: {
+    apple: "/apple-touch-icon.png",
   },
 };
 
@@ -65,6 +69,7 @@ export default function RootLayout({
           <QueryProvider>
             {children}
             <Toaster position="top-right" />
+            <PwaRegister />
           </QueryProvider>
         </ThemeProvider>
       </body>

@@ -8,6 +8,7 @@ import { Logo } from "@/components/logo";
 import { NAV_ITEMS } from "@/components/shell/nav-items";
 import { LogoutButton } from "@/components/shell/logout-button";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
+import { CommandPaletteButton } from "@/components/shortcuts/provider";
 import { Separator } from "@/components/ui/separator";
 
 export function Sidebar() {
@@ -53,6 +54,7 @@ export function Sidebar() {
       </nav>
       <div className="px-3 pb-4">
         <Separator className="mb-3" />
+        <CommandPaletteButton />
         <LogoutButton />
       </div>
     </aside>
