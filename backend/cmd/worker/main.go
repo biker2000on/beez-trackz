@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hibiken/asynq"
+
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/jobs"
@@ -45,9 +47,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	redisOpt, err := asynq.ParseRedisURI(cfg.RedisURL)
+	if err != nil {
+		slog.Error("redis", "err", err)
+		os.Exit(1)
+	}
+	scheduler := asynq.NewScheduler(redisOpt, nil)
+	if err := jobs.RegisterPeriodic(scheduler); err != nil {
+		slog.Error("scheduler", "err", err)
+		os.Exit(1)
+	}
+
 	go func() {
 		<-ctx.Done()
+		scheduler.Shutdown()
 		srv.Shutdown()
+	}()
+
+	go func() {
+		if err := scheduler.Run(); err != nil {
+			slog.Error("scheduler run", "err", err)
+		}
 	}()
 
 	slog.Info("worker started")
