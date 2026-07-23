@@ -58,8 +58,8 @@ func inspectionIsFKViolation(err error) bool {
 }
 
 type inspectionPest struct {
-	Type  string `json:"type"`
-	Count *int   `json:"count,omitempty"`
+	Type  string  `json:"type"`
+	Count *string `json:"count,omitempty"`
 }
 
 type inspectionTreatment struct {
