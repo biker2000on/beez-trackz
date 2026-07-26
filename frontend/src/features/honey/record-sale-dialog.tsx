@@ -191,7 +191,15 @@ export function RecordSaleDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label>Channel</Label>
-              <Select value={form.watch("channel")} onValueChange={(value) => form.setValue("channel", value)}>
+              <Select
+                value={form.watch("channel")}
+                onValueChange={(value) => {
+                  form.setValue("channel", value);
+                  if (value !== "wholesale") {
+                    form.setValue("wholesalePriceListId", "none");
+                  }
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {["direct", "farm_stand", "farmers_market", "wholesale", "pickup", "online", "gift", "consignment"].map((value) => <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>)}

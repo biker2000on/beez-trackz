@@ -13,7 +13,6 @@ type StoryPhoto = {
 };
 
 type HoneyStory = {
-  id: string;
   slug: string;
   name: string;
   lotCode: string;
@@ -27,7 +26,6 @@ type HoneyStory = {
   photos: StoryPhoto[];
   testingData?: Record<string, unknown> | null;
   bottlingRuns: {
-    id: string;
     bottledDate: string;
     jarSizeLabel?: string | null;
     quantity: number;

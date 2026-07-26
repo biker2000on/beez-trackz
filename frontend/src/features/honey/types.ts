@@ -67,12 +67,12 @@ export interface HoneySale {
   harvestLotCode: string | null;
   customerName: string | null;
   location: string | null;
-  channel: string;
-  paymentMethod: string;
+  channel: "farm_stand" | "farmers_market" | "wholesale" | "pickup" | "online" | "gift" | "consignment" | "direct";
+  paymentMethod: "cash" | "card" | "check" | "venmo" | "paypal" | "invoice" | "other";
   totalAmount: number;
   discountAmount: number;
   amountPaid: number;
-  orderStatus: string;
+  orderStatus: "draft" | "pending" | "paid" | "fulfilled" | "cancelled";
   orderNumber: string | null;
   dueDate: string | null;
   notes: string | null;

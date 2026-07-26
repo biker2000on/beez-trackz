@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
@@ -44,6 +44,7 @@ export function SingleReviewPanel({
   hiveId,
 }: SingleReviewPanelProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [parsed, setParsed] = React.useState<ParsedResult | undefined>(
     transcription.parsed,
   );
@@ -72,6 +73,9 @@ export function SingleReviewPanel({
       ]),
     onSuccess: () => {
       toast.success("Inspection created");
+      void queryClient.invalidateQueries({ queryKey: ["hives"] });
+      void queryClient.invalidateQueries({ queryKey: ["inspections"] });
+      void queryClient.invalidateQueries({ queryKey: ["analytics"] });
       router.push(`/hives/${hiveId}`);
     },
     onError: (error) => toast.error(error.message),

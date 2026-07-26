@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -56,6 +58,18 @@ func commerceSlug(value string) string {
 		return uuid.NewString()
 	}
 	return slug
+}
+
+func commerceOptionalHTTPURL(value *string) (*string, error) {
+	trimmed := honeyTrimPtr(value)
+	if trimmed == nil {
+		return nil, nil
+	}
+	parsed, err := url.ParseRequestURI(*trimmed)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, fmt.Errorf("URL must use http or https")
+	}
+	return trimmed, nil
 }
 
 type harvestLotPayload struct {
@@ -257,6 +271,11 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 	if req.IsPublic != nil {
 		public = *req.IsPublic
 	}
+	reorderURL, err := commerceOptionalHTTPURL(req.ReorderURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "reorderUrl must be an http or https URL")
+		return
+	}
 	slug := commerceSlug(req.PublicSlug)
 	if strings.TrimSpace(req.PublicSlug) == "" {
 		slug = commerceSlug(req.LotCode)
@@ -278,7 +297,7 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		honeyTrimPtr(req.ReorderURL), public).Scan(&id)
+		reorderURL, public).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "lot code or public slug already exists")
 		return
@@ -329,6 +348,11 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.IsPublic != nil {
 		public = *req.IsPublic
 	}
+	reorderURL, err := commerceOptionalHTTPURL(req.ReorderURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "reorderUrl must be an http or https URL")
+		return
+	}
 	slug := commerceSlug(req.PublicSlug)
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
@@ -345,7 +369,7 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		honeyTrimPtr(req.ReorderURL), public, id)
+		reorderURL, public, id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "lot code or public slug already exists")
 		return
@@ -525,17 +549,25 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 			"caption": photo["caption"],
 		})
 	}
+	publicBottlingRuns := make([]map[string]any, 0, len(item.BottlingRuns))
+	for _, run := range item.BottlingRuns {
+		publicBottlingRuns = append(publicBottlingRuns, map[string]any{
+			"bottledDate":  run["bottledDate"],
+			"jarSizeLabel": run["jarSizeLabel"],
+			"quantity":     run["quantity"],
+		})
+	}
 	// Deliberately curated response: no hive IDs, apiary IDs, coordinates,
 	// inspection data, expenses, or customer data can cross this boundary.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id": item.ID, "slug": item.PublicSlug, "name": name,
+		"slug": item.PublicSlug, "name": name,
 		"lotCode": item.LotCode, "season": item.Season,
 		"description": item.BloomNotes, "floralSource": item.HoneyVariety,
 		"apiaryRegion": item.ApiaryRegion, "sourceApiaries": item.SourceApiaries,
 		"harvestDate": item.ExtractionDate, "harvestedPounds": item.HoneyWeightLbs,
 		"beekeeperNotes": item.BeekeeperStory, "testingData": item.TestingData,
 		"reorderUrl": item.ReorderURL, "photos": publicPhotos,
-		"bottlingRuns": item.BottlingRuns,
+		"bottlingRuns": publicBottlingRuns,
 	})
 }
 
@@ -575,19 +607,27 @@ func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Reques
 		Email      string  `json:"email"`
 		ReferredBy *string `json:"referredBy"`
 	}
-	if err := decodeJSON(r, &req); err != nil ||
-		!strings.Contains(strings.TrimSpace(req.Email), "@") {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "a valid email is required")
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email || len(email) > 254 {
+		writeError(w, http.StatusBadRequest, "a valid email is required")
+		return
+	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		name = email
 	}
+	if len(name) > 200 || (req.ReferredBy != nil && len(strings.TrimSpace(*req.ReferredBy)) > 200) {
+		writeError(w, http.StatusBadRequest, "name or referral is too long")
+		return
+	}
 	var id uuid.UUID
 	referral := strings.ToUpper(uuid.NewString()[:8])
-	err := s.pool.QueryRow(r.Context(), `
+	err = s.pool.QueryRow(r.Context(), `
 		INSERT INTO customers (name,email,email_opt_in,referral_code,referred_by)
 		VALUES ($1,$2,true,$3,$4)
 		ON CONFLICT (lower(email)) WHERE email IS NOT NULL DO UPDATE SET

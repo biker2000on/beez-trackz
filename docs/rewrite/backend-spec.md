@@ -85,9 +85,14 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
   optional loss movement (reason default "jarring loss").
 - recordBulkMovement{kind bulk_use|loss, amountLbs>0, reason?}.
 - recordGiveAway{lines}; adjustJarCounts{lines[{jarSizeId,delta≠0}], reason default "manual correction"}.
-- recordSale{date, location?, customerName?, lines[{jarSizeId,quantity,unitPrice}], notes?}:
-  validate availability per size against inventory (error `Not enough {label}: need X, have Y`);
-  totalAmount = Σ qty*unitPrice; transaction insert sale + items. deleteSale cascades.
+- recordSale supports customer/lot, channel, payment, discounts, order state,
+  due date, and wholesale pricing. It aggregates duplicate jar-size lines,
+  rejects negative prices, locks affected jar sizes before checking inventory,
+  and inserts the sale + items in one transaction. A selected wholesale list
+  is authoritative for unit prices and minimum-order validation.
+- updateSale advances draft/pending orders to paid or fulfilled and records
+  payment without recreating line items. deleteSale cascades and returns jars
+  to derived inventory.
 - getJarInventory per active size: jarred=Σ jarring qty, givenAway, adjusted, sold(Σ sale items);
   onHand = jarred + adjusted − sold − givenAway.
 - getHoneyOverview: totalHarvestedLbs = Σ session extracted if >0 else Σ per-hive harvests;
@@ -122,7 +127,7 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
   Recording a bottling run also writes the corresponding jarring movement.
 - Public Honey Story JSON, QR images, and curated lot photos are readable
   without a session. Exact coordinates, raw inspections, and operational IDs
-  are not exposed.
+  or bottling notes are not exposed. Reorder links accept only HTTP(S) URLs.
 - Sales carry customer, harvest lot, channel, payment, discount, amount paid,
   status, order number, due date, and optional wholesale price list. Draft and
   pending orders reserve inventory; cancelled orders do not.

@@ -96,6 +96,7 @@ function useInvalidateInspections() {
   return () => {
     void queryClient.invalidateQueries({ queryKey: ["hives"] });
     void queryClient.invalidateQueries({ queryKey: ["inspections"] });
+    void queryClient.invalidateQueries({ queryKey: ["analytics"] });
   };
 }
 

@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { FileText, Trash2 } from "lucide-react";
+import { Check, FileText, PackageCheck, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -29,12 +29,13 @@ import {
 } from "@/components/ui/table";
 
 import { formatDate, formatMoney } from "./format";
-import { useDeleteSale, useHoneySales } from "./hooks";
+import { useDeleteSale, useHoneySales, useUpdateSale } from "./hooks";
 import type { HoneySale } from "./types";
 
 export function SalesTab() {
   const sales = useHoneySales();
   const deleteSale = useDeleteSale();
+  const updateSale = useUpdateSale();
   const [confirmSale, setConfirmSale] = React.useState<HoneySale | null>(null);
 
   if (sales.isPending) {
@@ -133,6 +134,43 @@ export function SalesTab() {
                 {formatMoney(sale.totalAmount)}
               </TableCell>
               <TableCell className="align-top text-right">
+                {sale.amountPaid < sale.totalAmount && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Mark order paid"
+                    disabled={updateSale.isPending}
+                    onClick={() =>
+                      updateSale.mutate({
+                        id: sale.id,
+                        orderStatus: "paid",
+                        amountPaid: sale.totalAmount,
+                        paymentMethod: sale.paymentMethod,
+                      })
+                    }
+                  >
+                    <Check className="size-4" />
+                  </Button>
+                )}
+                {sale.amountPaid >= sale.totalAmount && sale.orderStatus !== "fulfilled" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Mark order fulfilled"
+                    disabled={updateSale.isPending}
+                    onClick={() =>
+                      updateSale.mutate({
+                        id: sale.id,
+                        orderStatus: "fulfilled",
+                        amountPaid: sale.totalAmount,
+                      })
+                    }
+                  >
+                    <PackageCheck className="size-4" />
+                  </Button>
+                )}
                 <Button type="button" variant="ghost" size="icon-sm" asChild>
                   <Link
                     href={`/harvest/sales/${sale.id}`}

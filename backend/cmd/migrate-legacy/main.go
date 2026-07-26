@@ -251,6 +251,14 @@ func importFilesystemPhotos(ctx context.Context, dst *pgx.Conn, dataDir string) 
 		if entry.IsDir() {
 			return nil
 		}
+		extension := filepath.Ext(path)
+		base := strings.TrimSuffix(path, extension)
+		if strings.HasSuffix(base, "_thumb") || strings.HasSuffix(base, "_medium") {
+			// Generated variants belong to the original immediately beside
+			// them; importing each variant as a separate photo duplicates the
+			// gallery and loses the original/thumbnail relationship.
+			return nil
+		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
@@ -288,11 +296,26 @@ func importFilesystemPhotos(ctx context.Context, dst *pgx.Conn, dataDir string) 
 			return err
 		}
 		key := "photos/" + filepath.ToSlash(rel)
+		var thumbnailKey, mediumKey *string
+		for suffix, destination := range map[string]**string{
+			"_thumb": &thumbnailKey, "_medium": &mediumKey,
+		} {
+			variantPath := base + suffix + extension
+			if variantInfo, err := os.Stat(variantPath); err == nil && !variantInfo.IsDir() {
+				variantRel, err := filepath.Rel(root, variantPath)
+				if err != nil {
+					return err
+				}
+				variantKey := "photos/" + filepath.ToSlash(variantRel)
+				*destination = &variantKey
+			}
+		}
 		tag, err := dst.Exec(ctx, `
-			INSERT INTO photos (owner_type, owner_id, original_key, taken_date, created_at)
-			SELECT $1,$2,$3,$4,$4
+			INSERT INTO photos
+				(owner_type, owner_id, original_key, thumbnail_key, medium_key, taken_date, created_at)
+			SELECT $1,$2,$3,$4,$5,$6,$6
 			WHERE NOT EXISTS (SELECT 1 FROM photos WHERE original_key=$3)`,
-			ownerType, ownerID, key, info.ModTime())
+			ownerType, ownerID, key, thumbnailKey, mediumKey, info.ModTime())
 		if err != nil {
 			return err
 		}

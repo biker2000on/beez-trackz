@@ -9,12 +9,13 @@ Status labels below reflect the roadmap delivery completed on 2026-07-26.
 ## High value for how the apiary actually runs
 
 ### Photo migration + inspection photos on the timeline
-**Shipped 2026-07-26.**
+**Importer shipped 2026-07-26; production backfill awaits the missing source files.**
 
-The legacy filesystem photos were never imported into MinIO (the `photos`
-table is empty; originals still live in the old data volume on TrueNAS, with a
-pg_dump backup alongside). Import them with an adapted `cmd/migrate-legacy`,
-then render photos inline on inspection cards for a visual hive history.
+The media-only legacy importer now recovers photo metadata and filesystem-only
+originals into MinIO, and inspection photos render inline in the hive history.
+The expected TrueNAS source directory was empty during release verification,
+so the production photo backfill can run only after those originals are
+located or restored from another backup.
 
 ### Voice-first everything
 **Shipped 2026-07-26.**

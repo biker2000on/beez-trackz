@@ -221,6 +221,7 @@ export function useRecordSale() {
     mutationFn: (body: SaleBody) => api.post("/honey/sales", body),
     successMessage: "Sale recorded",
     silentError: true,
+    invalidate: [["commerce"]],
   });
 }
 
@@ -228,6 +229,24 @@ export function useDeleteSale() {
   return useHoneyMutation({
     mutationFn: (id: string) => api.delete(`/honey/sales/${id}`),
     successMessage: "Sale deleted",
+    invalidate: [["commerce"]],
+  });
+}
+
+export function useUpdateSale() {
+  return useHoneyMutation({
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string;
+      orderStatus: "draft" | "pending" | "paid" | "fulfilled";
+      amountPaid?: number;
+      paymentMethod?: "cash" | "card" | "check" | "venmo" | "paypal" | "invoice" | "other";
+      dueDate?: string;
+    }) => api.patch(`/honey/sales/${id}`, body),
+    successMessage: "Order updated",
+    invalidate: [["commerce"]],
   });
 }
 
