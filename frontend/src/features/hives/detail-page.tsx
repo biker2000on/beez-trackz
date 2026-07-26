@@ -58,6 +58,8 @@ import { InspectionFormDialog } from "@/features/inspections/inspection-form-dia
 import { useHiveInspections } from "@/features/inspections/hooks";
 import { PhotoSection } from "@/features/photos/photo-gallery";
 import { PhotoUpload } from "@/features/photos/photo-upload";
+import { HiveTimeline } from "@/features/operations/hive-timeline";
+import { VarroaPanel } from "@/features/operations/varroa-panel";
 import { EquipmentTab } from "./equipment-tab";
 import { HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
@@ -235,9 +237,11 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         )}
       </div>
 
-      <Tabs defaultValue="inspections">
+      <Tabs defaultValue="timeline">
         <TabsList className="flex w-full flex-wrap justify-start overflow-x-auto">
+          <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="inspections">Inspections</TabsTrigger>
+          <TabsTrigger value="varroa">Varroa</TabsTrigger>
           <TabsTrigger value="equipment">Equipment</TabsTrigger>
           <TabsTrigger value="photos">Photos</TabsTrigger>
           <TabsTrigger value="feedings">Feedings</TabsTrigger>
@@ -245,8 +249,14 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
           <TabsTrigger value="splits">Splits</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
+        <TabsContent value="timeline" className="pt-4">
+          <HiveTimeline hiveId={data.id} />
+        </TabsContent>
         <TabsContent value="inspections" className="pt-4">
           <InspectionsTab hiveId={data.id} />
+        </TabsContent>
+        <TabsContent value="varroa" className="pt-4">
+          <VarroaPanel hiveId={data.id} />
         </TabsContent>
         <TabsContent value="equipment" className="pt-4">
           <EquipmentTab hiveId={data.id} />

@@ -326,6 +326,10 @@ func (s *Server) handlePhotoFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.servePhotoKey(w, r, key)
+}
+
+func (s *Server) servePhotoKey(w http.ResponseWriter, r *http.Request, key string) {
 	ctx := r.Context()
 	info, err := s.store.Stat(ctx, key)
 	if err != nil {

@@ -41,6 +41,9 @@ function JarSizeRow({ jar }: { jar: JarSize }) {
   const [label, setLabel] = React.useState(jar.label);
   const [honeyOz, setHoneyOz] = React.useState(numberToInput(jar.honeyOz));
   const [price, setPrice] = React.useState(numberToInput(jar.defaultPrice));
+  const [lowStockThreshold, setLowStockThreshold] = React.useState(
+    String(jar.lowStockThreshold),
+  );
 
   // Re-sync the inline draft when the server row changes underneath it
   // (render-time state adjustment keyed on the previous server values).
@@ -48,26 +51,31 @@ function JarSizeRow({ jar }: { jar: JarSize }) {
     label: jar.label,
     honeyOz: jar.honeyOz,
     defaultPrice: jar.defaultPrice,
+    lowStockThreshold: jar.lowStockThreshold,
   });
   if (
     prevServer.label !== jar.label ||
     prevServer.honeyOz !== jar.honeyOz ||
-    prevServer.defaultPrice !== jar.defaultPrice
+    prevServer.defaultPrice !== jar.defaultPrice ||
+    prevServer.lowStockThreshold !== jar.lowStockThreshold
   ) {
     setPrevServer({
       label: jar.label,
       honeyOz: jar.honeyOz,
       defaultPrice: jar.defaultPrice,
+      lowStockThreshold: jar.lowStockThreshold,
     });
     setLabel(jar.label);
     setHoneyOz(numberToInput(jar.honeyOz));
     setPrice(numberToInput(jar.defaultPrice));
+    setLowStockThreshold(String(jar.lowStockThreshold));
   }
 
   const dirty =
     label.trim() !== jar.label ||
     parseNumber(honeyOz) !== jar.honeyOz ||
-    parseNumber(price) !== jar.defaultPrice;
+    parseNumber(price) !== jar.defaultPrice ||
+    Number(lowStockThreshold) !== jar.lowStockThreshold;
 
   async function handleSave() {
     if (label.trim() === "") {
@@ -80,6 +88,7 @@ function JarSizeRow({ jar }: { jar: JarSize }) {
         label: label.trim(),
         honeyOz: parseNumber(honeyOz),
         defaultPrice: parseNumber(price),
+        lowStockThreshold: Math.max(0, Math.floor(Number(lowStockThreshold) || 0)),
       });
       toast.success(`Saved "${label.trim()}"`);
     } catch (error) {
@@ -134,6 +143,18 @@ function JarSizeRow({ jar }: { jar: JarSize }) {
           onChange={(e) => setPrice(e.target.value)}
         />
       </TableCell>
+      <TableCell>
+        <Input
+          aria-label={`Low stock threshold for ${jar.label}`}
+          type="number"
+          inputMode="numeric"
+          min={0}
+          step={1}
+          className="w-24"
+          value={lowStockThreshold}
+          onChange={(e) => setLowStockThreshold(e.target.value)}
+        />
+      </TableCell>
       <TableCell className="text-center">
         <Checkbox
           aria-label={`${jar.label} active`}
@@ -163,6 +184,7 @@ export function JarSizesSection() {
   const [newLabel, setNewLabel] = React.useState("");
   const [newHoneyOz, setNewHoneyOz] = React.useState("");
   const [newPrice, setNewPrice] = React.useState("");
+  const [newLowStockThreshold, setNewLowStockThreshold] = React.useState("6");
 
   async function handleAdd() {
     if (newLabel.trim() === "") {
@@ -174,11 +196,13 @@ export function JarSizesSection() {
         label: newLabel.trim(),
         honeyOz: parseNumber(newHoneyOz),
         defaultPrice: parseNumber(newPrice),
+        lowStockThreshold: Math.max(0, Math.floor(Number(newLowStockThreshold) || 0)),
       });
       toast.success(`Added "${newLabel.trim()}"`);
       setNewLabel("");
       setNewHoneyOz("");
       setNewPrice("");
+      setNewLowStockThreshold("6");
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not add jar size",
@@ -217,6 +241,7 @@ export function JarSizesSection() {
           <TableHead>Label</TableHead>
           <TableHead>Honey (oz)</TableHead>
           <TableHead>Default price ($)</TableHead>
+          <TableHead>Low-stock alert</TableHead>
           <TableHead className="text-center">Active</TableHead>
           <TableHead className="w-12" />
         </TableRow>
@@ -258,6 +283,19 @@ export function JarSizesSection() {
               placeholder="$"
               value={newPrice}
               onChange={(e) => setNewPrice(e.target.value)}
+            />
+          </TableCell>
+          <TableCell>
+            <Input
+              aria-label="New jar size low stock threshold"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              className="w-24"
+              placeholder="6"
+              value={newLowStockThreshold}
+              onChange={(e) => setNewLowStockThreshold(e.target.value)}
             />
           </TableCell>
           <TableCell />

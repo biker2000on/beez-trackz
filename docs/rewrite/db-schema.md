@@ -66,11 +66,15 @@ super_weight_before double NOT NULL, super_weight_after double NOT NULL,
 calculated_honey_weight double NOT NULL, notes, created_at.
 
 ### honey_sales
-id, date NOT NULL, customer_name, location, total_amount double NOT NULL, notes, created_at.
+id, date NOT NULL, customer_id → customers, harvest_lot_id → harvest_lots,
+customer_name, location, channel, payment_method, total_amount double NOT NULL,
+discount_amount, amount_paid, order_status, order_number (unique when present),
+due_date, wholesale_price_list_id → wholesale_price_lists, notes, created_at.
 
 ### jar_sizes
 id, label text NOT NULL UNIQUE, honey_oz double, default_price double,
-sort_order int NOT NULL DEFAULT 0, is_active bool NOT NULL DEFAULT true, created_at.
+sort_order int NOT NULL DEFAULT 0, is_active bool NOT NULL DEFAULT true,
+low_stock_threshold int NOT NULL DEFAULT 6, created_at.
 
 ### honey_movements (append-only ledger)
 id, date NOT NULL, kind honey_movement_kind NOT NULL, amount_lbs double,
@@ -82,6 +86,32 @@ jar_size_id + quantity.
 ### honey_sale_items
 id, sale_id → honey_sales ON DELETE CASCADE NOT NULL, jar_size_id → jar_sizes NOT NULL,
 quantity int NOT NULL, unit_price double NOT NULL. (No timestamps.)
+
+### mite_counts (append-only)
+id, hive_id → hives, inspection_id → inspections (optional), date, method,
+mites_count, sample_size, generated mites_per_100, notes, created_at. One count
+per inspection/method.
+
+### treatment_events and queen_events (append-only)
+Treatment events store hive/inspection, applied and removed dates, product,
+method, and notes. Queen events store hive/queen, event date, constrained
+event type, and notes. Both feed the unified hive timeline.
+
+### harvest_lots, bottling_runs, and jar_serials
+Harvest lots store unique lot code/public slug, extraction date and weight,
+variety, season, approximate region, bloom/story/testing data, reorder URL,
+and public flag. Join tables connect source `honey_harvests` and curated
+`photos`. Bottling runs connect a lot to a jar size, date, quantity, honey
+weight, and optional globally unique jar serials.
+
+### expenses
+Expense date, constrained category, description, amount, optional apiary,
+hive, harvest lot, season, vendor, quantity/unit, notes, and created_at.
+
+### customers and wholesale pricing
+Customers store contact fields, explicit email opt-in, referral code, and
+referral source; email uniqueness is case-insensitive. Wholesale price lists
+store a minimum order and per-jar-size prices.
 
 ### equipment_types
 id, name text NOT NULL UNIQUE, category equipment_category NOT NULL, frames_per_box int,

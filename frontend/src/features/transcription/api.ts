@@ -26,6 +26,26 @@ export interface Treatment {
   method?: string | null;
 }
 
+export interface Feeding {
+  type: "sugar_syrup_1to1" | "sugar_syrup_2to1" | "dry_sugar" | "pollen_patty" | "fondant" | "other";
+  quantity: number;
+  quantityUnit: "lbs" | "oz" | "quarts" | "gallons";
+  feederType?: "entrance" | "top" | "frame" | "baggie" | "bucket" | "open" | "other" | null;
+  notes?: string | null;
+}
+
+export interface QueenEvent {
+  eventType: "observed" | "introduced" | "superseded" | "missing" | "dead" | "requeened";
+  notes?: string | null;
+}
+
+export interface ParsedMiteCount {
+  method: "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
+  mitesCount: number;
+  sampleSize?: number | null;
+  notes?: string | null;
+}
+
 /** One parsed inspection, annotated with a fuzzy hive match in batch mode. */
 export interface ParsedInspection {
   hiveReference?: string | null;
@@ -37,6 +57,9 @@ export interface ParsedInspection {
   temperament?: number | null;
   pests?: Pest[] | null;
   treatments?: Treatment[] | null;
+  feedings?: Feeding[] | null;
+  queenEvents?: QueenEvent[] | null;
+  miteCounts?: ParsedMiteCount[] | null;
   notes?: string | null;
   matchedHiveId?: string | null;
 }
@@ -71,6 +94,10 @@ export interface ConfirmInspection extends ParsedInspection {
 export interface ConfirmResult {
   success: boolean;
   inspectionIds: string[];
+  feedingIds: string[];
+  treatmentEventIds: string[];
+  queenEventIds: string[];
+  miteCountIds: string[];
 }
 
 /** Subset of the hive list/detail response used by this feature. */

@@ -61,6 +61,12 @@ export interface InspectionPayload {
   temperament?: number | null;
   pests?: InspectionPest[] | null;
   treatments?: InspectionTreatment[] | null;
+  miteCounts?: {
+    method: "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
+    mitesCount: number;
+    sampleSize?: number;
+    notes?: string;
+  }[];
   notes?: string | null;
 }
 

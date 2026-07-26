@@ -3,6 +3,8 @@ name: Build and publish images
 on:
   push:
     branches: [main, rewrite/go-stack]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -10,7 +12,49 @@ permissions:
   packages: write
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: beez_trackz_test
+          POSTGRES_USER: beez
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U beez -d beez_trackz_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test API and migrations
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgres://beez@localhost:5432/beez_trackz_test?sslmode=disable
+        run: go test ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install web dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Lint and build web
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm run build
+
   api:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +75,7 @@ jobs:
           cache-to: type=gha,scope=api,mode=max
 
   web:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

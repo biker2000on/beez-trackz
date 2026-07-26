@@ -3,7 +3,8 @@
 /** Sales tab: sales table with line items and per-sale delete. */
 
 import * as React from "react";
-import { Trash2 } from "lucide-react";
+import Link from "next/link";
+import { FileText, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -16,6 +17,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -62,6 +64,7 @@ export function SalesTab() {
             <TableHead>Items</TableHead>
             <TableHead>Location</TableHead>
             <TableHead>Customer</TableHead>
+            <TableHead>Order</TableHead>
             <TableHead className="text-right">Total</TableHead>
             <TableHead />
           </TableRow>
@@ -102,10 +105,42 @@ export function SalesTab() {
               <TableCell className="align-top text-muted-foreground">
                 {sale.customerName ?? "—"}
               </TableCell>
+              <TableCell className="align-top">
+                <p className="text-sm">{sale.orderNumber ?? "—"}</p>
+                {sale.harvestLotCode && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Lot {sale.harvestLotCode}
+                  </p>
+                )}
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <Badge variant="outline" className="capitalize">
+                    {sale.channel.replaceAll("_", " ")}
+                  </Badge>
+                  <Badge
+                    variant={sale.amountPaid >= sale.totalAmount ? "accent" : "secondary"}
+                    className="capitalize"
+                  >
+                    {sale.orderStatus}
+                  </Badge>
+                </div>
+                {sale.amountPaid < sale.totalAmount && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {formatMoney(sale.totalAmount - sale.amountPaid)} due
+                  </p>
+                )}
+              </TableCell>
               <TableCell className="align-top text-right font-medium tabular-nums">
                 {formatMoney(sale.totalAmount)}
               </TableCell>
               <TableCell className="align-top text-right">
+                <Button type="button" variant="ghost" size="icon-sm" asChild>
+                  <Link
+                    href={`/harvest/sales/${sale.id}`}
+                    aria-label="Open receipt or invoice"
+                  >
+                    <FileText className="size-4" />
+                  </Link>
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"

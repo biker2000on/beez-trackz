@@ -199,7 +199,17 @@ export function useAdjustJars() {
 export interface SaleBody {
   date: string;
   location?: string;
+  customerId?: string;
+  harvestLotId?: string;
   customerName?: string;
+  channel?: "farm_stand" | "farmers_market" | "wholesale" | "pickup" | "online" | "gift" | "consignment" | "direct";
+  paymentMethod?: "cash" | "card" | "check" | "venmo" | "paypal" | "invoice" | "other";
+  discountAmount?: number;
+  amountPaid?: number;
+  orderStatus?: "draft" | "pending" | "paid" | "fulfilled" | "cancelled";
+  orderNumber?: string;
+  dueDate?: string;
+  wholesalePriceListId?: string;
   lines: { jarSizeId: string; quantity: number; unitPrice: number }[];
   notes?: string;
 }

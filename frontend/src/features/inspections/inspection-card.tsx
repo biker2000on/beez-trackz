@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/features/hives/lib";
+import { usePhotos } from "@/features/photos/hooks";
 import { useDeleteInspection, type Inspection } from "./hooks";
 import { InspectionFormDialog } from "./inspection-form-dialog";
 
@@ -35,6 +36,7 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const deleteInspection = useDeleteInspection();
+  const photos = usePhotos("inspection", inspection.id);
 
   async function onDelete() {
     try {
@@ -123,6 +125,21 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
           <p className="whitespace-pre-wrap text-muted-foreground">
             {inspection.notes}
           </p>
+        )}
+        {(photos.data?.length ?? 0) > 0 && (
+          <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-3">
+            {photos.data?.map((photo) => (
+              // Media URLs are served by the authenticated Go API.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={photo.id}
+                src={photo.mediumUrl ?? photo.thumbnailUrl ?? photo.originalUrl ?? ""}
+                alt={photo.caption ?? "Inspection photo"}
+                className="aspect-[4/3] w-full rounded-md border object-cover"
+                loading="lazy"
+              />
+            ))}
+          </div>
         )}
       </CardContent>
 
