@@ -25,7 +25,8 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 
 - Base `/api/v1`, JSON, camelCase fields matching legacy TS shapes.
 - Errors: `{"error": "message"}` with appropriate status (400 validation, 401, 404, 500).
-- Auth middleware on everything except `/auth/*` + `/healthz`.
+- Auth middleware on everything except `/auth/*`, public Honey Story routes
+  under `/public/honey-stories/*`, and `/healthz`.
 - The Next frontend proxies `/api/*` to the Go server (same-origin cookies).
 
 ## Domain behavior (must-preserve rules)
@@ -64,6 +65,9 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 - Ratings stores_honey/pollen/temperament ints 1–5 or null. queenSeen bool or null.
 - ONE shared write path used by both CRUD API and offline sync endpoints.
 - Recent inspections join hive+apiary, limit param (default 10).
+- Inspection creation and transcription confirmation also persist structured
+  mite counts, operational treatment events, feedings, and queen events in the
+  same transaction.
 
 ### Feedings
 - create requires hiveId, dateFed, type, quantity, quantityUnit. markEmpty sets dateEmpty=now.
@@ -101,6 +105,30 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 ### Jar sizes
 - getJarSizes seeds defaults if empty: Half Pint 12oz, Pint 22, Quart 44, Half Gallon 88,
   Gallon 176 (idempotent). create: unique label, sortOrder = max+1. update: label/honeyOz/price/isActive.
+
+### Operations reports
+- `GET /hives/{id}/timeline` merges inspections (with inline photos),
+  feedings, treatments, mite counts, queen events, harvests, splits, and moves.
+- Structured Varroa counts support alcohol wash, sugar roll, sticky board, and
+  visual methods. `/analytics/varroa` pairs nearest pre/post-treatment counts
+  and calculates efficacy when both normalized samples exist.
+- `/analytics/survival`, `/analytics/yield`, and `/analytics/economics` report
+  winter outcomes, hive/apiary/year yield, queen/split outcomes, and allocated
+  cost and revenue metrics.
+
+### Harvest-to-sale
+- Harvest lots connect extraction weight, source hive harvests, selected
+  photos, testing data, bottling runs, optional jar serials, and sales.
+  Recording a bottling run also writes the corresponding jarring movement.
+- Public Honey Story JSON, QR images, and curated lot photos are readable
+  without a session. Exact coordinates, raw inspections, and operational IDs
+  are not exposed.
+- Sales carry customer, harvest lot, channel, payment, discount, amount paid,
+  status, order number, due date, and optional wholesale price list. Draft and
+  pending orders reserve inventory; cancelled orders do not.
+- Expenses can be assigned to an apiary, hive, season, or harvest lot.
+  Profitability is reported overall and by channel, jar size, lot, season, and
+  apiary. Production planning uses recent sales velocity and bulk inventory.
 
 ### Equipment v2
 - stock list with deployed = Σ active deployment qty, available = totalOwned − deployed.

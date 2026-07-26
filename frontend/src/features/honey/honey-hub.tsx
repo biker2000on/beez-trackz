@@ -24,6 +24,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useShortcut } from "@/components/shortcuts/provider";
 
 import { ActivityTab } from "./activity-tab";
+import { LotsTab } from "@/features/commerce/lots-tab";
+import { BusinessTab } from "@/features/commerce/business-tab";
+import { MarketDayTab } from "@/features/commerce/market-day-tab";
 import { formatLbs, formatMoney } from "./format";
 import { HarvestsTab } from "./harvests-tab";
 import { useHoneyOverview, useJarInventory } from "./hooks";
@@ -139,11 +142,14 @@ export function HoneyHub() {
       </div>
 
       <Tabs defaultValue="activity">
-        <TabsList>
+        <TabsList className="flex w-full flex-wrap justify-start">
           <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="jars">Jars</TabsTrigger>
           <TabsTrigger value="harvests">Harvests</TabsTrigger>
           <TabsTrigger value="sales">Sales</TabsTrigger>
+          <TabsTrigger value="lots">Lots & QR</TabsTrigger>
+          <TabsTrigger value="market">Market day</TabsTrigger>
+          <TabsTrigger value="business">Business</TabsTrigger>
         </TabsList>
         <TabsContent value="activity">
           <ActivityTab />
@@ -156,6 +162,15 @@ export function HoneyHub() {
         </TabsContent>
         <TabsContent value="sales">
           <SalesTab />
+        </TabsContent>
+        <TabsContent value="lots">
+          <LotsTab />
+        </TabsContent>
+        <TabsContent value="market">
+          <MarketDayTab />
+        </TabsContent>
+        <TabsContent value="business">
+          <BusinessTab />
         </TabsContent>
       </Tabs>
 

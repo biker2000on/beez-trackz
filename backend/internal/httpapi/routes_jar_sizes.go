@@ -22,12 +22,13 @@ func (s *Server) mountJarSizes(r chi.Router) {
 }
 
 type jarSizeRow struct {
-	ID           uuid.UUID `json:"id"`
-	Label        string    `json:"label"`
-	HoneyOz      *float64  `json:"honeyOz"`
-	DefaultPrice *float64  `json:"defaultPrice"`
-	SortOrder    int       `json:"sortOrder"`
-	IsActive     bool      `json:"isActive"`
+	ID                uuid.UUID `json:"id"`
+	Label             string    `json:"label"`
+	HoneyOz           *float64  `json:"honeyOz"`
+	DefaultPrice      *float64  `json:"defaultPrice"`
+	SortOrder         int       `json:"sortOrder"`
+	IsActive          bool      `json:"isActive"`
+	LowStockThreshold int       `json:"lowStockThreshold"`
 }
 
 func jarIsUniqueViolation(err error) bool {
@@ -61,7 +62,7 @@ func (s *Server) jarList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	query := `SELECT id, label, honey_oz, default_price, sort_order, is_active
+	query := `SELECT id, label, honey_oz, default_price, sort_order, is_active, low_stock_threshold
 		FROM jar_sizes`
 	if !includeInactive {
 		query += ` WHERE is_active`
@@ -77,7 +78,7 @@ func (s *Server) jarList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row jarSizeRow
 		if err := rows.Scan(&row.ID, &row.Label, &row.HoneyOz, &row.DefaultPrice,
-			&row.SortOrder, &row.IsActive); err != nil {
+			&row.SortOrder, &row.IsActive, &row.LowStockThreshold); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -93,9 +94,10 @@ func (s *Server) jarList(w http.ResponseWriter, r *http.Request) {
 // POST /jar-sizes {label, honeyOz?, defaultPrice?}
 func (s *Server) jarCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Label        string   `json:"label"`
-		HoneyOz      *float64 `json:"honeyOz"`
-		DefaultPrice *float64 `json:"defaultPrice"`
+		Label             string   `json:"label"`
+		HoneyOz           *float64 `json:"honeyOz"`
+		DefaultPrice      *float64 `json:"defaultPrice"`
+		LowStockThreshold *int     `json:"lowStockThreshold"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -106,15 +108,20 @@ func (s *Server) jarCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Label is required")
 		return
 	}
+	if req.LowStockThreshold != nil && *req.LowStockThreshold < 0 {
+		writeError(w, http.StatusBadRequest, "lowStockThreshold must be non-negative")
+		return
+	}
 
 	ctx := r.Context()
 	var row jarSizeRow
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO jar_sizes (label, honey_oz, default_price, sort_order)
-		VALUES ($1, $2, $3, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM jar_sizes))
-		RETURNING id, label, honey_oz, default_price, sort_order, is_active`,
-		label, req.HoneyOz, req.DefaultPrice).
-		Scan(&row.ID, &row.Label, &row.HoneyOz, &row.DefaultPrice, &row.SortOrder, &row.IsActive)
+		INSERT INTO jar_sizes (label, honey_oz, default_price, low_stock_threshold, sort_order)
+		VALUES ($1, $2, $3, COALESCE($4, 6), (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM jar_sizes))
+		RETURNING id, label, honey_oz, default_price, sort_order, is_active, low_stock_threshold`,
+		label, req.HoneyOz, req.DefaultPrice, req.LowStockThreshold).
+		Scan(&row.ID, &row.Label, &row.HoneyOz, &row.DefaultPrice, &row.SortOrder,
+			&row.IsActive, &row.LowStockThreshold)
 	if err != nil {
 		if jarIsUniqueViolation(err) {
 			writeError(w, http.StatusConflict, fmt.Sprintf("%q already exists", label))
@@ -135,10 +142,11 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Label        json.RawMessage `json:"label"`
-		HoneyOz      json.RawMessage `json:"honeyOz"`
-		DefaultPrice json.RawMessage `json:"defaultPrice"`
-		IsActive     json.RawMessage `json:"isActive"`
+		Label             json.RawMessage `json:"label"`
+		HoneyOz           json.RawMessage `json:"honeyOz"`
+		DefaultPrice      json.RawMessage `json:"defaultPrice"`
+		IsActive          json.RawMessage `json:"isActive"`
+		LowStockThreshold json.RawMessage `json:"lowStockThreshold"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -183,6 +191,14 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		addSet("is_active", active)
+	}
+	if req.LowStockThreshold != nil {
+		var threshold int
+		if err := json.Unmarshal(req.LowStockThreshold, &threshold); err != nil || threshold < 0 {
+			writeError(w, http.StatusBadRequest, "lowStockThreshold must be non-negative")
+			return
+		}
+		addSet("low_stock_threshold", threshold)
 	}
 	if len(sets) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})

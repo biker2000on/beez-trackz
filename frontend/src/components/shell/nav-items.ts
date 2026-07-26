@@ -3,6 +3,7 @@ import {
   Droplets,
   Hexagon,
   LayoutDashboard,
+  ChartNoAxesCombined,
   MapPin,
   Package,
   Settings,
@@ -26,6 +27,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Hives", shortLabel: "Hives", href: "/hives", icon: Hexagon, shortcutKey: "h" },
   { label: "Queens", shortLabel: "Queens", href: "/genealogy", icon: Crown, shortcutKey: "q" },
   { label: "Recommendations", shortLabel: "Recs", href: "/recommendations", icon: Sparkles, shortcutKey: "r" },
+  { label: "Reports", shortLabel: "Reports", href: "/reports", icon: ChartNoAxesCombined, shortcutKey: "o" },
   { label: "Honey", shortLabel: "Honey", href: "/harvest", icon: Droplets, shortcutKey: "y" },
   { label: "Inventory", shortLabel: "Gear", href: "/inventory", icon: Package, shortcutKey: "i" },
   { label: "Settings", shortLabel: "Settings", href: "/settings", icon: Settings, shortcutKey: "s" },
@@ -36,6 +38,6 @@ export const MOBILE_NAV_ITEMS = [
   NAV_ITEMS[0], // Dashboard
   NAV_ITEMS[1], // Apiaries
   NAV_ITEMS[2], // Hives
-  NAV_ITEMS[5], // Honey
-  NAV_ITEMS[7], // Settings
+  NAV_ITEMS[6], // Honey
+  NAV_ITEMS[8], // Settings
 ];

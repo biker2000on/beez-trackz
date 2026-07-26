@@ -518,29 +518,48 @@ type honeySaleItemRow struct {
 }
 
 type honeySaleRow struct {
-	ID           uuid.UUID          `json:"id"`
-	Date         time.Time          `json:"date"`
-	CustomerName *string            `json:"customerName"`
-	Location     *string            `json:"location"`
-	TotalAmount  float64            `json:"totalAmount"`
-	Notes        *string            `json:"notes"`
-	CreatedAt    time.Time          `json:"createdAt"`
-	LineItems    []honeySaleItemRow `json:"lineItems"`
+	ID             uuid.UUID          `json:"id"`
+	Date           time.Time          `json:"date"`
+	CustomerID     *uuid.UUID         `json:"customerId"`
+	HarvestLotID   *uuid.UUID         `json:"harvestLotId"`
+	HarvestLotCode *string            `json:"harvestLotCode"`
+	CustomerName   *string            `json:"customerName"`
+	Location       *string            `json:"location"`
+	Channel        string             `json:"channel"`
+	PaymentMethod  string             `json:"paymentMethod"`
+	TotalAmount    float64            `json:"totalAmount"`
+	DiscountAmount float64            `json:"discountAmount"`
+	AmountPaid     float64            `json:"amountPaid"`
+	OrderStatus    string             `json:"orderStatus"`
+	OrderNumber    *string            `json:"orderNumber"`
+	DueDate        *time.Time         `json:"dueDate"`
+	Notes          *string            `json:"notes"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	LineItems      []honeySaleItemRow `json:"lineItems"`
 }
 
 func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, date, customer_name, location, total_amount, notes, created_at
-		FROM honey_sales
-		ORDER BY date DESC`)
+		SELECT s.id, s.date, s.customer_id, s.harvest_lot_id, lot.lot_code,
+			COALESCE(c.name, s.customer_name),
+			s.location, s.channel, s.payment_method, s.total_amount,
+			s.discount_amount, s.amount_paid, s.order_status, s.order_number,
+			s.due_date, s.notes, s.created_at
+		FROM honey_sales s
+		LEFT JOIN customers c ON c.id=s.customer_id
+		LEFT JOIN harvest_lots lot ON lot.id=s.harvest_lot_id
+		ORDER BY s.date DESC, s.created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	sales := make([]honeySaleRow, 0)
 	for rows.Next() {
 		var sale honeySaleRow
-		if err := rows.Scan(&sale.ID, &sale.Date, &sale.CustomerName, &sale.Location,
-			&sale.TotalAmount, &sale.Notes, &sale.CreatedAt); err != nil {
+		if err := rows.Scan(&sale.ID, &sale.Date, &sale.CustomerID,
+			&sale.HarvestLotID, &sale.HarvestLotCode, &sale.CustomerName,
+			&sale.Location, &sale.Channel, &sale.PaymentMethod, &sale.TotalAmount,
+			&sale.DiscountAmount, &sale.AmountPaid, &sale.OrderStatus,
+			&sale.OrderNumber, &sale.DueDate, &sale.Notes, &sale.CreatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -589,13 +608,37 @@ func (s *Server) honeyListSalesHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sales)
 }
 
-// POST /honey/sales {date, location?, customerName?, lines:[{jarSizeId, quantity, unitPrice}], notes?}
+var honeySaleChannels = map[string]bool{
+	"farm_stand": true, "farmers_market": true, "wholesale": true,
+	"pickup": true, "online": true, "gift": true, "consignment": true, "direct": true,
+}
+
+var honeyPaymentMethods = map[string]bool{
+	"cash": true, "card": true, "check": true, "venmo": true,
+	"paypal": true, "invoice": true, "other": true,
+}
+
+var honeyOrderStatuses = map[string]bool{
+	"draft": true, "pending": true, "paid": true, "fulfilled": true, "cancelled": true,
+}
+
+// POST /honey/sales creates either an immediate sale or an order/invoice.
 func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date         string  `json:"date"`
-		Location     *string `json:"location"`
-		CustomerName *string `json:"customerName"`
-		Lines        []struct {
+		Date                 string     `json:"date"`
+		Location             *string    `json:"location"`
+		CustomerID           *uuid.UUID `json:"customerId"`
+		HarvestLotID         *uuid.UUID `json:"harvestLotId"`
+		CustomerName         *string    `json:"customerName"`
+		Channel              string     `json:"channel"`
+		PaymentMethod        string     `json:"paymentMethod"`
+		DiscountAmount       float64    `json:"discountAmount"`
+		AmountPaid           *float64   `json:"amountPaid"`
+		OrderStatus          string     `json:"orderStatus"`
+		OrderNumber          *string    `json:"orderNumber"`
+		DueDate              *string    `json:"dueDate"`
+		WholesalePriceListID *uuid.UUID `json:"wholesalePriceListId"`
+		Lines                []struct {
 			JarSizeID string  `json:"jarSizeId"`
 			Quantity  int     `json:"quantity"`
 			UnitPrice float64 `json:"unitPrice"`
@@ -636,6 +679,29 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
+	if req.Channel == "" {
+		req.Channel = "direct"
+	}
+	if req.PaymentMethod == "" {
+		req.PaymentMethod = "cash"
+	}
+	if req.OrderStatus == "" {
+		req.OrderStatus = "paid"
+	}
+	if !honeySaleChannels[req.Channel] || !honeyPaymentMethods[req.PaymentMethod] ||
+		!honeyOrderStatuses[req.OrderStatus] || req.DiscountAmount < 0 {
+		writeError(w, http.StatusBadRequest, "invalid channel, payment method, order status, or discount")
+		return
+	}
+	var dueDate *time.Time
+	if req.DueDate != nil && *req.DueDate != "" {
+		v, err := parseDate(*req.DueDate)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid dueDate")
+			return
+		}
+		dueDate = &v
+	}
 
 	ctx := r.Context()
 
@@ -664,9 +730,39 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	totalAmount := 0.0
+	subtotal := 0.0
 	for _, line := range lines {
-		totalAmount += float64(line.Quantity) * line.UnitPrice
+		subtotal += float64(line.Quantity) * line.UnitPrice
+	}
+	if req.DiscountAmount > subtotal {
+		writeError(w, http.StatusBadRequest, "discount cannot exceed the subtotal")
+		return
+	}
+	totalAmount := subtotal - req.DiscountAmount
+	amountPaid := totalAmount
+	if req.OrderStatus == "draft" || req.OrderStatus == "pending" {
+		amountPaid = 0
+	}
+	if req.AmountPaid != nil {
+		amountPaid = *req.AmountPaid
+	}
+	if amountPaid < 0 || amountPaid > totalAmount {
+		writeError(w, http.StatusBadRequest, "amountPaid must be between zero and the total")
+		return
+	}
+	if req.WholesalePriceListID != nil {
+		var minimum float64
+		if err := s.pool.QueryRow(ctx, `
+			SELECT minimum_order_amount FROM wholesale_price_lists
+			WHERE id=$1 AND is_active`, *req.WholesalePriceListID).Scan(&minimum); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid wholesale price list")
+			return
+		}
+		if totalAmount < minimum {
+			writeError(w, http.StatusBadRequest,
+				fmt.Sprintf("Wholesale minimum is $%.2f", minimum))
+			return
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -675,14 +771,27 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	var saleID uuid.UUID
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO honey_sales (date, customer_name, location, total_amount, notes)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id`,
-		date, honeyTrimPtr(req.CustomerName), honeyTrimPtr(req.Location), totalAmount,
-		honeyTrimPtr(req.Notes)).Scan(&saleID); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+	saleID := uuid.New()
+	orderNumber := honeyTrimPtr(req.OrderNumber)
+	if orderNumber == nil {
+		v := "BT-" + strings.ToUpper(strings.ReplaceAll(saleID.String()[:8], "-", ""))
+		orderNumber = &v
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO honey_sales
+			(id, date, customer_id, harvest_lot_id, customer_name, location, channel, payment_method,
+			 total_amount, discount_amount, amount_paid, order_status, order_number,
+			 due_date, wholesale_price_list_id, notes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		saleID, date, req.CustomerID, req.HarvestLotID, honeyTrimPtr(req.CustomerName),
+		honeyTrimPtr(req.Location), req.Channel, req.PaymentMethod, totalAmount,
+		req.DiscountAmount, amountPaid, req.OrderStatus, orderNumber, dueDate,
+		req.WholesalePriceListID, honeyTrimPtr(req.Notes)); err != nil {
+		if honeyIsFKViolation(err) {
+			writeError(w, http.StatusBadRequest, "invalid customer, harvest lot, or wholesale price list")
+			return
+		}
+		writeError(w, http.StatusConflict, "order number already exists")
 		return
 	}
 	for _, line := range lines {
@@ -702,7 +811,12 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "id": saleID, "totalAmount": totalAmount})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"success": true, "id": saleID, "orderNumber": orderNumber,
+		"subtotal": subtotal, "discountAmount": req.DiscountAmount,
+		"totalAmount": totalAmount, "amountPaid": amountPaid,
+		"balanceDue": totalAmount - amountPaid,
+	})
 }
 
 // DELETE /honey/sales/{id} — items cascade via FK.
@@ -780,9 +894,11 @@ func (s *Server) honeyJarInventory(ctx context.Context) ([]honeyInventoryRow, er
 			GROUP BY jar_size_id
 		) m ON m.jar_size_id = js.id
 		LEFT JOIN (
-			SELECT jar_size_id, SUM(quantity) AS sold
-			FROM honey_sale_items
-			GROUP BY jar_size_id
+			SELECT si.jar_size_id, SUM(si.quantity) AS sold
+			FROM honey_sale_items si
+			JOIN honey_sales s ON s.id=si.sale_id
+			WHERE s.order_status <> 'cancelled'
+			GROUP BY si.jar_size_id
 		) si ON si.jar_size_id = js.id
 		WHERE js.is_active
 		ORDER BY js.sort_order, js.label`)
@@ -830,8 +946,9 @@ func (s *Server) honeyOverviewHandler(w http.ResponseWriter, r *http.Request) {
 			FROM harvest_sessions hs) sessions) +
 		(SELECT COALESCE(SUM(calculated_honey_weight), 0)
 		 FROM honey_harvests WHERE session_id IS NULL),
-		(SELECT COALESCE(SUM(total_amount), 0) FROM honey_sales),
-		(SELECT COALESCE(SUM(quantity), 0) FROM honey_sale_items)`).
+		(SELECT COALESCE(SUM(total_amount), 0) FROM honey_sales WHERE order_status <> 'cancelled'),
+		(SELECT COALESCE(SUM(si.quantity), 0) FROM honey_sale_items si
+		 JOIN honey_sales s ON s.id=si.sale_id WHERE s.order_status <> 'cancelled')`).
 		Scan(&totalHarvested, &totalRevenue, &jarsSold)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")

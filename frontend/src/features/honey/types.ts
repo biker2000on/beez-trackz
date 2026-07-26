@@ -62,9 +62,19 @@ export interface SaleLineItem {
 export interface HoneySale {
   id: string;
   date: string;
+  customerId: string | null;
+  harvestLotId: string | null;
+  harvestLotCode: string | null;
   customerName: string | null;
   location: string | null;
+  channel: string;
+  paymentMethod: string;
   totalAmount: number;
+  discountAmount: number;
+  amountPaid: number;
+  orderStatus: string;
+  orderNumber: string | null;
+  dueDate: string | null;
   notes: string | null;
   createdAt: string;
   lineItems: SaleLineItem[];
