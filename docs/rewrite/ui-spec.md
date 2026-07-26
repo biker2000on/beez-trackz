@@ -62,7 +62,8 @@ flag >7 days), frame shortage (spare frames, drawn/fresh breakdown), honey inven
   bulk-select mode (b) with action bar (set status, archive/unarchive).
 - Detail: header (label, status badge, edit modal), quick actions (new inspection dialog,
   record inspection → transcribe, quick inspection, photo, feed, split, archive/deadout/
-  unarchive). Tabs: Inspections, Equipment (stack + deploy modal), Photos, Feedings, Queen
+  unarchive). Tabs: Timeline (default, with inline inspection photos), Inspections,
+  Varroa trends/treatment efficacy, Equipment (stack + deploy modal), Photos, Feedings, Queen
   (current queen card with year-color dot + history + add dialog), Splits (linked), History
   (location timeline).
 - Forms: hive form (apiary select, stand/row/col, placement, auto position label, status,
@@ -80,7 +81,9 @@ flag >7 days), frame shortage (spare frames, drawn/fresh breakdown), honey inven
   Record Sale (s: date, location autocomplete, lines with price prefill + on-hand, customer,
   live total), Bulk Use (u), Loss (l), Give Away (v), Adjust Jars (a: ±delta with on-hand).
 - Tabs: Activity (iconized color-tinted ledger timeline, per-row delete, bulk delete),
-  Jars (inventory table), Harvests (sessions + individual), Sales (table).
+  Jars (inventory table), Harvests (sessions + individual), harvest Lots & QR,
+  Sales/orders, phone-first Market Day, and Business (profitability, expenses,
+  production plan, customers, wholesale pricing).
 - Sessions: new (apiary/date/notes); detail with calculated vs actual extraction cards +
   difference, per-hive entries (before/after weights, live calc badge), true-up form.
 
@@ -103,6 +106,14 @@ flag >7 days), frame shortage (spare frames, drawn/fresh breakdown), honey inven
   batch = per-detected-inspection cards with include checkbox + match-to-hive select +
   compact fields, validate all included matched, Confirm All.
 - Server parses once and returns structured data with the status (fix legacy double-parse).
+- Review cards include structured feedings, treatments, queen events, and Varroa
+  counts; confirmation writes all included records atomically.
+
+## Reports
+- Survival by apiary, stand, and queen line; honey yield by hive/apiary/year
+  with year-over-year comparison; and apiary economics combining revenue,
+  expenses, pounds per hive, winter survival, queen/split outcomes, and
+  feed/treatment cost per colony.
 
 ## Settings (single consolidated page, no duplicate standalone routes)
 - Preferences: theme, default apiary, date format, weight unit.

@@ -62,9 +62,19 @@ export interface SaleLineItem {
 export interface HoneySale {
   id: string;
   date: string;
+  customerId: string | null;
+  harvestLotId: string | null;
+  harvestLotCode: string | null;
   customerName: string | null;
   location: string | null;
+  channel: "farm_stand" | "farmers_market" | "wholesale" | "pickup" | "online" | "gift" | "consignment" | "direct";
+  paymentMethod: "cash" | "card" | "check" | "venmo" | "paypal" | "invoice" | "other";
   totalAmount: number;
+  discountAmount: number;
+  amountPaid: number;
+  orderStatus: "draft" | "pending" | "paid" | "fulfilled" | "cancelled";
+  orderNumber: string | null;
+  dueDate: string | null;
   notes: string | null;
   createdAt: string;
   lineItems: SaleLineItem[];

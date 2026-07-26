@@ -186,6 +186,7 @@ type inspectionCreateReq struct {
 	Temperament   *int                  `json:"temperament"`
 	Pests         []inspectionPest      `json:"pests"`
 	Treatments    []inspectionTreatment `json:"treatments"`
+	MiteCounts    []miteCountPayload    `json:"miteCounts"`
 	Notes         *string               `json:"notes"`
 	SourceMedia   json.RawMessage       `json:"sourceMedia"`
 }
@@ -230,12 +231,52 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		Notes:         inspectionTrimPtr(req.Notes),
 		SourceMedia:   sourceMedia,
 	}
-	id, err := inspectionInsert(r.Context(), s.pool, fields)
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	id, err := inspectionInsert(r.Context(), tx, fields)
 	if err != nil {
 		if inspectionIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "Hive not found")
 			return
 		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	for _, treatment := range req.Treatments {
+		if strings.TrimSpace(treatment.Product) == "" {
+			continue
+		}
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO treatment_events
+				(hive_id, inspection_id, date_applied, product, method)
+			VALUES ($1,$2,$3,$4,$5)`,
+			hiveID, id, date, strings.TrimSpace(treatment.Product),
+			inspectionTrimPtr(treatment.Method)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid treatment")
+			return
+		}
+	}
+	for _, count := range req.MiteCounts {
+		if !miteMethods[count.Method] || count.MitesCount < 0 ||
+			(count.SampleSize != nil && *count.SampleSize <= 0) {
+			writeError(w, http.StatusBadRequest, "invalid mite count")
+			return
+		}
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO mite_counts
+				(hive_id, inspection_id, date, method, mites_count, sample_size, notes)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			hiveID, id, date, count.Method, count.MitesCount, count.SampleSize,
+			inspectionTrimPtr(count.Notes)); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid mite count")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}

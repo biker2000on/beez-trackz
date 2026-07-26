@@ -69,6 +69,10 @@ const inspectionSchema = z.object({
       method: z.string(),
     }),
   ),
+  miteMethod: z.string(),
+  miteCount: z.string(),
+  miteSampleSize: z.string(),
+  miteNotes: z.string(),
   notes: z.string(),
 });
 
@@ -101,6 +105,10 @@ function toValues(inspection?: Inspection | null): InspectionValues {
       product: treatment.product,
       method: treatment.method ?? "",
     })),
+    miteMethod: "none",
+    miteCount: "",
+    miteSampleSize: "300",
+    miteNotes: "",
     notes: inspection?.notes ?? "",
   };
 }
@@ -179,6 +187,17 @@ export function InspectionFormDialog({
   }
 
   async function onSubmit(values: InspectionValues) {
+    const miteCount = values.miteCount.trim() === "" ? null : Number(values.miteCount);
+    const miteSample = values.miteSampleSize.trim() === "" ? undefined : Number(values.miteSampleSize);
+    if (
+      !isEdit &&
+      values.miteMethod !== "none" &&
+      (miteCount == null || !Number.isInteger(miteCount) || miteCount < 0 ||
+        (miteSample != null && (!Number.isInteger(miteSample) || miteSample <= 0)))
+    ) {
+      toast.error("Enter a non-negative mite count and positive sample size.");
+      return;
+    }
     const payload = {
       date: values.date,
       inspectorName:
@@ -200,6 +219,16 @@ export function InspectionFormDialog({
         product: treatment.product,
         method: treatment.method.trim() === "" ? null : treatment.method,
       })),
+      ...(!isEdit && values.miteMethod !== "none" && miteCount != null
+        ? {
+            miteCounts: [{
+              method: values.miteMethod as "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual",
+              mitesCount: miteCount,
+              sampleSize: miteSample,
+              notes: values.miteNotes.trim() || undefined,
+            }],
+          }
+        : {}),
       notes: values.notes.trim() === "" ? null : values.notes,
     };
     try {
@@ -267,6 +296,60 @@ export function InspectionFormDialog({
           </section>
 
           <Separator />
+
+          {!isEdit && (
+            <>
+              <section className="grid gap-3">
+                <SectionHeading>Varroa count</SectionHeading>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="grid gap-2">
+                    <Label>Method</Label>
+                    <Select
+                      value={watched.miteMethod}
+                      onValueChange={(value) => form.setValue("miteMethod", value)}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Not counted</SelectItem>
+                        <SelectItem value="alcohol_wash">Alcohol wash</SelectItem>
+                        <SelectItem value="sugar_roll">Sugar roll</SelectItem>
+                        <SelectItem value="sticky_board">Sticky board</SelectItem>
+                        <SelectItem value="visual">Visual count</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inspection-mite-count">Mites</Label>
+                    <Input
+                      id="inspection-mite-count"
+                      type="number"
+                      min="0"
+                      step="1"
+                      disabled={watched.miteMethod === "none"}
+                      {...form.register("miteCount")}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="inspection-mite-sample">Bees sampled</Label>
+                    <Input
+                      id="inspection-mite-sample"
+                      type="number"
+                      min="1"
+                      step="1"
+                      disabled={watched.miteMethod === "none" || watched.miteMethod === "sticky_board" || watched.miteMethod === "visual"}
+                      {...form.register("miteSampleSize")}
+                    />
+                  </div>
+                </div>
+                <Input
+                  placeholder="Optional mite-count notes"
+                  disabled={watched.miteMethod === "none"}
+                  {...form.register("miteNotes")}
+                />
+              </section>
+              <Separator />
+            </>
+          )}
 
           <section className="grid gap-3">
             <SectionHeading>Queen</SectionHeading>

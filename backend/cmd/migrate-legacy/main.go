@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
@@ -98,26 +99,31 @@ func main() {
 	ctx := context.Background()
 
 	legacyURL := os.Getenv("LEGACY_DATABASE_URL")
-	if legacyURL == "" {
-		log.Fatal("LEGACY_DATABASE_URL is required")
-	}
 	dataDir := os.Getenv("LEGACY_DATA_DIR") // optional; skip file upload when unset
+	mediaOnly := strings.EqualFold(os.Getenv("LEGACY_MEDIA_ONLY"), "true") ||
+		os.Getenv("LEGACY_MEDIA_ONLY") == "1"
+	if legacyURL == "" && !mediaOnly {
+		log.Fatal("LEGACY_DATABASE_URL is required unless LEGACY_MEDIA_ONLY is enabled")
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
 
-	src, err := pgx.Connect(ctx, legacyURL)
-	if err != nil {
-		log.Fatalf("connect legacy db: %v", err)
-	}
-	defer src.Close(ctx)
+	var src *pgx.Conn
+	if legacyURL != "" {
+		src, err = pgx.Connect(ctx, legacyURL)
+		if err != nil {
+			log.Fatalf("connect legacy db: %v", err)
+		}
+		defer src.Close(ctx)
 
-	// Interpret legacy naive timestamps as UTC (they were written by now() in
-	// UTC containers).
-	if _, err := src.Exec(ctx, "SET TIME ZONE 'UTC'"); err != nil {
-		log.Fatalf("set timezone: %v", err)
+		// Interpret legacy naive timestamps as UTC (they were written by now() in
+		// UTC containers).
+		if _, err := src.Exec(ctx, "SET TIME ZONE 'UTC'"); err != nil {
+			log.Fatalf("set timezone: %v", err)
+		}
 	}
 
 	dst, err := pgx.Connect(ctx, cfg.DatabaseURL)
@@ -133,7 +139,7 @@ func main() {
 	if err := dst.QueryRow(ctx, "SELECT count(*) FROM apiaries").Scan(&existing); err != nil {
 		log.Fatalf("target not migrated? %v", err)
 	}
-	if existing > 0 {
+	if existing > 0 && !mediaOnly {
 		log.Fatal("target database already contains apiaries — refusing to double-import")
 	}
 
@@ -145,17 +151,35 @@ func main() {
 		}
 	}
 
-	for _, spec := range specs {
-		n, err := copyTable(ctx, src, dst, spec)
-		if err != nil {
-			log.Fatalf("copy %s: %v", spec.table, err)
+	if !mediaOnly {
+		for _, spec := range specs {
+			n, err := copyTable(ctx, src, dst, spec)
+			if err != nil {
+				log.Fatalf("copy %s: %v", spec.table, err)
+			}
+			log.Printf("copied %-28s %5d rows", spec.table, n)
 		}
-		log.Printf("copied %-28s %5d rows", spec.table, n)
-	}
-	if err := copyQueens(ctx, src, dst); err != nil {
-		log.Fatalf("copy queens: %v", err)
+		if err := copyQueens(ctx, src, dst); err != nil {
+			log.Fatalf("copy queens: %v", err)
+		}
+	} else {
+		log.Println("LEGACY_MEDIA_ONLY enabled - preserving operational rows and importing media only")
+		if src == nil {
+			log.Println("LEGACY_DATABASE_URL not set - discovering photos from the filesystem only")
+		} else {
+			if n, err := copyLegacyPhotos(ctx, src, dst); err != nil {
+				log.Fatalf("copy legacy photo rows: %v", err)
+			} else {
+				log.Printf("copied %-28s %5d rows", "legacy photo metadata", n)
+			}
+		}
 	}
 	if store != nil {
+		if n, err := importFilesystemPhotos(ctx, dst, dataDir); err != nil {
+			log.Fatalf("discover filesystem photos: %v", err)
+		} else {
+			log.Printf("discovered %-24s %5d rows", "filesystem-only photos", n)
+		}
 		if err := uploadMedia(ctx, dst, store, dataDir); err != nil {
 			log.Fatalf("upload media: %v", err)
 		}
@@ -163,6 +187,144 @@ func main() {
 		log.Println("LEGACY_DATA_DIR not set — skipped media upload (object keys recorded, files absent)")
 	}
 	log.Println("migration complete")
+}
+
+// copyLegacyPhotos imports photo metadata without requiring an empty target.
+// It supports post-cutover repair runs where operational data already exists.
+func copyLegacyPhotos(ctx context.Context, src, dst *pgx.Conn) (int, error) {
+	rows, err := src.Query(ctx, `
+		SELECT id, owner_type, owner_id, original_path, thumbnail_path, medium_path,
+			taken_date, caption, tags, created_at
+		FROM photos`)
+	if err != nil {
+		// Some oldest backups predate the photos table. Filesystem discovery
+		// below can still recover conventionally named originals.
+		log.Printf("warn: legacy photos table unavailable: %v", err)
+		return 0, nil
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		vals, err := rows.Values()
+		if err != nil {
+			return n, err
+		}
+		for _, i := range []int{3, 4, 5} {
+			if value, ok := vals[i].(string); ok && value != "" {
+				vals[i] = pathToKey(value)
+			}
+		}
+		tag, err := dst.Exec(ctx, `
+			INSERT INTO photos
+				(id, owner_type, owner_id, original_key, thumbnail_key, medium_key,
+				 taken_date, caption, tags, created_at)
+			SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10
+			WHERE NOT EXISTS (SELECT 1 FROM photos WHERE id=$1 OR original_key=$4)`,
+			vals...)
+		if err != nil {
+			return n, err
+		}
+		if tag.RowsAffected() > 0 {
+			n++
+		}
+	}
+	return n, rows.Err()
+}
+
+// importFilesystemPhotos recovers originals that were written to disk but
+// never received a legacy database row. The durable layout is:
+// data/photos/{hive|apiary|inspection}/{owner UUID}/file.ext
+func importFilesystemPhotos(ctx context.Context, dst *pgx.Conn, dataDir string) (int, error) {
+	root := filepath.Join(dataDir, "photos")
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("warn: no filesystem photo directory at %s", root)
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		extension := filepath.Ext(path)
+		base := strings.TrimSuffix(path, extension)
+		if strings.HasSuffix(base, "_thumb") || strings.HasSuffix(base, "_medium") {
+			// Generated variants belong to the original immediately beside
+			// them; importing each variant as a separate photo duplicates the
+			// gallery and loses the original/thumbnail relationship.
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) < 3 {
+			log.Printf("warn: cannot infer photo owner from %s", rel)
+			return nil
+		}
+		ownerType := parts[0]
+		if ownerType != "hive" && ownerType != "apiary" && ownerType != "inspection" {
+			log.Printf("warn: unsupported photo owner type in %s", rel)
+			return nil
+		}
+		ownerID, err := uuid.Parse(parts[1])
+		if err != nil {
+			log.Printf("warn: invalid photo owner UUID in %s", rel)
+			return nil
+		}
+		table := map[string]string{
+			"hive": "hives", "apiary": "apiaries", "inspection": "inspections",
+		}[ownerType]
+		var ownerExists bool
+		if err := dst.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM "+table+" WHERE id=$1)", ownerID).
+			Scan(&ownerExists); err != nil {
+			return err
+		}
+		if !ownerExists {
+			log.Printf("warn: photo owner does not exist for %s", rel)
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		key := "photos/" + filepath.ToSlash(rel)
+		var thumbnailKey, mediumKey *string
+		for suffix, destination := range map[string]**string{
+			"_thumb": &thumbnailKey, "_medium": &mediumKey,
+		} {
+			variantPath := base + suffix + extension
+			if variantInfo, err := os.Stat(variantPath); err == nil && !variantInfo.IsDir() {
+				variantRel, err := filepath.Rel(root, variantPath)
+				if err != nil {
+					return err
+				}
+				variantKey := "photos/" + filepath.ToSlash(variantRel)
+				*destination = &variantKey
+			}
+		}
+		tag, err := dst.Exec(ctx, `
+			INSERT INTO photos
+				(owner_type, owner_id, original_key, thumbnail_key, medium_key, taken_date, created_at)
+			SELECT $1,$2,$3,$4,$5,$6,$6
+			WHERE NOT EXISTS (SELECT 1 FROM photos WHERE original_key=$3)`,
+			ownerType, ownerID, key, thumbnailKey, mediumKey, info.ModTime())
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			n++
+		}
+		return nil
+	})
+	return n, err
 }
 
 func copyTable(ctx context.Context, src, dst *pgx.Conn, spec copySpec) (int, error) {

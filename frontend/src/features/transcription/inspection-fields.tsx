@@ -30,6 +30,23 @@ export interface EditableInspection {
   temperament: string;
   pests: { type: string; count: string }[];
   treatments: { product: string; method: string }[];
+  feedings: {
+    type: "sugar_syrup_1to1" | "sugar_syrup_2to1" | "dry_sugar" | "pollen_patty" | "fondant" | "other";
+    quantity: string;
+    quantityUnit: "lbs" | "oz" | "quarts" | "gallons";
+    feederType: "entrance" | "top" | "frame" | "baggie" | "bucket" | "open" | "other";
+    notes: string;
+  }[];
+  queenEvents: {
+    eventType: "observed" | "introduced" | "superseded" | "missing" | "dead" | "requeened";
+    notes: string;
+  }[];
+  miteCounts: {
+    method: "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
+    mitesCount: string;
+    sampleSize: string;
+    notes: string;
+  }[];
   notes: string;
 }
 
@@ -66,6 +83,23 @@ export function toEditable(p?: ParsedInspection | null): EditableInspection {
       product: t.product ?? "",
       method: t.method ?? "",
     })),
+    feedings: (p?.feedings ?? []).map((feeding) => ({
+      type: feeding.type,
+      quantity: String(feeding.quantity),
+      quantityUnit: feeding.quantityUnit,
+      feederType: feeding.feederType ?? "other",
+      notes: feeding.notes ?? "",
+    })),
+    queenEvents: (p?.queenEvents ?? []).map((event) => ({
+      eventType: event.eventType,
+      notes: event.notes ?? "",
+    })),
+    miteCounts: (p?.miteCounts ?? []).map((count) => ({
+      method: count.method,
+      mitesCount: String(count.mitesCount),
+      sampleSize: count.sampleSize == null ? "" : String(count.sampleSize),
+      notes: count.notes ?? "",
+    })),
     notes: p?.notes ?? "",
   };
 }
@@ -92,6 +126,27 @@ export function toConfirmPayload(
     temperament: e.temperament ? Number(e.temperament) : null,
     pests: pests.length > 0 ? pests : null,
     treatments: treatments.length > 0 ? treatments : null,
+    feedings: e.feedings
+      .map((feeding) => ({
+        type: feeding.type,
+        quantity: Number(feeding.quantity),
+        quantityUnit: feeding.quantityUnit,
+        feederType: feeding.feederType,
+        notes: feeding.notes.trim() || null,
+      }))
+      .filter((feeding) => feeding.quantity > 0),
+    queenEvents: e.queenEvents.map((event) => ({
+      eventType: event.eventType,
+      notes: event.notes.trim() || null,
+    })),
+    miteCounts: e.miteCounts
+      .map((count) => ({
+        method: count.method,
+        mitesCount: Number(count.mitesCount),
+        sampleSize: count.sampleSize.trim() ? Number(count.sampleSize) : null,
+        notes: count.notes.trim() || null,
+      }))
+      .filter((count) => Number.isInteger(count.mitesCount) && count.mitesCount >= 0),
     notes: e.notes.trim() || null,
   };
 }
@@ -239,6 +294,82 @@ export function InspectionFields({
             dense={dense}
           />
         </div>
+      </div>
+
+      <div className="grid gap-1.5">
+        <div className="flex items-center justify-between">
+          <Label className={labelClass}>Feedings</Label>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => set("feedings", [...value.feedings, {
+              type: "other", quantity: "", quantityUnit: "quarts",
+              feederType: "other", notes: "",
+            }])}
+          >
+            <Plus /> Add feeding
+          </Button>
+        </div>
+        {value.feedings.map((feeding, i) => (
+          <div key={i} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1.5fr_0.7fr_1fr_auto]">
+            <Select
+              value={feeding.type}
+              onValueChange={(next) => set("feedings", value.feedings.map((item, index) => index === i ? { ...item, type: next as typeof item.type } : item))}
+            >
+              <SelectTrigger className={inputClass}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sugar_syrup_1to1">1:1 syrup</SelectItem>
+                <SelectItem value="sugar_syrup_2to1">2:1 syrup</SelectItem>
+                <SelectItem value="dry_sugar">Dry sugar</SelectItem>
+                <SelectItem value="pollen_patty">Pollen patty</SelectItem>
+                <SelectItem value="fondant">Fondant</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input className={inputClass} type="number" min="0" step="0.1" value={feeding.quantity} onChange={(event) => set("feedings", value.feedings.map((item, index) => index === i ? { ...item, quantity: event.target.value } : item))} placeholder="Qty" />
+            <Select value={feeding.quantityUnit} onValueChange={(next) => set("feedings", value.feedings.map((item, index) => index === i ? { ...item, quantityUnit: next as typeof item.quantityUnit } : item))}>
+              <SelectTrigger className={inputClass}><SelectValue /></SelectTrigger>
+              <SelectContent>{["lbs", "oz", "quarts", "gallons"].map((unit) => <SelectItem key={unit} value={unit}>{unit}</SelectItem>)}</SelectContent>
+            </Select>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove feeding ${i + 1}`} onClick={() => set("feedings", value.feedings.filter((_, index) => index !== i))}><Trash2 /></Button>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-1.5">
+        <div className="flex items-center justify-between">
+          <Label className={labelClass}>Queen events</Label>
+          <Button type="button" variant="ghost" size="sm" onClick={() => set("queenEvents", [...value.queenEvents, { eventType: "observed", notes: "" }])}><Plus /> Add event</Button>
+        </div>
+        {value.queenEvents.map((event, i) => (
+          <div key={i} className="flex gap-2">
+            <Select value={event.eventType} onValueChange={(next) => set("queenEvents", value.queenEvents.map((item, index) => index === i ? { ...item, eventType: next as typeof item.eventType } : item))}>
+              <SelectTrigger className={inputClass}><SelectValue /></SelectTrigger>
+              <SelectContent>{["observed", "introduced", "superseded", "missing", "dead", "requeened"].map((kind) => <SelectItem key={kind} value={kind}>{kind}</SelectItem>)}</SelectContent>
+            </Select>
+            <Input className={inputClass} value={event.notes} onChange={(change) => set("queenEvents", value.queenEvents.map((item, index) => index === i ? { ...item, notes: change.target.value } : item))} placeholder="Event notes" />
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove queen event ${i + 1}`} onClick={() => set("queenEvents", value.queenEvents.filter((_, index) => index !== i))}><Trash2 /></Button>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-1.5">
+        <div className="flex items-center justify-between">
+          <Label className={labelClass}>Structured mite counts</Label>
+          <Button type="button" variant="ghost" size="sm" onClick={() => set("miteCounts", [...value.miteCounts, { method: "alcohol_wash", mitesCount: "", sampleSize: "300", notes: "" }])}><Plus /> Add count</Button>
+        </div>
+        {value.miteCounts.map((count, i) => (
+          <div key={i} className="grid gap-2 rounded-md border p-2 sm:grid-cols-[1.4fr_0.7fr_0.8fr_auto]">
+            <Select value={count.method} onValueChange={(next) => set("miteCounts", value.miteCounts.map((item, index) => index === i ? { ...item, method: next as typeof item.method } : item))}>
+              <SelectTrigger className={inputClass}><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="alcohol_wash">Alcohol wash</SelectItem><SelectItem value="sugar_roll">Sugar roll</SelectItem><SelectItem value="sticky_board">Sticky board</SelectItem><SelectItem value="visual">Visual</SelectItem></SelectContent>
+            </Select>
+            <Input className={inputClass} type="number" min="0" step="1" value={count.mitesCount} onChange={(event) => set("miteCounts", value.miteCounts.map((item, index) => index === i ? { ...item, mitesCount: event.target.value } : item))} placeholder="Mites" />
+            <Input className={inputClass} type="number" min="1" step="1" value={count.sampleSize} onChange={(event) => set("miteCounts", value.miteCounts.map((item, index) => index === i ? { ...item, sampleSize: event.target.value } : item))} placeholder="Sample" disabled={count.method === "sticky_board" || count.method === "visual"} />
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`Remove mite count ${i + 1}`} onClick={() => set("miteCounts", value.miteCounts.filter((_, index) => index !== i))}><Trash2 /></Button>
+          </div>
+        ))}
       </div>
 
       <div className="grid gap-1.5">

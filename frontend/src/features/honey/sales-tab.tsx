@@ -3,7 +3,8 @@
 /** Sales tab: sales table with line items and per-sale delete. */
 
 import * as React from "react";
-import { Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Check, FileText, PackageCheck, Trash2 } from "lucide-react";
 
 import {
   AlertDialog,
@@ -16,6 +17,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -27,12 +29,13 @@ import {
 } from "@/components/ui/table";
 
 import { formatDate, formatMoney } from "./format";
-import { useDeleteSale, useHoneySales } from "./hooks";
+import { useDeleteSale, useHoneySales, useUpdateSale } from "./hooks";
 import type { HoneySale } from "./types";
 
 export function SalesTab() {
   const sales = useHoneySales();
   const deleteSale = useDeleteSale();
+  const updateSale = useUpdateSale();
   const [confirmSale, setConfirmSale] = React.useState<HoneySale | null>(null);
 
   if (sales.isPending) {
@@ -62,6 +65,7 @@ export function SalesTab() {
             <TableHead>Items</TableHead>
             <TableHead>Location</TableHead>
             <TableHead>Customer</TableHead>
+            <TableHead>Order</TableHead>
             <TableHead className="text-right">Total</TableHead>
             <TableHead />
           </TableRow>
@@ -102,10 +106,79 @@ export function SalesTab() {
               <TableCell className="align-top text-muted-foreground">
                 {sale.customerName ?? "—"}
               </TableCell>
+              <TableCell className="align-top">
+                <p className="text-sm">{sale.orderNumber ?? "—"}</p>
+                {sale.harvestLotCode && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Lot {sale.harvestLotCode}
+                  </p>
+                )}
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <Badge variant="outline" className="capitalize">
+                    {sale.channel.replaceAll("_", " ")}
+                  </Badge>
+                  <Badge
+                    variant={sale.amountPaid >= sale.totalAmount ? "accent" : "secondary"}
+                    className="capitalize"
+                  >
+                    {sale.orderStatus}
+                  </Badge>
+                </div>
+                {sale.amountPaid < sale.totalAmount && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {formatMoney(sale.totalAmount - sale.amountPaid)} due
+                  </p>
+                )}
+              </TableCell>
               <TableCell className="align-top text-right font-medium tabular-nums">
                 {formatMoney(sale.totalAmount)}
               </TableCell>
               <TableCell className="align-top text-right">
+                {sale.amountPaid < sale.totalAmount && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Mark order paid"
+                    disabled={updateSale.isPending}
+                    onClick={() =>
+                      updateSale.mutate({
+                        id: sale.id,
+                        orderStatus: "paid",
+                        amountPaid: sale.totalAmount,
+                        paymentMethod: sale.paymentMethod,
+                      })
+                    }
+                  >
+                    <Check className="size-4" />
+                  </Button>
+                )}
+                {sale.amountPaid >= sale.totalAmount && sale.orderStatus !== "fulfilled" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Mark order fulfilled"
+                    disabled={updateSale.isPending}
+                    onClick={() =>
+                      updateSale.mutate({
+                        id: sale.id,
+                        orderStatus: "fulfilled",
+                        amountPaid: sale.totalAmount,
+                      })
+                    }
+                  >
+                    <PackageCheck className="size-4" />
+                  </Button>
+                )}
+                <Button type="button" variant="ghost" size="icon-sm" asChild>
+                  <Link
+                    href={`/harvest/sales/${sale.id}`}
+                    aria-label="Open receipt or invoice"
+                  >
+                    <FileText className="size-4" />
+                  </Link>
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"

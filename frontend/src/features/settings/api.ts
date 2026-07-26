@@ -161,6 +161,7 @@ export interface JarSize {
   defaultPrice: number | null;
   sortOrder: number;
   isActive: boolean;
+  lowStockThreshold: number;
 }
 
 export interface JarSizeUpdate {
@@ -168,6 +169,7 @@ export interface JarSizeUpdate {
   honeyOz?: number | null;
   defaultPrice?: number | null;
   isActive?: boolean;
+  lowStockThreshold?: number;
 }
 
 export function useJarSizes() {
@@ -185,6 +187,7 @@ export function useCreateJarSize() {
       label: string;
       honeyOz: number | null;
       defaultPrice: number | null;
+      lowStockThreshold: number;
     }) => api.post<JarSize>("/jar-sizes", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jar-sizes"] });

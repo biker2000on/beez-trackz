@@ -387,6 +387,10 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 
 	now := time.Now()
 	inspectionIDs := make([]uuid.UUID, 0, len(req.Inspections))
+	feedingIDs := make([]uuid.UUID, 0)
+	treatmentEventIDs := make([]uuid.UUID, 0)
+	queenEventIDs := make([]uuid.UUID, 0)
+	miteCountIDs := make([]uuid.UUID, 0)
 	for _, item := range req.Inspections {
 		hiveID := item.HiveID
 		if hiveID == nil && mode == "single" && row.OwnerType == "hive" {
@@ -432,13 +436,71 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		inspectionIDs = append(inspectionIDs, createdID)
+
+		for _, feeding := range item.Feedings {
+			var eventID uuid.UUID
+			err = tx.QueryRow(ctx, `
+				INSERT INTO feedings
+					(hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes)
+				VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+				*hiveID, now, feeding.Type, feeding.Quantity, feeding.QuantityUnit,
+				feeding.FeederType, feeding.Notes).Scan(&eventID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid feeding extracted from transcript")
+				return
+			}
+			feedingIDs = append(feedingIDs, eventID)
+		}
+		for _, treatment := range item.Treatments {
+			var eventID uuid.UUID
+			err = tx.QueryRow(ctx, `
+				INSERT INTO treatment_events
+					(hive_id, inspection_id, date_applied, product, method)
+				VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+				*hiveID, createdID, now, treatment.Product, treatment.Method).Scan(&eventID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid treatment extracted from transcript")
+				return
+			}
+			treatmentEventIDs = append(treatmentEventIDs, eventID)
+		}
+		for _, event := range item.QueenEvents {
+			var eventID uuid.UUID
+			err = tx.QueryRow(ctx, `
+				INSERT INTO queen_events (hive_id, event_date, event_type, notes)
+				VALUES ($1,$2,$3,$4) RETURNING id`,
+				*hiveID, now, event.EventType, event.Notes).Scan(&eventID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid queen event extracted from transcript")
+				return
+			}
+			queenEventIDs = append(queenEventIDs, eventID)
+		}
+		for _, miteCount := range item.MiteCounts {
+			var eventID uuid.UUID
+			err = tx.QueryRow(ctx, `
+				INSERT INTO mite_counts
+					(hive_id, inspection_id, date, method, mites_count, sample_size, notes)
+				VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+				*hiveID, createdID, now, miteCount.Method, miteCount.MitesCount,
+				miteCount.SampleSize, miteCount.Notes).Scan(&eventID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid mite count extracted from transcript")
+				return
+			}
+			miteCountIDs = append(miteCountIDs, eventID)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "inspectionIds": inspectionIDs})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true, "inspectionIds": inspectionIDs, "feedingIds": feedingIDs,
+		"treatmentEventIds": treatmentEventIDs, "queenEventIds": queenEventIDs,
+		"miteCountIds": miteCountIDs,
+	})
 }
 
 // transcriptionNullableJSON marshals a slice for a jsonb column, mapping nil
