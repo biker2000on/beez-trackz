@@ -34,11 +34,13 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
+import { useAccessProfile } from "@/features/access/api";
 
 import {
   QUEEN_STATUSES,
   QUEEN_STATUS_LABELS,
   useBulkUpdateQueens,
+  useQueenPerformance,
   useQueens,
   type Queen,
   type QueenStatus,
@@ -48,6 +50,7 @@ import { markingColorForDate, markingColorForYear } from "./marking";
 import { QueenDetailsSheet } from "./queen-details-sheet";
 import { QueenFormDialog } from "./queen-form-dialog";
 import { QueenNode } from "./queen-node";
+import { QueenPerformancePanel } from "./performance-panel";
 
 const nodeTypes = { queen: QueenNode };
 
@@ -79,6 +82,12 @@ function MarkingLegend() {
 
 export function GenealogyView() {
   const queensQuery = useQueens();
+  const performanceQuery = useQueenPerformance();
+  const access = useAccessProfile();
+  const canEdit =
+    access.data?.isAdmin === true ||
+    access.data?.memberships.some((membership) => membership.role === "editor") ===
+      true;
   const { resolvedTheme } = useTheme();
 
   const [formOpen, setFormOpen] = React.useState(false);
@@ -98,7 +107,23 @@ export function GenealogyView() {
   // Layout is a pure function of the queen list, and the effect below pushes
   // every fresh layout into React Flow — the tree always reflects the latest
   // query data (the legacy version cached a stale memo and never refreshed).
-  const layout = React.useMemo(() => layoutQueenTree(queens), [queens]);
+  const performance = React.useMemo(
+    () =>
+      new Map(
+        (performanceQuery.data?.queens ?? []).map((queen) => [
+          queen.id,
+          {
+            score: queen.overallScore,
+            inspections: queen.inspectionCount,
+          },
+        ]),
+      ),
+    [performanceQuery.data],
+  );
+  const layout = React.useMemo(
+    () => layoutQueenTree(queens, performance),
+    [queens, performance],
+  );
 
   const [nodes, setNodes, onNodesChange] = useNodesState<QueenFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -109,19 +134,21 @@ export function GenealogyView() {
   }, [layout, setNodes, setEdges]);
 
   const openCreate = React.useCallback(() => {
+    if (!canEdit) return;
     setEditingQueen(undefined);
     setFormOpen(true);
-  }, []);
+  }, [canEdit]);
 
   useShortcut("n", "New queen", openCreate);
   useShortcut("b", "Toggle bulk-manage queens", () => {
+    if (!canEdit) return;
     setManageMode((active) => {
       if (active) setBulkSelected(new Set());
       return !active;
     });
   });
   useShortcut("x", "Select all queens", () => {
-    if (!manageMode) return;
+    if (!canEdit || !manageMode) return;
     setBulkSelected(
       bulkSelected.size === queens.length
         ? new Set()
@@ -180,7 +207,7 @@ export function GenealogyView() {
             Family tree of your queens, colored by international marking year.
           </p>
         </div>
-        <div className="flex gap-2">
+        {canEdit ? <div className="flex gap-2">
           <Button
             variant={manageMode ? "secondary" : "outline"}
             onClick={() => {
@@ -195,9 +222,10 @@ export function GenealogyView() {
             <Plus />
             Add queen
           </Button>
-        </div>
+        </div> : null}
       </div>
       <MarkingLegend />
+      <QueenPerformancePanel />
 
       {queensQuery.isLoading ? (
         <Skeleton className="h-[60vh] min-h-96 w-full rounded-xl" />
@@ -299,7 +327,7 @@ export function GenealogyView() {
         </div>
       )}
 
-      {manageMode && queens.length > 0 && (
+      {canEdit && manageMode && queens.length > 0 && (
         <div className="sticky bottom-20 z-20 flex flex-wrap items-center gap-2 rounded-xl border bg-card p-3 shadow-lg md:bottom-4">
           <span className="text-sm font-medium">
             {bulkSelected.size} selected
@@ -353,6 +381,7 @@ export function GenealogyView() {
           if (!open) setSelectedId(null);
         }}
         onEdit={handleEdit}
+        canEdit={canEdit}
       />
     </div>
   );

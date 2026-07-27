@@ -28,8 +28,8 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT MAX(version_id) FROM goose_db_version WHERE is_applied`).Scan(&version); err != nil {
 		t.Fatalf("read migration version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("migration version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("migration version = %d, want 3", version)
 	}
 
 	var lotColumnExists bool
@@ -43,6 +43,26 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 	}
 	if !lotColumnExists {
 		t.Fatal("honey_sales.harvest_lot_id was not created")
+	}
+
+	for _, table := range []string{
+		"app_users",
+		"apiary_memberships",
+		"api_tokens",
+		"offline_mutation_receipts",
+		"apiary_weather_cache",
+	} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM information_schema.tables
+				WHERE table_schema='public' AND table_name=$1
+			)`, table).Scan(&exists); err != nil {
+			t.Fatalf("inspect %s: %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("%s was not created", table)
+		}
 	}
 
 	apiaryID := uuid.New()

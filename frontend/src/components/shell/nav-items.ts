@@ -19,6 +19,7 @@ export interface NavItem {
   icon: LucideIcon;
   /** Key used in the `g` + key navigation sequence. */
   shortcutKey: string;
+  adminOnly?: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -28,8 +29,8 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Queens", shortLabel: "Queens", href: "/genealogy", icon: Crown, shortcutKey: "q" },
   { label: "Recommendations", shortLabel: "Recs", href: "/recommendations", icon: Sparkles, shortcutKey: "r" },
   { label: "Reports", shortLabel: "Reports", href: "/reports", icon: ChartNoAxesCombined, shortcutKey: "o" },
-  { label: "Honey", shortLabel: "Honey", href: "/harvest", icon: Droplets, shortcutKey: "y" },
-  { label: "Inventory", shortLabel: "Gear", href: "/inventory", icon: Package, shortcutKey: "i" },
+  { label: "Honey", shortLabel: "Honey", href: "/harvest", icon: Droplets, shortcutKey: "y", adminOnly: true },
+  { label: "Inventory", shortLabel: "Gear", href: "/inventory", icon: Package, shortcutKey: "i", adminOnly: true },
   { label: "Settings", shortLabel: "Settings", href: "/settings", icon: Settings, shortcutKey: "s" },
 ];
 
@@ -41,3 +42,7 @@ export const MOBILE_NAV_ITEMS = [
   NAV_ITEMS[6], // Honey
   NAV_ITEMS[8], // Settings
 ];
+
+export function visibleNavItems(items: NavItem[], isAdmin: boolean) {
+  return items.filter((item) => isAdmin || !item.adminOnly);
+}

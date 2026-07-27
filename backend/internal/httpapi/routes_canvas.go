@@ -14,13 +14,19 @@ import (
 )
 
 func (s *Server) mountCanvas(r chi.Router) {
-	r.Put("/apiaries/{id}/canvas-layout", s.handleCanvasSaveLayout)
+	r.With(s.requireApiaryParamRole(true)).
+		Put("/apiaries/{id}/canvas-layout", s.handleCanvasSaveLayout)
 	r.Post("/canvas/hives", s.handleCanvasCreateHive)
-	r.Patch("/canvas/hives/{id}", s.handleCanvasUpdateHive)
-	r.Post("/canvas/hives/{id}/assign-slot", s.handleCanvasAssignSlot)
-	r.Post("/canvas/hives/{id}/placement", s.handleCanvasSetPlacement)
-	r.Post("/canvas/hives/{id}/remove-slot", s.handleCanvasRemoveSlot)
-	r.Post("/canvas/hives/{id}/facing", s.handleCanvasSetFacing)
+	r.With(s.requireHiveParamRole(true)).
+		Patch("/canvas/hives/{id}", s.handleCanvasUpdateHive)
+	r.With(s.requireHiveParamRole(true)).
+		Post("/canvas/hives/{id}/assign-slot", s.handleCanvasAssignSlot)
+	r.With(s.requireHiveParamRole(true)).
+		Post("/canvas/hives/{id}/placement", s.handleCanvasSetPlacement)
+	r.With(s.requireHiveParamRole(true)).
+		Post("/canvas/hives/{id}/remove-slot", s.handleCanvasRemoveSlot)
+	r.With(s.requireHiveParamRole(true)).
+		Post("/canvas/hives/{id}/facing", s.handleCanvasSetFacing)
 }
 
 // canvasStand is the persisted stand geometry (see src/lib/canvas/types.ts).
@@ -119,8 +125,12 @@ func (s *Server) handleCanvasCreateHive(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "standCols must be at least 1")
 		return
 	}
-	if _, err := uuid.Parse(req.ApiaryID); err != nil {
+	apiaryID, err := uuid.Parse(req.ApiaryID)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	if !s.requireApiaryRole(w, r, apiaryID, true) {
 		return
 	}
 	label := canvasSlotLabel(strings.TrimSpace(req.StandLabel), *req.SlotRow, *req.SlotCol, req.StandCols)

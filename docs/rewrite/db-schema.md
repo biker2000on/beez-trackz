@@ -1,6 +1,6 @@
 # Database Schema Inventory (rewrite source of truth)
 
-Ported to `backend/internal/db/migrations/00001_init.sql`. Conventions in the new schema:
+Implemented in `backend/internal/db/migrations/`. Conventions in the new schema:
 uuid PKs (`gen_random_uuid()`), `timestamptz`, `updated_at` maintained by trigger, indexes on
 every FK, media columns hold MinIO object keys (`photos.original_key/thumbnail_key/medium_key`,
 `media_files.audio_key`). Legacy columns `honey_sales.items`, `user_settings.jar_sizes`,
@@ -46,11 +46,14 @@ notes, created_at, updated_at.
 ### inspections
 id, hive_id → hives NOT NULL, date NOT NULL, inspector_name, queen_seen bool, queen_health,
 brood_pattern, stores_honey int, stores_pollen int, temperament int (1-5 ratings),
-pests jsonb, treatments jsonb, notes, source_media jsonb, created_at, updated_at.
+pests jsonb, treatments jsonb, notes, source_media jsonb, weather_snapshot
+jsonb, created_at, updated_at.
 
 JSON shapes: pests `Array<{type: string, count?: string}>`; treatments
 `Array<{product: string, method?: string}>`; source_media
 `{mediaFileId, hiveReference, rawText}` (set when created from a transcription).
+`weather_snapshot` stores provider, fetch time, timezone, and the exact current
+conditions captured when the inspection was created.
 
 ### feedings (append-only)
 id, hive_id → hives NOT NULL, date_fed NOT NULL, type feed_type NOT NULL,
@@ -136,7 +139,7 @@ date_last_seen date (null = active bloom), year int NOT NULL, abundance int, not
 ### photos (append-only)
 id, owner_type media_owner_type NOT NULL, owner_id uuid NOT NULL (polymorphic: hive/apiary/
 inspection, no FK), original_key text NOT NULL, thumbnail_key, medium_key, taken_date,
-caption, tags jsonb (`string[]`), created_at.
+caption, tags jsonb (`string[]`), created_at, updated_at.
 
 ### media_files
 id, audio_key text NOT NULL, transcription_text, transcription_status NOT NULL DEFAULT
@@ -146,6 +149,21 @@ id, audio_key text NOT NULL, transcription_text, transcription_status NOT NULL D
 id, hive_id → hives (null = apiary-wide), type recommendation_type NOT NULL,
 message text NOT NULL, priority text NOT NULL DEFAULT 'normal' (values urgent|high|normal|low),
 dismissed bool NOT NULL DEFAULT false, created_at.
+
+### app_users and apiary_memberships
+`app_users` stores canonical auth subject, display name, email, administrator
+flag, active flag, and timestamps. `apiary_memberships` has a composite
+`(user_id, apiary_id)` key and `viewer|editor` role. Existing password/OIDC
+owners migrate as administrators.
+
+### api_tokens and offline_mutation_receipts
+API tokens store only a SHA-256 token hash, owner, name, last-use/expiry, and
+creation time. Offline receipts use `(user_id, mutation_id)` as the key and
+retain a completed JSON response for idempotent PWA replay.
+
+### apiary_weather_cache
+One row per apiary with the exact coordinates, provider JSON, fetch time, and
+expiry. Coordinate changes invalidate the cached match.
 
 ### user_settings (single-row instance settings)
 id, password_hash (null when OIDC-bootstrapped), display_name, ai_provider_config jsonb,
@@ -157,8 +175,8 @@ model?}, imageAnalysis: {provider, model?}, import?: {provider, model?}, apiKeys
 google?, ollamaUrl?} }`, provider ∈ claude|gemini|ollama.
 
 ### oidc_identities
-id, issuer NOT NULL, subject NOT NULL, display_name, email, created_at, last_login_at,
-UNIQUE (issuer, subject).
+id, issuer NOT NULL, subject NOT NULL, display_name, email, user_id →
+app_users, created_at, last_login_at, UNIQUE (issuer, subject).
 
 ## Enums
 
@@ -179,3 +197,4 @@ UNIQUE (issuer, subject).
 | stock_adjustment_reason | purchased, built, discarded, broken, gifted, other |
 | frame_condition | drawn, fresh |
 | honey_movement_kind | jarring, bulk_use, loss, give_away, jar_adjustment |
+| apiary_access_role | viewer, editor |

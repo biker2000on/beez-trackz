@@ -122,7 +122,13 @@ type QueenValues = z.infer<typeof queenSchema>;
 
 const NO_PARENT = "none";
 
-export function QueenTab({ hiveId }: { hiveId: string }) {
+export function QueenTab({
+  hiveId,
+  canEdit = true,
+}: {
+  hiveId: string;
+  canEdit?: boolean;
+}) {
   const queens = useHiveQueens(hiveId);
   const allQueens = useQueens();
   const createQueen = useCreateQueen();
@@ -181,12 +187,12 @@ export function QueenTab({ hiveId }: { hiveId: string }) {
 
   return (
     <div className="grid gap-4">
-      <div className="flex justify-end">
+      {canEdit ? <div className="flex justify-end">
         <Button size="sm" onClick={() => setAddOpen(true)}>
           <Plus className="size-4" />
           Add queen
         </Button>
-      </div>
+      </div> : null}
 
       {queens.isPending ? (
         <Skeleton className="h-28 w-full" />
@@ -212,7 +218,7 @@ export function QueenTab({ hiveId }: { hiveId: string }) {
         </div>
       )}
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      {canEdit ? <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Add queen</DialogTitle>
@@ -319,7 +325,7 @@ export function QueenTab({ hiveId }: { hiveId: string }) {
             </DialogFooter>
           </form>
         </DialogContent>
-      </Dialog>
+      </Dialog> : null}
     </div>
   );
 }

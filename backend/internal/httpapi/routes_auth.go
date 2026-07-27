@@ -12,6 +12,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
@@ -72,8 +73,13 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		"passwordLogin": row != nil && row.PasswordHash != nil,
 	}
 	if sess, err := auth.SessionFromRequest(r, s.cfg.SessionSecret); err == nil {
-		resp["authenticated"] = true
-		resp["displayName"] = sess.Name
+		if user, userErr := s.principalFromSession(r, sess); userErr == nil {
+			resp["authenticated"] = true
+			resp["displayName"] = user.DisplayName
+			resp["isAdmin"] = user.IsAdmin
+		} else {
+			resp["authenticated"] = false
+		}
 	} else {
 		resp["authenticated"] = false
 	}
@@ -123,8 +129,14 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		// OIDC-bootstrapped instance gaining a password. The instance already
 		// has an owner, so this MUST NOT be reachable anonymously — otherwise
 		// anyone could claim a password on a public SSO-only deployment.
-		if _, authErr := auth.SessionFromRequest(r, s.cfg.SessionSecret); authErr != nil {
+		session, authErr := auth.SessionFromRequest(r, s.cfg.SessionSecret)
+		if authErr != nil {
 			writeError(w, http.StatusUnauthorized, "Sign in with SSO first to add a password")
+			return
+		}
+		user, userErr := s.principalFromSession(r, session)
+		if userErr != nil || !user.IsAdmin {
+			writeError(w, http.StatusForbidden, "administrator access required")
 			return
 		}
 		_, err = s.pool.Exec(r.Context(),
@@ -136,6 +148,15 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			string(hash), req.DisplayName)
 	}
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if _, err := s.pool.Exec(r.Context(), `
+		INSERT INTO app_users (auth_subject, display_name, is_admin)
+		VALUES ('password', $1, true)
+		ON CONFLICT (auth_subject) DO UPDATE SET
+			display_name=EXCLUDED.display_name, is_active=true`,
+		req.DisplayName); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -318,6 +339,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		Name              string `json:"name"`
 		PreferredUsername string `json:"preferred_username"`
 		Email             string `json:"email"`
+		EmailVerified     bool   `json:"email_verified"`
 	}
 	if err := idToken.Claims(&idClaims); err != nil || idClaims.Sub == "" {
 		s.loginRedirect(w, r, "oidc_failed")
@@ -329,12 +351,51 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	canonicalSubject := "oidc:" + s.cfg.OIDCIssuer + ":" + idClaims.Sub
+	var userID uuid.UUID
+	err = s.pool.QueryRow(ctx, `
+		SELECT id FROM app_users
+		WHERE is_active AND (
+			auth_subject=$1
+			OR ($2 <> '' AND $3::boolean AND email IS NOT NULL
+				AND lower(email)=lower($2))
+		)
+		LIMIT 1`, canonicalSubject, strings.TrimSpace(idClaims.Email),
+		idClaims.EmailVerified).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var userCount int
+		if countErr := s.pool.QueryRow(ctx, `SELECT count(*) FROM app_users`).Scan(&userCount); countErr != nil {
+			s.loginRedirect(w, r, "oidc_failed")
+			return
+		}
+		if userCount != 0 {
+			s.loginRedirect(w, r, "not_authorized")
+			return
+		}
+		err = s.pool.QueryRow(ctx, `
+			INSERT INTO app_users (auth_subject,display_name,email,is_admin)
+			VALUES ($1,$2,$3,true) RETURNING id`,
+			canonicalSubject, nullIfEmpty(displayName), nullIfEmpty(idClaims.Email)).Scan(&userID)
+	}
+	if err != nil {
+		s.loginRedirect(w, r, "oidc_failed")
+		return
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE app_users SET auth_subject=$1, display_name=COALESCE($2,display_name),
+			email=COALESCE($3,email), is_active=true
+		WHERE id=$4`,
+		canonicalSubject, nullIfEmpty(displayName), nullIfEmpty(idClaims.Email), userID); err != nil {
+		s.loginRedirect(w, r, "oidc_failed")
+		return
+	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO oidc_identities (issuer, subject, display_name, email)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO oidc_identities (issuer, subject, display_name, email, user_id)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (issuer, subject)
-		DO UPDATE SET display_name = EXCLUDED.display_name, email = EXCLUDED.email, last_login_at = now()`,
-		s.cfg.OIDCIssuer, idClaims.Sub, nullIfEmpty(displayName), nullIfEmpty(idClaims.Email))
+		DO UPDATE SET display_name = EXCLUDED.display_name, email = EXCLUDED.email,
+			user_id=EXCLUDED.user_id, last_login_at = now()`,
+		s.cfg.OIDCIssuer, idClaims.Sub, nullIfEmpty(displayName), nullIfEmpty(idClaims.Email), userID)
 	if err != nil {
 		s.loginRedirect(w, r, "oidc_failed")
 		return
@@ -354,7 +415,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sessionToken, err := auth.IssueToken(s.cfg.SessionSecret, idClaims.Sub, displayName)
+	sessionToken, err := auth.IssueToken(s.cfg.SessionSecret, canonicalSubject, displayName)
 	if err != nil {
 		s.loginRedirect(w, r, "oidc_failed")
 		return

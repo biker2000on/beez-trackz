@@ -16,9 +16,10 @@ import (
 // default sizes so a fresh instance works out of the box.
 
 func (s *Server) mountJarSizes(r chi.Router) {
-	r.Get("/jar-sizes", s.jarList)
-	r.Post("/jar-sizes", s.jarCreate)
-	r.Put("/jar-sizes/{id}", s.jarUpdate)
+	admin := r.With(s.requireAdmin)
+	admin.Get("/jar-sizes", s.jarList)
+	admin.Post("/jar-sizes", s.jarCreate)
+	admin.Put("/jar-sizes/{id}", s.jarUpdate)
 }
 
 type jarSizeRow struct {

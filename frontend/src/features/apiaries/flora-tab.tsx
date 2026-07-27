@@ -48,7 +48,13 @@ type BloomValues = z.infer<typeof bloomSchema>;
 
 const NOT_RATED = "none";
 
-export function FloraTab({ apiaryId }: { apiaryId: string }) {
+export function FloraTab({
+  apiaryId,
+  canEdit = true,
+}: {
+  apiaryId: string;
+  canEdit?: boolean;
+}) {
   const active = useBlooms(apiaryId, "active");
   const history = useBlooms(apiaryId, "history");
   const species = useBloomSpecies();
@@ -128,8 +134,8 @@ export function FloraTab({ apiaryId }: { apiaryId: string }) {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card>
+    <div className={`grid gap-4 ${canEdit ? "lg:grid-cols-2" : ""}`}>
+      {canEdit ? <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <Flower2 className="size-4 text-primary" />
@@ -237,7 +243,7 @@ export function FloraTab({ apiaryId }: { apiaryId: string }) {
             </Button>
           </form>
         </CardContent>
-      </Card>
+      </Card> : null}
 
       <div className="grid content-start gap-4">
         <Card>
@@ -266,14 +272,16 @@ export function FloraTab({ apiaryId }: { apiaryId: string }) {
                           ` · abundance ${bloom.abundance}/5`}
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onEndBloom(bloom.id)}
-                      disabled={endBloom.isPending}
-                    >
-                      End bloom
-                    </Button>
+                    {canEdit ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onEndBloom(bloom.id)}
+                        disabled={endBloom.isPending}
+                      >
+                        End bloom
+                      </Button>
+                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -309,14 +317,16 @@ export function FloraTab({ apiaryId }: { apiaryId: string }) {
                         {bloom.dateLastSeen &&
                           ` – ${formatDate(bloom.dateLastSeen)}`}
                       </span>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Delete ${bloom.species} observation`}
-                        onClick={() => onDeleteBloom(bloom.id)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      {canEdit ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Delete ${bloom.species} observation`}
+                          onClick={() => onDeleteBloom(bloom.id)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      ) : null}
                     </div>
                   </li>
                 ))}

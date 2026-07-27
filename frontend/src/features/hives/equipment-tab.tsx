@@ -34,7 +34,13 @@ import {
 } from "./hooks";
 import { formatDate } from "./lib";
 
-export function EquipmentTab({ hiveId }: { hiveId: string }) {
+export function EquipmentTab({
+  hiveId,
+  canManage = true,
+}: {
+  hiveId: string;
+  canManage?: boolean;
+}) {
   const deployments = useHiveDeployments(hiveId);
   const removeDeployment = useRemoveDeployment();
   const [deployOpen, setDeployOpen] = React.useState(false);
@@ -58,12 +64,12 @@ export function EquipmentTab({ hiveId }: { hiveId: string }) {
 
   return (
     <div className="grid gap-4">
-      <div className="flex justify-end">
+      {canManage ? <div className="flex justify-end">
         <Button size="sm" onClick={() => setDeployOpen(true)}>
           <PackagePlus className="size-4" />
           Deploy equipment
         </Button>
-      </div>
+      </div> : null}
 
       {deployments.isPending ? (
         <Skeleton className="h-24 w-full" />
@@ -89,7 +95,7 @@ export function EquipmentTab({ hiveId }: { hiveId: string }) {
                       {deployment.notes && ` · ${deployment.notes}`}
                     </p>
                   </div>
-                  <Button
+                  {canManage ? <Button
                     variant="outline"
                     size="sm"
                     onClick={() => onReturn(deployment.id)}
@@ -97,7 +103,7 @@ export function EquipmentTab({ hiveId }: { hiveId: string }) {
                   >
                     <Undo2 className="size-4" />
                     Return to storage
-                  </Button>
+                  </Button> : null}
                 </li>
               ))}
             </ul>
@@ -128,11 +134,11 @@ export function EquipmentTab({ hiveId }: { hiveId: string }) {
         </div>
       )}
 
-      <DeployDialog
+      {canManage ? <DeployDialog
         open={deployOpen}
         onOpenChange={setDeployOpen}
         hiveId={hiveId}
-      />
+      /> : null}
     </div>
   );
 }

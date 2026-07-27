@@ -10,8 +10,9 @@ import (
 // own routes_<domain>.go file.
 func (s *Server) mountDomains(r chi.Router) {
 	r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, sessionFrom(r))
+		writeJSON(w, http.StatusOK, principalFrom(r))
 	})
+	s.mountAccess(r)
 	s.mountApiaries(r)
 	s.mountHives(r)
 	s.mountCanvas(r)
@@ -31,4 +32,6 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountTranscriptions(r)
 	s.mountOperations(r)
 	s.mountCommerce(r)
+	s.mountFieldIntelligence(r)
+	s.mountMCP(r)
 }

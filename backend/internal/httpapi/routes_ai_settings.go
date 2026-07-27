@@ -11,10 +11,11 @@ import (
 )
 
 func (s *Server) mountAISettings(r chi.Router) {
-	r.Get("/settings/ai", s.handleAISettingsGet)
-	r.Put("/settings/ai", s.handleAISettingsPut)
-	r.Post("/settings/ai/test", s.handleAISettingsTest)
-	r.Get("/settings/ai/ollama-models", s.handleAIOllamaModels)
+	admin := r.With(s.requireAdmin)
+	admin.Get("/settings/ai", s.handleAISettingsGet)
+	admin.Put("/settings/ai", s.handleAISettingsPut)
+	admin.Post("/settings/ai/test", s.handleAISettingsTest)
+	admin.Get("/settings/ai/ollama-models", s.handleAIOllamaModels)
 }
 
 // aiTaskJSON renders a TaskConfig with camelCase fields (model omitted if empty).

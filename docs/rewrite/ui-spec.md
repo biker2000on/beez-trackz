@@ -1,6 +1,6 @@
 # UI Feature Spec (rewrite from scratch — ideas only, zero legacy code reuse)
 
-New frontend: Next.js view-only layer in `frontend/`, all data via the Go API (`/api/v1`,
+New frontend: Next.js client in `frontend/`, all data via the Go API (`/api/v1`,
 proxied same-origin). TanStack Query for data, react-hook-form + zod for forms, Tailwind +
 shadcn-style components, next-themes. PWA install + manifest retained.
 
@@ -11,9 +11,10 @@ shadcn-style components, next-themes. PWA install + manifest retained.
 - Warm honey/amber palette (primary amber, forest-green accent, cream bg), dark mode.
 - Keyboard shortcuts: `?` help dialog, `g`+key nav sequences, per-page keys (n=new, b=bulk,
   honey j/s/u/l/v/a). Ignore while typing/dialog open.
-- PWA: manifest (standalone, start /dashboard, amber theme, maskable icons), install prompt
-  card + iOS instructions, re-install from settings. NO offline-write queue (legacy one was
-  dead code) — service worker for asset caching only, show an offline banner.
+- PWA: manifest (standalone, start /dashboard, amber theme, maskable icons),
+  install prompt and iOS instructions. Cache field reads; queue supported JSON
+  writes in IndexedDB; replay on reconnect and offer retry/discard for
+  conflicts.
 
 ## Auth pages
 - `/setup`: first-run display name + password (≥8, confirm). `/login`: password + optional
@@ -31,7 +32,8 @@ flag >7 days), frame shortage (spare frames, drawn/fresh breakdown), honey inven
 - List: card grid (name, lat/lng, hive count) + new-apiary dialog.
 - Detail tabs: Layout (canvas), Hives (cards + new hive + bulk create), Bulk Actions
   (bulk inspection + bulk feeding forms), Flora (bloom form + active blooms + history),
-  Photos (upload + gallery). Header: batch record button, edit, delete (guarded).
+  Photos (upload + gallery), and Forecast (weather alerts + local bloom
+  windows). Header includes MUNBYN QR/NFC hive-tag printing.
 - Form: name, lat/lng with "Use current location" geolocation button, notes.
 
 ## Canvas (retain full functionality, rewrite clean)
@@ -74,6 +76,8 @@ flag >7 days), frame shortage (spare frames, drawn/fresh breakdown), honey inven
 - React Flow tree from parentQueenId, custom layout, queen nodes with international
   queen-marking year color dot, status badge, apiary—hive. Theme-synced. Add queen form
   (hive, parent queen, origin, dates, status).
+- Performance table ranks queens and mother lines from brood, temperament,
+  yield, and survival outcomes.
 
 ## Honey (/harvest)
 - Stat strip: bulk on hand, jars on hand, revenue, used+losses.
@@ -119,6 +123,8 @@ flag >7 days), frame shortage (spare frames, drawn/fresh breakdown), honey inven
 - Preferences: theme, default apiary, date format, weight unit.
 - AI config: keys (Anthropic/Google/Ollama URL) with test-connection buttons, Ollama model
   discovery, per-task provider+model selects.
+- Administrators add OIDC collaborators and assign viewer/editor per apiary.
+  Every user can create/revoke personal API tokens and see the MCP endpoint.
 - Jar sizes editor. Import records (upload → AI parse → review with include checkboxes +
   editable rows + summary → confirm). Install app.
 

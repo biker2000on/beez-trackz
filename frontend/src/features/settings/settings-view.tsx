@@ -1,7 +1,15 @@
 "use client";
 
-import { Bot, Milk, MonitorSmartphone, SlidersHorizontal } from "lucide-react";
+import {
+  Bot,
+  KeyRound,
+  Milk,
+  MonitorSmartphone,
+  SlidersHorizontal,
+} from "lucide-react";
 
+import { AccessSection } from "@/features/access/access-section";
+import { useAccessProfile } from "@/features/access/api";
 import { AISection } from "./ai-section";
 import { InstallSection } from "./install-section";
 import { JarSizesSection } from "./jar-sizes-section";
@@ -9,6 +17,8 @@ import { PreferencesSection } from "./preferences-section";
 import { SettingsSection } from "./settings-section";
 
 export function SettingsView() {
+  const profile = useAccessProfile();
+  const isAdmin = profile.data?.isAdmin === true;
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-4">
       <div>
@@ -17,28 +27,44 @@ export function SettingsView() {
           Preferences, AI providers, jar sizes, and app install.
         </p>
       </div>
+      {isAdmin ? (
+        <>
+          <SettingsSection
+            title="Preferences"
+            description="Theme, default apiary, and display formats."
+            icon={SlidersHorizontal}
+          >
+            <PreferencesSection />
+          </SettingsSection>
+          <SettingsSection
+            title="AI configuration"
+            description="Provider keys, connection tests, and per-task models."
+            icon={Bot}
+            defaultOpen={false}
+          >
+            <AISection />
+          </SettingsSection>
+          <SettingsSection
+            title="Jar sizes"
+            description="Container catalog used by the honey ledger."
+            icon={Milk}
+            defaultOpen={false}
+          >
+            <JarSizesSection />
+          </SettingsSection>
+        </>
+      ) : null}
       <SettingsSection
-        title="Preferences"
-        description="Theme, default apiary, and display formats."
-        icon={SlidersHorizontal}
+        title="Users, access, and API"
+        description={
+          isAdmin
+            ? "Apiary collaborators, viewer/editor roles, API tokens, and MCP."
+            : "Your apiary access, API tokens, and MCP connection."
+        }
+        icon={KeyRound}
+        defaultOpen={isAdmin}
       >
-        <PreferencesSection />
-      </SettingsSection>
-      <SettingsSection
-        title="AI configuration"
-        description="Provider keys, connection tests, and per-task models."
-        icon={Bot}
-        defaultOpen={false}
-      >
-        <AISection />
-      </SettingsSection>
-      <SettingsSection
-        title="Jar sizes"
-        description="Container catalog used by the honey ledger."
-        icon={Milk}
-        defaultOpen={false}
-      >
-        <JarSizesSection />
+        <AccessSection />
       </SettingsSection>
       <SettingsSection
         title="Install app"

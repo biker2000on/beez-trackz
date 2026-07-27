@@ -4,10 +4,23 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
-import { MOBILE_NAV_ITEMS } from "@/components/shell/nav-items";
+import {
+  MOBILE_NAV_ITEMS,
+  NAV_ITEMS,
+  visibleNavItems,
+} from "@/components/shell/nav-items";
+import { useAccessProfile } from "@/features/access/api";
 
 export function BottomNav() {
   const pathname = usePathname();
+  const profile = useAccessProfile();
+  const isAdmin = profile.data?.isAdmin === true;
+  const items = isAdmin
+    ? MOBILE_NAV_ITEMS
+    : visibleNavItems(
+        [NAV_ITEMS[0], NAV_ITEMS[1], NAV_ITEMS[2], NAV_ITEMS[3], NAV_ITEMS[8]],
+        false,
+      );
 
   return (
     <nav
@@ -15,7 +28,7 @@ export function BottomNav() {
       className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur pb-safe md:hidden"
     >
       <ul className="grid grid-cols-5">
-        {MOBILE_NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const active =
             pathname === item.href || pathname.startsWith(`${item.href}/`);
           const Icon = item.icon;

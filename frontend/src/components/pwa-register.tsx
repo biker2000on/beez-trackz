@@ -1,30 +1,189 @@
 "use client";
 
+import { CloudOff, RefreshCw, TriangleAlert } from "lucide-react";
 import * as React from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
-/**
- * Register the production service worker. The app remains online-first: API
- * writes are never queued or cached, while the installable shell and static
- * assets remain available when a beekeeper loses signal in the yard.
- */
+type QueueStatus = {
+  pending: number;
+  conflicts: number;
+  failed: number;
+  items: Array<{
+    id: string;
+    method: string;
+    path: string;
+    queuedAt: string;
+    state: "pending" | "conflict" | "failed";
+    error: string | null;
+  }>;
+};
+
+const emptyStatus: QueueStatus = {
+  pending: 0,
+  conflicts: 0,
+  failed: 0,
+  items: [],
+};
+
 export function PwaRegister() {
-  React.useEffect(() => {
-    if (
-      process.env.NODE_ENV !== "production" ||
-      !("serviceWorker" in navigator)
-    ) {
-      return;
-    }
+  const online = React.useSyncExternalStore(
+    React.useCallback((notify) => {
+      window.addEventListener("online", notify);
+      window.addEventListener("offline", notify);
+      return () => {
+        window.removeEventListener("online", notify);
+        window.removeEventListener("offline", notify);
+      };
+    }, []),
+    () => navigator.onLine,
+    () => true,
+  );
+  const [queue, setQueue] = React.useState<QueueStatus>(emptyStatus);
+  const [reviewOpen, setReviewOpen] = React.useState(false);
 
-    const register = () => {
-      void navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  React.useEffect(() => {
+    if (process.env.NODE_ENV !== "production") return;
+    if (!("serviceWorker" in navigator)) return;
+
+    const send = (type: string) => {
+      navigator.serviceWorker.controller?.postMessage({ type });
+    };
+    const onOnline = () => {
+      send("REPLAY_OFFLINE_QUEUE");
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "OFFLINE_QUEUE_STATUS") {
+        setQueue({
+          pending: event.data.pending ?? 0,
+          conflicts: event.data.conflicts ?? 0,
+          failed: event.data.failed ?? 0,
+          items: event.data.items ?? [],
+        });
+      }
+    };
+    const register = async () => {
+      const registration = await navigator.serviceWorker.register("/sw.js", {
+        scope: "/",
+      });
+      await navigator.serviceWorker.ready;
+      (registration.active ?? navigator.serviceWorker.controller)?.postMessage({
+        type: "GET_OFFLINE_QUEUE_STATUS",
+      });
     };
 
-    if (document.readyState === "complete") register();
+    window.addEventListener("online", onOnline);
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    if (document.readyState === "complete") void register();
     else window.addEventListener("load", register, { once: true });
 
-    return () => window.removeEventListener("load", register);
+    return () => {
+      window.removeEventListener("load", register);
+      window.removeEventListener("online", onOnline);
+      navigator.serviceWorker.removeEventListener("message", onMessage);
+    };
   }, []);
 
-  return null;
+  const issues = queue.conflicts + queue.failed;
+  if (online && queue.pending === 0 && issues === 0) return null;
+
+  const sendMutationAction = (type: string, id: string) =>
+    navigator.serviceWorker.controller?.postMessage({ type, id });
+
+  return (
+    <>
+      <div
+      className="fixed inset-x-3 bottom-3 z-[100] mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-lg dark:border-amber-800 dark:bg-amber-950 dark:text-amber-50"
+      role="status"
+    >
+      {issues > 0 ? (
+        <TriangleAlert className="size-5 shrink-0" />
+      ) : (
+        <CloudOff className="size-5 shrink-0" />
+      )}
+      <span className="flex-1">
+        {!online
+          ? `Offline${queue.pending ? ` · ${queue.pending} change${queue.pending === 1 ? "" : "s"} queued` : ""}`
+          : issues
+            ? `${issues} offline change${issues === 1 ? "" : "s"} need review`
+            : `Syncing ${queue.pending} queued change${queue.pending === 1 ? "" : "s"}…`}
+      </span>
+      {issues > 0 ? (
+        <button
+          className="rounded-md px-2 py-1 font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+          onClick={() => setReviewOpen(true)}
+          type="button"
+        >
+          Review
+        </button>
+      ) : online && queue.pending > 0 ? (
+        <button
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+          onClick={() =>
+            navigator.serviceWorker.controller?.postMessage({
+              type: "REPLAY_OFFLINE_QUEUE",
+            })
+          }
+          type="button"
+        >
+          <RefreshCw className="size-3.5" />
+          Retry
+        </button>
+      ) : null}
+      </div>
+      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Offline changes needing review</DialogTitle>
+            <DialogDescription>
+              Retry after checking the current server record, or discard the
+              local change.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[55dvh] divide-y overflow-y-auto rounded-lg border">
+            {queue.items
+              .filter((item) => item.state !== "pending")
+              .map((item) => (
+                <div className="grid gap-2 p-3" key={item.id}>
+                  <div className="flex items-center justify-between gap-3">
+                    <code className="truncate text-xs">
+                      {item.method} {item.path}
+                    </code>
+                    <span className="text-xs capitalize text-muted-foreground">
+                      {item.state}
+                    </span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{item.error}</p>
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        sendMutationAction("DISCARD_OFFLINE_MUTATION", item.id)
+                      }
+                    >
+                      Discard
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        sendMutationAction("RETRY_OFFLINE_MUTATION", item.id)
+                      }
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }

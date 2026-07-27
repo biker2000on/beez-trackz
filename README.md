@@ -2,9 +2,11 @@
 
 A self-hosted beekeeping management application.
 
-The current product includes voice-first inspection entry, structured Varroa
-and treatment tracking, hive timelines, survival/yield/economics reporting,
-and a harvest-to-sale workflow with lot QR stories, bottling runs, expenses,
+The current product includes voice-first inspection entry, apiary-scoped
+viewer/editor collaboration, offline field recording, structured Varroa and
+treatment tracking, hive timelines, location-aware weather and bloom
+predictions, queen performance scoring, printable/NFC hive tags, and a
+harvest-to-sale workflow with lot QR stories, bottling runs, expenses,
 customers, orders, wholesale pricing, and a phone-first market screen.
 
 ## Architecture (Go rewrite)
@@ -12,7 +14,7 @@ customers, orders, wholesale pricing, and a phone-first market screen.
 - **backend/** — Go API (`cmd/server`) and background worker (`cmd/worker`).
   chi + pgx + goose migrations (run automatically on boot), asynq job queue
   over Redis, MinIO for photo/audio storage. All endpoints under `/api/v1`.
-- **frontend/** — Next.js view-only layer (App Router). All data flows through
+- **frontend/** — Next.js client (App Router and installable PWA). All data flows through
   the Go API; `/api/*` is proxied to the backend so cookies stay same-origin.
 - **PostgreSQL** — primary datastore. **Redis** — worker queue. **MinIO** —
   media object storage.
@@ -41,6 +43,25 @@ npm run dev
 
 Copy `.env.example` values into your environment (`SESSION_SECRET` and
 `DATABASE_URL` are required for the API).
+
+## Collaboration, offline use, and MCP
+
+- The password owner and existing OIDC identities migrate as administrators.
+  Administrators add collaborators by verified OIDC email in **Settings >
+  Users, access, and API**, assigning `viewer` or `editor` per apiary.
+- Viewers can read their assigned apiaries. Editors can also change apiary,
+  hive, inspection, feeding, bloom, photo, and operational records. Global
+  AI, inventory, commerce, and instance settings remain administrator-only.
+- The production PWA caches field-data reads and queues supported JSON writes
+  in IndexedDB. Reconnect replays them with idempotency keys; newer server
+  edits become reviewable conflicts instead of being overwritten.
+- Personal API tokens are created in Settings and used as
+  `Authorization: Bearer bt_...`. The MCP Streamable HTTP endpoint is
+  `https://your-app.example/api/v1/mcp` and exposes only tools allowed by the
+  token owner's apiary roles.
+- Hive tag sheets are available from an apiary's **Print tags** action. The
+  print profiles target common MUNBYN 2x1 and 3x2 inch label stock; Web NFC
+  writing requires compatible Android Chrome hardware.
 
 ## Migrating data from the legacy app
 

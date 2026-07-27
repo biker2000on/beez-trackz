@@ -16,12 +16,16 @@ import (
 
 func (s *Server) mountOperations(r chi.Router) {
 	r.Post("/mite-counts", s.miteCountCreate)
-	r.Delete("/mite-counts/{id}", s.miteCountDelete)
+	r.With(s.requireEntityParamRole("mite", true)).
+		Delete("/mite-counts/{id}", s.miteCountDelete)
 	r.Post("/treatment-events", s.treatmentEventCreate)
-	r.Delete("/treatment-events/{id}", s.treatmentEventDelete)
+	r.With(s.requireEntityParamRole("treatment", true)).
+		Delete("/treatment-events/{id}", s.treatmentEventDelete)
 	r.Post("/queen-events", s.queenEventCreate)
-	r.Delete("/queen-events/{id}", s.queenEventDelete)
-	r.Get("/hives/{id}/timeline", s.hiveTimeline)
+	r.With(s.requireEntityParamRole("queen_event", true)).
+		Delete("/queen-events/{id}", s.queenEventDelete)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/timeline", s.hiveTimeline)
 	r.Get("/analytics/varroa", s.varroaAnalytics)
 	r.Get("/analytics/survival", s.survivalAnalytics)
 	r.Get("/analytics/yield", s.yieldAnalytics)
@@ -54,6 +58,9 @@ func (s *Server) miteCountCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil || req.HiveID == uuid.Nil || !miteMethods[req.Method] ||
 		req.MitesCount < 0 || (req.SampleSize != nil && *req.SampleSize <= 0) {
 		writeError(w, http.StatusBadRequest, "hiveId, date, method, and a non-negative mite count are required")
+		return
+	}
+	if !s.requireHiveRole(w, r, req.HiveID, true) {
 		return
 	}
 	var id uuid.UUID
@@ -108,6 +115,9 @@ func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "hiveId, dateApplied, and product are required")
 		return
 	}
+	if !s.requireHiveRole(w, r, req.HiveID, true) {
+		return
+	}
 	var removed *time.Time
 	if req.DateRemoved != nil && *req.DateRemoved != "" {
 		v, err := parseDate(*req.DateRemoved)
@@ -154,6 +164,9 @@ func (s *Server) queenEventCreate(w http.ResponseWriter, r *http.Request) {
 	date, err := parseDate(req.EventDate)
 	if err != nil || req.HiveID == uuid.Nil || !queenEventTypes[req.EventType] {
 		writeError(w, http.StatusBadRequest, "hiveId, eventDate, and a valid eventType are required")
+		return
+	}
+	if !s.requireHiveRole(w, r, req.HiveID, true) {
 		return
 	}
 	var id uuid.UUID
@@ -319,6 +332,9 @@ func (s *Server) varroaAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "hiveId is required")
 		return
 	}
+	if !s.requireHiveRole(w, r, hiveID, false) {
+		return
+	}
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, date, method, mites_count, sample_size, mites_per_100, notes
 		FROM mite_counts WHERE hive_id = $1 ORDER BY date`, hiveID)
@@ -448,8 +464,12 @@ func (s *Server) survivalAnalytics(w http.ResponseWriter, r *http.Request) {
 		JOIN apiaries a ON a.id = h.apiary_id
 		LEFT JOIN current_queen cq ON cq.hive_id = h.id
 		LEFT JOIN roots ON roots.queen_id = cq.id
-		WHERE h.installed_date IS NULL OR h.installed_date <= $1`,
-		winterStart)
+		WHERE (h.installed_date IS NULL OR h.installed_date <= $1)
+		  AND ($2::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$3 AND membership.apiary_id=a.id
+		  ))`,
+		winterStart, principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -548,9 +568,13 @@ func (s *Server) yieldAnalytics(w http.ResponseWriter, r *http.Request) {
 		JOIN apiaries a ON a.id = h.apiary_id
 		LEFT JOIN honey_harvests hh ON hh.hive_id = h.id
 			AND EXTRACT(YEAR FROM hh.date)::integer = $1
+		WHERE ($2::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$3 AND membership.apiary_id=a.id
+		))
 		GROUP BY h.id, h.position_label, a.id, a.name
 		HAVING COALESCE(SUM(hh.calculated_honey_weight), 0) > 0
-		ORDER BY pounds DESC`, year)
+		ORDER BY pounds DESC`, year, principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -588,8 +612,15 @@ func (s *Server) yieldAnalytics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	yearRows, err := s.pool.Query(r.Context(), `
-		SELECT EXTRACT(YEAR FROM date)::integer, SUM(calculated_honey_weight)
-		FROM honey_harvests GROUP BY 1 ORDER BY 1`)
+		SELECT EXTRACT(YEAR FROM harvest.date)::integer,
+			SUM(harvest.calculated_honey_weight)
+		FROM honey_harvests harvest
+		JOIN hives hive ON hive.id=harvest.hive_id
+		WHERE ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=hive.apiary_id
+		))
+		GROUP BY 1 ORDER BY 1`, principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

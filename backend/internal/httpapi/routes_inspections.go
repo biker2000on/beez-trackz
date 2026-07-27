@@ -21,10 +21,14 @@ func (s *Server) mountInspections(r chi.Router) {
 	r.Post("/inspections", s.handleInspectionCreate)
 	r.Get("/inspections/recent", s.handleInspectionsRecent)
 	r.Post("/inspections/bulk", s.handleInspectionsBulk)
-	r.Get("/inspections/{id}", s.handleInspectionGet)
-	r.Put("/inspections/{id}", s.handleInspectionUpdate)
-	r.Delete("/inspections/{id}", s.handleInspectionDelete)
-	r.Get("/hives/{id}/inspections", s.handleInspectionsForHive)
+	r.With(s.requireEntityParamRole("inspection", false)).
+		Get("/inspections/{id}", s.handleInspectionGet)
+	r.With(s.requireEntityParamRole("inspection", true)).
+		Put("/inspections/{id}", s.handleInspectionUpdate)
+	r.With(s.requireEntityParamRole("inspection", true)).
+		Delete("/inspections/{id}", s.handleInspectionDelete)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/inspections", s.handleInspectionsForHive)
 }
 
 // --- shared helpers (inspection-prefixed to avoid collisions in package) ---
@@ -82,6 +86,7 @@ type inspectionFields struct {
 	Treatments    []byte // JSON array or nil
 	Notes         *string
 	SourceMedia   []byte // JSON object or nil (passthrough)
+	Weather       []byte // provider snapshot captured when the record is created
 }
 
 // inspectionInsert is THE single insert path for inspections (CRUD, bulk, and
@@ -91,12 +96,13 @@ func inspectionInsert(ctx context.Context, q inspectionQuerier, f inspectionFiel
 	err := q.QueryRow(ctx, `
 		INSERT INTO inspections
 			(hive_id, date, inspector_name, queen_seen, queen_health, brood_pattern,
-			 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			 stores_honey, stores_pollen, temperament, pests, treatments, notes,
+			 source_media, weather_snapshot)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id`,
 		f.HiveID, f.Date, f.InspectorName, f.QueenSeen, f.QueenHealth, f.BroodPattern,
 		f.StoresHoney, f.StoresPollen, f.Temperament, f.Pests, f.Treatments, f.Notes,
-		f.SourceMedia).Scan(&id)
+		f.SourceMedia, f.Weather).Scan(&id)
 	return id, err
 }
 
@@ -139,19 +145,20 @@ type inspectionJSON struct {
 	Treatments    any       `json:"treatments"`
 	Notes         *string   `json:"notes"`
 	SourceMedia   any       `json:"sourceMedia"`
+	Weather       any       `json:"weather"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 const inspectionSelectCols = `id, hive_id, date, inspector_name, queen_seen, queen_health,
 	brood_pattern, stores_honey, stores_pollen, temperament, pests, treatments, notes,
-	source_media, created_at, updated_at`
+	source_media, weather_snapshot, created_at, updated_at`
 
 func inspectionScan(row pgx.Row) (inspectionJSON, error) {
 	var v inspectionJSON
 	err := row.Scan(&v.ID, &v.HiveID, &v.Date, &v.InspectorName, &v.QueenSeen, &v.QueenHealth,
 		&v.BroodPattern, &v.StoresHoney, &v.StoresPollen, &v.Temperament, &v.Pests,
-		&v.Treatments, &v.Notes, &v.SourceMedia, &v.CreatedAt, &v.UpdatedAt)
+		&v.Treatments, &v.Notes, &v.SourceMedia, &v.Weather, &v.CreatedAt, &v.UpdatedAt)
 	return v, err
 }
 
@@ -170,6 +177,30 @@ func inspectionMarshal(v any, present bool) []byte {
 		return nil
 	}
 	return b
+}
+
+func (s *Server) inspectionWeatherSnapshot(
+	r *http.Request,
+	hiveID uuid.UUID,
+) []byte {
+	var apiaryID uuid.UUID
+	if err := s.pool.QueryRow(r.Context(),
+		`SELECT apiary_id FROM hives WHERE id=$1`, hiveID).Scan(&apiaryID); err != nil {
+		return nil
+	}
+	weather, err := s.loadApiaryWeather(r, apiaryID)
+	if err != nil {
+		return nil
+	}
+	raw, err := json.Marshal(map[string]any{
+		"source": weather.Source, "fetchedAt": weather.Fetched,
+		"timezone": weather.Forecast.Timezone,
+		"current":  weather.Forecast.Current,
+	})
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 // --- handlers ---
@@ -203,6 +234,9 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "Hive is required")
 		return
 	}
+	if !s.requireHiveRole(w, r, hiveID, true) {
+		return
+	}
 	if strings.TrimSpace(req.Date) == "" {
 		writeError(w, http.StatusBadRequest, "Date is required")
 		return
@@ -230,6 +264,7 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		Treatments:    inspectionMarshal(req.Treatments, req.Treatments != nil),
 		Notes:         inspectionTrimPtr(req.Notes),
 		SourceMedia:   sourceMedia,
+		Weather:       s.inspectionWeatherSnapshot(r, hiveID),
 	}
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
@@ -494,8 +529,12 @@ func (s *Server) handleInspectionsRecent(w http.ResponseWriter, r *http.Request)
 		FROM inspections i
 		JOIN hives h ON h.id = i.hive_id
 		JOIN apiaries a ON a.id = h.apiary_id
+		WHERE ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=a.id
+		))
 		ORDER BY i.date DESC
-		LIMIT $1`, limit)
+		LIMIT $3`, principalFrom(r).IsAdmin, principalFrom(r).ID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -552,13 +591,18 @@ func (s *Server) handleInspectionsBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hiveIDs := make([]uuid.UUID, 0, len(req.HiveIDs))
+	weatherByHive := map[uuid.UUID][]byte{}
 	for _, raw := range req.HiveIDs {
 		id, err := uuid.Parse(raw)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid hive id: "+raw)
 			return
 		}
+		if !s.requireHiveRole(w, r, id, true) {
+			return
+		}
 		hiveIDs = append(hiveIDs, id)
+		weatherByHive[id] = s.inspectionWeatherSnapshot(r, id)
 	}
 	notes := inspectionTrimPtr(req.Notes)
 
@@ -570,7 +614,9 @@ func (s *Server) handleInspectionsBulk(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	for _, hiveID := range hiveIDs {
-		if _, err := inspectionInsert(ctx, tx, inspectionFields{HiveID: hiveID, Date: date, Notes: notes}); err != nil {
+		if _, err := inspectionInsert(ctx, tx, inspectionFields{
+			HiveID: hiveID, Date: date, Notes: notes, Weather: weatherByHive[hiveID],
+		}); err != nil {
 			if inspectionIsFKViolation(err) {
 				writeError(w, http.StatusBadRequest, "Hive not found")
 				return

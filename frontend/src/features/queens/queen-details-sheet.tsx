@@ -73,6 +73,7 @@ export function QueenDetailsSheet({
   queens,
   onOpenChange,
   onEdit,
+  canEdit = true,
 }: {
   /** Queen to show; null renders the sheet closed. */
   queen: Queen | null;
@@ -80,6 +81,7 @@ export function QueenDetailsSheet({
   queens: Queen[];
   onOpenChange: (open: boolean) => void;
   onEdit: (queen: Queen) => void;
+  canEdit?: boolean;
 }) {
   const deleteQueen = useDeleteQueen();
   const marking = queen ? markingColorForDate(queen.introducedDate) : null;
@@ -164,7 +166,7 @@ export function QueenDetailsSheet({
                 </>
               )}
             </div>
-            <SheetFooter>
+            {canEdit ? <SheetFooter>
               <Button onClick={() => onEdit(queen)}>
                 <Pencil />
                 Edit queen
@@ -199,7 +201,7 @@ export function QueenDetailsSheet({
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
-            </SheetFooter>
+            </SheetFooter> : null}
           </>
         )}
       </SheetContent>

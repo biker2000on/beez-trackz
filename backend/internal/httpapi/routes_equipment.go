@@ -18,23 +18,25 @@ import (
 // hives. Availability is derived: available = totalOwned − active deployments.
 
 func (s *Server) mountEquipment(r chi.Router) {
-	r.Get("/equipment/types", s.equipListTypes)
-	r.Post("/equipment/types", s.equipCreateType)
+	admin := r.With(s.requireAdmin)
+	admin.Get("/equipment/types", s.equipListTypes)
+	admin.Post("/equipment/types", s.equipCreateType)
 
-	r.Get("/equipment/stock", s.equipListStock)
-	r.Post("/equipment/stock", s.equipCreateStock)
-	r.Post("/equipment/stock/bulk-adjust", s.equipBulkAdjustStock)
-	r.Patch("/equipment/stock/{id}", s.equipUpdateStock)
-	r.Post("/equipment/stock/{id}/adjust", s.equipAdjustStock)
-	r.Get("/equipment/stock/{id}/adjustments", s.equipListAdjustments)
+	admin.Get("/equipment/stock", s.equipListStock)
+	admin.Post("/equipment/stock", s.equipCreateStock)
+	admin.Post("/equipment/stock/bulk-adjust", s.equipBulkAdjustStock)
+	admin.Patch("/equipment/stock/{id}", s.equipUpdateStock)
+	admin.Post("/equipment/stock/{id}/adjust", s.equipAdjustStock)
+	admin.Get("/equipment/stock/{id}/adjustments", s.equipListAdjustments)
 
-	r.Post("/equipment/deployments", s.equipDeploy)
-	r.Post("/equipment/deployments/{id}/remove", s.equipRemoveDeployment)
-	r.Get("/equipment/deployments/active", s.equipActiveDeployments)
-	r.Get("/hives/{id}/deployments", s.equipHiveDeployments)
+	admin.Post("/equipment/deployments", s.equipDeploy)
+	admin.Post("/equipment/deployments/{id}/remove", s.equipRemoveDeployment)
+	admin.Get("/equipment/deployments/active", s.equipActiveDeployments)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/deployments", s.equipHiveDeployments)
 
-	r.Get("/equipment/frame-summary", s.equipFrameSummary)
-	r.Post("/equipment/seed-defaults", s.equipSeedDefaults)
+	admin.Get("/equipment/frame-summary", s.equipFrameSummary)
+	admin.Post("/equipment/seed-defaults", s.equipSeedDefaults)
 }
 
 func equipTrimPtr(p *string) *string {

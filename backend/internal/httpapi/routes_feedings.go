@@ -16,9 +16,12 @@ func (s *Server) mountFeedings(r chi.Router) {
 	r.Post("/feedings", s.handleFeedingCreate)
 	r.Post("/feedings/bulk", s.handleFeedingsBulk)
 	r.Get("/feedings/active", s.handleFeedingsActive)
-	r.Post("/feedings/{id}/empty", s.handleFeedingEmpty)
-	r.Delete("/feedings/{id}", s.handleFeedingDelete)
-	r.Get("/hives/{id}/feedings", s.handleFeedingsForHive)
+	r.With(s.requireEntityParamRole("feeding", true)).
+		Post("/feedings/{id}/empty", s.handleFeedingEmpty)
+	r.With(s.requireEntityParamRole("feeding", true)).
+		Delete("/feedings/{id}", s.handleFeedingDelete)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/feedings", s.handleFeedingsForHive)
 }
 
 // --- feeding enums (mirror the Postgres enum types for human 400s) ---
@@ -136,6 +139,9 @@ func (s *Server) handleFeedingCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Hive is required")
 		return
 	}
+	if !s.requireHiveRole(w, r, hiveID, true) {
+		return
+	}
 	if msg := feedingValidate(&req); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -199,6 +205,9 @@ func (s *Server) handleFeedingsBulk(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(raw)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid hive id: "+raw)
+			return
+		}
+		if !s.requireHiveRole(w, r, id, true) {
 			return
 		}
 		hiveIDs = append(hiveIDs, id)
@@ -317,7 +326,11 @@ func (s *Server) handleFeedingsActive(w http.ResponseWriter, r *http.Request) {
 		JOIN hives h ON h.id = f.hive_id
 		JOIN apiaries a ON a.id = h.apiary_id
 		WHERE f.date_empty IS NULL
-		ORDER BY f.date_fed`)
+		  AND ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=a.id
+		  ))
+		ORDER BY f.date_fed`, principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

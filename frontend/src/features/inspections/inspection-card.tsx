@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Crown, Pencil, Trash2 } from "lucide-react";
+import { CloudSun, Crown, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
@@ -32,7 +32,13 @@ function Rating({ label, value }: { label: string; value: number | null }) {
   );
 }
 
-export function InspectionCard({ inspection }: { inspection: Inspection }) {
+export function InspectionCard({
+  inspection,
+  canEdit = true,
+}: {
+  inspection: Inspection;
+  canEdit?: boolean;
+}) {
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const deleteInspection = useDeleteInspection();
@@ -67,7 +73,7 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
             </Badge>
           )}
         </CardTitle>
-        <div className="flex items-center gap-1">
+        {canEdit ? <div className="flex items-center gap-1">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -84,7 +90,7 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
           >
             <Trash2 className="size-4" />
           </Button>
-        </div>
+        </div> : null}
       </CardHeader>
       <CardContent className="grid gap-2 text-sm">
         {inspection.inspectorName && (
@@ -92,6 +98,22 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
             Inspected by {inspection.inspectorName}
           </p>
         )}
+        {inspection.weather?.current ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1 font-medium text-foreground">
+              <CloudSun className="size-3.5" />
+              {Math.round(inspection.weather.current.temperature_2m)}°F
+            </span>
+            <span>
+              Feels {Math.round(inspection.weather.current.apparent_temperature)}
+              °F
+            </span>
+            <span>{inspection.weather.current.relative_humidity_2m}% humidity</span>
+            <span>
+              {Math.round(inspection.weather.current.wind_speed_10m)} mph wind
+            </span>
+          </div>
+        ) : null}
         {inspection.queenHealth && <p>Queen: {inspection.queenHealth}</p>}
         {inspection.broodPattern && <p>Brood: {inspection.broodPattern}</p>}
         <div className="flex flex-wrap gap-1.5 empty:hidden">
@@ -143,13 +165,13 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
         )}
       </CardContent>
 
-      <InspectionFormDialog
+      {canEdit ? <InspectionFormDialog
         open={editOpen}
         onOpenChange={setEditOpen}
         hiveId={inspection.hiveId}
         inspection={inspection}
-      />
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      /> : null}
+      {canEdit ? <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this inspection?</AlertDialogTitle>
@@ -172,7 +194,7 @@ export function InspectionCard({ inspection }: { inspection: Inspection }) {
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
-      </AlertDialog>
+      </AlertDialog> : null}
     </Card>
   );
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Camera,
+  CloudSun,
   Flower2,
   Hexagon,
   LayoutDashboard,
@@ -12,6 +13,7 @@ import {
   MapPin,
   Pencil,
   Trash2,
+  QrCode,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -26,15 +28,23 @@ import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { BulkActionsTab } from "./bulk-actions-tab";
 import { DeleteApiaryDialog } from "./delete-apiary-dialog";
 import { FloraTab } from "./flora-tab";
+import { ForecastTab } from "./forecast-tab";
 import { useApiary } from "./hooks";
+import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
 export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const apiary = useApiary(apiaryId);
   const hives = useApiaryHives(apiaryId);
+  const access = useAccessProfile();
+  const canEdit = ["admin", "editor"].includes(
+    apiaryRole(access.data, apiaryId) ?? "",
+  );
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
-  useShortcut("e", "Edit apiary", () => setEditOpen(true));
+  useShortcut("e", "Edit apiary", () => {
+    if (canEdit) setEditOpen(true);
+  });
 
   if (apiary.isPending) {
     return (
@@ -66,7 +76,6 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   }
 
   const detail = apiary.data;
-
   return (
     <div className="grid gap-5">
       <header className="grid gap-3">
@@ -106,19 +115,31 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
             )}
           </div>
           <div className="flex shrink-0 gap-2">
-            <Button variant="outline" onClick={() => setEditOpen(true)}>
-              <Pencil />
-              Edit
+            <Button asChild variant="outline">
+              <Link href={`/apiaries/${apiaryId}/labels`}>
+                <QrCode />
+                Print tags
+              </Link>
             </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground hover:text-destructive"
-              aria-label={`Delete ${detail.name}`}
-              onClick={() => setDeleteOpen(true)}
-            >
-              <Trash2 />
-            </Button>
+            {canEdit ? (
+              <>
+                <Button variant="outline" onClick={() => setEditOpen(true)}>
+                  <Pencil />
+                  Edit
+                </Button>
+                {access.data?.isAdmin ? (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label={`Delete ${detail.name}`}
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    <Trash2 />
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
           </div>
         </div>
       </header>
@@ -134,10 +155,16 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
               <Flower2 />
               Flora
             </TabsTrigger>
-            <TabsTrigger value="bulk" className="h-9">
-              <ListChecks />
-              Bulk record
+            <TabsTrigger value="forecast" className="h-9">
+              <CloudSun />
+              Forecast
             </TabsTrigger>
+            {canEdit ? (
+              <TabsTrigger value="bulk" className="h-9">
+                <ListChecks />
+                Bulk record
+              </TabsTrigger>
+            ) : null}
             <TabsTrigger value="photos" className="h-9">
               <Camera />
               Photos
@@ -145,16 +172,34 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
           </TabsList>
         </div>
         <TabsContent value="layout" className="min-w-0">
-          <ApiaryCanvas apiaryId={apiaryId} />
+          <div className="relative">
+            {!canEdit ? (
+              <span className="absolute right-3 top-3 z-20 rounded-full border bg-background/90 px-2 py-1 text-xs font-medium shadow-sm">
+                View only
+              </span>
+            ) : null}
+            <div className={!canEdit ? "pointer-events-none" : undefined}>
+              <ApiaryCanvas apiaryId={apiaryId} />
+            </div>
+          </div>
         </TabsContent>
         <TabsContent value="flora">
-          <FloraTab apiaryId={apiaryId} />
+          <FloraTab apiaryId={apiaryId} canEdit={canEdit} />
         </TabsContent>
-        <TabsContent value="bulk">
-          <BulkActionsTab apiaryId={apiaryId} />
+        <TabsContent value="forecast">
+          <ForecastTab apiaryId={apiaryId} />
         </TabsContent>
+        {canEdit ? (
+          <TabsContent value="bulk">
+            <BulkActionsTab apiaryId={apiaryId} />
+          </TabsContent>
+        ) : null}
         <TabsContent value="photos">
-          <PhotoSection ownerType="apiary" ownerId={apiaryId} />
+          <PhotoSection
+            ownerType="apiary"
+            ownerId={apiaryId}
+            canEdit={canEdit}
+          />
         </TabsContent>
       </Tabs>
 

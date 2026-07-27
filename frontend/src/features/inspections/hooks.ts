@@ -36,6 +36,19 @@ export interface Inspection {
   treatments: InspectionTreatment[] | null;
   notes: string | null;
   sourceMedia: unknown;
+  weather: {
+    source: string;
+    fetchedAt: string;
+    timezone: string;
+    current: {
+      time: string;
+      temperature_2m: number;
+      apparent_temperature: number;
+      relative_humidity_2m: number;
+      weather_code: number;
+      wind_speed_10m: number;
+    };
+  } | null;
   createdAt: string;
   updatedAt: string;
 }

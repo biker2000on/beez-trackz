@@ -40,6 +40,7 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, que
 		// Authenticated API routes are mounted by domain in routes_*.go files.
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireSession)
+			r.Use(s.offlineMutations)
 			s.mountDomains(r)
 		})
 	})

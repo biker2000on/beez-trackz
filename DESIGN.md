@@ -13,8 +13,9 @@ hand, and dense only where comparison helps a decision.
 - Make the complete application operable from a keyboard. `Ctrl/⌘ K` opens the
   command palette, `g` plus a navigation key changes sections, `?` shows
   shortcuts, and page actions register mnemonic single-key commands.
-- Never queue offline writes. The PWA caches only its shell and clearly asks the
-  user to reconnect before reading or changing records.
+- Cache authenticated field reads and queue supported JSON writes in the PWA.
+  Always show offline/sync state; replay with stable mutation IDs and surface
+  conflicts for explicit retry or discard.
 
 ## Visual language
 
@@ -39,7 +40,8 @@ hand, and dense only where comparison helps a decision.
 
 - Dashboard: prioritize actionable colony, feeding, harvest, and inventory
   signals; avoid decorative charts.
-- Apiary: layout canvas, flora, bulk records, and photos share one detail page.
+- Apiary: layout canvas, flora, local forecast/bloom intelligence, bulk
+  records, photos, and printable hive tags share one detail workflow.
 - Hive: inspection, voice capture, feeding, photo, split, and equipment actions
   stay available above the record tabs.
 - Honey: quick ledger actions use memorable keys and all multi-line movements

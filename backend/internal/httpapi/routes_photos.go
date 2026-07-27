@@ -63,8 +63,8 @@ func (s *Server) mountPhotos(r chi.Router) {
 	r.Route("/photos", func(r chi.Router) {
 		r.Post("/", s.handlePhotoUpload)
 		r.Get("/", s.handlePhotoList)
-		r.Patch("/{id}", s.handlePhotoUpdate)
-		r.Delete("/{id}", s.handlePhotoDelete)
+		r.With(s.requireEntityParamRole("photo", true)).Patch("/{id}", s.handlePhotoUpdate)
+		r.With(s.requireEntityParamRole("photo", true)).Delete("/{id}", s.handlePhotoDelete)
 		r.Get("/file/*", s.handlePhotoFile)
 	})
 }
@@ -126,6 +126,9 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Owner ID is required")
 		return
 	}
+	if !s.requireOwnerRole(w, r, ownerType, ownerID, true) {
+		return
+	}
 
 	var caption *string
 	if c := strings.TrimSpace(r.FormValue("caption")); c != "" {
@@ -184,6 +187,9 @@ func (s *Server) handlePhotoList(w http.ResponseWriter, r *http.Request) {
 	ownerID, err := uuid.Parse(r.URL.Query().Get("ownerId"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Owner ID is required")
+		return
+	}
+	if !s.requireOwnerRole(w, r, ownerType, ownerID, false) {
 		return
 	}
 
@@ -325,6 +331,26 @@ func (s *Server) handlePhotoFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "Invalid path")
 		return
 	}
+	var photoID uuid.UUID
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT id FROM photos
+		WHERE original_key=$1 OR thumbnail_key=$1 OR medium_key=$1`, key).Scan(&photoID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "File not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	apiaryID, err := s.entityApiaryID(r, "photo", photoID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !s.requireApiaryRole(w, r, apiaryID, false) {
+		return
+	}
 
 	s.servePhotoKey(w, r, key)
 }
@@ -353,9 +379,9 @@ func (s *Server) servePhotoKey(w http.ResponseWriter, r *http.Request, key strin
 	if contentType == "" || contentType == "application/octet-stream" {
 		contentType = photoContentTypeForKey(key)
 	}
-	cacheControl := "public, max-age=3600"
+	cacheControl := "private, max-age=3600"
 	if strings.Contains(key, "_thumb") || strings.Contains(key, "_medium") {
-		cacheControl = "public, max-age=31536000, immutable"
+		cacheControl = "private, max-age=31536000, immutable"
 	}
 
 	w.Header().Set("Content-Type", contentType)

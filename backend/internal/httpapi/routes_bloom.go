@@ -14,9 +14,12 @@ import (
 func (s *Server) mountBloom(r chi.Router) {
 	r.Post("/bloom-observations", s.handleBloomCreate)
 	r.Get("/bloom-observations/species", s.handleBloomSpecies)
-	r.Post("/bloom-observations/{id}/end", s.handleBloomEnd)
-	r.Delete("/bloom-observations/{id}", s.handleBloomDelete)
-	r.Get("/apiaries/{id}/blooms", s.handleBloomsForApiary)
+	r.With(s.requireEntityParamRole("bloom", true)).
+		Post("/bloom-observations/{id}/end", s.handleBloomEnd)
+	r.With(s.requireEntityParamRole("bloom", true)).
+		Delete("/bloom-observations/{id}", s.handleBloomDelete)
+	r.With(s.requireApiaryParamRole(false)).
+		Get("/apiaries/{id}/blooms", s.handleBloomsForApiary)
 }
 
 // bloomDate formats a Postgres `date` column as YYYY-MM-DD (legacy shape).
@@ -82,6 +85,9 @@ func (s *Server) handleBloomCreate(w http.ResponseWriter, r *http.Request) {
 	apiaryID, err := uuid.Parse(req.ApiaryID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	if !s.requireApiaryRole(w, r, apiaryID, true) {
 		return
 	}
 	firstSeen, err := parseDate(req.DateFirstSeen)
@@ -199,9 +205,15 @@ func (s *Server) handleBloomDelete(w http.ResponseWriter, r *http.Request) {
 // (autocomplete source).
 func (s *Server) handleBloomSpecies(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT species FROM bloom_observations
-		GROUP BY species
-		ORDER BY max(date_first_seen) DESC`)
+		SELECT observation.species FROM bloom_observations observation
+		JOIN apiaries apiary ON apiary.id=observation.apiary_id
+		WHERE ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=apiary.id
+		))
+		GROUP BY observation.species
+		ORDER BY max(observation.date_first_seen) DESC`,
+		principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

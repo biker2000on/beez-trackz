@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Command, Keyboard, Search } from "lucide-react";
 
-import { NAV_ITEMS } from "@/components/shell/nav-items";
+import { NAV_ITEMS, visibleNavItems } from "@/components/shell/nav-items";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useAccessProfile } from "@/features/access/api";
 
 interface ShortcutEntry {
   key: string;
@@ -59,6 +60,11 @@ export function ShortcutsProvider({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const access = useAccessProfile();
+  const navigation = visibleNavItems(
+    NAV_ITEMS,
+    access.data?.isAdmin === true,
+  );
   const [helpOpen, setHelpOpen] = React.useState(false);
   const [commandOpen, setCommandOpen] = React.useState(false);
   const [commandQuery, setCommandQuery] = React.useState("");
@@ -131,7 +137,7 @@ export function ShortcutsProvider({
 
       if (gotoPendingRef.current) {
         clearGoto();
-        const item = NAV_ITEMS.find(
+        const item = navigation.find(
           (nav) => nav.shortcutKey === key.toLowerCase(),
         );
         if (item) {
@@ -160,11 +166,11 @@ export function ShortcutsProvider({
       window.removeEventListener("keydown", onKeyDown);
       clearGoto();
     };
-  }, [router]);
+  }, [navigation, router]);
 
   const pageShortcuts = Array.from(entries.values());
   const commands = [
-    ...NAV_ITEMS.map((item) => ({
+    ...navigation.map((item) => ({
       id: `nav:${item.href}`,
       label: `Go to ${item.label}`,
       hint: `g ${item.shortcutKey}`,
@@ -211,7 +217,7 @@ export function ShortcutsProvider({
                 Navigation
               </h3>
               <ul className="grid gap-1.5">
-                {NAV_ITEMS.map((item) => (
+                {navigation.map((item) => (
                   <li
                     key={item.href}
                     className="flex items-center justify-between text-sm"
