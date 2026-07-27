@@ -23,9 +23,12 @@ const transcriptionMaxUploadBytes = 64 << 20 // 64MB of audio
 func (s *Server) mountTranscriptions(r chi.Router) {
 	r.Post("/transcriptions", s.handleTranscriptionCreate)
 	r.Get("/transcriptions", s.handleTranscriptionList)
-	r.Get("/transcriptions/{id}", s.handleTranscriptionGet)
-	r.Post("/transcriptions/{id}/parse", s.handleTranscriptionParse)
-	r.Post("/transcriptions/{id}/confirm", s.handleTranscriptionConfirm)
+	r.With(s.requireEntityParamRole("transcription", false)).
+		Get("/transcriptions/{id}", s.handleTranscriptionGet)
+	r.With(s.requireEntityParamRole("transcription", true)).
+		Post("/transcriptions/{id}/parse", s.handleTranscriptionParse)
+	r.With(s.requireEntityParamRole("transcription", true)).
+		Post("/transcriptions/{id}/confirm", s.handleTranscriptionConfirm)
 }
 
 // transcriptionRow mirrors a media_files record.
@@ -163,6 +166,9 @@ func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "Owner ID is required")
 		return
 	}
+	if !s.requireOwnerRole(w, r, ownerType, ownerID, true) {
+		return
+	}
 	if _, ok := transcriptionMode(r.FormValue("mode")); !ok {
 		writeError(w, http.StatusBadRequest, "mode must be single or batch")
 		return
@@ -229,8 +235,14 @@ func (s *Server) handleTranscriptionList(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, "invalid ownerId")
 			return
 		}
+		if !s.requireOwnerRole(w, r, ownerType, ownerID, false) {
+			return
+		}
 		query += ` WHERE owner_type = $1 AND owner_id = $2`
 		args = append(args, ownerType, ownerID)
+	} else if !principalFrom(r).IsAdmin {
+		writeError(w, http.StatusBadRequest, "ownerType and ownerId are required")
+		return
 	}
 	query += ` ORDER BY created_at DESC`
 
@@ -387,6 +399,7 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 
 	now := time.Now()
 	inspectionIDs := make([]uuid.UUID, 0, len(req.Inspections))
+	inspectionHiveIDs := make([]uuid.UUID, 0, len(req.Inspections))
 	feedingIDs := make([]uuid.UUID, 0)
 	treatmentEventIDs := make([]uuid.UUID, 0)
 	queenEventIDs := make([]uuid.UUID, 0)
@@ -398,6 +411,9 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 		}
 		if hiveID == nil {
 			writeError(w, http.StatusBadRequest, "Hive ID is required for each inspection")
+			return
+		}
+		if !s.requireHiveRole(w, r, *hiveID, true) {
 			return
 		}
 
@@ -436,6 +452,7 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		inspectionIDs = append(inspectionIDs, createdID)
+		inspectionHiveIDs = append(inspectionHiveIDs, *hiveID)
 
 		for _, feeding := range item.Feedings {
 			var eventID uuid.UUID
@@ -495,6 +512,13 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
+	}
+	for index, inspectionID := range inspectionIDs {
+		if snapshot := s.inspectionWeatherSnapshot(r, inspectionHiveIDs[index]); len(snapshot) > 0 {
+			_, _ = s.pool.Exec(ctx,
+				`UPDATE inspections SET weather_snapshot=$1 WHERE id=$2`,
+				snapshot, inspectionID)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "inspectionIds": inspectionIDs, "feedingIds": feedingIDs,

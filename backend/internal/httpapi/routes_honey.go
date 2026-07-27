@@ -21,24 +21,25 @@ import (
 // Inventory is ALWAYS derived from the ledger, never stored.
 
 func (s *Server) mountHoney(r chi.Router) {
-	r.Get("/harvests", s.honeyListHarvests)
-	r.Post("/harvests", s.honeyCreateHarvest)
+	admin := r.With(s.requireAdmin)
+	admin.Get("/harvests", s.honeyListHarvests)
+	admin.Post("/harvests", s.honeyCreateHarvest)
 
-	r.Post("/honey/jarring", s.honeyRecordJarring)
-	r.Post("/honey/bulk-movements", s.honeyRecordBulkMovement)
-	r.Post("/honey/give-away", s.honeyRecordGiveAway)
-	r.Post("/honey/jar-adjustments", s.honeyAdjustJarCounts)
-	r.Delete("/honey/movements/{id}", s.honeyDeleteMovement)
+	admin.Post("/honey/jarring", s.honeyRecordJarring)
+	admin.Post("/honey/bulk-movements", s.honeyRecordBulkMovement)
+	admin.Post("/honey/give-away", s.honeyRecordGiveAway)
+	admin.Post("/honey/jar-adjustments", s.honeyAdjustJarCounts)
+	admin.Delete("/honey/movements/{id}", s.honeyDeleteMovement)
 
-	r.Get("/honey/sales", s.honeyListSalesHandler)
-	r.Post("/honey/sales", s.honeyRecordSale)
-	r.Patch("/honey/sales/{id}", s.honeyUpdateSale)
-	r.Delete("/honey/sales/{id}", s.honeyDeleteSale)
-	r.Get("/honey/sale-locations", s.honeySaleLocations)
+	admin.Get("/honey/sales", s.honeyListSalesHandler)
+	admin.Post("/honey/sales", s.honeyRecordSale)
+	admin.Patch("/honey/sales/{id}", s.honeyUpdateSale)
+	admin.Delete("/honey/sales/{id}", s.honeyDeleteSale)
+	admin.Get("/honey/sale-locations", s.honeySaleLocations)
 
-	r.Get("/honey/inventory", s.honeyInventoryHandler)
-	r.Get("/honey/overview", s.honeyOverviewHandler)
-	r.Get("/honey/timeline", s.honeyTimelineHandler)
+	admin.Get("/honey/inventory", s.honeyInventoryHandler)
+	admin.Get("/honey/overview", s.honeyOverviewHandler)
+	admin.Get("/honey/timeline", s.honeyTimelineHandler)
 }
 
 // --- shared helpers ---

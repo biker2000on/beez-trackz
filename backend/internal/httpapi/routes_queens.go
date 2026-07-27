@@ -15,12 +15,18 @@ import (
 func (s *Server) mountQueens(r chi.Router) {
 	r.Get("/queens", s.handleQueenList)
 	r.Post("/queens", s.handleQueenCreate)
-	r.Get("/queens/{id}", s.handleQueenGet)
-	r.Put("/queens/{id}", s.handleQueenUpdate)
-	r.Delete("/queens/{id}", s.handleQueenDelete)
-	r.Get("/queens/{id}/lineage", s.handleQueenLineage)
-	r.Get("/queens/{id}/descendants", s.handleQueenDescendants)
-	r.Get("/hives/{id}/queens", s.handleQueensForHive)
+	r.With(s.requireEntityParamRole("queen", false)).
+		Get("/queens/{id}", s.handleQueenGet)
+	r.With(s.requireEntityParamRole("queen", true)).
+		Put("/queens/{id}", s.handleQueenUpdate)
+	r.With(s.requireEntityParamRole("queen", true)).
+		Delete("/queens/{id}", s.handleQueenDelete)
+	r.With(s.requireEntityParamRole("queen", false)).
+		Get("/queens/{id}/lineage", s.handleQueenLineage)
+	r.With(s.requireEntityParamRole("queen", false)).
+		Get("/queens/{id}/descendants", s.handleQueenDescendants)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/queens", s.handleQueensForHive)
 }
 
 // queenJSON is the queen response shape. HiveName/ApiaryName come from the
@@ -146,7 +152,11 @@ func queenResolvePayload(req *queenPayload) (hiveID, originHiveID, parentQueenID
 // GET /queens — all queens for the genealogy tree.
 func (s *Server) handleQueenList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(),
-		queenSelectSQL+` ORDER BY q.introduced_date DESC`)
+		queenSelectSQL+` WHERE ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=a.id
+		)) ORDER BY q.introduced_date DESC`,
+		principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -170,6 +180,17 @@ func (s *Server) handleQueenCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if hiveID == nil {
+		if !principalFrom(r).IsAdmin {
+			writeError(w, http.StatusForbidden, "a hive with editor access is required")
+			return
+		}
+	} else {
+		value, parseErr := uuid.Parse(*hiveID)
+		if parseErr != nil || !s.requireHiveRole(w, r, value, true) {
+			return
+		}
 	}
 	var id string
 	if err := s.pool.QueryRow(r.Context(), `
@@ -225,6 +246,17 @@ func (s *Server) handleQueenUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if hiveID == nil {
+		if !principalFrom(r).IsAdmin {
+			writeError(w, http.StatusForbidden, "a hive with editor access is required")
+			return
+		}
+	} else {
+		value, parseErr := uuid.Parse(*hiveID)
+		if parseErr != nil || !s.requireHiveRole(w, r, value, true) {
+			return
+		}
 	}
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE queens SET hive_id = $1, origin = $2, origin_hive_id = $3,

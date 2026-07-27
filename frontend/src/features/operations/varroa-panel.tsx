@@ -34,7 +34,13 @@ const METHOD_LABELS: Record<string, string> = {
   visual: "Visual count",
 };
 
-export function VarroaPanel({ hiveId }: { hiveId: string }) {
+export function VarroaPanel({
+  hiveId,
+  canEdit = true,
+}: {
+  hiveId: string;
+  canEdit?: boolean;
+}) {
   const report = useVarroaAnalytics(hiveId);
   const create = useCreateMiteCount();
   const [open, setOpen] = React.useState(false);
@@ -78,11 +84,11 @@ export function VarroaPanel({ hiveId }: { hiveId: string }) {
 
   return (
     <div className="grid gap-4">
-      <div className="flex justify-end">
+      {canEdit ? <div className="flex justify-end">
         <Button size="sm" onClick={() => setOpen(true)}>
           <Plus /> Record mite count
         </Button>
-      </div>
+      </div> : null}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -142,7 +148,7 @@ export function VarroaPanel({ hiveId }: { hiveId: string }) {
         ))}
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      {canEdit ? <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Record Varroa count</DialogTitle></DialogHeader>
           <div className="grid gap-4">
@@ -178,7 +184,7 @@ export function VarroaPanel({ hiveId }: { hiveId: string }) {
             <Button onClick={() => void save()} disabled={create.isPending}>{create.isPending ? "Saving…" : "Save count"}</Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog> : null}
     </div>
   );
 }

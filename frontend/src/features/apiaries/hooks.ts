@@ -51,6 +51,62 @@ export interface BloomObservation {
   createdAt: string;
 }
 
+export interface ApiaryWeather {
+  apiaryId: string;
+  source: string;
+  fetchedAt: string;
+  alerts: Array<{
+    date: string;
+    severity: "normal" | "high";
+    message: string;
+  }>;
+  feedingStatus: {
+    activeFeeders: number;
+    lastFeedingAt: string | null;
+    needsAttention: boolean;
+  };
+  forecast: {
+    timezone: string;
+    current: {
+      time: string;
+      temperature_2m: number;
+      apparent_temperature: number;
+      relative_humidity_2m: number;
+      weather_code: number;
+      wind_speed_10m: number;
+      is_day: number;
+    };
+    daily: {
+      time: string[];
+      weather_code: number[];
+      temperature_2m_max: number[];
+      temperature_2m_min: number[];
+      precipitation_sum: number[];
+      precipitation_probability_max: number[];
+      wind_speed_10m_max: number[];
+    };
+  };
+}
+
+export interface BloomPrediction {
+  species: string;
+  predictedDate: string;
+  windowStart: string;
+  windowEnd: string;
+  confidence: "low" | "medium" | "high";
+  observations: number;
+  radiusMiles: number;
+  weatherShiftDays: number;
+  method: string;
+}
+
+export interface BloomPredictions {
+  apiaryId: string;
+  latitude: number;
+  longitude: number;
+  predictions: BloomPrediction[];
+}
+
 // --- queries ---
 
 export function useApiaries() {
@@ -81,6 +137,25 @@ export function useBloomSpecies() {
   return useQuery({
     queryKey: ["bloom-species"],
     queryFn: () => api.get<string[]>("/bloom-observations/species"),
+  });
+}
+
+export function useApiaryWeather(apiaryId: string) {
+  return useQuery({
+    queryKey: ["apiaries", "detail", apiaryId, "weather"],
+    queryFn: () => api.get<ApiaryWeather>(`/apiaries/${apiaryId}/weather`),
+    staleTime: 15 * 60_000,
+    retry: 1,
+  });
+}
+
+export function useBloomPredictions(apiaryId: string) {
+  return useQuery({
+    queryKey: ["apiaries", "detail", apiaryId, "bloom-predictions"],
+    queryFn: () =>
+      api.get<BloomPredictions>(`/apiaries/${apiaryId}/bloom-predictions`),
+    staleTime: 15 * 60_000,
+    retry: 1,
   });
 }
 

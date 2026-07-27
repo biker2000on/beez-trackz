@@ -26,10 +26,11 @@ export interface ApiaryOption {
   name: string;
 }
 
-export function usePreferences() {
+export function usePreferences(enabled = true) {
   return useQuery({
     queryKey: ["settings", "preferences"],
     queryFn: () => api.get<Preferences>("/settings"),
+    enabled,
   });
 }
 

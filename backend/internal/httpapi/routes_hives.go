@@ -19,14 +19,14 @@ func (s *Server) mountHives(r chi.Router) {
 	r.Post("/hives", s.handleHiveCreate)
 	r.Post("/hives/bulk", s.handleHiveBulkCreate)
 	r.Patch("/hives/bulk", s.handleHiveBulkUpdate)
-	r.Get("/hives/{id}", s.handleHiveGet)
-	r.Put("/hives/{id}", s.handleHiveUpdate)
-	r.Delete("/hives/{id}", s.handleHiveDelete)
-	r.Post("/hives/{id}/move", s.handleHiveMove)
-	r.Post("/hives/{id}/archive", s.handleHiveArchive)
-	r.Post("/hives/{id}/unarchive", s.handleHiveUnarchive)
-	r.Post("/hives/{id}/deadout", s.handleHiveDeadout)
-	r.Get("/hives/{id}/location-history", s.handleHiveLocationHistory)
+	r.With(s.requireHiveParamRole(false)).Get("/hives/{id}", s.handleHiveGet)
+	r.With(s.requireHiveParamRole(true)).Put("/hives/{id}", s.handleHiveUpdate)
+	r.With(s.requireHiveParamRole(true)).Delete("/hives/{id}", s.handleHiveDelete)
+	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/move", s.handleHiveMove)
+	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/archive", s.handleHiveArchive)
+	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/unarchive", s.handleHiveUnarchive)
+	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/deadout", s.handleHiveDeadout)
+	r.With(s.requireHiveParamRole(false)).Get("/hives/{id}/location-history", s.handleHiveLocationHistory)
 }
 
 // hiveJSON is the hive response shape (list and detail).
@@ -174,6 +174,14 @@ func (s *Server) handleHiveList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	where := []string{}
 	args := []any{}
+	user := principalFrom(r)
+	if !user.IsAdmin {
+		args = append(args, user.ID)
+		where = append(where, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.apiary_id=h.apiary_id AND membership.user_id=$%d
+		)`, len(args)))
+	}
 	if v := q.Get("includeArchived"); v != "true" && v != "1" {
 		where = append(where, "h.is_archived = false")
 	}
@@ -235,6 +243,10 @@ func (s *Server) handleHiveCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := uuid.Parse(req.ApiaryID); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	apiaryID, _ := uuid.Parse(req.ApiaryID)
+	if !s.requireApiaryRole(w, r, apiaryID, true) {
 		return
 	}
 	label, placement, status, installed, err := hiveResolvePayload(&req)
@@ -314,6 +326,10 @@ func (s *Server) handleHiveBulkCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := uuid.Parse(req.ApiaryID); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	apiaryID, _ := uuid.Parse(req.ApiaryID)
+	if !s.requireApiaryRole(w, r, apiaryID, true) {
 		return
 	}
 
@@ -396,6 +412,22 @@ func (s *Server) handleHiveBulkUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Status == nil && req.IsArchived == nil {
 		writeError(w, http.StatusBadRequest, "Nothing to change")
 		return
+	}
+	user := principalFrom(r)
+	if !user.IsAdmin {
+		var allowed int
+		if err := s.pool.QueryRow(r.Context(), `
+			SELECT count(*) FROM hives hive
+			JOIN apiary_memberships membership ON membership.apiary_id=hive.apiary_id
+			WHERE hive.id=ANY($1::uuid[]) AND membership.user_id=$2
+				AND membership.role='editor'`, ids, user.ID).Scan(&allowed); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if allowed != len(ids) {
+			writeError(w, http.StatusForbidden, "editor access required for every selected hive")
+			return
+		}
 	}
 
 	sets := []string{}
@@ -543,6 +575,10 @@ func (s *Server) handleHiveMove(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := uuid.Parse(req.ApiaryID); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	destinationApiaryID, _ := uuid.Parse(req.ApiaryID)
+	if !s.requireApiaryRole(w, r, destinationApiaryID, true) {
 		return
 	}
 	label := strings.TrimSpace(req.PositionLabel)

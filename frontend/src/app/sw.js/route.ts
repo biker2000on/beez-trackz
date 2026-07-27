@@ -1,6 +1,8 @@
 const serviceWorker = String.raw`
-/* Beez Trackz is intentionally online-first. Never cache or queue API calls. */
-const CACHE_NAME = "beez-trackz-shell-v1";
+const SHELL_CACHE = "beez-trackz-shell-v2";
+const DATA_CACHE = "beez-trackz-api-v2";
+const QUEUE_DB = "beez-trackz-offline";
+const QUEUE_STORE = "mutations";
 const SHELL = [
   "/offline",
   "/icons/icon-192.png",
@@ -8,10 +10,264 @@ const SHELL = [
   "/apple-touch-icon.png",
 ];
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL)),
+function openQueue() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(QUEUE_DB, 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(QUEUE_STORE)) {
+        database.createObjectStore(QUEUE_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function queueRequest(request) {
+  const database = await openQueue();
+  const headers = {};
+  request.headers.forEach((value, key) => {
+    if (key !== "cookie" && key !== "authorization") headers[key] = value;
+  });
+  const id =
+    request.headers.get("X-Offline-Mutation-ID") || crypto.randomUUID();
+  headers["x-offline-mutation-id"] = id;
+  const item = {
+    id,
+    url: request.url,
+    method: request.method,
+    headers,
+    body: request.method === "DELETE" ? null : await request.clone().text(),
+    queuedAt: new Date().toISOString(),
+    state: "pending",
+    error: null,
+  };
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(QUEUE_STORE, "readwrite");
+    transaction.objectStore(QUEUE_STORE).put(item);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+  await broadcastQueueStatus();
+  return item;
+}
+
+async function queueItems() {
+  const database = await openQueue();
+  const items = await new Promise((resolve, reject) => {
+    const request = database
+      .transaction(QUEUE_STORE, "readonly")
+      .objectStore(QUEUE_STORE)
+      .getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return items.sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+}
+
+async function saveQueueItem(item) {
+  const database = await openQueue();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(QUEUE_STORE, "readwrite");
+    transaction.objectStore(QUEUE_STORE).put(item);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function deleteQueueItem(id) {
+  const database = await openQueue();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(QUEUE_STORE, "readwrite");
+    transaction.objectStore(QUEUE_STORE).delete(id);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function clearQueue() {
+  const database = await openQueue();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(QUEUE_STORE, "readwrite");
+    transaction.objectStore(QUEUE_STORE).clear();
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function clearPrivateOfflineState() {
+  await Promise.all([caches.delete(DATA_CACHE), clearQueue()]);
+  await broadcastQueueStatus();
+}
+
+async function broadcastQueueStatus() {
+  const items = await queueItems();
+  const clients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
+  const detail = {
+    pending: items.filter((item) => item.state === "pending").length,
+    conflicts: items.filter((item) => item.state === "conflict").length,
+    failed: items.filter((item) => item.state === "failed").length,
+    items: items.map((item) => ({
+      id: item.id,
+      method: item.method,
+      path: new URL(item.url).pathname,
+      queuedAt: item.queuedAt,
+      state: item.state,
+      error: item.error,
+    })),
+  };
+  clients.forEach((client) =>
+    client.postMessage({ type: "OFFLINE_QUEUE_STATUS", ...detail }),
   );
+}
+
+async function replayQueue() {
+  const items = await queueItems();
+  for (const item of items) {
+    if (item.state !== "pending") continue;
+    const headers = new Headers(item.headers);
+    headers.set("X-Offline-Mutation-ID", item.id);
+    headers.set("X-Offline-Queued-At", item.queuedAt);
+    try {
+      const response = await fetch(item.url, {
+        method: item.method,
+        headers,
+        body: item.body,
+        credentials: "include",
+      });
+      if (response.ok) {
+        await deleteQueueItem(item.id);
+        continue;
+      }
+      const errorBody = await response.clone().json().catch(() => null);
+      if (
+        response.status === 412 ||
+        response.headers.has("X-Offline-Conflict")
+      ) {
+        item.state = "conflict";
+        item.error =
+          errorBody?.error ||
+          "A newer server edit conflicts with this offline change.";
+        await saveQueueItem(item);
+        continue;
+      }
+      if (
+        response.status === 409 &&
+        errorBody?.error?.includes("already processing")
+      ) {
+        break;
+      }
+      if (response.status === 401 || response.status === 403) break;
+      if (response.status >= 400 && response.status < 500) {
+        item.state = "failed";
+        item.error =
+          errorBody?.error ||
+          "The server rejected this offline change.";
+        await saveQueueItem(item);
+        continue;
+      }
+      break;
+    } catch {
+      break;
+    }
+  }
+  await broadcastQueueStatus();
+}
+
+function queueableMutation(request, url) {
+  if (
+    !["POST", "PUT", "PATCH", "DELETE"].includes(request.method) ||
+    !url.pathname.startsWith("/api/v1/") ||
+    !(
+      request.method === "DELETE" ||
+      (request.headers.get("content-type") || "").includes("application/json")
+    )
+  ) {
+    return false;
+  }
+
+  const path = url.pathname;
+  const supportedFieldPaths = [
+    "/api/v1/inspections",
+    "/api/v1/feedings",
+    "/api/v1/bloom-observations",
+    "/api/v1/mite-counts",
+    "/api/v1/treatment-events",
+    "/api/v1/queen-events",
+    "/api/v1/queens",
+    "/api/v1/photos/",
+    "/api/v1/canvas/",
+    "/api/v1/harvest-sessions/",
+    "/api/v1/harvest-entries/",
+    "/api/v1/recommendations/",
+  ];
+  const supportedHiveMutation =
+    path === "/api/v1/hives/bulk" ||
+    (path.startsWith("/api/v1/hives/") && request.method !== "DELETE");
+  const supportedApiaryMutation =
+    path.startsWith("/api/v1/apiaries/") && request.method === "PUT";
+  const supportedSplitMutation =
+    path.startsWith("/api/v1/splits/") && request.method === "DELETE";
+  if (
+    !supportedFieldPaths.some((prefix) => path.startsWith(prefix)) &&
+    !supportedHiveMutation &&
+    !supportedApiaryMutation &&
+    !supportedSplitMutation
+  ) {
+    return false;
+  }
+
+  if (
+    request.method === "POST" &&
+    [
+      "/api/v1/canvas/hives",
+      "/api/v1/harvest-sessions",
+      "/api/v1/recommendations/run",
+    ].includes(url.pathname)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function cacheableAPI(url) {
+  return (
+    url.pathname.startsWith("/api/v1/") &&
+    !url.pathname.startsWith("/api/v1/auth/") &&
+    !url.pathname.startsWith("/api/v1/access/") &&
+    !url.pathname.startsWith("/api/v1/settings/")
+  );
+}
+
+async function networkFirstAPI(request) {
+  const cache = await caches.open(DATA_CACHE);
+  try {
+    const response = await Promise.race([
+      fetch(request),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("network timeout")), 5000),
+      ),
+    ]);
+    if (response.ok) await cache.put(request, response.clone());
+    return response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL)));
   self.skipWaiting();
 });
 
@@ -22,52 +278,146 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith("beez-trackz-") && key !== CACHE_NAME)
+            .filter(
+              (key) =>
+                key.startsWith("beez-trackz-") &&
+                key !== SHELL_CACHE &&
+                key !== DATA_CACHE,
+            )
             .map((key) => caches.delete(key)),
         ),
       )
-      .then(() => self.clients.claim()),
+      .then(() => self.clients.claim())
+      .then(() => replayQueue()),
   );
 });
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
 
   if (
-    request.method !== "GET" ||
-    url.origin !== self.location.origin ||
-    url.pathname.startsWith("/api/")
+    request.method === "POST" &&
+    url.pathname === "/api/v1/auth/logout"
   ) {
-    return;
-  }
-
-  if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(() => caches.match("/offline")),
+      fetch(request).then(async (response) => {
+        if (response.ok) {
+          await clearPrivateOfflineState();
+        }
+        return response;
+      }),
     );
     return;
   }
 
+  if (
+    (request.method === "POST" &&
+      url.pathname === "/api/v1/auth/login") ||
+    (request.method === "GET" &&
+      url.pathname === "/api/v1/auth/oidc/callback")
+  ) {
+    event.respondWith(
+      fetch(request).then(async (response) => {
+        if (response.ok || response.redirected) {
+          await clearPrivateOfflineState();
+        }
+        return response;
+      }),
+    );
+    return;
+  }
+
+  if (request.method === "GET" && cacheableAPI(url)) {
+    event.respondWith(networkFirstAPI(request));
+    return;
+  }
+
+  if (queueableMutation(request, url)) {
+    const mutationHeaders = new Headers(request.headers);
+    if (!mutationHeaders.has("X-Offline-Mutation-ID")) {
+      mutationHeaders.set("X-Offline-Mutation-ID", crypto.randomUUID());
+    }
+    const mutationRequest = new Request(request.clone(), {
+      headers: mutationHeaders,
+    });
+    event.respondWith(
+      fetch(mutationRequest.clone()).catch(async () => {
+        const item = await queueRequest(mutationRequest);
+        if ("sync" in self.registration) {
+          void self.registration.sync.register("beez-trackz-replay");
+        }
+        return new Response(
+          JSON.stringify({
+            queued: true,
+            offline: true,
+            mutationId: item.id,
+          }),
+          {
+            status: 202,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }),
+    );
+    return;
+  }
+
+  if (request.method !== "GET") return;
+  if (request.mode === "navigate") {
+    event.respondWith(fetch(request).catch(() => caches.match("/offline")));
+    return;
+  }
   if (
     url.pathname.startsWith("/_next/static/") ||
     url.pathname.startsWith("/icons/") ||
     url.pathname === "/apple-touch-icon.png"
   ) {
     event.respondWith(
-      caches.match(request).then(
-        (cached) =>
-          cached ||
-          fetch(request).then((response) => {
-            if (response.ok) {
-              const copy = response.clone();
-              void caches
-                .open(CACHE_NAME)
-                .then((cache) => cache.put(request, copy));
-            }
-            return response;
-          }),
-      ),
+      caches.match(request).then((cached) => {
+        const network = fetch(request).then((response) => {
+          if (response.ok) {
+            void caches
+              .open(SHELL_CACHE)
+              .then((cache) => cache.put(request, response.clone()));
+          }
+          return response;
+        });
+        return cached || network;
+      }),
+    );
+  }
+});
+
+self.addEventListener("sync", (event) => {
+  if (event.tag === "beez-trackz-replay") event.waitUntil(replayQueue());
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "REPLAY_OFFLINE_QUEUE") {
+    event.waitUntil(replayQueue());
+  }
+  if (event.data?.type === "GET_OFFLINE_QUEUE_STATUS") {
+    event.waitUntil(broadcastQueueStatus());
+  }
+  if (event.data?.type === "RETRY_OFFLINE_MUTATION") {
+    event.waitUntil(
+      queueItems().then(async (items) => {
+        const item = items.find((value) => value.id === event.data.id);
+        if (item) {
+          item.state = "pending";
+          item.error = null;
+          item.queuedAt = new Date().toISOString();
+          await saveQueueItem(item);
+          await replayQueue();
+        }
+      }),
+    );
+  }
+  if (event.data?.type === "DISCARD_OFFLINE_MUTATION") {
+    event.waitUntil(
+      deleteQueueItem(event.data.id).then(() => broadcastQueueStatus()),
     );
   }
 });

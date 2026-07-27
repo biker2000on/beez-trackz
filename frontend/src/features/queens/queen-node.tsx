@@ -60,7 +60,7 @@ export const QueenNode = React.memo(function QueenNode({
   data,
   selected,
 }: NodeProps<QueenFlowNode>) {
-  const { queen } = data;
+  const { queen, score, inspections } = data;
   const marking = markingColorForDate(queen.introducedDate);
 
   return (
@@ -101,6 +101,12 @@ export const QueenNode = React.memo(function QueenNode({
           {QUEEN_ORIGIN_LABELS[queen.origin] ?? queen.origin}
         </span>
       </div>
+      {score != null && (inspections ?? 0) > 0 ? (
+        <div className="mt-1.5 flex items-center justify-between border-t pt-1.5 text-[10px]">
+          <span className="text-muted-foreground">Performance</span>
+          <strong className="text-primary">{score.toFixed(1)}</strong>
+        </div>
+      ) : null}
       <Handle
         type="source"
         position={Position.Bottom}

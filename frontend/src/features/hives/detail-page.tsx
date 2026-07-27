@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -78,6 +79,12 @@ import { SplitDialog } from "./split-dialog";
 export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   const router = useRouter();
   const hive = useHive(hiveId);
+  const access = useAccessProfile();
+  const canEdit =
+    hive.data != null &&
+    ["admin", "editor"].includes(
+      apiaryRole(access.data, hive.data.apiaryId) ?? "",
+    );
 
   const [editOpen, setEditOpen] = React.useState(false);
   const [inspectionOpen, setInspectionOpen] = React.useState(false);
@@ -91,14 +98,16 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   const unarchiveHive = useUnarchiveHive();
   const deadoutHive = useDeadoutHive();
 
-  useShortcut("i", "New inspection", () => setInspectionOpen(true));
+  useShortcut("i", "New inspection", () => {
+    if (canEdit) setInspectionOpen(true);
+  });
   useShortcut("r", "Record inspection by voice", () =>
-    router.push(`/hives/${hiveId}/transcribe`),
+    canEdit ? router.push(`/hives/${hiveId}/transcribe`) : undefined,
   );
-  useShortcut("f", "Record feeding", () => setFeedOpen(true));
-  useShortcut("p", "Add photo", () => setPhotoOpen(true));
-  useShortcut("e", "Edit hive", () => setEditOpen(true));
-  useShortcut("s", "Split hive", () => setSplitOpen(true));
+  useShortcut("f", "Record feeding", () => canEdit && setFeedOpen(true));
+  useShortcut("p", "Add photo", () => canEdit && setPhotoOpen(true));
+  useShortcut("e", "Edit hive", () => canEdit && setEditOpen(true));
+  useShortcut("s", "Split hive", () => canEdit && setSplitOpen(true));
 
   if (hive.isPending) {
     return (
@@ -149,14 +158,16 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
               Archived
             </Badge>
           )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Edit hive"
-            onClick={() => setEditOpen(true)}
-          >
-            <Pencil className="size-4" />
-          </Button>
+          {canEdit ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Edit hive"
+              onClick={() => setEditOpen(true)}
+            >
+              <Pencil className="size-4" />
+            </Button>
+          ) : null}
         </div>
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           <Link
@@ -177,7 +188,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      {canEdit ? <div className="flex flex-wrap gap-2">
         <Button size="sm" onClick={() => setInspectionOpen(true)}>
           <ClipboardList className="size-4" />
           New inspection
@@ -235,7 +246,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
             )}
           </>
         )}
-      </div>
+      </div> : null}
 
       <Tabs defaultValue="timeline">
         <TabsList className="flex w-full flex-wrap justify-start overflow-x-auto">
@@ -253,22 +264,29 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
           <HiveTimeline hiveId={data.id} />
         </TabsContent>
         <TabsContent value="inspections" className="pt-4">
-          <InspectionsTab hiveId={data.id} />
+          <InspectionsTab hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="varroa" className="pt-4">
-          <VarroaPanel hiveId={data.id} />
+          <VarroaPanel hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="equipment" className="pt-4">
-          <EquipmentTab hiveId={data.id} />
+          <EquipmentTab
+            hiveId={data.id}
+            canManage={access.data?.isAdmin ?? false}
+          />
         </TabsContent>
         <TabsContent value="photos" className="pt-4">
-          <PhotoSection ownerType="hive" ownerId={data.id} />
+          <PhotoSection ownerType="hive" ownerId={data.id} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="feedings" className="pt-4">
-          <FeedingsTab hiveId={data.id} onNew={() => setFeedOpen(true)} />
+          <FeedingsTab
+            hiveId={data.id}
+            canEdit={canEdit}
+            onNew={() => setFeedOpen(true)}
+          />
         </TabsContent>
         <TabsContent value="queen" className="pt-4">
-          <QueenTab hiveId={data.id} />
+          <QueenTab hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="splits" className="pt-4">
           <SplitsTab hiveId={data.id} />
@@ -375,7 +393,13 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   );
 }
 
-function InspectionsTab({ hiveId }: { hiveId: string }) {
+function InspectionsTab({
+  hiveId,
+  canEdit,
+}: {
+  hiveId: string;
+  canEdit: boolean;
+}) {
   const inspections = useHiveInspections(hiveId);
   if (inspections.isPending) return <Skeleton className="h-32 w-full" />;
   if (inspections.isError) {
@@ -393,7 +417,11 @@ function InspectionsTab({ hiveId }: { hiveId: string }) {
   return (
     <div className="grid gap-3">
       {inspections.data.map((inspection) => (
-        <InspectionCard key={inspection.id} inspection={inspection} />
+        <InspectionCard
+          key={inspection.id}
+          inspection={inspection}
+          canEdit={canEdit}
+        />
       ))}
     </div>
   );
@@ -402,9 +430,11 @@ function InspectionsTab({ hiveId }: { hiveId: string }) {
 function FeedingsTab({
   hiveId,
   onNew,
+  canEdit,
 }: {
   hiveId: string;
   onNew: () => void;
+  canEdit: boolean;
 }) {
   const feedings = useHiveFeedings(hiveId);
   const markEmpty = useMarkFeedingEmpty();
@@ -438,12 +468,12 @@ function FeedingsTab({
 
   return (
     <div className="grid gap-4">
-      <div className="flex justify-end">
+      {canEdit ? <div className="flex justify-end">
         <Button size="sm" onClick={onNew}>
           <Droplets className="size-4" />
           New feeding
         </Button>
-      </div>
+      </div> : null}
       {feedings.isPending ? (
         <Skeleton className="h-24 w-full" />
       ) : (feedings.data?.length ?? 0) === 0 ? (
@@ -469,7 +499,7 @@ function FeedingsTab({
                     : " · still out"}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              {canEdit ? <div className="flex items-center gap-2">
                 {!feeding.dateEmpty && (
                   <Button
                     variant="outline"
@@ -488,7 +518,7 @@ function FeedingsTab({
                 >
                   Delete
                 </Button>
-              </div>
+              </div> : null}
             </li>
           ))}
         </ul>

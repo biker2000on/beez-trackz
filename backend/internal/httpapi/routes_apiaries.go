@@ -15,10 +15,10 @@ import (
 
 func (s *Server) mountApiaries(r chi.Router) {
 	r.Get("/apiaries", s.handleApiaryList)
-	r.Post("/apiaries", s.handleApiaryCreate)
-	r.Get("/apiaries/{id}", s.handleApiaryGet)
-	r.Put("/apiaries/{id}", s.handleApiaryUpdate)
-	r.Delete("/apiaries/{id}", s.handleApiaryDelete)
+	r.With(s.requireAdmin).Post("/apiaries", s.handleApiaryCreate)
+	r.With(s.requireApiaryParamRole(false)).Get("/apiaries/{id}", s.handleApiaryGet)
+	r.With(s.requireApiaryParamRole(true)).Put("/apiaries/{id}", s.handleApiaryUpdate)
+	r.With(s.requireAdmin).Delete("/apiaries/{id}", s.handleApiaryDelete)
 }
 
 // apiaryJSON is the detail response shape for a single apiary.
@@ -80,13 +80,18 @@ func (s *Server) apiaryFetch(ctx context.Context, id any) (*apiaryJSON, error) {
 
 // GET /apiaries — ordered by name, with count of live hives.
 func (s *Server) handleApiaryList(w http.ResponseWriter, r *http.Request) {
+	user := principalFrom(r)
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT a.id, a.name, a.latitude, a.longitude, a.notes, a.created_at, count(h.id)
 		FROM apiaries a
 		LEFT JOIN hives h ON h.apiary_id = a.id
 			AND h.is_archived = false AND h.deadout_date IS NULL
+		WHERE $1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.apiary_id=a.id AND membership.user_id=$2
+		)
 		GROUP BY a.id
-		ORDER BY a.name`)
+		ORDER BY a.name`, user.IsAdmin, user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

@@ -2,7 +2,10 @@ import type { Edge, Node } from "@xyflow/react";
 
 import type { Queen } from "./api";
 
-export type QueenFlowNode = Node<{ queen: Queen }, "queen">;
+export type QueenFlowNode = Node<
+  { queen: Queen; score?: number; inspections?: number },
+  "queen"
+>;
 
 /** Horizontal distance between sibling columns. */
 const H_SPACING = 220;
@@ -22,7 +25,10 @@ function byIntroduced(a: Queen, b: Queen): number {
  * parents centered over their children, separate lineages spaced apart.
  * Pure function of the queen list so the tree rebuilds whenever data changes.
  */
-export function layoutQueenTree(queens: Queen[]): {
+export function layoutQueenTree(
+  queens: Queen[],
+  performance: Map<string, { score: number; inspections: number }> = new Map(),
+): {
   nodes: QueenFlowNode[];
   edges: Edge[];
 } {
@@ -70,7 +76,11 @@ export function layoutQueenTree(queens: Queen[]): {
     id: queen.id,
     type: "queen",
     position: positions.get(queen.id) ?? { x: 0, y: 0 },
-    data: { queen },
+    data: {
+      queen,
+      score: performance.get(queen.id)?.score,
+      inspections: performance.get(queen.id)?.inspections,
+    },
   }));
 
   const edges: Edge[] = queens

@@ -43,9 +43,11 @@ import {
 export function PhotoGallery({
   ownerType,
   ownerId,
+  canEdit = true,
 }: {
   ownerType: PhotoOwnerType;
   ownerId: string;
+  canEdit?: boolean;
 }) {
   const photos = usePhotos(ownerType, ownerId);
   const bulkDelete = useBulkDeletePhotos(ownerType, ownerId);
@@ -55,13 +57,14 @@ export function PhotoGallery({
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
   useShortcut("b", "Toggle bulk-select photos", () => {
+    if (!canEdit) return;
     setBulkMode((active) => {
       if (active) setSelectedIds(new Set());
       return !active;
     });
   });
   useShortcut("x", "Select all photos", () => {
-    if (!bulkMode) return;
+    if (!canEdit || !bulkMode) return;
     setSelectedIds(
       selectedIds.size === (photos.data?.length ?? 0)
         ? new Set()
@@ -119,17 +122,19 @@ export function PhotoGallery({
         <p className="text-sm text-muted-foreground">
           {photos.data.length} {photos.data.length === 1 ? "photo" : "photos"}
         </p>
-        <Button
-          variant={bulkMode ? "secondary" : "outline"}
-          size="sm"
-          onClick={() => {
-            setBulkMode((active) => !active);
-            setSelectedIds(new Set());
-          }}
-        >
-          <CheckSquare />
-          {bulkMode ? "Done" : "Bulk select"}
-        </Button>
+        {canEdit ? (
+          <Button
+            variant={bulkMode ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => {
+              setBulkMode((active) => !active);
+              setSelectedIds(new Set());
+            }}
+          >
+            <CheckSquare />
+            {bulkMode ? "Done" : "Bulk select"}
+          </Button>
+        ) : null}
       </div>
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
         {photos.data.map((photo) => (
@@ -210,6 +215,7 @@ export function PhotoGallery({
         ownerType={ownerType}
         ownerId={ownerId}
         photo={detailPhoto}
+        canEdit={canEdit}
         onClose={() => setDetailPhoto(null)}
       />
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -247,11 +253,13 @@ function PhotoDetailDialog({
   ownerType,
   ownerId,
   photo,
+  canEdit,
   onClose,
 }: {
   ownerType: PhotoOwnerType;
   ownerId: string;
   photo: Photo | null;
+  canEdit: boolean;
   onClose: () => void;
 }) {
   const updatePhoto = useUpdatePhoto(ownerType, ownerId);
@@ -322,15 +330,15 @@ function PhotoDetailDialog({
               alt={photo.caption ?? "Photo"}
               className="max-h-96 w-full rounded-md object-contain"
             />
-            <div className="grid gap-2">
+            {canEdit ? <div className="grid gap-2">
               <Label htmlFor="photo-detail-caption">Caption</Label>
               <Input
                 id="photo-detail-caption"
                 value={caption}
                 onChange={(event) => setCaption(event.target.value)}
               />
-            </div>
-            <div className="grid gap-2">
+            </div> : null}
+            {canEdit ? <div className="grid gap-2">
               <Label htmlFor="photo-detail-tags">Tags</Label>
               <Input
                 id="photo-detail-tags"
@@ -338,8 +346,8 @@ function PhotoDetailDialog({
                 value={tags}
                 onChange={(event) => setTags(event.target.value)}
               />
-            </div>
-            <DialogFooter className="sm:justify-between">
+            </div> : null}
+            {canEdit ? <DialogFooter className="sm:justify-between">
               <Button
                 type="button"
                 variant="destructive"
@@ -356,7 +364,7 @@ function PhotoDetailDialog({
               >
                 {updatePhoto.isPending ? "Saving…" : "Save"}
               </Button>
-            </DialogFooter>
+            </DialogFooter> : null}
           </div>
         )}
       </DialogContent>
@@ -368,14 +376,16 @@ function PhotoDetailDialog({
 export function PhotoSection({
   ownerType,
   ownerId,
+  canEdit = true,
 }: {
   ownerType: PhotoOwnerType;
   ownerId: string;
+  canEdit?: boolean;
 }) {
   return (
     <div className="grid gap-4">
-      <PhotoUpload ownerType={ownerType} ownerId={ownerId} />
-      <PhotoGallery ownerType={ownerType} ownerId={ownerId} />
+      {canEdit ? <PhotoUpload ownerType={ownerType} ownerId={ownerId} /> : null}
+      <PhotoGallery ownerType={ownerType} ownerId={ownerId} canEdit={canEdit} />
     </div>
   );
 }

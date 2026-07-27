@@ -19,10 +19,14 @@ import (
 func (s *Server) mountHarvestSessions(r chi.Router) {
 	r.Get("/harvest-sessions", s.hsList)
 	r.Post("/harvest-sessions", s.hsCreate)
-	r.Get("/harvest-sessions/{id}", s.hsDetail)
-	r.Post("/harvest-sessions/{id}/entries", s.hsAddEntry)
-	r.Post("/harvest-sessions/{id}/true-up", s.hsTrueUp)
-	r.Delete("/harvest-entries/{id}", s.hsDeleteEntry)
+	r.With(s.requireEntityParamRole("harvest_session", false)).
+		Get("/harvest-sessions/{id}", s.hsDetail)
+	r.With(s.requireEntityParamRole("harvest_session", true)).
+		Post("/harvest-sessions/{id}/entries", s.hsAddEntry)
+	r.With(s.requireEntityParamRole("harvest_session", true)).
+		Post("/harvest-sessions/{id}/true-up", s.hsTrueUp)
+	r.With(s.requireEntityParamRole("harvest_entry", true)).
+		Delete("/harvest-entries/{id}", s.hsDeleteEntry)
 }
 
 func hsTrimPtr(p *string) *string {
@@ -49,8 +53,12 @@ func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 		FROM harvest_sessions hs
 		JOIN apiaries a ON a.id = hs.apiary_id
 		LEFT JOIN honey_harvests hh ON hh.session_id = hs.id
+		WHERE ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=a.id
+		))
 		GROUP BY hs.id, a.name
-		ORDER BY hs.date DESC`)
+		ORDER BY hs.date DESC`, principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -101,6 +109,9 @@ func (s *Server) hsCreate(w http.ResponseWriter, r *http.Request) {
 	apiaryID, err := uuid.Parse(req.ApiaryID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	if !s.requireApiaryRole(w, r, apiaryID, true) {
 		return
 	}
 	if req.Date == "" {
@@ -262,10 +273,22 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	var sessionDate time.Time
-	err = s.pool.QueryRow(ctx, `SELECT date FROM harvest_sessions WHERE id = $1`, sessionID).
-		Scan(&sessionDate)
+	var sessionApiaryID uuid.UUID
+	err = s.pool.QueryRow(ctx,
+		`SELECT date,apiary_id FROM harvest_sessions WHERE id = $1`, sessionID).
+		Scan(&sessionDate, &sessionApiaryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Session not found")
+		return
+	}
+	var hiveApiaryID uuid.UUID
+	if err := s.pool.QueryRow(ctx,
+		`SELECT apiary_id FROM hives WHERE id=$1`, hiveID).Scan(&hiveApiaryID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid hiveId")
+		return
+	}
+	if hiveApiaryID != sessionApiaryID {
+		writeError(w, http.StatusBadRequest, "hive must belong to the harvest session apiary")
 		return
 	}
 	if err != nil {

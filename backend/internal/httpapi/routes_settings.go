@@ -12,8 +12,9 @@ import (
 // mountSettings wires the preference settings endpoints. (AI provider settings
 // live in routes_ai_settings.go.)
 func (s *Server) mountSettings(r chi.Router) {
-	r.Get("/settings", s.handleSettingsGet)
-	r.Put("/settings/preferences", s.handleSettingsUpdatePreferences)
+	admin := r.With(s.requireAdmin)
+	admin.Get("/settings", s.handleSettingsGet)
+	admin.Put("/settings/preferences", s.handleSettingsUpdatePreferences)
 }
 
 const (

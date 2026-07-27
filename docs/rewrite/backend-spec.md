@@ -1,7 +1,8 @@
 # Backend Behavior Spec (from legacy app — Go rewrite source of truth)
 
 Legacy: Next.js server actions + a few API routes. New: Go REST API under `/api/v1`.
-Single-user instance model: one `user_settings` row; all data shared; no per-user scoping.
+`user_settings` remains the single instance-configuration row, while
+`app_users` and `apiary_memberships` scope operational data per person.
 
 ## Auth
 
@@ -9,16 +10,22 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 - Session: JWT HS256 signed with `SESSION_SECRET`; claims `{authenticated: true, sub, name, iat, exp}`;
   `sub` = `"password"` for password logins or the OIDC subject. TTL 30 days.
 - Cookie `session`: httpOnly, secure (prod), sameSite lax, maxAge 30d, path /.
-- Bearer token with the same JWT also accepted (MCP surface).
+- Bearer JWTs and personal `bt_...` API tokens are accepted.
 - Setup flow: if no user_settings row → setup required. Setup takes displayName + password
   (≥8 chars, confirmed). If a row exists WITH passwordHash → "Setup already completed".
-  If row exists without password (OIDC-bootstrapped) → update it with hash+displayName.
+  If row exists without password (OIDC-bootstrapped) → only an authenticated
+  administrator can add the password.
 - Login: password only. No row → setup required. Row without passwordHash → error (SSO-only).
 - OIDC (openid-client → Go: coreos/go-oidc + oauth2): enabled iff OIDC_ISSUER/CLIENT_ID/CLIENT_SECRET
   set. PKCE S256 + state + nonce, txn stored in signed JWT cookie `beez_oidc_txn` (TTL 600s).
-  Callback: upsert `oidc_identities` by (issuer, subject) updating displayName/email/lastLoginAt;
-  bootstrap user_settings row (passwordHash null) if none; create session {sub: subject, name};
-  redirect to app dashboard. Any account on the configured IdP may sign in.
+  Callback: bind `(issuer, subject)` to a pre-authorized active `app_users`
+  record. A pending collaborator can be claimed by matching a verified OIDC
+  email. Only the first identity on an empty instance bootstraps as an
+  administrator; unknown later identities are denied.
+- Administrators assign `viewer` or `editor` per apiary. Viewers are read-only;
+  editors can mutate operational records in assigned apiaries. Global
+  instance settings, AI configuration, inventory, and commerce are
+  administrator-only.
 - Login page probes GET oidc login endpoint: 404 when unconfigured (hides SSO button).
 
 ## API conventions (new)
@@ -28,6 +35,14 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 - Auth middleware on everything except `/auth/*`, public Honey Story routes
   under `/public/honey-stories/*`, and `/healthz`.
 - The Next frontend proxies `/api/*` to the Go server (same-origin cookies).
+- The service worker adds `X-Offline-Mutation-ID` UUIDs only to supported PWA
+  field mutations. Completed
+  responses are stored per user and returned on retry. Replayed updates send
+  `X-Offline-Queued-At`; a newer server row returns 409 plus
+  `X-Offline-Conflict`.
+- `/api/v1/mcp` implements MCP Streamable HTTP with immediate JSON responses
+  (protocol `2025-11-25`). API-token authentication and all tool calls use the
+  same apiary authorization checks as REST.
 
 ## Domain behavior (must-preserve rules)
 
@@ -68,6 +83,8 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 - Inspection creation and transcription confirmation also persist structured
   mite counts, operational treatment events, feedings, and queen events in the
   same transaction.
+- New inspections capture the current Open-Meteo conditions for the hive's
+  apiary in `weather_snapshot`; provider failure never blocks field recording.
 
 ### Feedings
 - create requires hiveId, dateFed, type, quantity, quantityUnit. markEmpty sets dateEmpty=now.
@@ -150,6 +167,20 @@ Single-user instance model: one `user_settings` row; all data shared; no per-use
 - create: apiaryId, species, dateFirstSeen required; year = dateFirstSeen.year; abundance 1-5 null ok.
 - endBloom/updateLastSeen: dateLastSeen = today (date only).
 - species autocomplete: distinct species by most recent.
+- Apiary bloom predictions use observations within 50 miles, with
+  distance/current-apiary weighting and a seven-day forecast temperature
+  adjustment. Ten-day weather responses are cached for 30 minutes and include
+  cold/wind alerts plus active-feeder status.
+
+### Queen performance
+- `/analytics/queen-performance` scores each visible queen from brood pattern
+  (30%), temperament (25%), normalized honey yield (30%), and colony survival
+  (15%), then aggregates scores by the oldest known mother line.
+
+### Hive QR and NFC tags
+- `/hives/{id}/tag` returns the authenticated hive URL, NFC URL record, and
+  supported MUNBYN label profiles. `/hives/{id}/tag/qr` returns a private,
+  authenticated PNG.
 
 ### Recommendations
 - list active: undismissed ordered urgent<high<normal<low then createdAt desc; dismiss(id); count.

@@ -15,8 +15,9 @@ import (
 func (s *Server) mountRecommendations(r chi.Router) {
 	r.Get("/recommendations", s.handleRecommendationsList)
 	r.Get("/recommendations/count", s.handleRecommendationsCount)
-	r.Post("/recommendations/{id}/dismiss", s.handleRecommendationDismiss)
-	r.Post("/recommendations/run", s.handleRecommendationsRun)
+	r.With(s.requireEntityParamRole("recommendation", true)).
+		Post("/recommendations/{id}/dismiss", s.handleRecommendationDismiss)
+	r.With(s.requireAdmin).Post("/recommendations/run", s.handleRecommendationsRun)
 }
 
 type recommendationJSON struct {
@@ -39,6 +40,10 @@ func (s *Server) handleRecommendationsList(w http.ResponseWriter, r *http.Reques
 		FROM ai_recommendations rec
 		LEFT JOIN hives h ON h.id = rec.hive_id
 		WHERE rec.dismissed = false
+		  AND ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=h.apiary_id
+		  ))
 		ORDER BY
 			CASE rec.priority
 				WHEN 'urgent' THEN 0
@@ -47,7 +52,7 @@ func (s *Server) handleRecommendationsList(w http.ResponseWriter, r *http.Reques
 				WHEN 'low'    THEN 3
 				ELSE 4
 			END,
-			rec.created_at DESC`)
+			rec.created_at DESC`, principalFrom(r).IsAdmin, principalFrom(r).ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -73,8 +78,13 @@ func (s *Server) handleRecommendationsList(w http.ResponseWriter, r *http.Reques
 // GET /recommendations/count — undismissed count (nav badge).
 func (s *Server) handleRecommendationsCount(w http.ResponseWriter, r *http.Request) {
 	var count int
-	err := s.pool.QueryRow(r.Context(),
-		`SELECT count(*) FROM ai_recommendations WHERE dismissed = false`).Scan(&count)
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT count(*) FROM ai_recommendations rec
+		LEFT JOIN hives hive ON hive.id=rec.hive_id
+		WHERE rec.dismissed=false AND ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=hive.apiary_id
+		))`, principalFrom(r).IsAdmin, principalFrom(r).ID).Scan(&count)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

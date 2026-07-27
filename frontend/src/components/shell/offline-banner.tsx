@@ -27,7 +27,8 @@ export function OfflineBanner() {
       className="flex items-center justify-center gap-2 bg-warning px-4 py-1.5 text-xs font-medium text-black/80"
     >
       <WifiOff className="size-3.5" />
-      You are offline — changes cannot be saved until you reconnect.
+      You are offline — cached field data is available and supported changes
+      will sync after reconnecting.
     </div>
   );
 }

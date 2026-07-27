@@ -26,26 +26,30 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
+import { useAccessProfile } from "@/features/access/api";
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { useApiaries, useBulkDeleteApiaries } from "./hooks";
 
 export function ApiariesListPage() {
   const apiaries = useApiaries();
+  const access = useAccessProfile();
+  const isAdmin = access.data?.isAdmin === true;
   const bulkDelete = useBulkDeleteApiaries();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [bulkMode, setBulkMode] = React.useState(false);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
-  useShortcut("n", "New apiary", () => setCreateOpen(true));
+  useShortcut("n", "New apiary", () => isAdmin && setCreateOpen(true));
   useShortcut("b", "Toggle bulk select", () => {
+    if (!isAdmin) return;
     setBulkMode((active) => {
       if (active) setSelected(new Set());
       return !active;
     });
   });
   useShortcut("x", "Select all apiaries", () => {
-    if (!bulkMode) return;
+    if (!isAdmin || !bulkMode) return;
     setSelected(
       selected.size === (apiaries.data?.length ?? 0)
         ? new Set()
@@ -86,7 +90,7 @@ export function ApiariesListPage() {
     <div className="grid gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight">Apiaries</h1>
-        <div className="flex gap-2">
+        {isAdmin ? <div className="flex gap-2">
           <Button
             variant={bulkMode ? "secondary" : "outline"}
             onClick={() => {
@@ -101,7 +105,7 @@ export function ApiariesListPage() {
             <Plus className="size-4" />
             New apiary
           </Button>
-        </div>
+        </div> : null}
       </div>
 
       {apiaries.isPending ? (
@@ -128,10 +132,10 @@ export function ApiariesListPage() {
             <p className="text-sm text-muted-foreground">
               No apiaries yet. Create your first yard to start tracking hives.
             </p>
-            <Button onClick={() => setCreateOpen(true)}>
+            {isAdmin ? <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />
               New apiary
-            </Button>
+            </Button> : null}
           </CardContent>
         </Card>
       ) : (
@@ -202,7 +206,7 @@ export function ApiariesListPage() {
         </div>
       )}
 
-      {bulkMode && (
+      {isAdmin && bulkMode && (
         <div className="sticky bottom-20 z-20 flex items-center gap-2 rounded-xl border bg-card p-3 shadow-lg md:bottom-4">
           <span className="text-sm font-medium">
             {selected.size} selected
@@ -248,7 +252,9 @@ export function ApiariesListPage() {
         </div>
       )}
 
-      <ApiaryFormDialog open={createOpen} onOpenChange={setCreateOpen} />
+      {isAdmin ? (
+        <ApiaryFormDialog open={createOpen} onOpenChange={setCreateOpen} />
+      ) : null}
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>

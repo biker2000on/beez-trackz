@@ -110,6 +110,8 @@ and treatment/feed cost per colony. This distinguishes a favorable honey year
 from a genuinely improving operation.
 
 ### Queen performance scoring
+**Shipped 2026-07-26.**
+
 Connect lineage to outcomes: brood pattern ratings, temperament, survival,
 and honey yield rolled up per queen and per mother line, displayed on the
 genealogy tree.
@@ -117,30 +119,48 @@ genealogy tree.
 ## Field usability
 
 ### True offline mode
+**Shipped 2026-07-26.**
+
 The legacy offline queue was dead code and was dropped in the rewrite. The
 PWA + Go API is a clean foundation for a real one: queue mutations in
 IndexedDB, replay on reconnect with conflict detection.
 
 ### NFC / QR tags on hives
+**Shipped 2026-07-26.**
+
 Scan a tag at the hive to jump straight to its page or start a recording.
-The canvas already knows physical positions.
+The same authenticated hive URL is encoded in QR and Web NFC. Printable
+2x1-inch and 3x2-inch profiles work with MUNBYN label-printer drivers.
 
 ### Weather integration
+**Shipped 2026-07-26.**
+
 Apiaries have lat/lng. Auto-attach conditions to inspections; warn about
-upcoming cold snaps when feeders are light.
+upcoming cold snaps when feeders are light. Forecasts use exact apiary
+coordinates, cache provider results, and show feeder-aware field alerts.
 
 ## Longer arc
 
 ### Bloom calendar intelligence
+**Shipped 2026-07-26.**
+
 Bloom observations are being recorded; correlate them with harvest timing
-across years to predict flow starts.
+across years to predict flow starts. Predictions are location-specific:
+distance-weighted observations within 50 miles favor the current apiary and
+shift their windows using its local forecast.
 
 ### MCP server for the Go API
+**Shipped 2026-07-26.**
+
 The legacy app exposed one. Re-adding it lets an AI assistant answer
 questions like "which hives haven't been inspected since the flow started?"
 from any MCP client.
 
 ### Multi-user support
+**Shipped 2026-07-26.**
+
 `user_settings` is single-row by design. If anyone else ever helps with the
 bees, per-user identities over shared data is the one structural change to
-plan for.
+plan for. Administrators now pre-authorize verified OIDC emails and grant
+viewer/editor access separately for each apiary; API tokens and MCP calls use
+the same authorization rules.

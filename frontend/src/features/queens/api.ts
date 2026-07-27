@@ -75,6 +75,38 @@ export interface HiveOption {
   status: string;
 }
 
+export interface QueenPerformance {
+  id: string;
+  hiveId: string | null;
+  hiveName: string | null;
+  apiaryId: string | null;
+  apiaryName: string | null;
+  parentQueenId: string | null;
+  introducedDate: string | null;
+  status: QueenStatus;
+  inspectionCount: number;
+  broodScore: number;
+  temperamentScore: number;
+  yieldPounds: number;
+  survivalScore: number;
+  overallScore: number;
+}
+
+export interface QueenPerformanceResponse {
+  weights: {
+    brood: number;
+    temperament: number;
+    yield: number;
+    survival: number;
+  };
+  queens: QueenPerformance[];
+  lineages: Array<{
+    queenId: string;
+    queenCount: number;
+    averageScore: number;
+  }>;
+}
+
 export function useQueens() {
   return useQuery({
     queryKey: ["queens"],
@@ -86,6 +118,14 @@ export function useHiveOptions() {
   return useQuery({
     queryKey: ["hives", "options"],
     queryFn: () => api.get<HiveOption[]>("/hives"),
+  });
+}
+
+export function useQueenPerformance() {
+  return useQuery({
+    queryKey: ["queens", "performance"],
+    queryFn: () =>
+      api.get<QueenPerformanceResponse>("/analytics/queen-performance"),
   });
 }
 

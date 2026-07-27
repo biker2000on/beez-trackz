@@ -11,8 +11,10 @@ import (
 
 func (s *Server) mountSplits(r chi.Router) {
 	r.Post("/splits", s.handleSplitCreate)
-	r.Delete("/splits/{id}", s.handleSplitDelete)
-	r.Get("/hives/{id}/splits", s.handleSplitListForHive)
+	r.With(s.requireEntityParamRole("split", true)).
+		Delete("/splits/{id}", s.handleSplitDelete)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/splits", s.handleSplitListForHive)
 }
 
 func splitValidType(v string) bool {
@@ -60,12 +62,18 @@ func (s *Server) handleSplitCreate(w http.ResponseWriter, r *http.Request) {
 			"Parent hive, apiary, position, date, and split type are required")
 		return
 	}
-	if _, err := uuid.Parse(req.ParentHiveID); err != nil {
+	parentHiveID, err := uuid.Parse(req.ParentHiveID)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid parentHiveId")
 		return
 	}
-	if _, err := uuid.Parse(req.ApiaryID); err != nil {
+	apiaryID, err := uuid.Parse(req.ApiaryID)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiaryId")
+		return
+	}
+	if !s.requireHiveRole(w, r, parentHiveID, true) ||
+		!s.requireApiaryRole(w, r, apiaryID, true) {
 		return
 	}
 	if !splitValidType(req.SplitType) {

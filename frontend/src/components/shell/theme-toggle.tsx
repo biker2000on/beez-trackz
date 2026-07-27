@@ -17,10 +17,13 @@ import {
   useUpdatePreferences,
   type Preferences,
 } from "@/features/settings/api";
+import { useAccessProfile } from "@/features/access/api";
 
 export function ThemeToggle() {
   const { setTheme } = useTheme();
-  const prefs = usePreferences();
+  const profile = useAccessProfile();
+  const isAdmin = profile.data?.isAdmin === true;
+  const prefs = usePreferences(isAdmin);
   const updatePrefs = useUpdatePreferences();
   const queryClient = useQueryClient();
 
@@ -29,7 +32,7 @@ export function ThemeToggle() {
   // next-themes would get silently reverted the next time Settings mounts.
   function choose(theme: "light" | "dark" | "system") {
     setTheme(theme);
-    const current = prefs.data;
+    const current = isAdmin ? prefs.data : undefined;
     if (!current || current.theme === theme) return;
     queryClient.setQueryData<Preferences>(["settings", "preferences"], {
       ...current,
