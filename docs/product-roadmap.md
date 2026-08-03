@@ -40,6 +40,88 @@ Structured mite-count fields (alcohol wash / sticky board counts) instead of
 free-text pest counts, with per-hive trend charts and treatment-efficacy
 overlays (counts before vs. after each treatment).
 
+## Workflow clarity and field-first UI
+
+**Planned; based on the 2026-08-02 production UI audit.**
+
+### P0 — Feeding lifecycle and one-row hive status
+
+At audit time, 81 feeding records had no empty date across 22 hives (two to
+six records per hive), and every one was older than 90 days. First verify
+whether an empty date actually means an active feeder, then perform an
+audit-safe, reversible backfill or state correction rather than silently
+changing history. Preserve feeding events in the hive timeline, but show one
+dashboard status row per hive: feeder count, latest feed date/type, and an
+actionable stale or attention state. Sort urgent rows first; use a fixed-height
+scrolling list on desktop/tablet and prioritized rows plus **View all feeding
+status** on mobile. Refills and closures must make the active-feeder rule
+explicit so duplicate status rows cannot return.
+
+### P1 — Dashboard hierarchy for work in front of the beekeeper
+
+Make the dashboard lead with **Needs attention** and **Today’s field actions**,
+then hive/apiary status, feeding summaries, recent activity, and reporting.
+Every recommendation should name the action and its evidence (for example,
+a feeding record with no empty date older than 90 days, once active-feeder
+semantics are verified), rather than giving generic advice equal weight with
+setup or analytics.
+
+### P1 — Replace embedded workflow tabs with clear overviews
+
+Apiary, Hive, and Honey need default overview pages with promoted field
+actions. Keep tabs only for two or three peer views; move larger workflows to
+dedicated routes reached through concise section menus and breadcrumbs. Apiary
+overviews should summarize yard status, layout, hives, flora, and activity;
+hive overviews should summarize health, latest inspection, feeding, equipment,
+queen, and timeline; Honey should summarize bulk stock, packaged stock, recent
+harvests, and sales. Use **Honey** consistently as the module name and
+**Harvests** as its subsection.
+
+### P1 — Separate operational inventories and clarify honey flow
+
+Name and model **Equipment Inventory** separately from **Honey Inventory**.
+If equipment is a routine field operation, move it out of Settings. The
+equipment workflow needs an initial-count flow and a clear view of owned,
+deployed, available, needed, damaged, and retired equipment, backed by ledger
+actions to receive, deploy, return, adjust, and retire rather than opaque
+quantity edits.
+
+Make the Honey workflow show its allowed path and the next useful action:
+**harvest session → bulk inventory/lot → optional bottling → movement or
+sale**. Each stage should show its status and available quantity, while still
+allowing the deliberate shortcuts that real operations need.
+
+Harvest entry should capture the date and apiary once per session, accept
+multiple hive line items, and save once. Replace ambiguous **Before** and
+**After** fields with explicit measurement labels, while permitting direct
+harvested-weight entry when that is simpler in the field.
+
+### P1 — GnuCash-web-ready inventory and honey integration
+
+Design inventory and honey workflows and data contracts for future
+bidirectional syncing with **gnucash-web** across the product ecosystem.
+Records need stable external IDs and idempotent sync behavior; explicit
+account, category, and tax mappings; and traceability from inventory movement
+through COGS, revenue, payment, refund, and adjustment. Surface reconciliation
+status and conflicts, retain a complete audit trail, and never silently
+overwrite quantity or value when either system changes it. The eventual sync
+must preserve the physical honey/equipment ledger and its financial entries as
+linked, reviewable records rather than treating either side as disposable.
+Beez Trackz remains authoritative for physical honey and equipment quantities;
+gnucash-web remains authoritative for posted accounting entries. Sync must not
+infer or overwrite physical stock solely from accounting data.
+
+### P1 — PWA prompt behavior
+
+Do not overlay active apiary, hive, or field-recording work with the install
+prompt. Ask only after a completed task or a repeat visit, persist dismissal,
+and make installation easy to find later without interrupting operations.
+
+### P2 — Responsive field polish
+
+Finish responsive layouts, field-appropriate touch targets, and useful empty
+states so routine work stays clear on a phone as well as desktop and tablet.
+
 ## From harvest to sale
 
 ### Harvest lots, jar runs, and customer-facing QR honey stories
@@ -57,6 +139,65 @@ honey variety/season, bottling date, lot number, approximate apiary region,
 bloom observations, beekeeper story, and selected photos. Keep exact apiary
 coordinates and raw inspection data private. Include a reorder link and an
 optional customer email signup, not a public view of operational records.
+
+### Zebra label printing and physical traceability program
+**Planned; distinct from the shipped generic browser-print support.**
+
+Hive labels already print through the browser using MUNBYN 2x1-inch and
+3x2-inch profiles, with an authenticated internal QR. Honey lots already
+support public Honey Story QRs, lot metadata, bottling runs, and optional
+per-jar serials, but have no label-print action yet.
+
+Validate the exact Zebra ZD420 **ZD42H42-C01E00EZ** before one-click work. It
+is a 4-inch-class, 203-dpi ZD420c-HC healthcare ribbon-cartridge desktop
+printer supporting thermal transfer and direct thermal; this SKU provides
+USB, USB Host/USB-A, Bluetooth, and Ethernet. Zebra family specifications list
+ZPL II, a 4.09-inch maximum print width, and media up to 4.65 inches; other
+family connectivity options should not be assumed for this SKU. The model was
+replaced by the ZD421c-HC.
+
+Build the label layer for any self-hosted installation, not around fixed Beez
+branding. Each installation owns a reusable asset library for admin-uploaded
+logos, artwork, backgrounds, and approved fonts in common raster/vector
+formats. Validate type and size, and sanitize or rasterize SVG before use.
+Keep branding and versioned templates separate from hive/lot data so each
+operator can design labels and historical reprints retain their original look.
+
+1. **Native ZD420 hive labels.** Add an exact-size template, preview, copies,
+   and alignment/calibration so authenticated hive QRs scan reliably.
+2. **Bottling-run honey labels.** Batch lot and jar labels, including circular
+   stock, with the public, curated Honey Story QR; preview, lot, copies, and
+   printed QR must agree.
+3. **Serialized jar traceability.** Preserve each jar identity through print,
+   explicit reprint, reason, and audit history.
+4. **Harvest/extraction container labels.** Once process IDs are stable, keep
+   containers tied to the correct authenticated internal record.
+5. **Market, wholesale-order, and tote labels.** Once order states are stable,
+   reduce fulfillment mix-ups with authenticated internal identifiers.
+6. **Apiary and stand identifiers.** Once naming is final, add durable internal
+   wayfinding that works with the existing scan flow.
+7. **Equipment and bin labels.** Begin after stable asset IDs exist, with label
+   history tied to IDs rather than free-form names.
+
+Shared prerequisites are validated media/hardware, centralized templates and
+DPI/media settings, and a shared print service before any one-click ZPL phase.
+Templates support configurable physical diameter/shape, 203-dpi-safe layout,
+print/export, and a constrained editor for assets, apiary name, text, colors,
+borders, lot fields, and QR placement. A live round preview flags QR quiet-zone
+or size failures and edge clipping; calibration and paper/test print come
+before label stock. Starter presets may later be derived from user-provided
+MUNBYN Editor samples, without making that editor a runtime dependency.
+
+The service owns ZPL and tracks jobs, history, and copies; clients never submit
+arbitrary ZPL. Only job creation and deduplication are idempotent. Raw TCP/9100
+delivery is not: if a connection is lost after bytes may have been sent, mark
+every label type unknown, never auto-resend, and require the operator to
+inspect output and explicitly reprint. Keep port 9100 LAN-only. If Ethernet is
+unusable, use an operator workstation or dedicated local USB print bridge
+without assuming TrueNAS container USB passthrough. Browser/system-driver
+printing remains the durable fallback. Only curated Honey Story content is
+public; hive, order, container, apiary/stand, and equipment identifiers remain
+authenticated and internal.
 
 ### Profitability and cost tracking
 **Shipped 2026-07-26.**
