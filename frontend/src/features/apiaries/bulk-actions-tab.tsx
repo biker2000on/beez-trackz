@@ -283,7 +283,7 @@ function BulkFeedingCard({
             onSelectAll={(all) => selectAll(hives, all)}
             idPrefix="bulk-feed"
           />
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="bulk-feed-date">Date</Label>
               <Input
