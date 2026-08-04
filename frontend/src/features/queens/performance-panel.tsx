@@ -119,9 +119,15 @@ export function QueenPerformancePanel() {
             </TableBody>
           </Table>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            Record queen-linked inspections to begin comparing performance.
-          </p>
+          <div className="grid place-items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center">
+            <ChartNoAxesCombined className="size-7 text-muted-foreground" />
+            <p className="text-sm font-medium">No scored queens yet</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Scores come from inspections linked to a queen. Record an
+              inspection on a hive with a queen assigned and her ranking shows
+              up here.
+            </p>
+          </div>
         )}
       </CardContent>
     </Card>

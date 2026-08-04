@@ -234,83 +234,93 @@ export function JarSizesSection() {
     );
   }
 
+  const isEmpty = (jarSizes.data ?? []).length === 0;
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Label</TableHead>
-          <TableHead>Honey (oz)</TableHead>
-          <TableHead>Default price ($)</TableHead>
-          <TableHead>Low-stock alert</TableHead>
-          <TableHead className="text-center">Active</TableHead>
-          <TableHead className="w-12" />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {(jarSizes.data ?? []).map((jar) => (
-          <JarSizeRow key={jar.id} jar={jar} />
-        ))}
-        <TableRow>
-          <TableCell>
-            <Input
-              aria-label="New jar size label"
-              placeholder="New size…"
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.target.value)}
-            />
-          </TableCell>
-          <TableCell>
-            <Input
-              aria-label="New jar size honey ounces"
-              type="number"
-              inputMode="decimal"
-              min={0}
-              step="any"
-              className="w-24"
-              placeholder="oz"
-              value={newHoneyOz}
-              onChange={(e) => setNewHoneyOz(e.target.value)}
-            />
-          </TableCell>
-          <TableCell>
-            <Input
-              aria-label="New jar size default price"
-              type="number"
-              inputMode="decimal"
-              min={0}
-              step="0.01"
-              className="w-24"
-              placeholder="$"
-              value={newPrice}
-              onChange={(e) => setNewPrice(e.target.value)}
-            />
-          </TableCell>
-          <TableCell>
-            <Input
-              aria-label="New jar size low stock threshold"
-              type="number"
-              inputMode="numeric"
-              min={0}
-              step={1}
-              className="w-24"
-              placeholder="6"
-              value={newLowStockThreshold}
-              onChange={(e) => setNewLowStockThreshold(e.target.value)}
-            />
-          </TableCell>
-          <TableCell />
-          <TableCell>
-            <Button
-              size="icon-sm"
-              aria-label="Add jar size"
-              disabled={createJar.isPending || newLabel.trim() === ""}
-              onClick={handleAdd}
-            >
-              <Plus />
-            </Button>
-          </TableCell>
-        </TableRow>
-      </TableBody>
-    </Table>
+    <div className="grid gap-3">
+      {isEmpty ? (
+        <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+          No jar sizes yet. These are the containers the honey ledger sells and
+          counts stock in — add your first one in the row below.
+        </p>
+      ) : null}
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Label</TableHead>
+            <TableHead>Honey (oz)</TableHead>
+            <TableHead>Default price ($)</TableHead>
+            <TableHead>Low-stock alert</TableHead>
+            <TableHead className="text-center">Active</TableHead>
+            <TableHead className="w-12" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {(jarSizes.data ?? []).map((jar) => (
+            <JarSizeRow key={jar.id} jar={jar} />
+          ))}
+          <TableRow>
+            <TableCell>
+              <Input
+                aria-label="New jar size label"
+                placeholder="New size…"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+              />
+            </TableCell>
+            <TableCell>
+              <Input
+                aria-label="New jar size honey ounces"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="any"
+                className="w-24"
+                placeholder="oz"
+                value={newHoneyOz}
+                onChange={(e) => setNewHoneyOz(e.target.value)}
+              />
+            </TableCell>
+            <TableCell>
+              <Input
+                aria-label="New jar size default price"
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                className="w-24"
+                placeholder="$"
+                value={newPrice}
+                onChange={(e) => setNewPrice(e.target.value)}
+              />
+            </TableCell>
+            <TableCell>
+              <Input
+                aria-label="New jar size low stock threshold"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
+                className="w-24"
+                placeholder="6"
+                value={newLowStockThreshold}
+                onChange={(e) => setNewLowStockThreshold(e.target.value)}
+              />
+            </TableCell>
+            <TableCell />
+            <TableCell>
+              <Button
+                size="icon-sm"
+                aria-label="Add jar size"
+                disabled={createJar.isPending || newLabel.trim() === ""}
+                onClick={handleAdd}
+              >
+                <Plus />
+              </Button>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
   );
 }

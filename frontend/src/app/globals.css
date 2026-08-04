@@ -222,8 +222,15 @@
     min-height: 44px;
   }
 
+  /* `<Button asChild>` renders an anchor, which the rules above miss. */
+  a[data-slot="button"],
+  [data-slot="select-trigger"] {
+    min-height: 44px;
+  }
+
   button[aria-label],
-  [role="button"][aria-label] {
+  [role="button"][aria-label],
+  a[data-slot="button"][aria-label] {
     min-width: 44px;
   }
 }

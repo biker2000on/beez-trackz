@@ -161,6 +161,18 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
           </Button>
         </div>
         <div className="divide-y rounded-lg border">
+          {(hives.data ?? []).length === 0 ? (
+            <div className="grid place-items-center gap-3 p-8 text-center">
+              <QrCode className="size-8 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                This apiary has no hives yet, so there is nothing to label. Add
+                hives on the apiary layout, then come back to print tags.
+              </p>
+              <Button asChild variant="outline">
+                <Link href={`/apiaries/${apiaryId}`}>Back to apiary layout</Link>
+              </Button>
+            </div>
+          ) : null}
           {(hives.data ?? []).map((hive) => (
             <div className="flex items-center gap-3 p-3" key={hive.id}>
               <Checkbox
