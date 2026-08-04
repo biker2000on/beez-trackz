@@ -2,6 +2,7 @@
 
 /** Jars tab: derived jar inventory table per size. */
 
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -54,13 +55,21 @@ export function JarsTab() {
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
-            <TableRow key={row.jarSizeId}>
+            <TableRow
+              key={row.jarSizeId}
+              className={row.isActive === false ? "opacity-60" : undefined}
+            >
               <TableCell className="font-medium">
                 {row.label}
                 {row.honeyOz != null && (
                   <span className="ml-2 text-xs text-muted-foreground">
                     {row.honeyOz} oz
                   </span>
+                )}
+                {row.isActive === false && (
+                  <Badge variant="outline" className="ml-2 text-muted-foreground">
+                    inactive
+                  </Badge>
                 )}
               </TableCell>
               <TableCell

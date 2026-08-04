@@ -1,10 +1,10 @@
 "use client";
 
-/** Sales tab: sales table with line items and per-sale delete. */
+/** Sales tab: sales table with line items and per-sale cancellation. */
 
 import * as React from "react";
 import Link from "next/link";
-import { Check, FileText, PackageCheck, Trash2 } from "lucide-react";
+import { Ban, Check, FileText, PackageCheck } from "lucide-react";
 
 import {
   AlertDialog,
@@ -72,7 +72,12 @@ export function SalesTab() {
         </TableHeader>
         <TableBody>
           {sales.data.map((sale) => (
-            <TableRow key={sale.id}>
+            <TableRow
+              key={sale.id}
+              className={
+                sale.orderStatus === "cancelled" ? "opacity-60" : undefined
+              }
+            >
               <TableCell className="align-top">
                 {formatDate(sale.date)}
               </TableCell>
@@ -118,13 +123,19 @@ export function SalesTab() {
                     {sale.channel.replaceAll("_", " ")}
                   </Badge>
                   <Badge
-                    variant={sale.amountPaid >= sale.totalAmount ? "accent" : "secondary"}
+                    variant={
+                      sale.orderStatus === "cancelled"
+                        ? "outline"
+                        : sale.amountPaid >= sale.totalAmount
+                          ? "accent"
+                          : "secondary"
+                    }
                     className="capitalize"
                   >
                     {sale.orderStatus}
                   </Badge>
                 </div>
-                {sale.amountPaid < sale.totalAmount && (
+                {sale.orderStatus !== "cancelled" && sale.amountPaid < sale.totalAmount && (
                   <p className="mt-1 text-xs text-destructive">
                     {formatMoney(sale.totalAmount - sale.amountPaid)} due
                   </p>
@@ -134,7 +145,7 @@ export function SalesTab() {
                 {formatMoney(sale.totalAmount)}
               </TableCell>
               <TableCell className="align-top text-right">
-                {sale.amountPaid < sale.totalAmount && (
+                {sale.orderStatus !== "cancelled" && sale.amountPaid < sale.totalAmount && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -153,7 +164,7 @@ export function SalesTab() {
                     <Check className="size-4" />
                   </Button>
                 )}
-                {sale.amountPaid >= sale.totalAmount && sale.orderStatus !== "fulfilled" && (
+                {sale.orderStatus !== "cancelled" && sale.amountPaid >= sale.totalAmount && sale.orderStatus !== "fulfilled" && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -179,16 +190,18 @@ export function SalesTab() {
                     <FileText className="size-4" />
                   </Link>
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="text-muted-foreground hover:text-destructive"
-                  aria-label="Delete sale"
-                  onClick={() => setConfirmSale(sale)}
-                >
-                  <Trash2 className="size-4" />
-                </Button>
+                {sale.orderStatus !== "cancelled" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label="Cancel sale"
+                    onClick={() => setConfirmSale(sale)}
+                  >
+                    <Ban className="size-4" />
+                  </Button>
+                )}
               </TableCell>
             </TableRow>
           ))}
@@ -203,16 +216,16 @@ export function SalesTab() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this sale?</AlertDialogTitle>
+            <AlertDialogTitle>Cancel this sale?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirmSale
-                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} and its line items will be removed, returning the jars to inventory.`
+                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled and its jars returned to inventory. The record is kept for the ledger.`
                 : ""}{" "}
-              This cannot be undone.
+              A cancelled sale cannot be reopened.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Keep sale</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
@@ -220,7 +233,7 @@ export function SalesTab() {
                 setConfirmSale(null);
               }}
             >
-              Delete
+              Cancel sale
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

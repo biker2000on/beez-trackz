@@ -19,6 +19,8 @@ export interface HoneyInventoryRow {
   givenAway: number;
   adjusted: number;
   onHand: number;
+  /** False for deactivated sizes that still hold stock (kept visible). */
+  isActive?: boolean;
 }
 
 export interface HoneyOverview {
@@ -49,6 +51,11 @@ export interface TimelineEntry {
   quantity: number | null;
   totalAmount: number | null;
   notes: string | null;
+  /** Movement rows: this entry negates an earlier one. */
+  isReversal?: boolean;
+  reversesMovementId?: string | null;
+  /** Sale rows: the sale was cancelled (record kept). */
+  cancelled?: boolean;
 }
 
 export interface SaleLineItem {

@@ -2,7 +2,9 @@
 
 /**
  * Activity tab: the honey ledger timeline. Iconized, color-tinted rows per
- * kind, per-row delete with confirm, and a bulk-select delete mode (`b`).
+ * kind, per-row reverse/cancel with confirm, and a bulk-select mode (`b`).
+ * The ledger is append-only: movements are reversed with a negating entry
+ * and sales are cancelled in place — nothing is deleted.
  */
 
 import * as React from "react";
@@ -191,7 +193,7 @@ export function ActivityTab() {
         <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/50 px-3 py-2">
           <span className="text-sm">
             {selectedCount === 0
-              ? "Select entries to delete"
+              ? "Select entries to reverse or cancel"
               : `${selectedCount} selected`}
           </span>
           <Button
@@ -217,7 +219,7 @@ export function ActivityTab() {
             onClick={() => setConfirmTarget({ kind: "bulk" })}
           >
             <Trash2 />
-            Delete selected
+            Reverse selected
           </Button>
         </div>
       )}
@@ -225,12 +227,13 @@ export function ActivityTab() {
       {entries.map((entry) => {
         const style = KIND_STYLES[entry.type] ?? FALLBACK_STYLE;
         const Icon = style.icon;
+        const corrected = Boolean(entry.isReversal || entry.cancelled);
         return (
           <div
             key={`${entry.type}-${entry.id}`}
             className={cn(
               "flex items-center gap-3 rounded-lg border p-3",
-              style.rowClass,
+              corrected ? "border-dashed opacity-60" : style.rowClass,
             )}
           >
             {bulkMode && (
@@ -249,7 +252,14 @@ export function ActivityTab() {
               <Icon className="size-4" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{entry.description}</p>
+              <p
+                className={cn(
+                  "truncate text-sm font-medium",
+                  entry.cancelled && "line-through",
+                )}
+              >
+                {entry.description}
+              </p>
               <p className="text-xs text-muted-foreground">
                 {formatDate(entry.date)}
                 {entry.notes ? ` · ${entry.notes}` : ""}
@@ -266,13 +276,17 @@ export function ActivityTab() {
                   {formatLbs(entry.amountLbs)}
                 </Badge>
               )}
-              {!bulkMode && (
+              {!bulkMode && !corrected && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon-sm"
                   className="text-muted-foreground hover:text-destructive"
-                  aria-label={`Delete ${style.label.toLowerCase()} entry`}
+                  aria-label={
+                    entry.type === "sale"
+                      ? "Cancel sale"
+                      : `Reverse ${style.label.toLowerCase()} entry`
+                  }
                   onClick={() => setConfirmTarget({ kind: "single", entry })}
                 >
                   <Trash2 className="size-4" />
@@ -293,23 +307,31 @@ export function ActivityTab() {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirmTarget?.kind === "bulk"
-                ? `Delete ${selectedCount} entries?`
-                : "Delete this entry?"}
+                ? `Reverse ${selectedCount} entries?`
+                : confirmTarget?.kind === "single" &&
+                    confirmTarget.entry.type === "sale"
+                  ? "Cancel this sale?"
+                  : "Reverse this entry?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmTarget?.kind === "single"
-                ? `"${confirmTarget.entry.description}" will be removed from the ledger and inventory recalculated.`
-                : "The selected ledger entries will be removed and inventory recalculated."}{" "}
-              This cannot be undone.
+                ? confirmTarget.entry.type === "sale"
+                  ? `"${confirmTarget.entry.description}" will be marked cancelled and its jars returned to inventory.`
+                  : `A reversing entry will be recorded to undo "${confirmTarget.entry.description}".`
+                : "Sales will be cancelled and movements undone with reversing entries."}{" "}
+              The original records stay in the ledger.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Keep as is</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={runDelete}
             >
-              Delete
+              {confirmTarget?.kind === "single" &&
+              confirmTarget.entry.type === "sale"
+                ? "Cancel sale"
+                : "Reverse"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

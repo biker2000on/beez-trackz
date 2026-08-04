@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { ExternalLink, PackagePlus, Plus, QrCode } from "lucide-react";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -204,9 +205,14 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
   function submit() {
     const qty = Number(quantity);
     if (!Number.isInteger(qty) || qty <= 0) return;
+    // A run without a jar size creates no inventory movement; the API 400s.
+    if (!jarSizeId) {
+      toast.error("Pick a jar size — the run's jars have to land in inventory.");
+      return;
+    }
     create.mutate({
       bottledDate: date,
-      jarSizeId: jarSizeId || undefined,
+      jarSizeId,
       quantity: qty,
       honeyLbs: pounds.trim() ? Number(pounds) : undefined,
       serialize,

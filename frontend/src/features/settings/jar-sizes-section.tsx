@@ -102,6 +102,31 @@ function JarSizeRow({ jar }: { jar: JarSize }) {
     try {
       await updateJar.mutateAsync({ id: jar.id, isActive: checked });
     } catch (error) {
+      // Deactivating a size with jars still on hand is refused until the
+      // remaining stock is explicitly written off as a visible ledger entry.
+      if (error instanceof ApiError && error.status === 409 && !checked) {
+        const proceed = window.confirm(
+          `${error.message}\n\nWrite the remaining jars off and deactivate "${jar.label}"? The write-off is recorded in the honey ledger.`,
+        );
+        if (proceed) {
+          try {
+            await updateJar.mutateAsync({
+              id: jar.id,
+              isActive: false,
+              writeOffRemaining: true,
+              writeOffReason: "Deactivated from settings",
+            });
+            toast.success(`"${jar.label}" deactivated; remaining jars written off`);
+          } catch (retryError) {
+            toast.error(
+              retryError instanceof ApiError
+                ? retryError.message
+                : "Could not update jar size",
+            );
+          }
+        }
+        return;
+      }
       toast.error(
         error instanceof ApiError
           ? error.message

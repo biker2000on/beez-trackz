@@ -171,6 +171,9 @@ export interface JarSizeUpdate {
   defaultPrice?: number | null;
   isActive?: boolean;
   lowStockThreshold?: number;
+  /** Required to deactivate a size with jars still on hand (API 409s otherwise). */
+  writeOffRemaining?: boolean;
+  writeOffReason?: string;
 }
 
 export function useJarSizes() {
