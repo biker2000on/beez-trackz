@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -29,6 +28,7 @@ func (s *Server) mountCommerce(r chi.Router) {
 
 	admin.Get("/expenses", s.expenseList)
 	admin.Post("/expenses", s.expenseCreate)
+	// Soft-deletes; see expenseDelete.
 	admin.Delete("/expenses/{id}", s.expenseDelete)
 	admin.Get("/customers", s.customerList)
 	admin.Post("/customers", s.customerCreate)
@@ -292,13 +292,13 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO harvest_lots
 			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_variety,
 			 season, apiary_region, bloom_notes, beekeeper_story, testing_data,
-			 reorder_url, is_public)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+			 reorder_url, is_public, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
 		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public).Scan(&id)
+		reorderURL, public, actorID(r)).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "lot code or public slug already exists")
 		return
@@ -429,37 +429,97 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bottledDate and a positive quantity are required")
 		return
 	}
-	tx, err := s.pool.Begin(r.Context())
+	// A run with no jar size used to create no inventory movement at all: the
+	// jars showed on the lot page and nowhere in inventory. Rejecting is the
+	// only honest option — the jars have to land in a size to be counted.
+	if req.JarSizeID == nil {
+		writeError(w, http.StatusBadRequest,
+			"jarSizeId is required so the bottled jars enter inventory")
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	defer tx.Rollback(r.Context())
-	var runID uuid.UUID
+	defer tx.Rollback(ctx)
+
 	var lotCode string
-	err = tx.QueryRow(r.Context(), `
-		INSERT INTO bottling_runs (lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes)
-		SELECT id, $2, $3, $4, $5, $6 FROM harvest_lots WHERE id = $1
+	var lotWeightLbs float64
+	if err := tx.QueryRow(ctx,
+		`SELECT lot_code, honey_weight_lbs FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
+		Scan(&lotCode, &lotWeightLbs); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid harvest lot")
+		return
+	}
+
+	// Pounds this run consumes. When honeyLbs is omitted it is derived from the
+	// jar size, using the same oz/16 rule as jarring.
+	var honeyOz *float64
+	if err := tx.QueryRow(ctx, `SELECT honey_oz FROM jar_sizes WHERE id=$1`, *req.JarSizeID).
+		Scan(&honeyOz); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid jar size")
+		return
+	}
+	runLbs := 0.0
+	switch {
+	case req.HoneyLbs != nil:
+		runLbs = *req.HoneyLbs
+	case honeyOz != nil:
+		runLbs = *honeyOz * float64(req.Quantity) / 16
+	}
+
+	// A run cannot bottle more than its lot yielded, and cannot bottle honey
+	// that is not in the bulk pool.
+	var alreadyBottledLbs float64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
+			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
+		FROM bottling_runs run
+		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
+		WHERE run.lot_id = $1`, lotID).Scan(&alreadyBottledLbs); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if alreadyBottledLbs+runLbs > lotWeightLbs+honeyPoundTolerance {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"Lot %s holds %.2f lbs; %.2f lbs are already bottled and this run needs %.2f lbs",
+			lotCode, lotWeightLbs, alreadyBottledLbs, runLbs))
+		return
+	}
+	bulk, err := honeyLockBulk(ctx, tx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if message := honeyBulkShortfall(runLbs, bulk.BulkOnHandLbs); message != "" {
+		writeError(w, http.StatusBadRequest, message)
+		return
+	}
+
+	actor := actorID(r)
+	var runID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO bottling_runs (lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id`, lotID, date, req.JarSizeID, req.Quantity, req.HoneyLbs,
-		honeyTrimPtr(req.Notes)).Scan(&runID)
+		honeyTrimPtr(req.Notes), actor).Scan(&runID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid harvest lot or jar size")
 		return
 	}
-	if err := tx.QueryRow(r.Context(), `SELECT lot_code FROM harvest_lots WHERE id=$1`, lotID).Scan(&lotCode); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+	// bottling_run_id is a real foreign key now. The old link was the text
+	// reason "bottling run LOT-CODE", which nothing enforced.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO honey_movements
+			(date, kind, jar_size_id, quantity, amount_lbs, reason, notes, bottling_run_id, created_by)
+		VALUES ($1, 'jarring', $2, $3, $4, $5, $6, $7, $8)`,
+		date, req.JarSizeID, req.Quantity, runLbs,
+		"bottling run "+lotCode, honeyTrimPtr(req.Notes), runID, actor); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid jar size")
 		return
-	}
-	if req.JarSizeID != nil {
-		if _, err := tx.Exec(r.Context(), `
-			INSERT INTO honey_movements
-				(date, kind, jar_size_id, quantity, amount_lbs, reason, notes)
-			VALUES ($1, 'jarring', $2, $3, $4, $5, $6)`,
-			date, req.JarSizeID, req.Quantity, req.HoneyLbs,
-			"bottling run "+lotCode, honeyTrimPtr(req.Notes)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid jar size")
-			return
-		}
 	}
 	serials := make([]string, 0)
 	if req.Serialize {
@@ -650,14 +710,16 @@ var expenseCategories = map[string]bool{
 
 func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 	year := r.URL.Query().Get("year")
+	// Soft-deleted expenses never appear in listings or aggregates.
 	query := `
-		SELECT e.id, e.expense_date, e.category, e.description, e.amount,
+		SELECT e.id, e.expense_date, e.category, e.description, e.amount_cents,
 			e.apiary_id, a.name, e.hive_id, h.position_label, e.harvest_lot_id,
 			hl.lot_code, e.season, e.vendor, e.quantity, e.unit, e.notes
 		FROM expenses e
 		LEFT JOIN apiaries a ON a.id=e.apiary_id
 		LEFT JOIN hives h ON h.id=e.hive_id
-		LEFT JOIN harvest_lots hl ON hl.id=e.harvest_lot_id`
+		LEFT JOIN harvest_lots hl ON hl.id=e.harvest_lot_id
+		WHERE e.deleted_at IS NULL`
 	args := []any{}
 	if year != "" {
 		y, err := strconv.Atoi(year)
@@ -665,7 +727,7 @@ func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid year")
 			return
 		}
-		query += ` WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1`
+		query += ` AND EXTRACT(YEAR FROM e.expense_date)::integer=$1`
 		args = append(args, y)
 	}
 	query += ` ORDER BY e.expense_date DESC, e.created_at DESC`
@@ -680,7 +742,7 @@ func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 		var id uuid.UUID
 		var date time.Time
 		var category, description string
-		var amount float64
+		var amount money
 		var apiaryID, hiveID, lotID *uuid.UUID
 		var apiaryName, hiveName, lotCode, season, vendor, unit, notes *string
 		var quantity *float64
@@ -706,7 +768,7 @@ func (s *Server) expenseCreate(w http.ResponseWriter, r *http.Request) {
 		ExpenseDate  string     `json:"expenseDate"`
 		Category     string     `json:"category"`
 		Description  string     `json:"description"`
-		Amount       float64    `json:"amount"`
+		Amount       money      `json:"amount"`
 		ApiaryID     *uuid.UUID `json:"apiaryId"`
 		HiveID       *uuid.UUID `json:"hiveId"`
 		HarvestLotID *uuid.UUID `json:"harvestLotId"`
@@ -729,13 +791,13 @@ func (s *Server) expenseCreate(w http.ResponseWriter, r *http.Request) {
 	var id uuid.UUID
 	err = s.pool.QueryRow(r.Context(), `
 		INSERT INTO expenses
-			(expense_date, category, description, amount, apiary_id, hive_id,
-			 harvest_lot_id, season, vendor, quantity, unit, notes)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+			(expense_date, category, description, amount_cents, apiary_id, hive_id,
+			 harvest_lot_id, season, vendor, quantity, unit, notes, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
 		date, req.Category, strings.TrimSpace(req.Description), req.Amount,
 		req.ApiaryID, req.HiveID, req.HarvestLotID, honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.Vendor), req.Quantity, honeyTrimPtr(req.Unit),
-		honeyTrimPtr(req.Notes)).Scan(&id)
+		honeyTrimPtr(req.Notes), actorID(r)).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiary, hive, or harvest lot")
 		return
@@ -743,15 +805,43 @@ func (s *Server) expenseCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
+// DELETE /expenses/{id} SOFT-deletes: the row survives with the actor, the
+// time, and an optional reason, and is excluded from every listing and
+// aggregate. Deleting an expense used to retroactively change every break-even
+// and lot margin for the year with no trace of what changed.
+//
+// Optional body: {"reason": "..."}.
 func (s *Server) expenseDelete(w http.ResponseWriter, r *http.Request) {
-	deleteSimpleRecord(s, w, r, "expenses", "expense")
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Reason *string `json:"reason"`
+	}
+	_ = decodeJSON(r, &req)
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE expenses
+		SET deleted_at=now(), deleted_by=$2, deletion_reason=$3
+		WHERE id=$1 AND deleted_at IS NULL`,
+		id, actorID(r), honeyTrimPtr(req.Reason))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "expense not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "softDeleted": true})
 }
 
 func (s *Server) customerList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT c.id, c.name, c.email, c.phone, c.notes, c.email_opt_in,
 			c.referral_code, c.referred_by, c.created_at,
-			COUNT(s.id), COALESCE(SUM(s.total_amount), 0), MAX(s.date)
+			COUNT(s.id), COALESCE(SUM(s.total_amount_cents), 0), MAX(s.date)
 		FROM customers c
 		LEFT JOIN honey_sales s ON s.customer_id=c.id AND s.order_status <> 'cancelled'
 		GROUP BY c.id ORDER BY c.name`)
@@ -768,7 +858,7 @@ func (s *Server) customerList(w http.ResponseWriter, r *http.Request) {
 		var optIn bool
 		var created time.Time
 		var orders int
-		var revenue float64
+		var revenue money
 		var lastOrder *time.Time
 		if err := rows.Scan(&id, &name, &email, &phone, &notes, &optIn,
 			&referral, &referredBy, &created, &orders, &revenue, &lastOrder); err != nil {
@@ -810,10 +900,11 @@ func (s *Server) customerCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var id uuid.UUID
 	err := s.pool.QueryRow(r.Context(), `
-		INSERT INTO customers (name,email,phone,notes,email_opt_in,referral_code,referred_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		INSERT INTO customers (name,email,phone,notes,email_opt_in,referral_code,referred_by,created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
 		strings.TrimSpace(req.Name), honeyTrimPtr(req.Email), honeyTrimPtr(req.Phone),
-		honeyTrimPtr(req.Notes), req.EmailOptIn, referral, honeyTrimPtr(req.ReferredBy)).Scan(&id)
+		honeyTrimPtr(req.Notes), req.EmailOptIn, referral, honeyTrimPtr(req.ReferredBy),
+		actorID(r)).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusConflict, "referral code already exists")
 		return
@@ -851,9 +942,12 @@ func (s *Server) customerUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) priceListList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT p.id, p.name, p.minimum_order_amount, p.is_active,
+		SELECT p.id, p.name, p.minimum_order_amount_cents, p.is_active,
 			COALESCE(jsonb_agg(jsonb_build_object(
-				'jarSizeId', i.jar_size_id, 'label', js.label, 'unitPrice', i.unit_price
+				'jarSizeId', i.jar_size_id, 'label', js.label,
+				-- The wire format stays in dollars; round to 2dp in SQL so the
+				-- JSON aggregate matches what money.MarshalJSON would emit.
+				'unitPrice', ROUND(i.unit_price_cents / 100.0, 2)
 			) ORDER BY js.sort_order) FILTER (WHERE i.jar_size_id IS NOT NULL), '[]'::jsonb)
 		FROM wholesale_price_lists p
 		LEFT JOIN wholesale_price_list_items i ON i.price_list_id=p.id
@@ -868,7 +962,7 @@ func (s *Server) priceListList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id uuid.UUID
 		var name string
-		var minimum float64
+		var minimum money
 		var active bool
 		var items any
 		if err := rows.Scan(&id, &name, &minimum, &active, &items); err != nil {
@@ -882,11 +976,11 @@ func (s *Server) priceListList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) priceListCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name               string  `json:"name"`
-		MinimumOrderAmount float64 `json:"minimumOrderAmount"`
+		Name               string `json:"name"`
+		MinimumOrderAmount money  `json:"minimumOrderAmount"`
 		Items              []struct {
 			JarSizeID uuid.UUID `json:"jarSizeId"`
-			UnitPrice float64   `json:"unitPrice"`
+			UnitPrice money     `json:"unitPrice"`
 		} `json:"items"`
 	}
 	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.Name) == "" || req.MinimumOrderAmount < 0 {
@@ -901,8 +995,9 @@ func (s *Server) priceListCreate(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	var id uuid.UUID
 	if err := tx.QueryRow(r.Context(), `
-		INSERT INTO wholesale_price_lists (name,minimum_order_amount) VALUES ($1,$2) RETURNING id`,
-		strings.TrimSpace(req.Name), req.MinimumOrderAmount).Scan(&id); err != nil {
+		INSERT INTO wholesale_price_lists (name,minimum_order_amount_cents,created_by)
+		VALUES ($1,$2,$3) RETURNING id`,
+		strings.TrimSpace(req.Name), req.MinimumOrderAmount, actorID(r)).Scan(&id); err != nil {
 		writeError(w, http.StatusConflict, "price list name already exists")
 		return
 	}
@@ -912,8 +1007,9 @@ func (s *Server) priceListCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err := tx.Exec(r.Context(), `
-			INSERT INTO wholesale_price_list_items VALUES ($1,$2,$3)`,
-			id, item.JarSizeID, item.UnitPrice); err != nil {
+			INSERT INTO wholesale_price_list_items (price_list_id, jar_size_id, unit_price_cents, created_by)
+			VALUES ($1,$2,$3,$4)`,
+			id, item.JarSizeID, item.UnitPrice, actorID(r)); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid jarSizeId")
 			return
 		}
@@ -927,20 +1023,23 @@ func (s *Server) priceListCreate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) {
 	year := requestedYear(r)
-	var revenue, expenses, harvested, inventoryValue float64
+	var revenue, collected, expenses, inventoryValue money
+	var harvested float64
 	var jarsSold int
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT
-			COALESCE((SELECT SUM(total_amount) FROM honey_sales
+			COALESCE((SELECT SUM(total_amount_cents) FROM honey_sales
 				WHERE EXTRACT(YEAR FROM date)::integer=$1 AND order_status <> 'cancelled'),0),
-			COALESCE((SELECT SUM(amount) FROM expenses
-				WHERE EXTRACT(YEAR FROM expense_date)::integer=$1),0),
+			COALESCE((SELECT SUM(amount_paid_cents) FROM honey_sales
+				WHERE EXTRACT(YEAR FROM date)::integer=$1 AND order_status <> 'cancelled'),0),
+			COALESCE((SELECT SUM(amount_cents) FROM expenses
+				WHERE EXTRACT(YEAR FROM expense_date)::integer=$1 AND deleted_at IS NULL),0),
 			COALESCE((SELECT SUM(calculated_honey_weight) FROM honey_harvests
-				WHERE EXTRACT(YEAR FROM date)::integer=$1),0),
+				WHERE EXTRACT(YEAR FROM date)::integer=$1 AND deleted_at IS NULL),0),
 			COALESCE((SELECT SUM(si.quantity) FROM honey_sale_items si
 				JOIN honey_sales s ON s.id=si.sale_id
 				WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'),0)`,
-		year).Scan(&revenue, &expenses, &harvested, &jarsSold)
+		year).Scan(&revenue, &collected, &expenses, &harvested, &jarsSold)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -951,13 +1050,15 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	breakEven := make([]map[string]any, 0)
+	// Per-pound and per-jar costs are ratios, not stored amounts: they stay
+	// float dollars, derived from the exact cent totals.
 	costPerPound := 0.0
 	if harvested > 0 {
-		costPerPound = expenses / harvested
+		costPerPound = expenses.Dollars() / harvested
 	}
 	for _, row := range inventory {
 		if row.DefaultPrice != nil {
-			inventoryValue += float64(row.OnHand) * *row.DefaultPrice
+			inventoryValue += row.DefaultPrice.mulQuantity(row.OnHand)
 		}
 		perJar := 0.0
 		if row.HoneyOz != nil {
@@ -969,10 +1070,10 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	channelRows, err := s.pool.Query(r.Context(), `
-		SELECT channel, SUM(total_amount), COUNT(*)
+		SELECT channel, SUM(total_amount_cents), COUNT(*)
 		FROM honey_sales WHERE EXTRACT(YEAR FROM date)::integer=$1
 			AND order_status <> 'cancelled'
-		GROUP BY channel ORDER BY SUM(total_amount) DESC`, year)
+		GROUP BY channel ORDER BY SUM(total_amount_cents) DESC`, year)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -980,7 +1081,7 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	channels := make([]map[string]any, 0)
 	for channelRows.Next() {
 		var channel string
-		var total float64
+		var total money
 		var count int
 		if err := channelRows.Scan(&channel, &total, &count); err != nil {
 			channelRows.Close()
@@ -994,9 +1095,9 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	jarRows, err := s.pool.Query(r.Context(), `
 		WITH lines AS (
 			SELECT si.jar_size_id, js.label, js.honey_oz, si.quantity,
-				si.quantity * si.unit_price AS gross,
-				s.discount_amount,
-				SUM(si.quantity * si.unit_price) OVER (PARTITION BY s.id) AS subtotal
+				si.quantity * si.unit_price_cents AS gross_cents,
+				s.discount_amount_cents,
+				SUM(si.quantity * si.unit_price_cents) OVER (PARTITION BY s.id) AS subtotal_cents
 			FROM honey_sale_items si
 			JOIN honey_sales s ON s.id=si.sale_id
 			JOIN jar_sizes js ON js.id=si.jar_size_id
@@ -1004,8 +1105,9 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 				AND s.order_status <> 'cancelled'
 		)
 		SELECT jar_size_id, label, honey_oz, SUM(quantity),
-			SUM(gross - CASE WHEN subtotal > 0
-				THEN discount_amount * gross / subtotal ELSE 0 END)
+			ROUND(SUM(gross_cents - CASE WHEN subtotal_cents > 0
+				THEN discount_amount_cents::numeric * gross_cents / subtotal_cents
+				ELSE 0 END))::bigint
 		FROM lines GROUP BY jar_size_id, label, honey_oz
 		ORDER BY 5 DESC`, year)
 	if err != nil {
@@ -1018,15 +1120,15 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		var label string
 		var honeyOz *float64
 		var quantity int
-		var jarRevenue float64
+		var jarRevenue money
 		if err := jarRows.Scan(&id, &label, &honeyOz, &quantity, &jarRevenue); err != nil {
 			jarRows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		estimatedCost := 0.0
+		estimatedCost := money(0)
 		if honeyOz != nil {
-			estimatedCost = float64(quantity) * *honeyOz / 16 * costPerPound
+			estimatedCost = money(dollarsToCents(float64(quantity) * *honeyOz / 16 * costPerPound))
 		}
 		byJarSize = append(byJarSize, map[string]any{
 			"jarSizeId": id, "label": label, "jarsSold": quantity,
@@ -1038,16 +1140,16 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 
 	lotRows, err := s.pool.Query(r.Context(), `
 		WITH lot_revenue AS (
-			SELECT harvest_lot_id, SUM(total_amount) revenue
+			SELECT harvest_lot_id, SUM(total_amount_cents) revenue
 			FROM honey_sales
 			WHERE EXTRACT(YEAR FROM date)::integer=$1
 				AND order_status <> 'cancelled' AND harvest_lot_id IS NOT NULL
 			GROUP BY harvest_lot_id
 		), lot_cost AS (
-			SELECT harvest_lot_id, SUM(amount) expenses
+			SELECT harvest_lot_id, SUM(amount_cents) expenses
 			FROM expenses
 			WHERE EXTRACT(YEAR FROM expense_date)::integer=$1
-				AND harvest_lot_id IS NOT NULL
+				AND harvest_lot_id IS NOT NULL AND deleted_at IS NULL
 			GROUP BY harvest_lot_id
 		)
 		SELECT lot.id, lot.lot_code, lot.season, lot.honey_weight_lbs,
@@ -1067,7 +1169,8 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		var id uuid.UUID
 		var code string
 		var season *string
-		var pounds, lotRevenue, lotExpenses float64
+		var pounds float64
+		var lotRevenue, lotExpenses money
 		if err := lotRows.Scan(&id, &code, &season, &pounds, &lotRevenue, &lotExpenses); err != nil {
 			lotRows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -1083,16 +1186,16 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 
 	seasonRows, err := s.pool.Query(r.Context(), `
 		WITH revenue AS (
-			SELECT COALESCE(lot.season,'Unassigned') season, SUM(s.total_amount) revenue
+			SELECT COALESCE(lot.season,'Unassigned') season, SUM(s.total_amount_cents) revenue
 			FROM honey_sales s
 			LEFT JOIN harvest_lots lot ON lot.id=s.harvest_lot_id
 			WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
 			GROUP BY 1
 		), costs AS (
-			SELECT COALESCE(lot.season,e.season,'Unassigned') season, SUM(e.amount) expenses
+			SELECT COALESCE(lot.season,e.season,'Unassigned') season, SUM(e.amount_cents) expenses
 			FROM expenses e
 			LEFT JOIN harvest_lots lot ON lot.id=e.harvest_lot_id
-			WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1
+			WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1 AND e.deleted_at IS NULL
 			GROUP BY 1
 		), harvest_weight AS (
 			SELECT COALESCE(season,'Unassigned') season, SUM(honey_weight_lbs) pounds
@@ -1115,7 +1218,8 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	bySeason := make([]map[string]any, 0)
 	for seasonRows.Next() {
 		var season string
-		var pounds, seasonRevenue, seasonExpenses float64
+		var pounds float64
+		var seasonRevenue, seasonExpenses money
 		if err := seasonRows.Scan(&season, &pounds, &seasonRevenue, &seasonExpenses); err != nil {
 			seasonRows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -1131,9 +1235,14 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 
 	margin := revenue - expenses
 	writeJSON(w, http.StatusOK, map[string]any{
-		"year": year, "revenue": revenue, "expenses": expenses, "grossMargin": margin,
-		"marginPercent": safePercent(margin, revenue), "harvestedPounds": harvested,
-		"costPerHarvestedPound": costPerPound, "costPerJarSold": safeDivide(expenses, float64(jarsSold)),
+		// revenue keeps its previous meaning (invoiced, incl. unpaid orders);
+		// collectedRevenue and invoicedRevenue name the two definitions.
+		"year": year, "revenue": revenue, "invoicedRevenue": revenue,
+		"collectedRevenue": collected, "unpaidRevenue": revenue - collected,
+		"expenses": expenses, "grossMargin": margin,
+		"marginPercent":   safePercent(margin.Dollars(), revenue.Dollars()),
+		"harvestedPounds": harvested, "costPerHarvestedPound": costPerPound,
+		"costPerJarSold": safeDivide(expenses.Dollars(), float64(jarsSold)),
 		"inventoryValue": inventoryValue, "jarsSold": jarsSold,
 		"breakEvenByJarSize": breakEven, "byChannel": channels,
 		"byJarSize": byJarSize, "byHarvestLot": byLot, "bySeason": bySeason,
@@ -1150,39 +1259,42 @@ func (s *Server) economicsAnalytics(w http.ResponseWriter, r *http.Request) {
 			FROM apiaries a
 			LEFT JOIN hives h ON h.apiary_id=a.id
 			LEFT JOIN honey_harvests hh ON hh.hive_id=h.id
-				AND EXTRACT(YEAR FROM hh.date)::integer=$1
+				AND EXTRACT(YEAR FROM hh.date)::integer=$1 AND hh.deleted_at IS NULL
 			GROUP BY a.id
 		), costs AS (
 			SELECT COALESCE(e.apiary_id, h.apiary_id) apiary_id,
-				SUM(e.amount) expenses,
-				SUM(e.amount) FILTER (WHERE e.category='feed') feed_cost,
-				SUM(e.amount) FILTER (WHERE e.category='treatments') treatment_cost
+				SUM(e.amount_cents) expenses,
+				SUM(e.amount_cents) FILTER (WHERE e.category='feed') feed_cost,
+				SUM(e.amount_cents) FILTER (WHERE e.category='treatments') treatment_cost
 			FROM expenses e LEFT JOIN hives h ON h.id=e.hive_id
-			WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1
+			WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1 AND e.deleted_at IS NULL
 			GROUP BY COALESCE(e.apiary_id, h.apiary_id)
 		), general_costs AS (
-			SELECT COALESCE(SUM(e.amount),0) expenses,
-				COALESCE(SUM(e.amount) FILTER (WHERE e.category='feed'),0) feed_cost,
-				COALESCE(SUM(e.amount) FILTER (WHERE e.category='treatments'),0) treatment_cost
+			SELECT COALESCE(SUM(e.amount_cents),0) expenses,
+				COALESCE(SUM(e.amount_cents) FILTER (WHERE e.category='feed'),0) feed_cost,
+				COALESCE(SUM(e.amount_cents) FILTER (WHERE e.category='treatments'),0) treatment_cost
 			FROM expenses e
 			LEFT JOIN hives h ON h.id=e.hive_id
-			WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1
+			WHERE EXTRACT(YEAR FROM e.expense_date)::integer=$1 AND e.deleted_at IS NULL
 				AND COALESCE(e.apiary_id,h.apiary_id) IS NULL
 		), totals AS (
-			SELECT COALESCE(SUM(total_amount),0) revenue
+			SELECT COALESCE(SUM(total_amount_cents),0) revenue
 			FROM honey_sales WHERE EXTRACT(YEAR FROM date)::integer=$1
 				AND order_status <> 'cancelled'
 		), yield_total AS (
 			SELECT COALESCE(SUM(pounds),0) pounds FROM yields
 		)
+		-- Allocated cents are rounded once, at the point of allocation, so the
+		-- per-apiary numbers stay whole cents.
 		SELECT y.apiary_id, y.name, y.pounds, y.producing_hives,
-			COALESCE(c.expenses,0) + CASE WHEN yt.pounds > 0
-				THEN gc.expenses * y.pounds / yt.pounds ELSE 0 END,
-			COALESCE(c.feed_cost,0) + CASE WHEN yt.pounds > 0
-				THEN gc.feed_cost * y.pounds / yt.pounds ELSE 0 END,
-			COALESCE(c.treatment_cost,0) + CASE WHEN yt.pounds > 0
-				THEN gc.treatment_cost * y.pounds / yt.pounds ELSE 0 END,
-			CASE WHEN yt.pounds > 0 THEN t.revenue * y.pounds / yt.pounds ELSE 0 END
+			ROUND(COALESCE(c.expenses,0) + CASE WHEN yt.pounds > 0
+				THEN gc.expenses::numeric * y.pounds / yt.pounds ELSE 0 END)::bigint,
+			ROUND(COALESCE(c.feed_cost,0) + CASE WHEN yt.pounds > 0
+				THEN gc.feed_cost::numeric * y.pounds / yt.pounds ELSE 0 END)::bigint,
+			ROUND(COALESCE(c.treatment_cost,0) + CASE WHEN yt.pounds > 0
+				THEN gc.treatment_cost::numeric * y.pounds / yt.pounds ELSE 0 END)::bigint,
+			ROUND(CASE WHEN yt.pounds > 0
+				THEN t.revenue::numeric * y.pounds / yt.pounds ELSE 0 END)::bigint
 		FROM yields y
 		LEFT JOIN costs c ON c.apiary_id=y.apiary_id
 		CROSS JOIN totals t CROSS JOIN yield_total yt CROSS JOIN general_costs gc
@@ -1197,7 +1309,8 @@ func (s *Server) economicsAnalytics(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id uuid.UUID
 		var name string
-		var pounds, expenses, feedCost, treatmentCost, revenue float64
+		var pounds float64
+		var expenses, feedCost, treatmentCost, revenue money
 		var producing int
 		if err := rows.Scan(&id, &name, &pounds, &producing, &expenses,
 			&feedCost, &treatmentCost, &revenue); err != nil {
@@ -1209,8 +1322,8 @@ func (s *Server) economicsAnalytics(w http.ResponseWriter, r *http.Request) {
 			"producingHives": producing, "revenueAllocated": revenue,
 			"expenses": expenses, "margin": revenue - expenses,
 			"poundsPerHive":          safeDivide(pounds, float64(producing)),
-			"feedCostPerColony":      safeDivide(feedCost, float64(producing)),
-			"treatmentCostPerColony": safeDivide(treatmentCost, float64(producing)),
+			"feedCostPerColony":      safeDivide(feedCost.Dollars(), float64(producing)),
+			"treatmentCostPerColony": safeDivide(treatmentCost.Dollars(), float64(producing)),
 		}
 		out = append(out, item)
 		byID[id] = item
@@ -1334,7 +1447,8 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	salesRows.Close()
 	recommendations := make([]map[string]any, 0)
-	totalPounds, projectedRevenue := 0.0, 0.0
+	totalPounds := 0.0
+	projectedRevenue := money(0)
 	for _, row := range inventory {
 		projectedDemand := int(math.Ceil(float64(sold[row.JarSizeID]) / float64(lookbackDays) * float64(horizonDays)))
 		needed := projectedDemand - row.OnHand
@@ -1345,9 +1459,9 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 		if row.HoneyOz != nil {
 			pounds = float64(needed) * *row.HoneyOz / 16
 		}
-		revenue := 0.0
+		revenue := money(0)
 		if row.DefaultPrice != nil {
-			revenue = float64(needed) * *row.DefaultPrice
+			revenue = row.DefaultPrice.mulQuantity(needed)
 		}
 		totalPounds += pounds
 		projectedRevenue += revenue
@@ -1361,17 +1475,22 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(recommendations, func(i, j int) bool {
 		return recommendations[i]["recommendedToBottle"].(int) > recommendations[j]["recommendedToBottle"].(int)
 	})
-	var wholesaleReserved, bulkOnHand float64
+	var wholesaleReserved float64
 	_ = s.pool.QueryRow(r.Context(), `
 		SELECT COALESCE(SUM(si.quantity * COALESCE(js.honey_oz,0) / 16.0),0)
 		FROM honey_sale_items si
 		JOIN honey_sales s ON s.id=si.sale_id
 		JOIN jar_sizes js ON js.id=si.jar_size_id
 		WHERE s.channel='wholesale' AND s.order_status IN ('draft','pending')`).Scan(&wholesaleReserved)
-	overview, err := s.honeyOverviewValues(r.Context())
-	if err == nil {
-		bulkOnHand = overview["bulkOnHandLbs"].(float64)
+	// The SAME formula /honey/overview reports. This endpoint used to recompute
+	// pounds jarred from quantity * honey_oz / 16, so the two disagreed
+	// whenever a jar size had been edited or had no honey_oz at jarring time.
+	bulk, err := honeyBulkOnHand(r.Context(), s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
 	}
+	bulkOnHand := bulk.BulkOnHandLbs
 	var optedIn int
 	_ = s.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM customers WHERE email_opt_in`).Scan(&optedIn)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -1382,29 +1501,6 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 		"bulkAvailableAfterPlanLbs":   bulkOnHand - wholesaleReserved - totalPounds,
 		"releaseAlertSubscribers":     optedIn,
 	})
-}
-
-func (s *Server) honeyOverviewValues(ctx context.Context) (map[string]any, error) {
-	// Keep the production-plan calculation aligned with /honey/overview without
-	// routing an internal HTTP request.
-	var totalHarvested, jarredLbs, bulkUsed, loss float64
-	err := s.pool.QueryRow(ctx, `
-		SELECT
-			COALESCE((
-				SELECT SUM(COALESCE(hs.total_extracted_weight, (
-					SELECT SUM(hh.calculated_honey_weight) FROM honey_harvests hh WHERE hh.session_id=hs.id
-				))) FROM harvest_sessions hs
-			),0) + COALESCE((SELECT SUM(calculated_honey_weight) FROM honey_harvests WHERE session_id IS NULL),0),
-			COALESCE((SELECT SUM(hm.quantity * COALESCE(js.honey_oz,0) / 16.0)
-				FROM honey_movements hm JOIN jar_sizes js ON js.id=hm.jar_size_id
-				WHERE hm.kind='jarring'),0),
-			COALESCE((SELECT SUM(amount_lbs) FROM honey_movements WHERE kind='bulk_use'),0),
-			COALESCE((SELECT SUM(amount_lbs) FROM honey_movements WHERE kind='loss'),0)`).
-		Scan(&totalHarvested, &jarredLbs, &bulkUsed, &loss)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"bulkOnHandLbs": totalHarvested - jarredLbs - bulkUsed - loss}, nil
 }
 
 func (s *Server) lowStockAlerts(w http.ResponseWriter, r *http.Request) {
@@ -1453,8 +1549,8 @@ func (s *Server) marketDayReconciliation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT payment_method, channel, COUNT(*), SUM(total_amount), SUM(amount_paid),
-			SUM(total_amount-amount_paid)
+		SELECT payment_method, channel, COUNT(*), SUM(total_amount_cents), SUM(amount_paid_cents),
+			SUM(total_amount_cents-amount_paid_cents)
 		FROM honey_sales
 		WHERE date::date=$1::date AND order_status <> 'cancelled'
 		GROUP BY payment_method, channel ORDER BY payment_method, channel`, parsed)
@@ -1464,12 +1560,12 @@ func (s *Server) marketDayReconciliation(w http.ResponseWriter, r *http.Request)
 	}
 	defer rows.Close()
 	lines := make([]map[string]any, 0)
-	totalSales, totalPaid, totalDue := 0.0, 0.0, 0.0
+	totalSales, totalPaid, totalDue := money(0), money(0), money(0)
 	orders := 0
 	for rows.Next() {
 		var payment, channel string
 		var count int
-		var sales, paid, due float64
+		var sales, paid, due money
 		if err := rows.Scan(&payment, &channel, &count, &sales, &paid, &due); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -1502,9 +1598,13 @@ func (s *Server) saleReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, sale := range sales {
 		if sale.ID == id {
+			balanceDue := sale.TotalAmount - sale.AmountPaid
+			if balanceDue < 0 {
+				balanceDue = 0
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"seller": "Beez Trackz Apiary", "sale": sale,
-				"balanceDue":   math.Max(0, sale.TotalAmount-sale.AmountPaid),
+				"balanceDue":   balanceDue,
 				"documentType": map[bool]string{true: "receipt", false: "invoice"}[sale.AmountPaid >= sale.TotalAmount],
 			})
 			return

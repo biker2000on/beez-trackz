@@ -64,6 +64,22 @@ func offlineMutationSupported(method, path string) bool {
 		"/api/v1/harvest-sessions/",
 		"/api/v1/harvest-entries/",
 		"/api/v1/recommendations/",
+		// Honey and commerce writes. Market day is the most offline-prone
+		// surface in the product — a farmers' market with no signal — and
+		// every one of these routes was previously excluded, so a replayed
+		// queue could book the same sale twice.
+		"/api/v1/harvests",
+		"/api/v1/honey/jarring",
+		"/api/v1/honey/bulk-movements",
+		"/api/v1/honey/give-away",
+		"/api/v1/honey/jar-adjustments",
+		"/api/v1/honey/movements/",
+		"/api/v1/honey/sales",
+		"/api/v1/jar-sizes",
+		"/api/v1/expenses",
+		"/api/v1/customers",
+		"/api/v1/harvest-lots",
+		"/api/v1/wholesale-price-lists",
 	}
 	supported := false
 	for _, prefix := range prefixes {
@@ -98,17 +114,27 @@ func (s *Server) offlineResourceUpdatedAt(r *http.Request) (*time.Time, error) {
 		return nil, nil
 	}
 	tableByResource := map[string]string{
-		"apiaries":    "apiaries",
-		"hives":       "hives",
-		"inspections": "inspections",
-		"photos":      "photos",
-		"queens":      "queens",
+		"apiaries":     "apiaries",
+		"hives":        "hives",
+		"inspections":  "inspections",
+		"photos":       "photos",
+		"queens":       "queens",
+		"expenses":     "expenses",
+		"customers":    "customers",
+		"harvest-lots": "harvest_lots",
+		"jar-sizes":    "jar_sizes",
 	}
-	table, ok := tableByResource[parts[2]]
+	resource, idPart := parts[2], parts[3]
+	// /honey/sales/{id} nests one level deeper than the flat resources.
+	if resource == "honey" && len(parts) >= 5 && parts[3] == "sales" {
+		resource, idPart = "honey_sales", parts[4]
+		tableByResource["honey_sales"] = "honey_sales"
+	}
+	table, ok := tableByResource[resource]
 	if !ok {
 		return nil, nil
 	}
-	id, err := uuid.Parse(parts[3])
+	id, err := uuid.Parse(idPart)
 	if err != nil {
 		return nil, nil
 	}

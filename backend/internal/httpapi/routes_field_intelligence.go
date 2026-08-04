@@ -582,7 +582,7 @@ func (s *Server) queenPerformance(w http.ResponseWriter, r *http.Request) {
 		if err := s.pool.QueryRow(r.Context(), `
 			SELECT COALESCE(sum(calculated_honey_weight),0)
 			FROM honey_harvests
-			WHERE hive_id=$1 AND ($2::timestamptz IS NULL OR date >= $2)
+			WHERE hive_id=$1 AND deleted_at IS NULL AND ($2::timestamptz IS NULL OR date >= $2)
 				AND ($3::timestamptz IS NULL OR date < $3)`,
 			item.HiveID, item.IntroducedDate, nextIntroduced).Scan(&item.YieldPounds); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")

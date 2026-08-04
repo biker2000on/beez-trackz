@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -52,7 +53,7 @@ func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 		       COUNT(hh.id)::int, COALESCE(SUM(hh.calculated_honey_weight), 0)
 		FROM harvest_sessions hs
 		JOIN apiaries a ON a.id = hs.apiary_id
-		LEFT JOIN honey_harvests hh ON hh.session_id = hs.id
+		LEFT JOIN honey_harvests hh ON hh.session_id = hs.id AND hh.deleted_at IS NULL
 		WHERE ($1::boolean OR EXISTS (
 			SELECT 1 FROM apiary_memberships membership
 			WHERE membership.user_id=$2 AND membership.apiary_id=a.id
@@ -127,10 +128,10 @@ func (s *Server) hsCreate(w http.ResponseWriter, r *http.Request) {
 	var id uuid.UUID
 	var createdAt time.Time
 	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO harvest_sessions (apiary_id, date, notes)
-		VALUES ($1, $2, $3)
+		INSERT INTO harvest_sessions (apiary_id, date, notes, created_by)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id, created_at`,
-		apiaryID, date, hsTrimPtr(req.Notes)).Scan(&id, &createdAt)
+		apiaryID, date, hsTrimPtr(req.Notes), actorID(r)).Scan(&id, &createdAt)
 	if err != nil {
 		if hsIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid apiaryId")
@@ -191,7 +192,7 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		       hh.calculated_honey_weight, hh.notes, h.position_label
 		FROM honey_harvests hh
 		JOIN hives h ON h.id = hh.hive_id
-		WHERE hh.session_id = $1
+		WHERE hh.session_id = $1 AND hh.deleted_at IS NULL
 		ORDER BY hh.created_at`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -222,6 +223,15 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		d := calculatedTotal - *totalExtractedWeight
 		difference = &d
 	}
+
+	// Every true-up keeps the value it replaced, so a correction is auditable
+	// instead of silently overwriting the authoritative weight.
+	trueUps, err := s.hsTrueUpHistory(ctx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                   id,
 		"apiaryId":             apiaryID,
@@ -232,7 +242,38 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		"entries":              entries,
 		"calculatedTotal":      calculatedTotal,
 		"difference":           difference,
+		"trueUpHistory":        trueUps,
 	})
+}
+
+func (s *Server) hsTrueUpHistory(ctx context.Context, sessionID uuid.UUID) ([]map[string]any, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id, t.previous_weight_lbs, t.new_weight_lbs, t.reason,
+			t.created_at, u.display_name
+		FROM harvest_session_true_ups t
+		LEFT JOIN app_users u ON u.id = t.created_by
+		WHERE t.session_id = $1
+		ORDER BY t.created_at DESC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		var previous *float64
+		var next float64
+		var reason, actor *string
+		var createdAt time.Time
+		if err := rows.Scan(&id, &previous, &next, &reason, &createdAt, &actor); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"id": id, "previousWeightLbs": previous, "newWeightLbs": next,
+			"reason": reason, "recordedAt": createdAt, "recordedBy": actor,
+		})
+	}
+	return out, rows.Err()
 }
 
 // POST /harvest-sessions/{id}/entries {hiveId, superWeightBefore, superWeightAfter, notes?}
@@ -298,11 +339,11 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 
 	var id uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO honey_harvests (session_id, hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO honey_harvests (session_id, hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight, notes, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id`,
 		sessionID, hiveID, sessionDate, *req.SuperWeightBefore, *req.SuperWeightAfter,
-		honeyWeight, hsTrimPtr(req.Notes)).Scan(&id)
+		honeyWeight, hsTrimPtr(req.Notes), actorID(r)).Scan(&id)
 	if err != nil {
 		if hsIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid hiveId")
@@ -323,7 +364,12 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /harvest-sessions/{id}/true-up {totalExtractedWeight}
+// POST /harvest-sessions/{id}/true-up {totalExtractedWeight, reason?}
+//
+// The true-up sets the authoritative extracted weight. It used to overwrite the
+// previous value with no record of what it replaced, and accepted negatives.
+// The prior value is now written to harvest_session_true_ups first, inside the
+// same transaction, and negatives are rejected.
 func (s *Server) hsTrueUp(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -332,6 +378,7 @@ func (s *Server) hsTrueUp(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		TotalExtractedWeight *float64 `json:"totalExtractedWeight"`
+		Reason               *string  `json:"reason"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -341,28 +388,74 @@ func (s *Server) hsTrueUp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Total weight is required")
 		return
 	}
-	tag, err := s.pool.Exec(r.Context(),
-		`UPDATE harvest_sessions SET total_extracted_weight = $1 WHERE id = $2`,
-		*req.TotalExtractedWeight, id)
+	if *req.TotalExtractedWeight < 0 {
+		writeError(w, http.StatusBadRequest, "Total weight must be zero or greater")
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "session not found")
+	defer tx.Rollback(ctx)
+
+	var previous *float64
+	if err := tx.QueryRow(ctx,
+		`SELECT total_extracted_weight FROM harvest_sessions WHERE id = $1 FOR UPDATE`, id).
+		Scan(&previous); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO harvest_session_true_ups
+			(session_id, previous_weight_lbs, new_weight_lbs, reason, created_by)
+		VALUES ($1,$2,$3,$4,$5)`,
+		id, previous, *req.TotalExtractedWeight, hsTrimPtr(req.Reason), actorID(r)); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE harvest_sessions SET total_extracted_weight = $1 WHERE id = $2`,
+		*req.TotalExtractedWeight, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":              true,
+		"previousWeightLbs":    previous,
+		"totalExtractedWeight": *req.TotalExtractedWeight,
+	})
 }
 
-// DELETE /harvest-entries/{id}
+// DELETE /harvest-entries/{id} SOFT-deletes. The row keeps the actor, the time,
+// and an optional reason, and is excluded from every listing and aggregate.
+//
+// Optional body: {"reason": "..."}.
 func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	tag, err := s.pool.Exec(r.Context(), `DELETE FROM honey_harvests WHERE id = $1`, id)
+	var req struct {
+		Reason *string `json:"reason"`
+	}
+	_ = decodeJSON(r, &req)
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE honey_harvests
+		SET deleted_at=now(), deleted_by=$2, deletion_reason=$3
+		WHERE id = $1 AND deleted_at IS NULL`,
+		id, actorID(r), hsTrimPtr(req.Reason))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -371,5 +464,5 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "entry not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "softDeleted": true})
 }

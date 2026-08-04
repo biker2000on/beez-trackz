@@ -33,6 +33,10 @@ type copySpec struct {
 	cols  []string
 	// selectCols overrides the legacy column list when names differ.
 	selectCols []string
+	// centsCols marks target columns (by index into cols) that are integer
+	// cents in this schema but float dollars in the legacy one. The insert
+	// converts them with the same ROUND(x*100) rule as migration 00004.
+	centsCols map[int]bool
 }
 
 var specs = []copySpec{
@@ -55,13 +59,19 @@ var specs = []copySpec{
 	{table: "honey_harvests",
 		cols: []string{"id", "session_id", "hive_id", "date", "super_weight_before", "super_weight_after", "calculated_honey_weight", "notes", "created_at"}},
 	{table: "honey_sales",
-		cols: []string{"id", "date", "customer_name", "location", "total_amount", "notes", "created_at"}},
+		cols:       []string{"id", "date", "customer_name", "location", "total_amount_cents", "notes", "created_at"},
+		selectCols: []string{"id", "date", "customer_name", "location", "total_amount", "notes", "created_at"},
+		centsCols:  map[int]bool{4: true}},
 	{table: "jar_sizes",
-		cols: []string{"id", "label", "honey_oz", "default_price", "sort_order", "is_active", "created_at"}},
+		cols:       []string{"id", "label", "honey_oz", "default_price_cents", "sort_order", "is_active", "created_at"},
+		selectCols: []string{"id", "label", "honey_oz", "default_price", "sort_order", "is_active", "created_at"},
+		centsCols:  map[int]bool{3: true}},
 	{table: "honey_movements",
 		cols: []string{"id", "date", "kind", "amount_lbs", "jar_size_id", "quantity", "reason", "notes", "created_at"}},
 	{table: "honey_sale_items",
-		cols: []string{"id", "sale_id", "jar_size_id", "quantity", "unit_price"}},
+		cols:       []string{"id", "sale_id", "jar_size_id", "quantity", "unit_price_cents"},
+		selectCols: []string{"id", "sale_id", "jar_size_id", "quantity", "unit_price"},
+		centsCols:  map[int]bool{4: true}},
 	{table: "equipment_types",
 		cols: []string{"id", "name", "category", "frames_per_box", "is_default", "created_at"}},
 	{table: "equipment_stock",
@@ -341,6 +351,9 @@ func copyTable(ctx context.Context, src, dst *pgx.Conn, spec copySpec) (int, err
 	placeholders := make([]string, len(spec.cols))
 	for i := range spec.cols {
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		if spec.centsCols[i] {
+			placeholders[i] = fmt.Sprintf("ROUND($%d::numeric * 100)::bigint", i+1)
+		}
 	}
 	insert := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 		spec.table, strings.Join(spec.cols, ", "), strings.Join(placeholders, ", "))

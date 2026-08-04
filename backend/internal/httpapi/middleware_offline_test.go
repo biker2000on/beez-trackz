@@ -25,6 +25,24 @@ func TestOfflineMutationSupported(t *testing.T) {
 		{"access token", http.MethodPost, "/api/v1/access/tokens", false},
 		{"settings", http.MethodPut, "/api/v1/settings/preferences", false},
 		{"MCP", http.MethodPost, "/api/v1/mcp", false},
+		// Honey/commerce writes: market day is the most offline-prone surface
+		// in the product and every one of these used to be excluded.
+		{"record sale", http.MethodPost, "/api/v1/honey/sales", true},
+		{"update sale", http.MethodPatch, "/api/v1/honey/sales/a", true},
+		{"cancel sale", http.MethodDelete, "/api/v1/honey/sales/a", true},
+		{"jarring", http.MethodPost, "/api/v1/honey/jarring", true},
+		{"give away", http.MethodPost, "/api/v1/honey/give-away", true},
+		{"jar adjustment", http.MethodPost, "/api/v1/honey/jar-adjustments", true},
+		{"reverse movement", http.MethodDelete, "/api/v1/honey/movements/a", true},
+		{"harvest", http.MethodPost, "/api/v1/harvests", true},
+		{"expense", http.MethodPost, "/api/v1/expenses", true},
+		{"expense delete", http.MethodDelete, "/api/v1/expenses/a", true},
+		{"jar size", http.MethodPut, "/api/v1/jar-sizes/a", true},
+		{"customer", http.MethodPost, "/api/v1/customers", true},
+		{"harvest lot", http.MethodPost, "/api/v1/harvest-lots", true},
+		{"bottling run", http.MethodPost, "/api/v1/harvest-lots/a/bottling-runs", true},
+		// Read-only honey routes are still out of scope.
+		{"honey overview", http.MethodGet, "/api/v1/honey/overview", false},
 	}
 
 	for _, test := range tests {
