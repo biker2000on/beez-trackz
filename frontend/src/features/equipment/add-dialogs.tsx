@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-import { parseNum } from "./format";
+import { parseCents, parseNum } from "./format";
 import { useCreateStock, useCreateType, useEquipmentTypes } from "./hooks";
 import {
   CATEGORY_LABELS,
@@ -59,35 +59,42 @@ const stockSchema = z.object({
         (Number.isInteger(parseNum(v) ?? NaN) && (parseNum(v) ?? -1) >= 0),
       "Enter a whole number of 0 or more",
     ),
+  neededQuantity: z
+    .string()
+    .refine(
+      (v) =>
+        v.trim() === "" ||
+        (Number.isInteger(parseNum(v) ?? NaN) && (parseNum(v) ?? -1) >= 0),
+      "Enter a whole number of 0 or more",
+    ),
+  unitCost: z.string(),
   frameCondition: z.string(),
   storageLocation: z.string(),
   notes: z.string(),
 });
 type StockValues = z.infer<typeof stockSchema>;
 
+const EMPTY_STOCK: StockValues = {
+  typeId: "",
+  initialQuantity: "0",
+  neededQuantity: "0",
+  unitCost: "",
+  frameCondition: "unspecified",
+  storageLocation: "",
+  notes: "",
+};
+
 export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
   const types = useEquipmentTypes();
   const mutation = useCreateStock();
   const form = useForm<StockValues>({
     resolver: zodResolver(stockSchema),
-    defaultValues: {
-      typeId: "",
-      initialQuantity: "0",
-      frameCondition: "unspecified",
-      storageLocation: "",
-      notes: "",
-    },
+    defaultValues: EMPTY_STOCK,
   });
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({
-      typeId: "",
-      initialQuantity: "0",
-      frameCondition: "unspecified",
-      storageLocation: "",
-      notes: "",
-    });
+    form.reset(EMPTY_STOCK);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -102,10 +109,17 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
 
   const onSubmit = form.handleSubmit((values) => {
     const condition = values.frameCondition;
+    const unitCostCents = parseCents(values.unitCost);
+    if (values.unitCost.trim() !== "" && unitCostCents == null) {
+      form.setError("unitCost", { message: "Enter an amount like 24.50" });
+      return;
+    }
     mutation.mutate(
       {
         typeId: values.typeId,
         initialQuantity: parseNum(values.initialQuantity) ?? 0,
+        neededQuantity: parseNum(values.neededQuantity) ?? 0,
+        unitCostCents,
         storageLocation: values.storageLocation.trim() || undefined,
         notes: values.notes.trim() || undefined,
         ...(isFrame && (condition === "drawn" || condition === "fresh")
@@ -165,6 +179,28 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
                 {...form.register("initialQuantity")}
               />
               <FieldError message={errors.initialQuantity?.message} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="stock-needed">Needed</Label>
+              <Input
+                id="stock-needed"
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={0}
+                {...form.register("neededQuantity")}
+              />
+              <FieldError message={errors.neededQuantity?.message} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="stock-unit-cost">Unit cost</Label>
+              <Input
+                id="stock-unit-cost"
+                inputMode="decimal"
+                placeholder="e.g. 24.50"
+                {...form.register("unitCost")}
+              />
+              <FieldError message={errors.unitCost?.message} />
             </div>
             {isFrame && (
               <div className="grid gap-1.5">

@@ -23,6 +23,24 @@ export function formatDate(iso: string): string {
   });
 }
 
+/** Money arrives from the API as integer cents; render it as currency. */
+export function formatCents(cents: number | null | undefined): string {
+  if (cents == null) return "—";
+  return (cents / 100).toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+  });
+}
+
+/** Parse a currency input ("12.50") into integer cents; empty becomes null. */
+export function parseCents(value: string): number | null {
+  const trimmed = value.trim().replace(/[$,]/g, "");
+  if (trimmed === "") return null;
+  const amount = Number(trimmed);
+  if (!Number.isFinite(amount)) return null;
+  return Math.round(amount * 100);
+}
+
 /** Parse a numeric input string; empty or invalid becomes null. */
 export function parseNum(value: string): number | null {
   const trimmed = value.trim();
