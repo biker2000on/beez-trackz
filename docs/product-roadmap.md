@@ -245,13 +245,13 @@ states so routine work stays clear on a phone as well as desktop and tablet.
 ## From harvest to sale
 
 ### Harvest lots, jar runs, and customer-facing QR honey stories
-**Partially shipped 2026-07-26.** Lots, bottling runs, and public Honey
-Story pages work, but the jar→extraction-run traceability is not real at
-the data level: `jar_serials` are generated and counted, yet no endpoint
-looks a serial up and serials link to nothing downstream (no sale linkage).
-Lot weight is free-typed and never validated against linked harvests, and
-bottling is not FK-linked to the jar ledger (see the gnucash-web item).
-Finish serial lookup + sale linkage, or stop generating serials until then.
+**Shipped; serial traceability completed 2026-08-04.** Lots, bottling runs,
+and public Honey Story pages work; bottling runs are FK-linked to the jar
+ledger and validated against lot weight and bulk on hand (2026-08-04, with
+the gnucash-web blockers); and serials are now real: `/harvest/serials`
+looks any serial up (serial → bottling run → lot → sale), and sales carry
+linked serials via `jar_serials.sale_id` with audit fields, managed from
+the sale receipt. Lot weight remains free-typed against linked harvests.
 
 The existing harvest sessions, per-hive harvest records, honey ledger, and
 sales inventory are a strong base, but they do not connect a physical jar to
@@ -421,12 +421,11 @@ live use first — the production compose file and CI reference only
 `backend/` and `frontend/`).
 
 ### Dangling features to wire up or remove
-
-From the 2026-08-03 review: `PATCH /harvest-lots/{id}` and
-`PATCH /customers/{id}` have no UI (lots and customers are create-only);
-the `useLowStock` hook and `jar_sizes.low_stock_threshold` have no surface;
-wholesale price lists can be created but not applied from the sale dialog,
-leaving the wholesale-minimum enforcement path unreachable.
+**Closed 2026-08-04.** Lots and customers are editable in place from their
+existing views (`PATCH` endpoints finally have UI); the low-stock threshold
+surfaces on the Honey overview's next actions; wholesale price lists apply
+from the sale dialog's wholesale channel, prefilling line prices and
+enforcing the minimum server-side.
 
 ## Longer arc
 

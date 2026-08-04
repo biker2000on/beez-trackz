@@ -24,6 +24,7 @@ const SECTIONS = [
   { href: "/harvest/jars", label: "Jars" },
   { href: "/harvest/sales", label: "Sales" },
   { href: "/harvest/lots", label: "Lots & QR" },
+  { href: "/harvest/serials", label: "Serials" },
   { href: "/harvest/activity", label: "Activity" },
 ] as const;
 
