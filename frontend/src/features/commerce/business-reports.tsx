@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * Back-office reports for the honey business. These used to be four nested
+ * tabs inside `/harvest` → Business; they are now sections of `/reports`, the
+ * single home for financial numbers.
+ *
+ * Revenue here is *invoiced* (order totals, unpaid orders included) because
+ * that is what `/analytics/profitability` sums. Collected figures live on the
+ * sales list and the market-day reconciliation.
+ */
+
 import * as React from "react";
 import { Bell, DollarSign, Plus, Trash2, Users } from "lucide-react";
 
@@ -24,7 +34,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -49,30 +58,7 @@ import {
   useWholesalePriceLists,
 } from "./api";
 
-export function BusinessTab() {
-  const [year, setYear] = React.useState(new Date().getFullYear());
-  return (
-    <div className="grid gap-4">
-      <div className="flex justify-end">
-        <div className="grid gap-1"><Label className="text-xs">Year</Label><Input className="w-28" type="number" value={year} onChange={(e) => setYear(Number(e.target.value))} /></div>
-      </div>
-      <Tabs defaultValue="profit">
-        <TabsList className="flex w-full flex-wrap justify-start">
-          <TabsTrigger value="profit">Profitability</TabsTrigger>
-          <TabsTrigger value="expenses">Expenses</TabsTrigger>
-          <TabsTrigger value="planning">Bottle next</TabsTrigger>
-          <TabsTrigger value="customers">Customers & wholesale</TabsTrigger>
-        </TabsList>
-        <TabsContent value="profit" className="pt-4"><ProfitabilityPanel year={year} /></TabsContent>
-        <TabsContent value="expenses" className="pt-4"><ExpensesPanel year={year} /></TabsContent>
-        <TabsContent value="planning" className="pt-4"><PlanningPanel /></TabsContent>
-        <TabsContent value="customers" className="pt-4"><CustomersPanel /></TabsContent>
-      </Tabs>
-    </div>
-  );
-}
-
-function ProfitabilityPanel({ year }: { year: number }) {
+export function ProfitabilityPanel({ year }: { year: number }) {
   const report = useProfitability(year);
   if (report.isPending) return <Skeleton className="h-64" />;
   if (report.isError) return <ErrorText />;
@@ -80,7 +66,7 @@ function ProfitabilityPanel({ year }: { year: number }) {
   return (
     <div className="grid gap-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric label="Revenue" value={formatMoney(data.revenue)} />
+        <Metric label="Revenue (invoiced)" value={formatMoney(data.revenue)} detail="Order totals, unpaid orders included" />
         <Metric label="Expenses" value={formatMoney(data.expenses)} />
         <Metric label="Gross margin" value={formatMoney(data.grossMargin)} detail={`${data.marginPercent.toFixed(0)}%`} />
         <Metric label="Inventory value" value={formatMoney(data.inventoryValue)} />
@@ -91,7 +77,7 @@ function ProfitabilityPanel({ year }: { year: number }) {
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card><CardHeader><CardTitle className="text-base">Break-even prices</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Size</TableHead><TableHead className="text-right">Break even</TableHead><TableHead className="text-right">Price</TableHead></TableRow></TableHeader><TableBody>{data.breakEvenByJarSize.map((row) => <TableRow key={row.jarSizeId}><TableCell>{row.label}</TableCell><TableCell className="text-right">{formatMoney(row.breakEvenPrice)}</TableCell><TableCell className="text-right">{row.defaultPrice == null ? "—" : formatMoney(row.defaultPrice)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
-        <Card><CardHeader><CardTitle className="text-base">Revenue by channel</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Revenue</TableHead></TableRow></TableHeader><TableBody>{data.byChannel.map((row) => <TableRow key={row.channel}><TableCell className="capitalize">{row.channel.replaceAll("_", " ")}</TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.revenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+        <Card><CardHeader><CardTitle className="text-base">Revenue by channel</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Revenue (invoiced)</TableHead></TableRow></TableHeader><TableBody>{data.byChannel.map((row) => <TableRow key={row.channel}><TableCell className="capitalize">{row.channel.replaceAll("_", " ")}</TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.revenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
       </div>
       <div className="grid gap-4 xl:grid-cols-3">
         <Card>
@@ -126,7 +112,7 @@ function ProfitabilityPanel({ year }: { year: number }) {
   );
 }
 
-function ExpensesPanel({ year }: { year: number }) {
+export function ExpensesPanel({ year }: { year: number }) {
   const expenses = useExpenses(year);
   const remove = useDeleteExpense();
   const [open, setOpen] = React.useState(false);
@@ -184,7 +170,7 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   );
 }
 
-function PlanningPanel() {
+export function PlanningPanel() {
   const plan = useProductionPlan();
   if (plan.isPending) return <Skeleton className="h-64" />;
   if (plan.isError) return <ErrorText />;
@@ -202,7 +188,7 @@ function PlanningPanel() {
   );
 }
 
-function CustomersPanel() {
+export function CustomersPanel() {
   const customers = useCustomers();
   const priceLists = useWholesalePriceLists();
   const [customerOpen, setCustomerOpen] = React.useState(false);
