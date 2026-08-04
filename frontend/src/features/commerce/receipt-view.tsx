@@ -10,6 +10,8 @@ import { formatDate, formatMoney } from "@/features/honey/format";
 import type { HoneySale } from "@/features/honey/types";
 import { api } from "@/lib/api";
 
+import { SaleSerials } from "./sale-serials";
+
 interface Receipt {
   seller: string;
   sale: HoneySale;
@@ -104,6 +106,8 @@ export function ReceiptView({ saleId }: { saleId: string }) {
           )}
         </CardContent>
       </Card>
+      {/* Admin-only and print:hidden — see SaleSerials. */}
+      <SaleSerials saleId={saleId} />
     </div>
   );
 }

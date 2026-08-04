@@ -42,6 +42,7 @@ func (s *Server) mountCommerce(r chi.Router) {
 	admin.Get("/honey/low-stock", s.lowStockAlerts)
 	admin.Get("/market-day/reconciliation", s.marketDayReconciliation)
 	admin.Get("/honey/sales/{id}/receipt", s.saleReceipt)
+	s.mountSerials(admin)
 }
 
 func (s *Server) mountPublicCommerce(r chi.Router) {
