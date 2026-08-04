@@ -103,7 +103,12 @@ export interface FieldItem {
   feedingId?: string | null;
   /** Set for feeding items: whether the feeder record is unverified. */
   unverified?: boolean;
+  /** Set for recommendation items: the recommendation to triage. */
+  recommendationId?: string;
 }
+
+/** Rows shown per work widget before the "+N more" overflow link. */
+export const FIELD_VISIBLE = 5;
 
 const RECOMMENDATION_ACTIONS: Record<string, string> = {
   inspection_due: "Inspect this hive",
@@ -135,6 +140,7 @@ function recommendationItem(rec: Recommendation): FieldItem {
     action: RECOMMENDATION_ACTIONS[rec.type] ?? "Review",
     evidence: rec.message,
     priority: (rec.priority as FieldItem["priority"]) ?? "normal",
+    recommendationId: rec.id,
   };
 }
 
