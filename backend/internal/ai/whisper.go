@@ -82,9 +82,43 @@ func whisperFilename(mimeType string) string {
 	}
 }
 
+// installModel asks the server to download the model (speaches requires an
+// explicit POST /v1/models/{id} before a model can serve). Blocks until the
+// download finishes; the model cache volume makes this a once-per-install cost.
+func (w *Whisper) installModel(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		w.baseURL+"/v1/models/"+w.model, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := aiHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("whisper model install: %w", err)
+	}
+	defer resp.Body.Close()
+	// 2xx = installed now; 409/4xx "already exists" also leaves it usable.
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("whisper model install failed: %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // Transcribe posts the audio to POST {baseURL}/v1/audio/transcriptions
-// (multipart: file, model, prompt, response_format=json).
+// (multipart: file, model, prompt, response_format=json). A "model not
+// installed" response triggers one install-and-retry so a fresh model cache
+// heals itself.
 func (w *Whisper) Transcribe(ctx context.Context, audio []byte, mimeType string) (string, error) {
+	text, err := w.transcribeOnce(ctx, audio, mimeType)
+	if err != nil && strings.Contains(err.Error(), "not installed") {
+		if installErr := w.installModel(ctx); installErr != nil {
+			return "", installErr
+		}
+		return w.transcribeOnce(ctx, audio, mimeType)
+	}
+	return text, err
+}
+
+func (w *Whisper) transcribeOnce(ctx context.Context, audio []byte, mimeType string) (string, error) {
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	part, err := form.CreateFormFile("file", whisperFilename(mimeType))

@@ -71,6 +71,34 @@ func TestWhisperFilenameByMime(t *testing.T) {
 	}
 }
 
+func TestWhisperTranscribeInstallsMissingModelAndRetries(t *testing.T) {
+	installed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/models/"):
+			installed = true
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/v1/audio/transcriptions" && !installed:
+			http.Error(w, `{"detail":"Model 'x' is not installed locally. You can download the model using POST /v1/models"}`, http.StatusNotFound)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"text":"after install"}`))
+		}
+	}))
+	defer server.Close()
+
+	text, err := NewWhisper(server.URL, "").Transcribe(context.Background(), []byte("x"), "audio/webm")
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
+	if !installed {
+		t.Fatal("model install was never requested")
+	}
+	if text != "after install" {
+		t.Fatalf("text = %q", text)
+	}
+}
+
 func TestWhisperTranscribeSurfacesServerErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"detail":"model not found"}`, http.StatusNotFound)
