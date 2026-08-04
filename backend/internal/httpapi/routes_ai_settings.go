@@ -45,6 +45,7 @@ func (s *Server) handleAISettingsGet(w http.ResponseWriter, r *http.Request) {
 			"hasAnthropicKey": cfg.APIKeys.Anthropic != "",
 			"hasGoogleKey":    cfg.APIKeys.Google != "",
 			"ollamaUrl":       cfg.APIKeys.OllamaURL,
+			"whisperUrl":      cfg.APIKeys.WhisperURL,
 		},
 	})
 }
@@ -67,8 +68,17 @@ func (s *Server) handleAISettingsPut(w http.ResponseWriter, r *http.Request) {
 		"transcription": req.Transcription, "recommendations": req.Recommendations,
 		"imageAnalysis": req.ImageAnalysis, "import": req.Import,
 	} {
-		if tc != nil && tc.Provider != "" && !ai.IsValidProvider(tc.Provider) {
+		if tc == nil || tc.Provider == "" {
+			continue
+		}
+		if !ai.IsValidProvider(tc.Provider) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid %s provider", name))
+			return
+		}
+		// Whisper is speech-to-text only; it cannot serve the text/image tasks.
+		if tc.Provider == "whisper" && name != "transcription" {
+			writeError(w, http.StatusBadRequest,
+				fmt.Sprintf("Whisper only supports transcription, not %s", name))
 			return
 		}
 	}
@@ -109,6 +119,9 @@ func (s *Server) handleAISettingsPut(w http.ResponseWriter, r *http.Request) {
 		if req.APIKeys.OllamaURL != "" {
 			cfg.APIKeys.OllamaURL = req.APIKeys.OllamaURL
 		}
+		if req.APIKeys.WhisperURL != "" {
+			cfg.APIKeys.WhisperURL = req.APIKeys.WhisperURL
+		}
 	}
 
 	raw, err := json.Marshal(cfg)
@@ -129,9 +142,10 @@ func (s *Server) handleAISettingsPut(w http.ResponseWriter, r *http.Request) {
 // the settings UI can render them inline.
 func (s *Server) handleAISettingsTest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Provider  string `json:"provider"`
-		APIKey    string `json:"apiKey"`
-		OllamaURL string `json:"ollamaUrl"`
+		Provider   string `json:"provider"`
+		APIKey     string `json:"apiKey"`
+		OllamaURL  string `json:"ollamaUrl"`
+		WhisperURL string `json:"whisperUrl"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -195,6 +209,19 @@ func (s *Server) handleAISettingsTest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Ollama connection successful"})
+	case "whisper":
+		baseURL := req.WhisperURL
+		if baseURL == "" {
+			baseURL = storedKey(func(c *ai.AIProviderConfig) string { return c.APIKeys.WhisperURL })
+		}
+		if baseURL == "" {
+			baseURL = ai.DefaultWhisperURL
+		}
+		if err := ai.WhisperHealthy(ctx, baseURL); err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"error": fmt.Sprintf("Whisper not reachable at %s", baseURL)})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Whisper connection successful"})
 	default:
 		writeJSON(w, http.StatusOK, map[string]any{"error": "Unknown provider: " + req.Provider})
 	}

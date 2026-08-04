@@ -54,13 +54,14 @@ export function useUpdatePreferences() {
 
 // --- AI configuration ------------------------------------------------------
 
-export const AI_PROVIDERS = ["claude", "gemini", "ollama"] as const;
+export const AI_PROVIDERS = ["claude", "gemini", "ollama", "whisper"] as const;
 export type AIProvider = (typeof AI_PROVIDERS)[number];
 
 export const AI_PROVIDER_LABELS: Record<AIProvider, string> = {
   claude: "Claude (Anthropic)",
   gemini: "Gemini (Google)",
   ollama: "Ollama (local)",
+  whisper: "Whisper (local)",
 };
 
 export const AI_TASKS = [
@@ -93,6 +94,7 @@ export interface AISettings {
     hasAnthropicKey: boolean;
     hasGoogleKey: boolean;
     ollamaUrl: string;
+    whisperUrl: string;
   };
 }
 
@@ -106,6 +108,7 @@ export interface AISettingsPayload {
     anthropic: string;
     google: string;
     ollamaUrl: string;
+    whisperUrl: string;
   };
 }
 
@@ -140,6 +143,7 @@ export function useTestAIConnection() {
       provider: AIProvider;
       apiKey?: string;
       ollamaUrl?: string;
+      whisperUrl?: string;
     }) => api.post<AITestResult>("/settings/ai/test", payload),
   });
 }

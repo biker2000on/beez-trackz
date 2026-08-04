@@ -29,6 +29,7 @@ x-api-env: &api-env
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
   OLLAMA_URL: ${OLLAMA_URL:-}
+  WHISPER_URL: ${WHISPER_URL:-http://whisper:8000}
 
 services:
   api:
@@ -111,6 +112,16 @@ services:
       timeout: 5s
       retries: 5
 
+  # Local speech-to-text (speaches: faster-whisper behind an OpenAI-compatible
+  # API). CPU-only; not published on the host — only the api/worker reach it on
+  # the compose network. The model (~1.6 GB) downloads into the cache volume on
+  # first use, so the first transcription after deploy is slow.
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    restart: unless-stopped
+    volumes:
+      - whisper-models:/home/ubuntu/.cache/huggingface/hub
+
   minio:
     image: minio/minio:latest
     restart: unless-stopped
@@ -128,3 +139,4 @@ services:
 
 volumes:
   redis-data:
+  whisper-models:

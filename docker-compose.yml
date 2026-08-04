@@ -46,7 +46,16 @@ services:
       timeout: 5s
       retries: 5
 
+  # Local speech-to-text for the transcription task (optional in dev).
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    ports:
+      - "${WHISPER_PORT:-8000}:8000"
+    volumes:
+      - whisper_models:/home/ubuntu/.cache/huggingface/hub
+
 volumes:
   postgres_data:
   redis_data:
   minio_data:
+  whisper_models:

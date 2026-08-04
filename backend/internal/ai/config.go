@@ -22,7 +22,7 @@ const (
 )
 
 // ValidProviders are the accepted provider names.
-var ValidProviders = []string{"claude", "gemini", "ollama"}
+var ValidProviders = []string{"claude", "gemini", "ollama", "whisper"}
 
 // IsValidProvider reports whether name is a known provider.
 func IsValidProvider(name string) bool {
@@ -40,11 +40,13 @@ type TaskConfig struct {
 	Model    string `json:"model,omitempty"`
 }
 
-// APIKeys holds provider credentials (ollamaUrl is a base URL, not a secret).
+// APIKeys holds provider credentials (ollamaUrl and whisperUrl are base URLs,
+// not secrets).
 type APIKeys struct {
-	Anthropic string `json:"anthropic,omitempty"`
-	Google    string `json:"google,omitempty"`
-	OllamaURL string `json:"ollamaUrl,omitempty"`
+	Anthropic  string `json:"anthropic,omitempty"`
+	Google     string `json:"google,omitempty"`
+	OllamaURL  string `json:"ollamaUrl,omitempty"`
+	WhisperURL string `json:"whisperUrl,omitempty"`
 }
 
 // AIProviderConfig mirrors the user_settings.ai_provider_config jsonb shape:
@@ -136,6 +138,9 @@ func LoadConfig(ctx context.Context, pool *pgxpool.Pool) (*AIProviderConfig, err
 	if cfg.APIKeys.OllamaURL == "" {
 		cfg.APIKeys.OllamaURL = os.Getenv("OLLAMA_URL")
 	}
+	if cfg.APIKeys.WhisperURL == "" {
+		cfg.APIKeys.WhisperURL = os.Getenv("WHISPER_URL")
+	}
 	return cfg, nil
 }
 
@@ -193,6 +198,15 @@ func NewProvider(name string, cfg *AIProviderConfig, model string) (Provider, er
 			baseURL = DefaultOllamaURL
 		}
 		return NewOllama(baseURL, model), nil
+	case "whisper":
+		baseURL := cfg.APIKeys.WhisperURL
+		if baseURL == "" {
+			baseURL = os.Getenv("WHISPER_URL")
+		}
+		if baseURL == "" {
+			baseURL = DefaultWhisperURL
+		}
+		return NewWhisper(baseURL, model), nil
 	default:
 		return nil, fmt.Errorf("unknown AI provider: %s", name)
 	}

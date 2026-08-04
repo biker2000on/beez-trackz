@@ -45,6 +45,7 @@ interface AIDraft {
   anthropicKey: string;
   googleKey: string;
   ollamaUrl: string;
+  whisperUrl: string;
   tasks: Record<AITask, TaskDraft>;
 }
 
@@ -60,6 +61,7 @@ function draftFromSettings(settings: AISettings): AIDraft {
     anthropicKey: "",
     googleKey: "",
     ollamaUrl: settings.apiKeys.ollamaUrl ?? "",
+    whisperUrl: settings.apiKeys.whisperUrl ?? "",
     tasks,
   };
 }
@@ -104,6 +106,7 @@ export function AISection() {
     claude: { status: "idle" },
     gemini: { status: "idle" },
     ollama: { status: "idle" },
+    whisper: { status: "idle" },
   });
   const [ollamaModels, setOllamaModels] = React.useState<string[] | null>(null);
 
@@ -156,6 +159,7 @@ export function AISection() {
               ? draft.googleKey
               : undefined,
         ollamaUrl: provider === "ollama" ? draft.ollamaUrl : undefined,
+        whisperUrl: provider === "whisper" ? draft.whisperUrl : undefined,
       });
       if (result.error) {
         setTest(provider, { status: "error", message: result.error });
@@ -208,6 +212,7 @@ export function AISection() {
           anthropic: draft.anthropicKey.trim(),
           google: draft.googleKey.trim(),
           ollamaUrl: draft.ollamaUrl.trim(),
+          whisperUrl: draft.whisperUrl.trim(),
         },
       });
       toast.success("AI settings saved");
@@ -334,6 +339,35 @@ export function AISection() {
           </div>
           <TestResult state={tests.ollama} />
         </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="ai-whisper-url">Whisper URL</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              id="ai-whisper-url"
+              type="url"
+              placeholder="http://whisper:8000"
+              className="min-w-48 flex-1"
+              value={draft.whisperUrl}
+              onChange={(e) =>
+                setDraft({ ...draft, whisperUrl: e.target.value })
+              }
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={tests.whisper.status === "testing"}
+              onClick={() => runTest("whisper")}
+            >
+              Test connection
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Local speech-to-text (speaches / faster-whisper). Transcription
+            only; the first transcription downloads the model, so it is slow.
+          </p>
+          <TestResult state={tests.whisper} />
+        </div>
       </div>
 
       <Separator />
@@ -370,7 +404,11 @@ export function AISection() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {AI_PROVIDERS.map((provider) => (
+                    {AI_PROVIDERS.filter(
+                      // Whisper is speech-to-text only.
+                      (provider) =>
+                        provider !== "whisper" || task === "transcription",
+                    ).map((provider) => (
                       <SelectItem key={provider} value={provider}>
                         {AI_PROVIDER_LABELS[provider]}
                       </SelectItem>
