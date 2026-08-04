@@ -28,18 +28,35 @@ const ICONS = {
   move: MapPin,
 } satisfies Record<HiveTimelineEntry["type"], typeof Activity>;
 
-export function HiveTimeline({ hiveId }: { hiveId: string }) {
+export function HiveTimeline({
+  hiveId,
+  types,
+}: {
+  hiveId: string;
+  /** Restrict the timeline to these entry types (the filter chips). */
+  types?: readonly HiveTimelineEntry["type"][];
+}) {
   const timeline = useHiveTimeline(hiveId);
   if (timeline.isPending) return <Skeleton className="h-64 w-full" />;
   if (timeline.isError) {
     return <p className="text-sm text-muted-foreground">Could not load hive history.</p>;
   }
-  if (timeline.data.length === 0) {
-    return <p className="text-sm text-muted-foreground">No hive activity recorded yet.</p>;
+  const entries =
+    types == null
+      ? timeline.data
+      : timeline.data.filter((entry) => types.includes(entry.type));
+  if (entries.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {timeline.data.length === 0
+          ? "No hive activity recorded yet."
+          : "Nothing on the timeline matches this filter."}
+      </p>
+    );
   }
   return (
     <ol className="relative grid gap-4 border-l pl-5">
-      {timeline.data.map((entry) => {
+      {entries.map((entry) => {
         const Icon = ICONS[entry.type];
         return (
           <li key={`${entry.type}-${entry.id}`} className="relative">

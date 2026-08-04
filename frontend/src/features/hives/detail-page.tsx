@@ -1,5 +1,19 @@
 "use client";
 
+/**
+ * Hive detail.
+ *
+ * The strip used to carry nine tabs, four of which (Inspections, Feedings,
+ * Splits, History) were filtered subsets of the Timeline. It is now
+ * Timeline | Health | Equipment | Queen | Photos, with the four subsets
+ * demoted to filter chips on the timeline — nothing was dropped, the chips
+ * still open the richer per-type lists with their own actions.
+ *
+ * Both the active tab and the active chip live in search params, so a hive is
+ * deep-linkable and coming back from an inspection or a session detail does
+ * not reset the view.
+ */
+
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -11,6 +25,7 @@ import {
   Droplets,
   MapPin,
   Mic,
+  MoreHorizontal,
   Pencil,
   Skull,
   Split,
@@ -18,6 +33,8 @@ import {
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { useSearchParamState } from "@/lib/url-state";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import {
   AlertDialog,
@@ -31,6 +48,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -38,6 +56,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
 import {
@@ -60,6 +85,7 @@ import { useHiveInspections } from "@/features/inspections/hooks";
 import { PhotoSection } from "@/features/photos/photo-gallery";
 import { PhotoUpload } from "@/features/photos/photo-upload";
 import { HiveTimeline } from "@/features/operations/hive-timeline";
+import type { HiveTimelineEntry } from "@/features/operations/hooks";
 import { VarroaPanel } from "@/features/operations/varroa-panel";
 import { EquipmentTab } from "./equipment-tab";
 import { HiveStatusBadge } from "./hive-card";
@@ -76,6 +102,31 @@ import { formatDate } from "./lib";
 import { QueenTab } from "./queen-tab";
 import { SplitDialog } from "./split-dialog";
 
+const TABS = ["timeline", "health", "equipment", "queen", "photos"] as const;
+
+/**
+ * Timeline filter chips. `types` filters the merged timeline; the four chips
+ * that replaced whole tabs render the richer list instead so their per-row
+ * actions (edit an inspection, mark a feeder empty) survive.
+ */
+const TIMELINE_FILTERS: {
+  value: string;
+  label: string;
+  types?: readonly HiveTimelineEntry["type"][];
+}[] = [
+  { value: "all", label: "All" },
+  { value: "inspections", label: "Inspections" },
+  { value: "feedings", label: "Feedings" },
+  { value: "treatments", label: "Treatments", types: ["treatment"] },
+  { value: "mites", label: "Mite counts", types: ["mite_count"] },
+  { value: "queen", label: "Queen events", types: ["queen_event"] },
+  { value: "harvests", label: "Harvests", types: ["harvest"] },
+  { value: "splits", label: "Splits" },
+  { value: "moves", label: "Moves" },
+];
+
+const FILTER_VALUES = TIMELINE_FILTERS.map((filter) => filter.value);
+
 export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   const router = useRouter();
   const hive = useHive(hiveId);
@@ -85,6 +136,9 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
     ["admin", "editor"].includes(
       apiaryRole(access.data, hive.data.apiaryId) ?? "",
     );
+
+  const [tab, setTab] = useSearchParamState("tab", "timeline", TABS);
+  const [filter, setFilter] = useSearchParamState("view", "all", FILTER_VALUES);
 
   const [editOpen, setEditOpen] = React.useState(false);
   const [inspectionOpen, setInspectionOpen] = React.useState(false);
@@ -107,7 +161,8 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   useShortcut("f", "Record feeding", () => canEdit && setFeedOpen(true));
   useShortcut("p", "Add photo", () => canEdit && setPhotoOpen(true));
   useShortcut("e", "Edit hive", () => canEdit && setEditOpen(true));
-  useShortcut("s", "Split hive", () => canEdit && setSplitOpen(true));
+  // `x`, not `s`: `s` is Record sale on Honey and the tail of `g s` (Settings).
+  useShortcut("x", "Split hive", () => canEdit && setSplitOpen(true));
 
   if (hive.isPending) {
     return (
@@ -132,6 +187,9 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
     );
   }
   const data = hive.data;
+  const activeFilter =
+    TIMELINE_FILTERS.find((entry) => entry.value === filter) ??
+    TIMELINE_FILTERS[0];
 
   async function run(action: () => Promise<unknown>, success: string) {
     try {
@@ -158,16 +216,6 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
               Archived
             </Badge>
           )}
-          {canEdit ? (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Edit hive"
-              onClick={() => setEditOpen(true)}
-            >
-              <Pencil className="size-4" />
-            </Button>
-          ) : null}
         </div>
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           <Link
@@ -188,86 +236,136 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         </p>
       </div>
 
-      {canEdit ? <div className="flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => setInspectionOpen(true)}>
-          <ClipboardList className="size-4" />
-          New inspection
-        </Button>
-        <Button size="sm" variant="outline" asChild>
-          <Link href={`/hives/${data.id}/transcribe`}>
-            <Mic className="size-4" />
-            Record inspection
-          </Link>
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setFeedOpen(true)}>
-          <Droplets className="size-4" />
-          Feed
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setPhotoOpen(true)}>
-          <Camera className="size-4" />
-          Take photo
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setSplitOpen(true)}>
-          <Split className="size-4" />
-          Split hive
-        </Button>
-        {data.isArchived ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              run(() => unarchiveHive.mutateAsync(data.id), "Hive unarchived")
-            }
-            disabled={unarchiveHive.isPending}
-          >
-            <ArchiveRestore className="size-4" />
-            Unarchive
+      {canEdit ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => setInspectionOpen(true)}>
+            <ClipboardList className="size-4" />
+            New inspection
           </Button>
-        ) : (
-          <>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setArchiveOpen(true)}
-            >
-              <Archive className="size-4" />
-              Archive
-            </Button>
-            {data.status !== "dead" && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-destructive hover:text-destructive"
-                onClick={() => setDeadoutOpen(true)}
-              >
-                <Skull className="size-4" />
-                Deadout
+          <Button size="sm" variant="outline" onClick={() => setFeedOpen(true)}>
+            <Droplets className="size-4" />
+            Feed
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setPhotoOpen(true)}>
+            <Camera className="size-4" />
+            Photo
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" aria-label="More hive actions">
+                <MoreHorizontal className="size-4" />
+                More
               </Button>
-            )}
-          </>
-        )}
-      </div> : null}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem asChild>
+                <Link href={`/hives/${data.id}/transcribe`}>
+                  <Mic className="size-4" />
+                  Record inspection by voice
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setSplitOpen(true)}>
+                <Split className="size-4" />
+                Split hive
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setEditOpen(true)}>
+                <Pencil className="size-4" />
+                Edit hive
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {data.isArchived ? (
+                <DropdownMenuItem
+                  disabled={unarchiveHive.isPending}
+                  onSelect={() =>
+                    void run(
+                      () => unarchiveHive.mutateAsync(data.id),
+                      "Hive unarchived",
+                    )
+                  }
+                >
+                  <ArchiveRestore className="size-4" />
+                  Unarchive
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onSelect={() => setArchiveOpen(true)}>
+                  <Archive className="size-4" />
+                  Archive
+                </DropdownMenuItem>
+              )}
+              {!data.isArchived && data.status !== "dead" && (
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onSelect={() => setDeadoutOpen(true)}
+                >
+                  <Skull className="size-4" />
+                  Mark deadout
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
 
-      <Tabs defaultValue="timeline">
-        <TabsList className="flex w-full flex-wrap justify-start overflow-x-auto">
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-          <TabsTrigger value="inspections">Inspections</TabsTrigger>
-          <TabsTrigger value="varroa">Varroa</TabsTrigger>
-          <TabsTrigger value="equipment">Equipment</TabsTrigger>
-          <TabsTrigger value="photos">Photos</TabsTrigger>
-          <TabsTrigger value="feedings">Feedings</TabsTrigger>
-          <TabsTrigger value="queen">Queen</TabsTrigger>
-          <TabsTrigger value="splits">Splits</TabsTrigger>
-          <TabsTrigger value="history">History</TabsTrigger>
-        </TabsList>
-        <TabsContent value="timeline" className="pt-4">
-          <HiveTimeline hiveId={data.id} />
+      <Tabs value={tab} onValueChange={setTab}>
+        <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
+          <TabsList className="min-w-max">
+            <TabsTrigger value="timeline">Timeline</TabsTrigger>
+            <TabsTrigger value="health">Health</TabsTrigger>
+            <TabsTrigger value="equipment">Equipment</TabsTrigger>
+            <TabsTrigger value="queen">Queen</TabsTrigger>
+            <TabsTrigger value="photos">Photos</TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="timeline" className="grid gap-4 pt-4">
+          <div
+            className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:px-0"
+            role="group"
+            aria-label="Filter the timeline"
+          >
+            {TIMELINE_FILTERS.map((entry) => (
+              <button
+                key={entry.value}
+                type="button"
+                aria-pressed={entry.value === activeFilter.value}
+                onClick={() => setFilter(entry.value)}
+                className={cn(
+                  "shrink-0 rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  entry.value === activeFilter.value
+                    ? "border-primary bg-primary/12 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+          {activeFilter.value === "inspections" ? (
+            <InspectionsList hiveId={data.id} canEdit={canEdit} />
+          ) : activeFilter.value === "feedings" ? (
+            <FeedingsList
+              hiveId={data.id}
+              canEdit={canEdit}
+              onNew={() => setFeedOpen(true)}
+            />
+          ) : activeFilter.value === "splits" ? (
+            <SplitsList hiveId={data.id} />
+          ) : activeFilter.value === "moves" ? (
+            <LocationHistory hiveId={data.id} />
+          ) : (
+            <HiveTimeline hiveId={data.id} types={activeFilter.types} />
+          )}
         </TabsContent>
-        <TabsContent value="inspections" className="pt-4">
-          <InspectionsTab hiveId={data.id} canEdit={canEdit} />
-        </TabsContent>
-        <TabsContent value="varroa" className="pt-4">
+        <TabsContent value="health" className="grid gap-5 pt-4">
           <VarroaPanel hiveId={data.id} canEdit={canEdit} />
+          <InspectionSummary
+            hiveId={data.id}
+            canEdit={canEdit}
+            onSeeAll={() => {
+              setTab("timeline");
+              setFilter("inspections");
+            }}
+          />
         </TabsContent>
         <TabsContent value="equipment" className="pt-4">
           <EquipmentTab
@@ -275,24 +373,11 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
             canManage={access.data?.isAdmin ?? false}
           />
         </TabsContent>
-        <TabsContent value="photos" className="pt-4">
-          <PhotoSection ownerType="hive" ownerId={data.id} canEdit={canEdit} />
-        </TabsContent>
-        <TabsContent value="feedings" className="pt-4">
-          <FeedingsTab
-            hiveId={data.id}
-            canEdit={canEdit}
-            onNew={() => setFeedOpen(true)}
-          />
-        </TabsContent>
         <TabsContent value="queen" className="pt-4">
           <QueenTab hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
-        <TabsContent value="splits" className="pt-4">
-          <SplitsTab hiveId={data.id} />
-        </TabsContent>
-        <TabsContent value="history" className="pt-4">
-          <HistoryTab hiveId={data.id} />
+        <TabsContent value="photos" className="pt-4">
+          <PhotoSection ownerType="hive" ownerId={data.id} canEdit={canEdit} />
         </TabsContent>
       </Tabs>
 
@@ -393,7 +478,63 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   );
 }
 
-function InspectionsTab({
+/** Health tab: inspection cadence at a glance plus the latest write-ups. */
+function InspectionSummary({
+  hiveId,
+  canEdit,
+  onSeeAll,
+}: {
+  hiveId: string;
+  canEdit: boolean;
+  onSeeAll: () => void;
+}) {
+  const inspections = useHiveInspections(hiveId);
+  if (inspections.isPending) return <Skeleton className="h-40 w-full" />;
+  if (inspections.isError) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Could not load inspections.
+      </p>
+    );
+  }
+  const all = [...inspections.data].sort((a, b) => b.date.localeCompare(a.date));
+  const latest = all[0];
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">Inspection summary</CardTitle>
+        {all.length > 0 && (
+          <Button variant="ghost" size="sm" onClick={onSeeAll}>
+            All {all.length}
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        {all.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No inspections yet.</p>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {all.length} {all.length === 1 ? "inspection" : "inspections"} on
+              record · last {formatDate(latest.date)}
+            </p>
+            <div className="grid gap-3">
+              {all.slice(0, 3).map((inspection) => (
+                <InspectionCard
+                  key={inspection.id}
+                  inspection={inspection}
+                  canEdit={canEdit}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function InspectionsList({
   hiveId,
   canEdit,
 }: {
@@ -427,7 +568,7 @@ function InspectionsTab({
   );
 }
 
-function FeedingsTab({
+function FeedingsList({
   hiveId,
   onNew,
   canEdit,
@@ -527,7 +668,7 @@ function FeedingsTab({
   );
 }
 
-function SplitsTab({ hiveId }: { hiveId: string }) {
+function SplitsList({ hiveId }: { hiveId: string }) {
   const splits = useHiveSplits(hiveId);
   if (splits.isPending) return <Skeleton className="h-24 w-full" />;
   if ((splits.data?.length ?? 0) === 0) {
@@ -577,7 +718,7 @@ function SplitsTab({ hiveId }: { hiveId: string }) {
   );
 }
 
-function HistoryTab({ hiveId }: { hiveId: string }) {
+function LocationHistory({ hiveId }: { hiveId: string }) {
   const history = useHiveLocationHistory(hiveId);
   if (history.isPending) return <Skeleton className="h-24 w-full" />;
   if ((history.data?.length ?? 0) === 0) {
