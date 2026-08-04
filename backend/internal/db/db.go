@@ -45,6 +45,10 @@ func openPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
+// migrationLockID is an arbitrary constant that identifies the advisory lock
+// guarding schema changes. Any value works as long as it never changes.
+const migrationLockID int64 = 8123471290347123
+
 func migrate(pool *pgxpool.Pool) error {
 	goose.SetBaseFS(migrationsFS)
 	if err := goose.SetDialect("postgres"); err != nil {
@@ -52,6 +56,23 @@ func migrate(pool *pgxpool.Pool) error {
 	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
 	defer sqlDB.Close()
+
+	// Serialise migrators behind one advisory lock. Two API processes coming
+	// up together during a rolling deploy (or two test packages sharing a
+	// database) otherwise race on the same DDL and one of them fails.
+	ctx := context.Background()
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationLockID)
+	}()
+
 	if err := goose.Up(sqlDB, "migrations"); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
