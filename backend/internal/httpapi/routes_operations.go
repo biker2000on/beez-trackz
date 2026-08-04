@@ -282,7 +282,7 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 			SELECT hs.id, 'harvest', hs.date, 'Honey harvest',
 				round(hs.calculated_honey_weight::numeric, 2)::text || ' lb', '[]'::jsonb,
 				jsonb_build_object('weightLbs', hs.calculated_honey_weight)
-			FROM honey_harvests hs WHERE hs.hive_id = $1
+			FROM honey_harvests hs WHERE hs.hive_id = $1 AND hs.deleted_at IS NULL
 			UNION ALL
 			SELECT sp.id, 'split', sp.split_date,
 				CASE WHEN sp.parent_hive_id = $1 THEN 'Split created'
@@ -567,7 +567,7 @@ func (s *Server) yieldAnalytics(w http.ResponseWriter, r *http.Request) {
 		FROM hives h
 		JOIN apiaries a ON a.id = h.apiary_id
 		LEFT JOIN honey_harvests hh ON hh.hive_id = h.id
-			AND EXTRACT(YEAR FROM hh.date)::integer = $1
+			AND EXTRACT(YEAR FROM hh.date)::integer = $1 AND hh.deleted_at IS NULL
 		WHERE ($2::boolean OR EXISTS (
 			SELECT 1 FROM apiary_memberships membership
 			WHERE membership.user_id=$3 AND membership.apiary_id=a.id
@@ -616,7 +616,7 @@ func (s *Server) yieldAnalytics(w http.ResponseWriter, r *http.Request) {
 			SUM(harvest.calculated_honey_weight)
 		FROM honey_harvests harvest
 		JOIN hives hive ON hive.id=harvest.hive_id
-		WHERE ($1::boolean OR EXISTS (
+		WHERE harvest.deleted_at IS NULL AND ($1::boolean OR EXISTS (
 			SELECT 1 FROM apiary_memberships membership
 			WHERE membership.user_id=$2 AND membership.apiary_id=hive.apiary_id
 		))
