@@ -260,11 +260,11 @@ export function SessionDetail({ id }: { id: string }) {
 function BackLink() {
   return (
     <Link
-      href="/harvest"
+      href="/harvest/harvests"
       className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
     >
       <ArrowLeft className="size-4" />
-      Honey
+      Harvests
     </Link>
   );
 }

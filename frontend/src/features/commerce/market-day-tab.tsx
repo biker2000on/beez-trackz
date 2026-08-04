@@ -29,7 +29,15 @@ import { formatMoney, todayISO } from "@/features/honey/format";
 import { useJarInventory, useRecordSale } from "@/features/honey/hooks";
 import { useHarvestLots, useLowStock, useReconciliation } from "./api";
 
-export function MarketDayTab() {
+export function MarketDayTab({
+  onCartCountChange,
+}: {
+  /**
+   * Reports how many jars are in the cart so the surrounding full-screen
+   * route can confirm before an exit throws a sale away.
+   */
+  onCartCountChange?: (count: number) => void;
+} = {}) {
   const inventory = useJarInventory();
   const sale = useRecordSale();
   const lowStock = useLowStock();
@@ -42,6 +50,11 @@ export function MarketDayTab() {
   const [discount, setDiscount] = React.useState("0");
   const [customer, setCustomer] = React.useState("");
   const [harvestLotId, setHarvestLotId] = React.useState("none");
+
+  const cartCount = Object.values(cart).reduce((sum, qty) => sum + qty, 0);
+  React.useEffect(() => {
+    onCartCountChange?.(cartCount);
+  }, [cartCount, onCartCountChange]);
 
   if (inventory.isPending) return <Skeleton className="h-72" />;
   if (inventory.isError) return <p className="py-8 text-center text-sm text-muted-foreground">Could not load market inventory.</p>;
@@ -161,7 +174,7 @@ function ReconciliationCard({ date, loading, data }: { date: string; loading: bo
       <CardContent>
         {loading ? <Skeleton className="h-24" /> : data ? (
           <div className="grid gap-4">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Summary label="Orders" value={String(data.orderCount)} /><Summary label="Gross sales" value={formatMoney(data.grossSales)} /><Summary label="Collected" value={formatMoney(data.amountCollected)} /><Summary label="Balance due" value={formatMoney(data.balanceDue)} /></div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Summary label="Orders" value={String(data.orderCount)} /><Summary label="Gross sales (invoiced)" value={formatMoney(data.grossSales)} /><Summary label="Collected" value={formatMoney(data.amountCollected)} /><Summary label="Balance due" value={formatMoney(data.balanceDue)} /></div>
             <Table><TableHeader><TableRow><TableHead>Payment</TableHead><TableHead>Channel</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Collected</TableHead></TableRow></TableHeader><TableBody>{data.breakdown.map((row) => <TableRow key={`${row.paymentMethod}-${row.channel}`}><TableCell className="capitalize">{row.paymentMethod}</TableCell><TableCell className="capitalize">{row.channel.replaceAll("_", " ")}</TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.paid)}</TableCell></TableRow>)}</TableBody></Table>
           </div>
         ) : <p className="text-sm text-muted-foreground">Reconciliation unavailable.</p>}
