@@ -299,12 +299,16 @@ func checkEquipmentNeeded(ctx context.Context, pool *pgxpool.Pool, _ time.Time) 
 func checkFeederCheck(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]Result, error) {
 	const defaultCheckDays = 7
 
-	// Active feeders: date_empty is null.
+	// Active feeders are the explicitly open ones (migration
+	// 00007_feeding_lifecycle). Legacy records with no recorded end are
+	// 'unverified' and are handled by the dashboard feeding-status row, which
+	// carries the evidence needed to close them, instead of generating the
+	// same generic feeder reminder forever.
 	rows, err := pool.Query(ctx, `
 		SELECT f.hive_id, f.date_fed, f.type, h.position_label
 		FROM feedings f
 		JOIN hives h ON h.id = f.hive_id
-		WHERE f.date_empty IS NULL`)
+		WHERE f.status = 'open'`)
 	if err != nil {
 		return nil, err
 	}
