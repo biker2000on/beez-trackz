@@ -109,7 +109,7 @@ func (s *Server) apiaryFeedingStatus(
 ) feedingStatus {
 	var value feedingStatus
 	_ = s.pool.QueryRow(r.Context(), `
-		SELECT count(*) FILTER (WHERE feeding.date_empty IS NULL)::integer,
+		SELECT count(*) FILTER (WHERE feeding.status = 'open')::integer,
 			max(feeding.date_fed)
 		FROM feedings feeding
 		JOIN hives hive ON hive.id=feeding.hive_id

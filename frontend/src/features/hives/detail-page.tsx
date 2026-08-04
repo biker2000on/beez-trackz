@@ -76,7 +76,8 @@ import {
   feederTypeLabel,
   feedingTypeLabel,
   useHiveFeedings,
-  useMarkFeedingEmpty,
+  useCloseFeeding,
+  useRefillFeeding,
   useDeleteFeeding,
 } from "@/features/feedings/hooks";
 import { InspectionCard } from "@/features/inspections/inspection-card";
@@ -578,18 +579,32 @@ function FeedingsList({
   canEdit: boolean;
 }) {
   const feedings = useHiveFeedings(hiveId);
-  const markEmpty = useMarkFeedingEmpty();
+  const closeFeeding = useCloseFeeding();
+  const refillFeeding = useRefillFeeding();
   const deleteFeeding = useDeleteFeeding();
 
-  async function onMarkEmpty(id: string) {
+  async function onClose(id: string, reason: string, success: string) {
     try {
-      await markEmpty.mutateAsync(id);
-      toast.success("Feeder marked empty");
+      await closeFeeding.mutateAsync({ id, reason });
+      toast.success(success);
     } catch (error) {
       toast.error(
         error instanceof ApiError
           ? error.message
-          : "Could not mark the feeder empty",
+          : "Could not close the feeder",
+      );
+    }
+  }
+
+  async function onRefill(id: string) {
+    try {
+      await refillFeeding.mutateAsync({ id });
+      toast.success("Feeder refilled");
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : "Could not refill the feeder",
       );
     }
   }
@@ -635,20 +650,50 @@ function FeedingsList({
                   Fed {formatDate(feeding.dateFed)}
                   {feeding.feederType &&
                     ` · ${feederTypeLabel(feeding.feederType)}`}
-                  {feeding.dateEmpty
-                    ? ` · empty ${formatDate(feeding.dateEmpty)}`
-                    : " · still out"}
+                  {feeding.status === "closed"
+                    ? ` · closed ${formatDate(feeding.dateEmpty ?? feeding.closedAt ?? feeding.dateFed)}`
+                    : feeding.status === "unverified"
+                      ? " · no recorded end — verify in the field"
+                      : " · feeder on the hive"}
                 </p>
               </div>
               {canEdit ? <div className="flex items-center gap-2">
-                {!feeding.dateEmpty && (
+                {feeding.status === "open" && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onRefill(feeding.id)}
+                      disabled={refillFeeding.isPending}
+                    >
+                      Refill
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        onClose(feeding.id, "emptied", "Feeder closed")
+                      }
+                      disabled={closeFeeding.isPending}
+                    >
+                      Close
+                    </Button>
+                  </>
+                )}
+                {feeding.status === "unverified" && (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onMarkEmpty(feeding.id)}
-                    disabled={markEmpty.isPending}
+                    onClick={() =>
+                      onClose(
+                        feeding.id,
+                        "verified_closed",
+                        "Verified — no feeder on the hive",
+                      )
+                    }
+                    disabled={closeFeeding.isPending}
                   >
-                    Mark empty
+                    Verify &amp; close
                   </Button>
                 )}
                 <Button
