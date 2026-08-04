@@ -28,8 +28,11 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT MAX(version_id) FROM goose_db_version WHERE is_applied`).Scan(&version); err != nil {
 		t.Fatalf("read migration version: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("migration version = %d, want 3", version)
+	// Migrations are additive: assert the baseline schema this test covers is
+	// applied rather than pinning the newest version number, which every new
+	// migration would otherwise break.
+	if version < 3 {
+		t.Fatalf("migration version = %d, want at least 3", version)
 	}
 
 	var lotColumnExists bool
