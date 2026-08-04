@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
-import { ReportsOverview } from "@/features/operations/reports-overview";
+import { ProfitabilityView } from "@/features/operations/report-views";
 
-export const metadata: Metadata = { title: "Reports" };
+export const metadata: Metadata = { title: "Profitability" };
 
-export default function ReportsPage() {
+export default function ProfitabilityPage() {
   return (
     <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-      <ReportsOverview />
+      <ProfitabilityView />
     </Suspense>
   );
 }

@@ -66,7 +66,7 @@ export function SalesTab() {
             <TableHead>Location</TableHead>
             <TableHead>Customer</TableHead>
             <TableHead>Order</TableHead>
-            <TableHead className="text-right">Total</TableHead>
+            <TableHead className="text-right">Total (invoiced)</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>

@@ -1,9 +1,10 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { GenealogyView } from "@/features/queens/genealogy-view";
-
-export const metadata: Metadata = { title: "Queens" };
-
-export default function GenealogyPage() {
-  return <GenealogyView />;
+/**
+ * The nav item has always been labelled "Queens" while the route said
+ * `/genealogy`. The page now lives at `/queens`; this keeps old links,
+ * bookmarks and shared URLs working.
+ */
+export default function GenealogyRedirect() {
+  redirect("/queens");
 }

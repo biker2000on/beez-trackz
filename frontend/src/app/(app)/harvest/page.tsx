@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 
-import { HoneyHub } from "@/features/honey/honey-hub";
+import { HoneyOverview } from "@/features/honey/honey-overview";
 
 export const metadata: Metadata = { title: "Honey" };
 
-export default function HarvestPage() {
-  return <HoneyHub />;
+export default function HoneyPage() {
+  return <HoneyOverview />;
 }
