@@ -6,6 +6,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/lib/query";
 import { Toaster } from "@/components/ui/toaster";
 import { PwaRegister } from "@/components/pwa-register";
+import { InstallPrompt } from "@/components/install-prompt";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -70,6 +71,7 @@ export default function RootLayout({
             {children}
             <Toaster position="top-right" />
             <PwaRegister />
+            <InstallPrompt />
           </QueryProvider>
         </ThemeProvider>
       </body>

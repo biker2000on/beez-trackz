@@ -98,7 +98,10 @@ export function PwaRegister() {
 
   return (
     <>
+      {/* data-offline-banner marks the bottom banner slot as taken, so the
+          install prompt stands down while sync work is reported here. */}
       <div
+      data-offline-banner=""
       className="fixed inset-x-3 bottom-3 z-[100] mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-lg dark:border-amber-800 dark:bg-amber-950 dark:text-amber-50"
       role="status"
     >
