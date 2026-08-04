@@ -42,7 +42,13 @@ overlays (counts before vs. after each treatment).
 
 ## Workflow clarity and field-first UI
 
-**Planned; based on the 2026-08-02 production UI audit.**
+**Planned; based on the 2026-08-02 production UI audit and the 2026-08-03
+adversarial UX/inventory review
+(`docs/plans/2026-08-03-ux-and-inventory-adversarial-review.md`), which
+quantified the tab problem: 28 tab triggers across 5 tab strips, 11 tab
+targets on `/harvest` alone (7 tabs + 4 nested Business tabs), 9 tabs on
+hive detail, zero tab state in URLs, and a mobile bottom nav that drops 4 of
+9 destinations with no overflow menu.**
 
 ### P0 — Feeding lifecycle and one-row hive status
 
@@ -77,6 +83,36 @@ queen, and timeline; Honey should summarize bulk stock, packaged stock, recent
 harvests, and sales. Use **Honey** consistently as the module name and
 **Harvests** as its subsection.
 
+Specific defects from the 2026-08-03 review to close as part of this work:
+
+- `/harvest` mixes three work modes as sibling tabs: record browsing
+  (Activity/Jars/Harvests/Sales/Lots), a full point-of-sale (Market day —
+  a cart inside a tab, where one stray click abandons a sale), and
+  back-office reporting (Business, itself four nested tabs). Split: Honey
+  overview page with quick actions; sub-routes for harvests, lots, and
+  sales; a dedicated full-screen `/harvest/market-day`; Business reports
+  merged into Reports. Eliminate nested tabs entirely.
+- `/hives/[id]` has 9 tabs, and four (Inspections, Feedings, Splits,
+  History) are filtered subsets of the Timeline tab. Replace them with
+  filter chips on the timeline; target strip: Timeline | Health (Varroa +
+  inspections) | Equipment | Queen | Photos. Collapse the 8-button action
+  row to 2–3 primary actions plus overflow.
+- Any surviving tab strip must persist its active tab in the URL
+  (deep-linkable, back-button-safe); returning from a session or receipt
+  detail must not reset to the default tab.
+- Mobile bottom nav drops Recommendations/Reports (and, for admins, Queens/
+  Inventory) with no overflow — Inventory is unreachable in the field. Add
+  a "More" sheet or shrink top-level nav to 6–7 items so it fits.
+- Financial numbers appear on three surfaces (`/harvest` stats, Business →
+  Profitability, Reports → economics) that disagree because overview
+  revenue includes unpaid draft/pending orders. One reporting home, one
+  labeled revenue definition (collected vs. invoiced).
+- Orphans and duplicates: `/transcribe` (batch voice transcription) is fully
+  built with zero inbound links — link it or delete it; two independent
+  deploy-equipment UIs and four hand-rolled bulk-select toggles should
+  consolidate; nav labels should match routes ("Queens" → `/genealogy`,
+  "Honey" → `/harvest`).
+
 ### P1 — Separate operational inventories and clarify honey flow
 
 Name and model **Equipment Inventory** separately from **Honey Inventory**.
@@ -85,6 +121,25 @@ equipment workflow needs an initial-count flow and a clear view of owned,
 deployed, available, needed, damaged, and retired equipment, backed by ledger
 actions to receive, deploy, return, adjust, and retire rather than opaque
 quantity edits.
+
+The 2026-08-03 review measured the current equipment model against this bar:
+
+- Returns cannot be partial, record no reason or condition, and a second
+  return call silently overwrites the first return date (no
+  `date_removed IS NULL` guard).
+- Damaged/retired exist only as adjustment reasons that decrement
+  `total_owned` — there is no damaged or retired state and no loss
+  reporting. "Needed" and unit cost do not exist at all.
+- `bulk-adjust` is exactly the opaque quantity edit this item bans: it
+  records reason `'other'` with note "bulk edit" and silently skips rows
+  that fail to resolve. Replace it with a physical-count flow.
+- `equipment_stock.type_id` is not unique, so one equipment type can split
+  across multiple stock rows, making per-row availability meaningless.
+- `total_owned` is a mutable column kept in sync with the adjustments
+  ledger only by application code; nothing reconciles them. Either derive
+  the total from the ledger or add a reconciliation check.
+- Only the sale path validates stock; deployments and adjustments can drive
+  counts negative server-side.
 
 Make the Honey workflow show its allowed path and the next useful action:
 **harvest session → bulk inventory/lot → optional bottling → movement or
@@ -111,6 +166,48 @@ Beez Trackz remains authoritative for physical honey and equipment quantities;
 gnucash-web remains authoritative for posted accounting entries. Sync must not
 infer or overwrite physical stock solely from accounting data.
 
+The 2026-08-03 review found the current system fails every one of these
+criteria. Concrete blockers, in recommended order of attack:
+
+1. **Money precision.** Every monetary column is `double precision` and every
+   handler uses `float64`, with float equality/comparison on payments.
+   Balances will never net to zero against a double-entry ledger. Migrate all
+   money to integer cents (or `numeric`) before more data accumulates, and
+   add `updated_at`/`created_by` to all commerce and inventory tables —
+   today no table records the actor, `honey_sales` has no `updated_at`, and
+   `amount_paid` can be patched tracelessly.
+2. **Kill hard deletes.** `DELETE` endpoints hard-delete honey movements,
+   sales (items cascade), harvest entries, and expenses with no tombstone or
+   reversing entry — on a ledger documented as append-only. Meanwhile the
+   legitimate void path (`order_status='cancelled'`) is rejected by the
+   update endpoint, so destroying the row is the only way to void a sale.
+   Replace with reversing entries / reachable cancellation / soft delete
+   with reason.
+3. **One formula per number.** `/honey/overview` and `/honey/production-plan`
+   compute `bulkOnHandLbs` differently (stored `amount_lbs` vs. live
+   `quantity × honey_oz/16`) and already disagree; editing a jar size's
+   `honey_oz` rewrites history on one endpoint only. Bottling runs are
+   mirrored into the jar ledger by a text `reason` string, not a foreign
+   key — deleting the movement strands the run, and a run without a jar
+   size creates no movement at all. Session true-up overwrites the
+   authoritative weight with no history and accepts negative values.
+   Deactivating a jar size silently removes its remaining jars from every
+   on-hand total while its sales still count — an untracked write-off.
+4. **Negative-stock validation.** Only `POST /honey/sales` locks and
+   validates availability (correctly). Jarring, give-aways, bulk use/loss,
+   bottling runs, and equipment deployment all accept quantities that drive
+   stock negative. Reuse the sale path's lock-and-validate pattern.
+5. **Equipment ledger upgrades** (see the operational-inventories item
+   above).
+6. **Then the sync layer itself**: per-record `external_id`/sync-state
+   mapping (entity, external account/category/tax mapping, last-synced,
+   conflict state), and extend the offline idempotency middleware — which
+   today excludes every honey, commerce, and equipment route — to cover
+   them. Tax fields currently do not exist anywhere; categories and
+   channels are DDL CHECK strings rather than mappable lookup tables. COGS
+   is a year-blended average recomputed at read time and attached to
+   nothing; inventory value is computed at retail price, not cost.
+
 ### P1 — PWA prompt behavior
 
 Do not overlay active apiary, hive, or field-recording work with the install
@@ -125,7 +222,13 @@ states so routine work stays clear on a phone as well as desktop and tablet.
 ## From harvest to sale
 
 ### Harvest lots, jar runs, and customer-facing QR honey stories
-**Shipped 2026-07-26.**
+**Partially shipped 2026-07-26.** Lots, bottling runs, and public Honey
+Story pages work, but the jar→extraction-run traceability is not real at
+the data level: `jar_serials` are generated and counted, yet no endpoint
+looks a serial up and serials link to nothing downstream (no sale linkage).
+Lot weight is free-typed and never validated against linked harvests, and
+bottling is not FK-linked to the jar ledger (see the gnucash-web item).
+Finish serial lookup + sale linkage, or stop generating serials until then.
 
 The existing harvest sessions, per-hive harvest records, honey ledger, and
 sales inventory are a strong base, but they do not connect a physical jar to
@@ -279,6 +382,28 @@ The same authenticated hive URL is encoded in QR and Web NFC. Printable
 Apiaries have lat/lng. Auto-attach conditions to inspections; warn about
 upcoming cold snaps when feeders are light. Forecasts use exact apiary
 coordinates, cache provider results, and show feeder-aware field alerts.
+
+## Housekeeping
+
+### Retire the legacy stack from the repo
+**Root `src/` deleted 2026-08-04; remaining legacy root files still to prune.**
+
+The pre-rewrite Next.js app lived at the repo root and confused tooling,
+agents, and reviews. The `src/` tree is gone; still present and candidates
+for removal or relocation: root `drizzle/`, `drizzle.config.ts`,
+`package.json`/`node_modules`, `Dockerfile`, `docker-compose.yml`,
+`docker-entrypoint.sh`, `next.config.ts`, `tailwind.config.ts`,
+`components.json`, `vitest.config.ts`, and `scripts/` (audit each for
+live use first — the production compose file and CI reference only
+`backend/` and `frontend/`).
+
+### Dangling features to wire up or remove
+
+From the 2026-08-03 review: `PATCH /harvest-lots/{id}` and
+`PATCH /customers/{id}` have no UI (lots and customers are create-only);
+the `useLowStock` hook and `jar_sizes.low_stock_threshold` have no surface;
+wholesale price lists can be created but not applied from the sale dialog,
+leaving the wholesale-minimum enforcement path unreachable.
 
 ## Longer arc
 
