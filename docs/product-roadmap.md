@@ -274,6 +274,22 @@ Hive labels already print through the browser using MUNBYN 2x1-inch and
 support public Honey Story QRs, lot metadata, bottling runs, and optional
 per-jar serials, but have no label-print action yet.
 
+**First milestone (requested 2026-08-04): serialized jar-label batches.**
+Print a sequence of jar labels on the Zebra where the print action mints the
+serials — one freshly generated serial per label, tied to the bottling run
+(runs already serialized print their existing serials instead of minting
+twice). Requirements, inheriting this section's service rules: the API owns
+the ZPL and the job (printer host/port configured in Settings with a
+test/calibration print; port 9100 kept LAN-only); each job records per-label
+state, and a connection lost after bytes may have been sent marks the
+affected labels **unknown** — never auto-resent, cleared only by operator
+inspection and an explicit per-label reprint with a reason, which lands in
+the serial's audit history (traceability shipped 2026-08-04:
+`jar_serials` + `/harvest/serials`). Labels carry the public curated Honey
+Story QR plus the human-readable serial (optionally barcoded); nothing
+internal or authenticated goes on a customer-facing jar. Entry point: a
+"Print serial labels" action on the bottling run.
+
 Validate the exact Zebra ZD420 **ZD42H42-C01E00EZ** before one-click work. It
 is a 4-inch-class, 203-dpi ZD420c-HC healthcare ribbon-cartridge desktop
 printer supporting thermal transfer and direct thermal; this SKU provides
