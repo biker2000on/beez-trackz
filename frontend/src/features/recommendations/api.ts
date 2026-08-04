@@ -7,6 +7,12 @@ import { api } from "@/lib/api";
 export const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
+export const REC_VIEWS = ["pending", "all", "dismissed"] as const;
+export type RecView = (typeof REC_VIEWS)[number];
+
+/** Triage states, action-center style. */
+export type RecState = "dismissed" | "snoozed" | "open";
+
 /** Recommendation shape from GET /recommendations. */
 export interface Recommendation {
   id: string;
@@ -17,46 +23,47 @@ export interface Recommendation {
   dismissed: boolean;
   createdAt: string;
   hiveName: string | null;
+  snoozedUntil: string | null;
+  dismissedAt: string | null;
 }
 
-export function useRecommendations() {
+export function useRecommendations(view: RecView = "pending") {
   return useQuery({
-    queryKey: ["recommendations"],
-    queryFn: () => api.get<Recommendation[]>("/recommendations"),
+    queryKey: ["recommendations", view],
+    queryFn: () =>
+      api.get<Recommendation[]>(`/recommendations?view=${view}`),
   });
 }
 
-export function useDismissRecommendation() {
+function useInvalidateRecommendations() {
   const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) =>
-      api.post<{ success: boolean }>(`/recommendations/${id}/dismiss`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["recommendations"] });
-    },
-  });
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ["recommendations"] });
+  };
 }
 
-export function useBulkDismissRecommendations() {
-  const queryClient = useQueryClient();
+/**
+ * Bulk triage: one request for any number of recommendations. `days` only
+ * applies to state "snoozed" (server default: 7).
+ */
+export function useSetRecommendationState() {
+  const invalidate = useInvalidateRecommendations();
   return useMutation({
-    mutationFn: async (ids: string[]) => {
-      const results = await Promise.allSettled(
-        ids.map((id) =>
-          api.post<{ success: boolean }>(`/recommendations/${id}/dismiss`),
-        ),
-      );
-      const failed = results.filter(
-        (result) => result.status === "rejected",
-      ).length;
-      if (failed > 0) {
-        throw new Error(`${failed} of ${ids.length} dismissals failed`);
-      }
-      return ids.length;
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["recommendations"] });
-    },
+    mutationFn: ({
+      ids,
+      state,
+      days,
+    }: {
+      ids: string[];
+      state: RecState;
+      days?: number;
+    }) =>
+      api.post<{ updated: number }>("/recommendations/state", {
+        ids,
+        state,
+        days,
+      }),
+    onSuccess: invalidate,
   });
 }
 
