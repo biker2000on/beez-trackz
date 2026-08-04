@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   ListChecks,
   MapPin,
+  Mic,
   Pencil,
   Trash2,
   QrCode,
@@ -20,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useShortcut } from "@/components/shortcuts/provider";
+import { useSearchParamState } from "@/lib/url-state";
 import ApiaryCanvas from "@/features/canvas";
 import { useApiaryHives } from "@/features/canvas/lib/use-canvas-data";
 import { PhotoSection } from "@/features/photos/photo-gallery";
@@ -32,6 +34,8 @@ import { ForecastTab } from "./forecast-tab";
 import { useApiary } from "./hooks";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
+const APIARY_TABS = ["layout", "flora", "forecast", "bulk", "photos"] as const;
+
 export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const apiary = useApiary(apiaryId);
   const hives = useApiaryHives(apiaryId);
@@ -41,6 +45,8 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   );
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // Deep-linkable and back-button safe: the active tab lives in the URL.
+  const [tab, setTab] = useSearchParamState("tab", "layout", APIARY_TABS);
 
   useShortcut("e", "Edit apiary", () => {
     if (canEdit) setEditOpen(true);
@@ -114,7 +120,17 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
               </p>
             )}
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-wrap gap-2">
+            {canEdit ? (
+              // Batch transcription used to be an orphan route with no inbound
+              // link; the yard you are standing in is its natural entry point.
+              <Button asChild variant="outline">
+                <Link href={`/transcribe?apiary=${apiaryId}`}>
+                  <Mic />
+                  Voice walkthrough
+                </Link>
+              </Button>
+            ) : null}
             <Button asChild variant="outline">
               <Link href={`/apiaries/${apiaryId}/labels`}>
                 <QrCode />
@@ -144,7 +160,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
         </div>
       </header>
 
-      <Tabs defaultValue="layout" className="min-w-0">
+      <Tabs value={tab} onValueChange={setTab} className="min-w-0">
         <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
           <TabsList className="h-11 min-w-max">
             <TabsTrigger value="layout" className="h-9">
