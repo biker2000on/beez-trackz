@@ -88,10 +88,14 @@ export function EquipmentTab({
                 >
                   <div className="min-w-0">
                     <p className="font-medium">
-                      {deployment.quantity}× {deployment.typeName}
+                      {deployment.outstanding ?? deployment.quantity}×{" "}
+                      {deployment.typeName}
                     </p>
                     <p className="text-xs text-muted-foreground">
                       Since {formatDate(deployment.dateDeployed)}
+                      {deployment.outstanding != null &&
+                        deployment.outstanding < deployment.quantity &&
+                        ` · ${deployment.quantity - deployment.outstanding} of ${deployment.quantity} returned`}
                       {deployment.notes && ` · ${deployment.notes}`}
                     </p>
                   </div>

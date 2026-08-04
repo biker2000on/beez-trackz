@@ -95,6 +95,9 @@ export interface HiveDeployment {
   id: string;
   stockId: string;
   quantity: number;
+  /** Quantity still on the hive after partial returns. */
+  outstanding?: number;
+  quantityReturned?: number;
   dateDeployed: string;
   dateRemoved: string | null;
   notes: string | null;

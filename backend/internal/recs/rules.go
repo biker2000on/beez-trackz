@@ -225,12 +225,14 @@ func checkEquipmentNeeded(ctx context.Context, pool *pgxpool.Pool, _ time.Time) 
 	// Frame shortage per hive from active deployments: box deployments provide
 	// capacity (frames_per_box), frame deployments fill it.
 	rows, err := pool.Query(ctx, `
-		SELECT d.hive_id, h.position_label, d.quantity, t.category, t.frames_per_box
+		SELECT d.hive_id, h.position_label, d.quantity - d.quantity_returned,
+			t.category, t.frames_per_box
 		FROM equipment_deployments d
 		JOIN equipment_stock s ON s.id = d.stock_id
 		JOIN equipment_types t ON t.id = s.type_id
 		JOIN hives h ON h.id = d.hive_id
-		WHERE d.date_removed IS NULL AND h.status = 'active' AND h.is_archived = false`)
+		WHERE d.date_removed IS NULL AND d.quantity > d.quantity_returned
+			AND h.status = 'active' AND h.is_archived = false`)
 	if err != nil {
 		return nil, err
 	}
