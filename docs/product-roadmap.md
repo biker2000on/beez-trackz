@@ -33,8 +33,8 @@ overlays (counts before vs. after each treatment).
 
 ## Workflow clarity and field-first UI
 
-**Planned; based on the 2026-08-02 production UI audit and the 2026-08-03
-adversarial UX/inventory review
+**Delivered 2026-08-04 (statuses on each item below); based on the 2026-08-02
+production UI audit and the 2026-08-03 adversarial UX/inventory review
 (`docs/plans/2026-08-03-ux-and-inventory-adversarial-review.md`), which
 quantified the tab problem: 28 tab triggers across 5 tab strips, 11 tab
 targets on `/harvest` alone (7 tabs + 4 nested Business tabs), 9 tabs on
@@ -42,6 +42,10 @@ hive detail, zero tab state in URLs, and a mobile bottom nav that drops 4 of
 9 destinations with no overflow menu.**
 
 ### P0 — Feeding lifecycle and one-row hive status
+**Shipped 2026-08-04.** Explicit open/closed/unverified feeder states with
+refill/close endpoints, an audited reversible backfill (originals preserved in
+`feeding_status_backfills`), and a per-hive `GET /feedings/status` row driving
+the dashboard widget.
 
 At audit time, 81 feeding records had no empty date across 22 hives (two to
 six records per hive), and every one was older than 90 days. First verify
@@ -55,6 +59,8 @@ status** on mobile. Refills and closures must make the active-feeder rule
 explicit so duplicate status rows cannot return.
 
 ### P1 — Dashboard hierarchy for work in front of the beekeeper
+**Shipped 2026-08-04.** Needs attention and Today's field actions lead;
+every row names its action and evidence.
 
 Make the dashboard lead with **Needs attention** and **Today’s field actions**,
 then hive/apiary status, feeding summaries, recent activity, and reporting.
@@ -64,6 +70,13 @@ semantics are verified), rather than giving generic advice equal weight with
 setup or analytics.
 
 ### P1 — Replace embedded workflow tabs with clear overviews
+**Shipped 2026-08-04.** Honey overview + sub-routes with a full-screen
+`/harvest/market-day`; Business reports merged into `/reports`; hive detail
+9 tabs → 5 with timeline filter chips; tab state in URLs; bottom nav pins 4
+role-aware items plus a More sheet; `/genealogy` renamed `/queens` (redirect
+kept); `/transcribe` linked from apiary detail. Deferred: the `/harvest` →
+`/honey` route rename (collides with the public `/honey/[slug]` story pages)
+and consolidating the two deploy-equipment UIs / four bulk-select toggles.
 
 Apiary, Hive, and Honey need default overview pages with promoted field
 actions. Keep tabs only for two or three peer views; move larger workflows to
@@ -105,6 +118,12 @@ Specific defects from the 2026-08-03 review to close as part of this work:
   "Honey" → `/harvest`).
 
 ### P1 — Separate operational inventories and clarify honey flow
+**Shipped 2026-08-04.** Equipment is a real ledger: unique stock row per
+type (duplicates merged), trigger-derived totals with drift rejected,
+damaged/retired states with a loss report, partial guarded returns with
+reason/condition, needed quantity + unit cost (cents), and a physical-count
+flow replacing bulk-adjust. Honey movement paths validate stock (sale-path
+lock pattern); bottling runs require a jar size and are FK-linked.
 
 Name and model **Equipment Inventory** separately from **Honey Inventory**.
 If equipment is a routine field operation, move it out of Settings. The
@@ -143,6 +162,13 @@ multiple hive line items, and save once. Replace ambiguous **Before** and
 harvested-weight entry when that is simpler in the field.
 
 ### P1 — GnuCash-web-ready inventory and honey integration
+**Pre-sync blockers shipped 2026-08-04; the sync layer itself remains
+planned.** Money is integer cents end to end (dollars on the wire),
+`updated_at`/`created_by` everywhere, hard deletes replaced by reversing
+entries / reachable cancellation / soft delete, one bulk-on-hand formula,
+negative-stock validation, collected-vs-invoiced revenue fields, an
+`external_sync` mapping table (schema only), and idempotency coverage for
+all honey/commerce mutations.
 
 Design inventory and honey workflows and data contracts for future
 bidirectional syncing with **gnucash-web** across the product ecosystem.
@@ -200,12 +226,18 @@ criteria. Concrete blockers, in recommended order of attack:
    nothing; inventory value is computed at retail price, not cost.
 
 ### P1 — PWA prompt behavior
+**Shipped 2026-08-04.** The prompt waits for a completed task or repeat
+visit, retreats from dialogs/recordings/detail routes, persists dismissal
+for 120 days, and Settings keeps a permanent Install entry.
 
 Do not overlay active apiary, hive, or field-recording work with the install
 prompt. Ask only after a completed task or a repeat visit, persist dismissal,
 and make installation easy to find later without interrupting operations.
 
 ### P2 — Responsive field polish
+**Partially shipped 2026-08-04** — touch targets, empty states, and phone
+layouts in apiaries, queens, and settings; other modules got the same
+treatment implicitly via the restructures above but were not audited.
 
 Finish responsive layouts, field-appropriate touch targets, and useful empty
 states so routine work stays clear on a phone as well as desktop and tablet.
