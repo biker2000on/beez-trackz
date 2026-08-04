@@ -335,3 +335,83 @@ export function useCreateWholesalePriceList() {
     "Wholesale price list created",
   );
 }
+
+/* ---------------------------------------------------------------------------
+ * Serialized jar traceability
+ *
+ * A serial printed on a jar lid is the only thing someone holding the jar has,
+ * so it is the lookup key for the whole chain: serial -> bottling run -> lot ->
+ * sale. `sale` is null until the jar is linked to an order.
+ * ------------------------------------------------------------------------- */
+
+export interface JarSerialTrace {
+  serialNumber: string;
+  createdAt: string;
+  bottlingRun: {
+    id: string;
+    bottledDate: string;
+    jarSizeLabel: string | null;
+    quantity: number;
+  };
+  harvestLot: {
+    id: string;
+    lotCode: string;
+    variety: string | null;
+    season: string | null;
+    publicSlug: string;
+  };
+  sale: {
+    id: string;
+    date: string;
+    customerName: string | null;
+    orderStatus: string;
+    soldAt: string | null;
+    linkedByName: string | null;
+  } | null;
+}
+
+export interface SaleJarSerial {
+  serialNumber: string;
+  lotCode: string;
+  jarSizeLabel: string | null;
+  soldAt: string | null;
+}
+
+/**
+ * Look up one serial. Disabled until a serial is supplied, and never retried:
+ * an unknown serial is a 404 the operator needs to see immediately, not after
+ * three silent attempts.
+ */
+export function useJarSerialLookup(serialNumber: string) {
+  const trimmed = serialNumber.trim();
+  return useQuery({
+    queryKey: ["commerce", "jar-serial", trimmed.toLowerCase()],
+    queryFn: () =>
+      api.get<JarSerialTrace>(`/honey/serials/${encodeURIComponent(trimmed)}`),
+    enabled: trimmed.length > 0,
+    retry: false,
+  });
+}
+
+export function useSaleSerials(saleId: string) {
+  return useQuery({
+    queryKey: ["commerce", "sale-serials", saleId],
+    queryFn: () => api.get<SaleJarSerial[]>(`/honey/sales/${saleId}/serials`),
+  });
+}
+
+export function useLinkSaleSerials(saleId: string) {
+  return useCommerceMutation(
+    (serialNumbers: string[]) =>
+      api.post<SaleJarSerial[]>(`/honey/sales/${saleId}/serials`, { serialNumbers }),
+    "Jar serials linked",
+  );
+}
+
+export function useUnlinkSaleSerial(saleId: string) {
+  return useCommerceMutation(
+    (serialNumber: string) =>
+      api.delete(`/honey/sales/${saleId}/serials/${encodeURIComponent(serialNumber)}`),
+    "Jar serial unlinked",
+  );
+}
