@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Per-row stock dialogs: deploy to hive (quantity capped at available),
- * adjust count (± with a reason), edit storage location, and the adjustment
- * history viewer.
+ * Per-row ledger dialogs. Every one of them writes an entry that says what
+ * happened and why — receive, deploy, adjust, mark damaged, repair, retire —
+ * instead of editing a quantity in place. Plus the stock detail editor
+ * (location, needed, unit cost) and the combined history viewer.
  */
 
 import * as React from "react";
@@ -33,15 +34,26 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 
-import { formatDate, parseNum, todayISO } from "./format";
+import { formatCents, formatDate, parseCents, parseNum, todayISO } from "./format";
 import {
   useAdjustStock,
   useDeployEquipment,
   useHiveOptions,
+  useMarkDamaged,
+  useReceiveStock,
+  useRepairStock,
+  useRetireStock,
   useStockAdjustments,
+  useStockStateChanges,
   useUpdateStock,
 } from "./hooks";
-import { ADJUSTMENT_REASONS, type EquipmentStockRow } from "./types";
+import {
+  ADJUSTMENT_REASONS,
+  RECEIVE_REASONS,
+  STATE_REASONS,
+  reasonLabel,
+  type EquipmentStockRow,
+} from "./types";
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -54,16 +66,50 @@ interface StockDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** Which pile a removal or state change draws from. */
+type StockPool = "serviceable" | "damaged" | "retired";
+
+/** Reason picker shared by every ledger dialog. */
+function ReasonSelect({
+  id,
+  value,
+  options,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  options: readonly string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger id={id}>
+        <SelectValue placeholder="Choose a reason" />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((option) => (
+          <SelectItem key={option} value={option}>
+            {reasonLabel(option)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+const wholeNumber = (min: number, message: string) =>
+  z
+    .string()
+    .refine(
+      (v) => Number.isInteger(parseNum(v) ?? NaN) && (parseNum(v) ?? -1) >= min,
+      message,
+    );
+
 // --- deploy to hive ---
 
 const deploySchema = z.object({
   hiveId: z.string().min(1, "Hive is required"),
-  quantity: z
-    .string()
-    .refine(
-      (v) => Number.isInteger(parseNum(v) ?? NaN) && (parseNum(v) ?? 0) >= 1,
-      "Quantity must be at least 1",
-    ),
+  quantity: wholeNumber(1, "Quantity must be at least 1"),
   notes: z.string(),
 });
 type DeployValues = z.infer<typeof deploySchema>;
@@ -176,6 +222,142 @@ export function DeployDialog({ stock, open, onOpenChange }: StockDialogProps) {
   );
 }
 
+// --- receive ---
+
+const receiveSchema = z.object({
+  quantity: wholeNumber(1, "Quantity must be at least 1"),
+  reason: z.string().min(1, "Reason is required"),
+  unitCost: z.string(),
+  date: z.string().min(1, "Date is required"),
+  notes: z.string(),
+});
+type ReceiveValues = z.infer<typeof receiveSchema>;
+
+export function ReceiveDialog({ stock, open, onOpenChange }: StockDialogProps) {
+  const mutation = useReceiveStock();
+  const defaults = React.useMemo<ReceiveValues>(
+    () => ({
+      quantity: "1",
+      reason: "purchased",
+      unitCost:
+        stock.unitCostCents != null ? String(stock.unitCostCents / 100) : "",
+      date: todayISO(),
+      notes: "",
+    }),
+    [stock.unitCostCents],
+  );
+  const form = useForm<ReceiveValues>({
+    resolver: zodResolver(receiveSchema),
+    defaultValues: defaults,
+  });
+
+  React.useEffect(() => {
+    if (!open) return;
+    form.reset(defaults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaults]);
+
+  const onSubmit = form.handleSubmit((values) => {
+    const unitCostCents = parseCents(values.unitCost);
+    if (values.unitCost.trim() !== "" && unitCostCents == null) {
+      form.setError("unitCost", { message: "Enter an amount like 24.50" });
+      return;
+    }
+    mutation.mutate(
+      {
+        stockId: stock.id,
+        quantity: parseNum(values.quantity)!,
+        reason: values.reason,
+        unitCostCents: unitCostCents ?? undefined,
+        date: values.date,
+        notes: values.notes.trim() || undefined,
+      },
+      { onSuccess: () => onOpenChange(false) },
+    );
+  });
+
+  const { errors } = form.formState;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Receive {stock.typeName}</DialogTitle>
+          <DialogDescription>
+            Add newly bought or built equipment to stock. {stock.totalOwned}{" "}
+            owned today.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="grid gap-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="receive-quantity">Quantity</Label>
+              <Input
+                id="receive-quantity"
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={1}
+                {...form.register("quantity")}
+              />
+              <FieldError message={errors.quantity?.message} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="receive-reason">Reason</Label>
+              <ReasonSelect
+                id="receive-reason"
+                value={form.watch("reason")}
+                options={RECEIVE_REASONS}
+                onChange={(value) =>
+                  form.setValue("reason", value, { shouldValidate: true })
+                }
+              />
+              <FieldError message={errors.reason?.message} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="receive-cost">Unit cost</Label>
+              <Input
+                id="receive-cost"
+                inputMode="decimal"
+                placeholder="e.g. 24.50"
+                {...form.register("unitCost")}
+              />
+              <FieldError message={errors.unitCost?.message} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="receive-date">Date</Label>
+              <Input id="receive-date" type="date" {...form.register("date")} />
+              <FieldError message={errors.date?.message} />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="receive-notes">Notes</Label>
+            <Textarea
+              id="receive-notes"
+              rows={2}
+              placeholder="Supplier, order number, …"
+              {...form.register("notes")}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? "Saving…" : "Receive"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // --- adjust count ---
 
 const adjustSchema = z.object({
@@ -186,6 +368,7 @@ const adjustSchema = z.object({
       "Enter a non-zero whole number",
     ),
   reason: z.string().min(1, "Reason is required"),
+  from: z.string(),
   date: z.string().min(1, "Date is required"),
   notes: z.string(),
 });
@@ -202,6 +385,7 @@ export function AdjustStockDialog({
     defaultValues: {
       quantity: "",
       reason: "purchased",
+      from: "serviceable",
       date: todayISO(),
       notes: "",
     },
@@ -209,18 +393,37 @@ export function AdjustStockDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({ quantity: "", reason: "purchased", date: todayISO(), notes: "" });
+    form.reset({
+      quantity: "",
+      reason: "purchased",
+      from: "serviceable",
+      date: todayISO(),
+      notes: "",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const delta = parseNum(form.watch("quantity")) ?? 0;
+  const from = form.watch("from");
+  const pool =
+    from === "damaged"
+      ? stock.damaged
+      : from === "retired"
+        ? stock.retired
+        : stock.available;
 
   const onSubmit = form.handleSubmit((values) => {
+    const quantity = parseNum(values.quantity)!;
+    if (quantity < 0 && -quantity > pool) {
+      form.setError("quantity", { message: `Only ${pool} to remove` });
+      return;
+    }
     mutation.mutate(
       {
         stockId: stock.id,
-        quantity: parseNum(values.quantity)!,
+        quantity,
         reason: values.reason,
+        from: quantity < 0 ? (values.from as StockPool) : undefined,
         date: values.date,
         notes: values.notes.trim() || undefined,
       },
@@ -235,8 +438,8 @@ export function AdjustStockDialog({
         <DialogHeader>
           <DialogTitle>Adjust {stock.typeName}</DialogTitle>
           <DialogDescription>
-            Currently {stock.totalOwned} owned. Use a positive number to add
-            stock, negative to remove.
+            Correct what you own outside the normal flow. {stock.totalOwned}{" "}
+            owned, {stock.available} available.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="grid gap-4">
@@ -254,27 +457,46 @@ export function AdjustStockDialog({
               <FieldError message={errors.quantity?.message} />
             </div>
             <div className="grid gap-1.5">
-              <Label>Reason</Label>
-              <Select
+              <Label htmlFor="adjust-reason">Reason</Label>
+              <ReasonSelect
+                id="adjust-reason"
                 value={form.watch("reason")}
-                onValueChange={(value) =>
+                options={ADJUSTMENT_REASONS}
+                onChange={(value) =>
                   form.setValue("reason", value, { shouldValidate: true })
                 }
-              >
-                <SelectTrigger className="capitalize">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ADJUSTMENT_REASONS.map((reason) => (
-                    <SelectItem key={reason} value={reason} className="capitalize">
-                      {reason}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
               <FieldError message={errors.reason?.message} />
             </div>
           </div>
+          {delta < 0 && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="adjust-from">Remove from</Label>
+              <Select
+                value={from}
+                onValueChange={(value) => form.setValue("from", value)}
+              >
+                <SelectTrigger id="adjust-from">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="serviceable">
+                    In storage ({stock.available})
+                  </SelectItem>
+                  <SelectItem value="damaged">
+                    Damaged ({stock.damaged})
+                  </SelectItem>
+                  <SelectItem value="retired">
+                    Retired ({stock.retired})
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Disposing of damaged or retired gear clears it from that pile
+                too.
+              </p>
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label htmlFor="adjust-date">Date</Label>
             <Input id="adjust-date" type="date" {...form.register("date")} />
@@ -315,57 +537,304 @@ export function AdjustStockDialog({
   );
 }
 
-// --- edit location ---
+// --- condition states: damaged / repaired / retired ---
 
-const locationSchema = z.object({
-  storageLocation: z.string(),
+export type StateDialogMode = "damage" | "repair" | "retire";
+
+const stateSchema = z.object({
+  quantity: wholeNumber(1, "Quantity must be at least 1"),
+  reason: z.string().min(1, "Reason is required"),
+  from: z.string(),
+  date: z.string().min(1, "Date is required"),
+  notes: z.string(),
 });
-type LocationValues = z.infer<typeof locationSchema>;
+type StateValues = z.infer<typeof stateSchema>;
 
-export function EditLocationDialog({
+const STATE_COPY: Record<
+  StateDialogMode,
+  { title: string; description: string; action: string; reason: string }
+> = {
+  damage: {
+    title: "Mark damaged",
+    description:
+      "Damaged equipment stays on the books but stops counting as available.",
+    action: "Mark damaged",
+    reason: "broken",
+  },
+  repair: {
+    title: "Back in service",
+    description: "Move repaired equipment out of the damaged pile.",
+    action: "Return to service",
+    reason: "repaired",
+  },
+  retire: {
+    title: "Retire",
+    description:
+      "Retired equipment is still owned but permanently out of service.",
+    action: "Retire",
+    reason: "worn_out",
+  },
+};
+
+export function StateChangeDialog({
   stock,
+  mode,
   open,
   onOpenChange,
-}: StockDialogProps) {
-  const mutation = useUpdateStock();
-  const form = useForm<LocationValues>({
-    resolver: zodResolver(locationSchema),
-    defaultValues: { storageLocation: stock.storageLocation ?? "" },
+}: StockDialogProps & { mode: StateDialogMode }) {
+  const damage = useMarkDamaged();
+  const repair = useRepairStock();
+  const retire = useRetireStock();
+  const mutation =
+    mode === "damage" ? damage : mode === "repair" ? repair : retire;
+  const copy = STATE_COPY[mode];
+
+  const defaultFrom = mode === "repair" ? "damaged" : "serviceable";
+  const form = useForm<StateValues>({
+    resolver: zodResolver(stateSchema),
+    defaultValues: {
+      quantity: "1",
+      reason: copy.reason,
+      from: defaultFrom,
+      date: todayISO(),
+      notes: "",
+    },
   });
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({ storageLocation: stock.storageLocation ?? "" });
+    form.reset({
+      quantity: "1",
+      reason: copy.reason,
+      from: defaultFrom,
+      date: todayISO(),
+      notes: "",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, stock.storageLocation]);
+  }, [open, mode]);
+
+  const from = form.watch("from");
+  const pool =
+    from === "damaged"
+      ? stock.damaged
+      : from === "retired"
+        ? stock.retired
+        : stock.available;
 
   const onSubmit = form.handleSubmit((values) => {
+    const quantity = parseNum(values.quantity)!;
+    if (quantity > pool) {
+      form.setError("quantity", { message: `Only ${pool} to move` });
+      return;
+    }
     mutation.mutate(
       {
         stockId: stock.id,
-        storageLocation: values.storageLocation.trim() || null,
+        quantity,
+        reason: values.reason,
+        from: values.from as StockPool,
+        date: values.date,
+        notes: values.notes.trim() || undefined,
       },
       { onSuccess: () => onOpenChange(false) },
     );
   });
 
+  const { errors } = form.formState;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Storage location</DialogTitle>
+          <DialogTitle>
+            {copy.title} — {stock.typeName}
+          </DialogTitle>
+          <DialogDescription>{copy.description}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="grid gap-4">
+          {mode === "retire" && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="state-from">Retire from</Label>
+              <Select
+                value={from}
+                onValueChange={(value) => form.setValue("from", value)}
+              >
+                <SelectTrigger id="state-from">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="serviceable">
+                    In storage ({stock.available})
+                  </SelectItem>
+                  <SelectItem value="damaged">
+                    Damaged ({stock.damaged})
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="state-quantity">Quantity</Label>
+              <Input
+                id="state-quantity"
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={1}
+                max={pool}
+                {...form.register("quantity")}
+              />
+              <FieldError message={errors.quantity?.message} />
+              <p className="text-xs text-muted-foreground">
+                {pool} available to move.
+              </p>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="state-reason">Reason</Label>
+              <ReasonSelect
+                id="state-reason"
+                value={form.watch("reason")}
+                options={STATE_REASONS}
+                onChange={(value) =>
+                  form.setValue("reason", value, { shouldValidate: true })
+                }
+              />
+              <FieldError message={errors.reason?.message} />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="state-date">Date</Label>
+            <Input id="state-date" type="date" {...form.register("date")} />
+            <FieldError message={errors.date?.message} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="state-notes">Notes</Label>
+            <Textarea
+              id="state-notes"
+              rows={2}
+              placeholder="What happened?"
+              {...form.register("notes")}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={mutation.isPending || pool < 1}>
+              {mutation.isPending ? "Saving…" : copy.action}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- stock details (location, needed, unit cost) ---
+
+const detailsSchema = z.object({
+  storageLocation: z.string(),
+  needed: wholeNumber(0, "Enter a whole number of 0 or more"),
+  unitCost: z.string(),
+});
+type DetailsValues = z.infer<typeof detailsSchema>;
+
+export function EditDetailsDialog({
+  stock,
+  open,
+  onOpenChange,
+}: StockDialogProps) {
+  const mutation = useUpdateStock();
+  const defaults = React.useMemo<DetailsValues>(
+    () => ({
+      storageLocation: stock.storageLocation ?? "",
+      needed: String(stock.needed),
+      unitCost:
+        stock.unitCostCents != null ? String(stock.unitCostCents / 100) : "",
+    }),
+    [stock.storageLocation, stock.needed, stock.unitCostCents],
+  );
+  const form = useForm<DetailsValues>({
+    resolver: zodResolver(detailsSchema),
+    defaultValues: defaults,
+  });
+
+  React.useEffect(() => {
+    if (!open) return;
+    form.reset(defaults);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaults]);
+
+  const onSubmit = form.handleSubmit((values) => {
+    const unitCostCents = parseCents(values.unitCost);
+    if (values.unitCost.trim() !== "" && unitCostCents == null) {
+      form.setError("unitCost", { message: "Enter an amount like 24.50" });
+      return;
+    }
+    mutation.mutate(
+      {
+        stockId: stock.id,
+        storageLocation: values.storageLocation.trim() || null,
+        neededQuantity: parseNum(values.needed)!,
+        unitCostCents,
+      },
+      { onSuccess: () => onOpenChange(false) },
+    );
+  });
+
+  const { errors } = form.formState;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{stock.typeName} details</DialogTitle>
           <DialogDescription>
-            Where spare {stock.typeName.toLowerCase()} stock is kept.
+            Where spare stock is kept, how many you want on hand, and what one
+            costs.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="grid gap-4">
           <div className="grid gap-1.5">
-            <Label htmlFor="stock-location">Location</Label>
+            <Label htmlFor="stock-location">Storage location</Label>
             <Input
               id="stock-location"
               placeholder="e.g. Garage shelf B"
               {...form.register("storageLocation")}
             />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="stock-needed">Needed</Label>
+              <Input
+                id="stock-needed"
+                type="number"
+                inputMode="numeric"
+                step={1}
+                min={0}
+                {...form.register("needed")}
+              />
+              <FieldError message={errors.needed?.message} />
+              <p className="text-xs text-muted-foreground">
+                Target to keep available.
+              </p>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="stock-cost">Unit cost</Label>
+              <Input
+                id="stock-cost"
+                inputMode="decimal"
+                placeholder="e.g. 24.50"
+                {...form.register("unitCost")}
+              />
+              <FieldError message={errors.unitCost?.message} />
+              <p className="text-xs text-muted-foreground">
+                Used to value losses.
+              </p>
+            </div>
           </div>
           <DialogFooter>
             <Button
@@ -385,10 +854,48 @@ export function EditLocationDialog({
   );
 }
 
-// --- adjustment history ---
+// --- history ---
+
+interface HistoryEntry {
+  id: string;
+  date: string;
+  quantity: number;
+  label: string;
+  detail: string;
+  tone: "positive" | "negative" | "neutral";
+}
 
 export function HistoryDialog({ stock, open, onOpenChange }: StockDialogProps) {
   const adjustments = useStockAdjustments(stock.id, open);
+  const stateChanges = useStockStateChanges(stock.id, open);
+
+  const isPending = adjustments.isPending || stateChanges.isPending;
+  const isError = adjustments.isError || stateChanges.isError;
+
+  const entries = React.useMemo<HistoryEntry[]>(() => {
+    const rows: HistoryEntry[] = [];
+    for (const adjustment of adjustments.data ?? []) {
+      rows.push({
+        id: adjustment.id,
+        date: adjustment.date,
+        quantity: adjustment.quantity,
+        label: reasonLabel(adjustment.reason),
+        detail: adjustment.notes ?? "Owned count",
+        tone: adjustment.quantity >= 0 ? "positive" : "negative",
+      });
+    }
+    for (const change of stateChanges.data ?? []) {
+      rows.push({
+        id: change.id,
+        date: change.date,
+        quantity: change.quantity,
+        label: `${reasonLabel(change.reason)} · ${change.fromState} → ${change.toState}`,
+        detail: change.notes ?? "Condition change",
+        tone: change.toState === "serviceable" ? "positive" : "negative",
+      });
+    }
+    return rows.sort((a, b) => b.date.localeCompare(a.date));
+  }, [adjustments.data, stateChanges.data]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -396,48 +903,51 @@ export function HistoryDialog({ stock, open, onOpenChange }: StockDialogProps) {
         <DialogHeader>
           <DialogTitle>{stock.typeName} history</DialogTitle>
           <DialogDescription>
-            Every stock adjustment, most recent first.
+            Every ledger entry — counts and condition changes — most recent
+            first.
           </DialogDescription>
         </DialogHeader>
-        {adjustments.isPending ? (
+        {isPending ? (
           <div className="grid gap-2">
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
           </div>
-        ) : adjustments.isError ? (
+        ) : isError ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
             Could not load history.
           </p>
-        ) : adjustments.data.length === 0 ? (
+        ) : entries.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
-            No adjustments recorded yet.
+            Nothing recorded yet.
           </p>
         ) : (
           <ul className="grid max-h-80 gap-2 overflow-y-auto">
-            {adjustments.data.map((adjustment) => (
+            {entries.map((entry) => (
               <li
-                key={adjustment.id}
+                key={entry.id}
                 className="flex items-center gap-3 rounded-lg border p-3"
               >
                 <Badge
-                  variant={adjustment.quantity >= 0 ? "accent" : "destructive"}
+                  variant={entry.tone === "positive" ? "accent" : "destructive"}
                   className="w-12 justify-center tabular-nums"
                 >
-                  {adjustment.quantity > 0 ? "+" : ""}
-                  {adjustment.quantity}
+                  {entry.quantity > 0 ? "+" : ""}
+                  {entry.quantity}
                 </Badge>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium capitalize">
-                    {adjustment.reason}
-                  </p>
+                  <p className="text-sm font-medium">{entry.label}</p>
                   <p className="truncate text-xs text-muted-foreground">
-                    {formatDate(adjustment.date)}
-                    {adjustment.notes ? ` · ${adjustment.notes}` : ""}
+                    {formatDate(entry.date)} · {entry.detail}
                   </p>
                 </div>
               </li>
             ))}
           </ul>
+        )}
+        {stock.unitCostCents != null && (
+          <p className="text-xs text-muted-foreground">
+            Unit cost on file: {formatCents(stock.unitCostCents)}
+          </p>
         )}
       </DialogContent>
     </Dialog>

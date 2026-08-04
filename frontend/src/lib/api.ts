@@ -96,6 +96,32 @@ export const api = {
   },
 };
 
+/**
+ * Some endpoints reject a batch by returning per-line errors alongside the
+ * summary message (the equipment physical count, for example) so the caller can
+ * point at the offending row instead of failing the whole form silently.
+ */
+export interface ApiLineError {
+  index: number;
+  stockId?: string | null;
+  typeId?: string | null;
+  message: string;
+}
+
+/** Extract per-line errors from a failed request; [] when there are none. */
+export function apiLineErrors(error: unknown): ApiLineError[] {
+  if (!(error instanceof ApiError)) return [];
+  const body = error.body as { errors?: unknown } | null;
+  if (!body || !Array.isArray(body.errors)) return [];
+  return body.errors.filter(
+    (entry): entry is ApiLineError =>
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as ApiLineError).index === "number" &&
+      typeof (entry as ApiLineError).message === "string",
+  );
+}
+
 /** Shape returned by GET /api/v1/auth/status. */
 export interface AuthStatus {
   authenticated: boolean;
