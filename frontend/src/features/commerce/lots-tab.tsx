@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ExternalLink, PackagePlus, Plus, QrCode } from "lucide-react";
+import { ExternalLink, PackagePlus, Pencil, Plus, QrCode } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,7 @@ import {
   useCreateBottlingRun,
   useCreateHarvestLot,
   useHarvestLots,
+  useUpdateHarvestLot,
   type HarvestLot,
 } from "./api";
 
@@ -41,6 +42,7 @@ export function LotsTab() {
   const lots = useHarvestLots();
   const harvests = useHarvests();
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [editLot, setEditLot] = React.useState<HarvestLot | null>(null);
   const [bottleLot, setBottleLot] = React.useState<HarvestLot | null>(null);
 
   if (lots.isPending || harvests.isPending) return <Skeleton className="h-64 w-full" />;
@@ -95,50 +97,78 @@ export function LotsTab() {
                     ))}
                   </div>
                 )}
-                <Button variant="outline" size="sm" onClick={() => setBottleLot(lot)}>
-                  <PackagePlus /> Add bottling run
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setBottleLot(lot)}>
+                    <PackagePlus /> Add bottling run
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditLot(lot)}>
+                    <Pencil /> Edit lot
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ))}
         </div>
       )}
       {createOpen && (
-        <CreateLotDialog open onOpenChange={setCreateOpen} harvests={harvests.data} />
+        <LotFormDialog open onOpenChange={setCreateOpen} harvests={harvests.data} />
+      )}
+      {editLot && (
+        <LotFormDialog
+          open
+          onOpenChange={(open) => !open && setEditLot(null)}
+          harvests={harvests.data}
+          lot={editLot}
+        />
       )}
       {bottleLot && <BottlingDialog lot={bottleLot} open onOpenChange={(open) => !open && setBottleLot(null)} />}
     </div>
   );
 }
 
-function CreateLotDialog({
+/** Create a lot, or — when `lot` is set — edit it in place (same fields). */
+function LotFormDialog({
   open,
   onOpenChange,
   harvests,
+  lot,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   harvests: ReturnType<typeof useHarvests>["data"];
+  lot?: HarvestLot;
 }) {
   const create = useCreateHarvestLot();
+  const update = useUpdateHarvestLot();
+  const busy = create.isPending || update.isPending;
   const [lotCode, setLotCode] = React.useState(
-    () => `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`,
+    () =>
+      lot?.lotCode ??
+      `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`,
   );
-  const [date, setDate] = React.useState(todayISO());
-  const [weight, setWeight] = React.useState("");
-  const [variety, setVariety] = React.useState("");
-  const [season, setSeason] = React.useState("");
-  const [region, setRegion] = React.useState("");
-  const [bloom, setBloom] = React.useState("");
-  const [story, setStory] = React.useState("");
-  const [reorder, setReorder] = React.useState("");
-  const [harvestIds, setHarvestIds] = React.useState<string[]>([]);
-  const [photoIds, setPhotoIds] = React.useState("");
+  const [date, setDate] = React.useState(
+    () => lot?.extractionDate?.slice(0, 10) ?? todayISO(),
+  );
+  const [weight, setWeight] = React.useState(
+    () => (lot ? String(lot.honeyWeightLbs) : ""),
+  );
+  const [variety, setVariety] = React.useState(lot?.honeyVariety ?? "");
+  const [season, setSeason] = React.useState(lot?.season ?? "");
+  const [region, setRegion] = React.useState(lot?.apiaryRegion ?? "");
+  const [bloom, setBloom] = React.useState(lot?.bloomNotes ?? "");
+  const [story, setStory] = React.useState(lot?.beekeeperStory ?? "");
+  const [reorder, setReorder] = React.useState(lot?.reorderUrl ?? "");
+  const [harvestIds, setHarvestIds] = React.useState<string[]>(
+    () => lot?.sourceHarvestIds ?? [],
+  );
+  const [photoIds, setPhotoIds] = React.useState(
+    () => lot?.photos.map((photo) => photo.id).join(", ") ?? "",
+  );
 
   function submit() {
     const pounds = Number(weight);
     if (!lotCode.trim() || !date || !Number.isFinite(pounds) || pounds < 0) return;
-    create.mutate({
+    const payload = {
       lotCode: lotCode.trim(),
       extractionDate: date,
       honeyWeightLbs: pounds,
@@ -148,16 +178,25 @@ function CreateLotDialog({
       bloomNotes: bloom.trim() || undefined,
       beekeeperStory: story.trim() || undefined,
       reorderUrl: reorder.trim() || undefined,
-      isPublic: true,
+      isPublic: lot?.isPublic ?? true,
       harvestIds,
       photoIds: photoIds.split(",").map((id) => id.trim()).filter(Boolean),
-    }, { onSuccess: () => onOpenChange(false) });
+    };
+    if (lot) {
+      // Keep the published slug stable so printed QR labels keep resolving.
+      update.mutate(
+        { id: lot.id, publicSlug: lot.publicSlug, ...payload },
+        { onSuccess: () => onOpenChange(false) },
+      );
+    } else {
+      create.mutate(payload, { onSuccess: () => onOpenChange(false) });
+    }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90dvh] max-w-2xl overflow-y-auto">
-        <DialogHeader><DialogTitle>Create harvest lot</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{lot ? `Edit lot ${lot.lotCode}` : "Create harvest lot"}</DialogTitle></DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label htmlFor="lot-code">Lot code</Label><Input id="lot-code" value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></div>
@@ -187,7 +226,7 @@ function CreateLotDialog({
             <div className="grid gap-1.5"><Label>Curated photo IDs</Label><Input value={photoIds} onChange={(e) => setPhotoIds(e.target.value)} placeholder="Optional, comma separated" /></div>
           </div>
         </div>
-        <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} disabled={create.isPending}><QrCode />{create.isPending ? "Creating…" : "Create lot & QR"}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} disabled={busy}><QrCode />{busy ? "Saving…" : lot ? "Save lot" : "Create lot & QR"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

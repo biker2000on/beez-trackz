@@ -55,7 +55,9 @@ import {
   useHarvestLots,
   useProductionPlan,
   useProfitability,
+  useUpdateCustomer,
   useWholesalePriceLists,
+  type Customer,
 } from "./api";
 
 export function ProfitabilityPanel({ year }: { year: number }) {
@@ -192,6 +194,7 @@ export function CustomersPanel() {
   const customers = useCustomers();
   const priceLists = useWholesalePriceLists();
   const [customerOpen, setCustomerOpen] = React.useState(false);
+  const [editCustomer, setEditCustomer] = React.useState<Customer | null>(null);
   const [priceOpen, setPriceOpen] = React.useState(false);
   if (customers.isPending || priceLists.isPending) return <Skeleton className="h-64" />;
   if (customers.isError || priceLists.isError) return <ErrorText />;
@@ -199,19 +202,52 @@ export function CustomersPanel() {
     <div className="grid gap-5">
       <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setPriceOpen(true)}><DollarSign /> New wholesale list</Button><Button size="sm" onClick={() => setCustomerOpen(true)}><Plus /> Add customer</Button></div>
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="size-4" /> Customers</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Contact</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Revenue</TableHead></TableRow></TableHeader><TableBody>{customers.data.map((row) => <TableRow key={row.id}><TableCell><p className="font-medium">{row.name}</p><p className="text-xs text-muted-foreground">{row.referralCode}</p></TableCell><TableCell><p>{row.email ?? row.phone ?? "—"}</p><div className="mt-1 flex flex-wrap gap-1">{row.emailOptIn && <Badge variant="accent" className="gap-1"><Bell className="size-3" /> Release alerts</Badge>}{row.reorderReminderDue && <Badge variant="secondary">Reorder reminder due</Badge>}</div></TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.lifetimeRevenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+        <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="size-4" /> Customers</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Contact</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Revenue</TableHead></TableRow></TableHeader><TableBody>{customers.data.map((row) => <TableRow key={row.id} className="cursor-pointer" onClick={() => setEditCustomer(row)}><TableCell><p className="font-medium">{row.name}</p><p className="text-xs text-muted-foreground">{row.referralCode}</p></TableCell><TableCell><p>{row.email ?? row.phone ?? "—"}</p><div className="mt-1 flex flex-wrap gap-1">{row.emailOptIn && <Badge variant="accent" className="gap-1"><Bell className="size-3" /> Release alerts</Badge>}{row.reorderReminderDue && <Badge variant="secondary">Reorder reminder due</Badge>}</div></TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.lifetimeRevenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
         <Card><CardHeader><CardTitle className="text-base">Wholesale price lists</CardTitle></CardHeader><CardContent className="grid gap-3">{priceLists.data.length === 0 ? <p className="text-sm text-muted-foreground">No wholesale pricing yet.</p> : priceLists.data.map((list) => <div key={list.id} className="rounded-md border p-3 text-sm"><div className="flex justify-between gap-2"><p className="font-medium">{list.name}</p><span>{formatMoney(list.minimumOrderAmount)} minimum</span></div><p className="mt-1 text-xs text-muted-foreground">{list.items.map((item) => `${item.label} ${formatMoney(item.unitPrice)}`).join(" · ")}</p></div>)}</CardContent></Card>
       </div>
       <CustomerDialog open={customerOpen} onOpenChange={setCustomerOpen} />
+      {editCustomer && (
+        <CustomerDialog
+          open
+          onOpenChange={(open) => !open && setEditCustomer(null)}
+          customer={editCustomer}
+        />
+      )}
       <PriceListDialog open={priceOpen} onOpenChange={setPriceOpen} />
     </div>
   );
 }
 
-function CustomerDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/** Create a customer, or — when `customer` is set — edit them in place. */
+function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpenChange: (open: boolean) => void; customer?: Customer }) {
   const create = useCreateCustomer();
-  const [name, setName] = React.useState(""); const [email, setEmail] = React.useState(""); const [phone, setPhone] = React.useState(""); const [optIn, setOptIn] = React.useState(false);
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Add customer</DialogTitle></DialogHeader><div className="grid gap-3"><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div><div className="grid gap-1.5"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div></div><label className="flex items-center gap-2 text-sm"><Checkbox checked={optIn} onCheckedChange={(value) => setOptIn(value === true)} />Customer opted into seasonal release and reorder emails</label></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={() => create.mutate({ name, email: email || undefined, phone: phone || undefined, emailOptIn: optIn }, { onSuccess: () => onOpenChange(false) })} disabled={create.isPending || !name.trim()}>Save customer</Button></DialogFooter></DialogContent></Dialog>;
+  const update = useUpdateCustomer();
+  const busy = create.isPending || update.isPending;
+  const [name, setName] = React.useState(customer?.name ?? "");
+  const [email, setEmail] = React.useState(customer?.email ?? "");
+  const [phone, setPhone] = React.useState(customer?.phone ?? "");
+  const [notes, setNotes] = React.useState(customer?.notes ?? "");
+  const [optIn, setOptIn] = React.useState(customer?.emailOptIn ?? false);
+
+  function submit() {
+    if (customer) {
+      update.mutate({
+        id: customer.id,
+        name,
+        email: email.trim() || undefined,
+        phone: phone.trim() || undefined,
+        notes: notes.trim() || undefined,
+        emailOptIn: optIn,
+        // Preserve referral wiring; this dialog does not edit it.
+        referralCode: customer.referralCode ?? undefined,
+        referredBy: customer.referredBy ?? undefined,
+      }, { onSuccess: () => onOpenChange(false) });
+    } else {
+      create.mutate({ name, email: email.trim() || undefined, phone: phone.trim() || undefined, emailOptIn: optIn }, { onSuccess: () => onOpenChange(false) });
+    }
+  }
+
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>{customer ? `Edit ${customer.name}` : "Add customer"}</DialogTitle></DialogHeader><div className="grid gap-3"><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div><div className="grid gap-1.5"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div></div>{customer && <div className="grid gap-1.5"><Label>Notes</Label><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>}<label className="flex items-center gap-2 text-sm"><Checkbox checked={optIn} onCheckedChange={(value) => setOptIn(value === true)} />Customer opted into seasonal release and reorder emails</label></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} disabled={busy || !name.trim()}>{customer ? "Save changes" : "Save customer"}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function PriceListDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {

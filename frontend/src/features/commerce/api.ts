@@ -209,6 +209,14 @@ export function useCreateHarvestLot() {
   );
 }
 
+export function useUpdateHarvestLot() {
+  return useCommerceMutation(
+    ({ id, ...body }: HarvestLotInput & { id: string }) =>
+      api.patch(`/harvest-lots/${id}`, body),
+    "Harvest lot updated",
+  );
+}
+
 export function useCreateBottlingRun(lotId: string) {
   return useCommerceMutation(
     (body: {
@@ -275,6 +283,25 @@ export function useCreateCustomer() {
       referredBy?: string;
     }) => api.post("/customers", body),
     "Customer saved",
+  );
+}
+
+export function useUpdateCustomer() {
+  return useCommerceMutation(
+    ({
+      id,
+      ...body
+    }: {
+      id: string;
+      name: string;
+      email?: string | null;
+      phone?: string | null;
+      notes?: string | null;
+      emailOptIn: boolean;
+      referralCode?: string | null;
+      referredBy?: string | null;
+    }) => api.patch(`/customers/${id}`, body),
+    "Customer updated",
   );
 }
 
