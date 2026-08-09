@@ -33,7 +33,7 @@ overlays (counts before vs. after each treatment).
 
 ## Workflow clarity and field-first UI
 
-**Delivered 2026-08-04 (statuses on each item below); based on the 2026-08-02
+**Progress updated from HEAD `e9fd757` (statuses on each item below); based on the 2026-08-02
 production UI audit and the 2026-08-03 adversarial UX/inventory review
 (`docs/plans/2026-08-03-ux-and-inventory-adversarial-review.md`), which
 quantified the tab problem: 28 tab triggers across 5 tab strips, 11 tab
@@ -42,10 +42,14 @@ hive detail, zero tab state in URLs, and a mobile bottom nav that drops 4 of
 9 destinations with no overflow menu.**
 
 ### P0 — Feeding lifecycle and one-row hive status
-**Shipped 2026-08-04.** Explicit open/closed/unverified feeder states with
+**Mostly shipped 2026-08-04.** Explicit open/closed/unverified feeder states with
 refill/close endpoints, an audited reversible backfill (originals preserved in
 `feeding_status_backfills`), and a per-hive `GET /feedings/status` row driving
 the dashboard widget.
+
+New feedings without a physical feeder still default open and can overstate
+active feeders. Finish the latest feed date/type visibility and make mixed
+open/unverified records resolve to an unambiguous action target.
 
 At audit time, 81 feeding records had no empty date across 22 hives (two to
 six records per hive), and every one was older than 90 days. First verify
@@ -59,7 +63,7 @@ status** on mobile. Refills and closures must make the active-feeder rule
 explicit so duplicate status rows cannot return.
 
 ### P1 — Dashboard hierarchy for work in front of the beekeeper
-**Shipped 2026-08-04.** Needs attention and Today's field actions lead;
+**Complete 2026-08-04.** Needs attention and Today's field actions lead;
 every row names its action and evidence.
 
 Make the dashboard lead with **Needs attention** and **Today’s field actions**,
@@ -70,13 +74,17 @@ semantics are verified), rather than giving generic advice equal weight with
 setup or analytics.
 
 ### P1 — Replace embedded workflow tabs with clear overviews
-**Shipped 2026-08-04.** Honey overview + sub-routes with a full-screen
+**Partially shipped 2026-08-04.** Honey overview + sub-routes with a full-screen
 `/harvest/market-day`; Business reports merged into `/reports`; hive detail
 9 tabs → 5 with timeline filter chips; tab state in URLs; bottom nav pins 4
 role-aware items plus a More sheet; `/genealogy` renamed `/queens` (redirect
 kept); `/transcribe` linked from apiary detail. Deferred: the `/harvest` →
 `/honey` route rename (collides with the public `/honey/[slug]` story pages)
 and consolidating the two deploy-equipment UIs / four bulk-select toggles.
+
+The embedded-tab replacement remains incomplete: Apiary and Hive each retain
+five tabs, while Honey and Reports retain dense horizontal seven- and
+eight-link strips.
 
 Apiary, Hive, and Honey need default overview pages with promoted field
 actions. Keep tabs only for two or three peer views; move larger workflows to
@@ -118,12 +126,14 @@ Specific defects from the 2026-08-03 review to close as part of this work:
   "Honey" → `/harvest`).
 
 ### P1 — Separate operational inventories and clarify honey flow
-**Shipped 2026-08-04.** Equipment is a real ledger: unique stock row per
+**Equipment workflow complete 2026-08-04; honey flow partially shipped.**
+Equipment is a real ledger: unique stock row per
 type (duplicates merged), trigger-derived totals with drift rejected,
 damaged/retired states with a loss report, partial guarded returns with
 reason/condition, needed quantity + unit cost (cents), and a physical-count
-flow replacing bulk-adjust. Honey movement paths validate stock (sale-path
-lock pattern); bottling runs require a jar size and are FK-linked.
+flow replacing bulk-adjust. Only minor naming clarity remains. Honey movement
+paths validate stock (sale-path lock pattern); bottling runs require a jar
+size and are FK-linked.
 
 Name and model **Equipment Inventory** separately from **Honey Inventory**.
 If equipment is a routine field operation, move it out of Settings. The
@@ -132,7 +142,7 @@ deployed, available, needed, damaged, and retired equipment, backed by ledger
 actions to receive, deploy, return, adjust, and retire rather than opaque
 quantity edits.
 
-The 2026-08-03 review measured the current equipment model against this bar:
+The 2026-08-03 review documented the pre-delivery equipment model against this bar:
 
 - Returns cannot be partial, record no reason or condition, and a second
   return call silently overwrites the first return date (no
@@ -156,19 +166,18 @@ Make the Honey workflow show its allowed path and the next useful action:
 sale**. Each stage should show its status and available quantity, while still
 allowing the deliberate shortcuts that real operations need.
 
-Harvest entry should capture the date and apiary once per session, accept
-multiple hive line items, and save once. Replace ambiguous **Before** and
-**After** fields with explicit measurement labels, while permitting direct
-harvested-weight entry when that is simpler in the field.
+Harvest entry captures the date and apiary once per session. Remaining work:
+save multiple hive line items in one operation, permit direct harvested-weight
+entry, replace ambiguous **Before** and **After** with explicit measurement
+labels, and unify lifecycle/status handling.
 
 ### P1 — GnuCash-web-ready inventory and honey integration
-**Pre-sync blockers shipped 2026-08-04; the sync layer itself remains
-planned.** Money is integer cents end to end (dollars on the wire),
-`updated_at`/`created_by` everywhere, hard deletes replaced by reversing
-entries / reachable cancellation / soft delete, one bulk-on-hand formula,
-negative-stock validation, collected-vs-invoiced revenue fields, an
-`external_sync` mapping table (schema only), and idempotency coverage for
-all honey/commerce mutations.
+**Foundations shipped 2026-08-04; live GnuCash sync and external/accounting
+reconciliation remain planned.** Completed foundations include integer cents,
+audit fields, reversals/soft deletes, a unified bulk formula, stock
+validation, collected-vs-invoiced revenue fields, and honey/commerce
+idempotency. The `external_sync` mapping-table foundation is in place;
+equipment entity mappings and equipment mutation idempotency remain missing.
 
 Design inventory and honey workflows and data contracts for future
 bidirectional syncing with **gnucash-web** across the product ecosystem.
@@ -183,47 +192,28 @@ Beez Trackz remains authoritative for physical honey and equipment quantities;
 gnucash-web remains authoritative for posted accounting entries. Sync must not
 infer or overwrite physical stock solely from accounting data.
 
-The 2026-08-03 review found the current system fails every one of these
-criteria. Concrete blockers, in recommended order of attack:
+The 2026-08-03 review found the pre-delivery system failed these criteria.
+The remaining GnuCash work is live GnuCash sync and external/accounting
+reconciliation, plus equipment entity mappings and equipment mutation
+idempotency. Historical blockers, in recommended order of attack:
 
-1. **Money precision.** Every monetary column is `double precision` and every
-   handler uses `float64`, with float equality/comparison on payments.
-   Balances will never net to zero against a double-entry ledger. Migrate all
-   money to integer cents (or `numeric`) before more data accumulates, and
-   add `updated_at`/`created_by` to all commerce and inventory tables —
-   today no table records the actor, `honey_sales` has no `updated_at`, and
-   `amount_paid` can be patched tracelessly.
-2. **Kill hard deletes.** `DELETE` endpoints hard-delete honey movements,
-   sales (items cascade), harvest entries, and expenses with no tombstone or
-   reversing entry — on a ledger documented as append-only. Meanwhile the
-   legitimate void path (`order_status='cancelled'`) is rejected by the
-   update endpoint, so destroying the row is the only way to void a sale.
-   Replace with reversing entries / reachable cancellation / soft delete
-   with reason.
-3. **One formula per number.** `/honey/overview` and `/honey/production-plan`
-   compute `bulkOnHandLbs` differently (stored `amount_lbs` vs. live
-   `quantity × honey_oz/16`) and already disagree; editing a jar size's
-   `honey_oz` rewrites history on one endpoint only. Bottling runs are
-   mirrored into the jar ledger by a text `reason` string, not a foreign
-   key — deleting the movement strands the run, and a run without a jar
-   size creates no movement at all. Session true-up overwrites the
-   authoritative weight with no history and accepts negative values.
-   Deactivating a jar size silently removes its remaining jars from every
-   on-hand total while its sales still count — an untracked write-off.
-4. **Negative-stock validation.** Only `POST /honey/sales` locks and
-   validates availability (correctly). Jarring, give-aways, bulk use/loss,
-   bottling runs, and equipment deployment all accept quantities that drive
-   stock negative. Reuse the sale path's lock-and-validate pattern.
-5. **Equipment ledger upgrades** (see the operational-inventories item
-   above).
-6. **Then the sync layer itself**: per-record `external_id`/sync-state
-   mapping (entity, external account/category/tax mapping, last-synced,
-   conflict state), and extend the offline idempotency middleware — which
-   today excludes every honey, commerce, and equipment route — to cover
-   them. Tax fields currently do not exist anywhere; categories and
-   channels are DDL CHECK strings rather than mappable lookup tables. COGS
-   is a year-blended average recomputed at read time and attached to
-   nothing; inventory value is computed at retail price, not cost.
+1. **RESOLVED — Money precision and audit fields.** Money uses integer cents
+   and commerce/inventory records have the required audit fields.
+2. **RESOLVED — Reversals and soft deletes.** Ledger corrections use
+   reversing entries, reachable cancellation, or soft delete rather than
+   destructive deletion.
+3. **RESOLVED — Unified bulk formula and linked bottling ledger.**
+4. **RESOLVED — Negative-stock validation.**
+5. **RESOLVED — Equipment ledger upgrades** (see the operational-inventories
+   item above).
+6. **Remaining — live GnuCash sync and external/accounting reconciliation.**
+   Complete per-record `external_id`/sync-state mappings (entity, external
+   account/category/tax mapping, last-synced, conflict state) and add the
+   live GnuCash sync and reconciliation workflow. Honey and commerce
+   mutations are idempotent; remaining idempotency work is limited to
+   equipment mutations.
+   Keep categories, channels, and tax data mappable for external accounting,
+   with COGS and inventory values traceable to the linked physical ledger.
 
 ### P1 — PWA prompt behavior
 **Shipped 2026-08-04.** The prompt waits for a completed task or repeat
@@ -236,8 +226,9 @@ and make installation easy to find later without interrupting operations.
 
 ### P2 — Responsive field polish
 **Partially shipped 2026-08-04** — touch targets, empty states, and phone
-layouts in apiaries, queens, and settings; other modules got the same
-treatment implicitly via the restructures above but were not audited.
+layouts in apiaries, queens, and settings. Remaining gaps include sub-44px
+targets, horizontal navigation strips, and wide tables that do not fit small
+screens.
 
 Finish responsive layouts, field-appropriate touch targets, and useful empty
 states so routine work stays clear on a phone as well as desktop and tablet.
