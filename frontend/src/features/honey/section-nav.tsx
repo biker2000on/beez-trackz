@@ -5,9 +5,9 @@
  * routes, so this is a link bar rather than a `<Tabs>` — every section is
  * deep-linkable and back-button safe for free.
  *
- * Serial lookup and the activity ledger keep their routes but not strip
- * slots: serials are reached from Lots & QR (and by scanning), activity from
- * the overview's recent-activity card. Five destinations fit a phone.
+ * Three stable workflow groups replace the former five-to-seven link strip.
+ * Detail routes resolve to their parent group without changing the visible
+ * navigation, so the chrome never jumps when opening Activity or a QR lookup.
  *
  * Market day is a full-screen point-of-sale route with its own chrome, so the
  * menu hides itself there (a stray click must not abandon a cart mid-sale).
@@ -22,33 +22,38 @@ import { SectionNav } from "@/components/shell/section-nav";
 
 import { HoneyQuickActions } from "./quick-actions";
 
-const SECTIONS = [
-  { href: "/harvest", label: "Overview" },
-  { href: "/harvest/harvests", label: "Harvests" },
-  { href: "/harvest/jars", label: "Jars" },
-  { href: "/harvest/sales", label: "Sales" },
-  { href: "/harvest/lots", label: "Lots & QR" },
-  // Not in the strip, but still resolved as active for the select on small
-  // screens when the user lands there via a link or QR scan.
-  { href: "/harvest/serials", label: "Serial lookup" },
-  { href: "/harvest/activity", label: "Activity" },
+export const HONEY_SECTIONS = [
+  {
+    href: "/harvest",
+    label: "Overview",
+    matches: ["/harvest/activity"],
+  },
+  {
+    href: "/harvest/production",
+    label: "Production",
+    matches: [
+      "/harvest/harvests",
+      "/harvest/jars",
+      "/harvest/lots",
+      "/harvest/serials",
+      "/harvest/sessions",
+    ],
+  },
+  {
+    href: "/harvest/sales",
+    label: "Sales",
+  },
 ] as const;
-
-const STRIP = SECTIONS.slice(0, 5);
 
 export function HoneySectionNav() {
   const pathname = usePathname();
   if (pathname.startsWith("/harvest/market-day")) return null;
 
-  const onHiddenSection =
-    pathname.startsWith("/harvest/serials") ||
-    pathname.startsWith("/harvest/activity");
-
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-3">
       <SectionNav
         label="Honey sections"
-        sections={onHiddenSection ? SECTIONS : STRIP}
+        sections={HONEY_SECTIONS}
         rootHref="/harvest"
         pathname={pathname}
       />

@@ -7,7 +7,7 @@ import { ArrowRight } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 
-import { REPORT_SECTIONS } from "./reports-nav";
+import { REPORT_PAGES } from "./reports-nav";
 import {
   ReportHeader,
   ReportHighlights,
@@ -16,7 +16,7 @@ import {
 
 export function ReportsOverview() {
   const [year, setYear] = useReportYear();
-  const sections = REPORT_SECTIONS.filter(
+  const sections = REPORT_PAGES.filter(
     (section) => section.href !== "/reports",
   );
 

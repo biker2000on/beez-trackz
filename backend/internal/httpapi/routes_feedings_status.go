@@ -229,33 +229,45 @@ func feedingStatusSort(rows []feedingStatusRow) {
 	})
 }
 
-// GET /feedings/status — one row per hive that has ever been fed, urgent first.
+// GET /feedings/status — one row per visible active hive, urgent first. Hives
+// that have never been fed remain visible with zero counts and no latest feed,
+// rather than disappearing from an ostensibly per-hive status view.
 func (s *Server) handleFeedingsStatus(w http.ResponseWriter, r *http.Request) {
 	user := principalFrom(r)
 	rows, err := s.pool.Query(r.Context(), `
-		WITH scoped AS (
-			SELECT feeding.*, hive.position_label AS hive_name,
+		WITH visible_hives AS (
+			SELECT hive.id AS hive_id, hive.position_label AS hive_name,
 				hive.apiary_id, apiary.name AS apiary_name
-			FROM feedings feeding
-			JOIN hives hive ON hive.id = feeding.hive_id
+			FROM hives hive
 			JOIN apiaries apiary ON apiary.id = hive.apiary_id
 			WHERE hive.is_archived = false
 			  AND ($1::boolean OR EXISTS (
 				SELECT 1 FROM apiary_memberships membership
 				WHERE membership.user_id = $2 AND membership.apiary_id = apiary.id
 			  ))
+		), scoped AS (
+			SELECT visible_hives.*, feeding.id, feeding.date_fed, feeding.type,
+				feeding.quantity, feeding.quantity_unit, feeding.feeder_type,
+				feeding.status, feeding.created_at
+			FROM visible_hives
+			LEFT JOIN feedings feeding ON feeding.hive_id = visible_hives.hive_id
 		)
 		SELECT hive_id, hive_name, apiary_id, apiary_name,
-			count(*) FILTER (WHERE status = 'open')::integer,
-			count(*) FILTER (WHERE status = 'unverified')::integer,
+			count(id) FILTER (WHERE status = 'open')::integer,
+			count(id) FILTER (WHERE status = 'unverified')::integer,
 			min(date_fed) FILTER (WHERE status = 'open'),
 			min(date_fed) FILTER (WHERE status = 'unverified'),
 			max(date_fed),
-			(array_agg(type::text ORDER BY date_fed DESC, created_at DESC))[1],
-			(array_agg(quantity ORDER BY date_fed DESC, created_at DESC))[1],
-			(array_agg(quantity_unit::text ORDER BY date_fed DESC, created_at DESC))[1],
-			(array_agg(feeder_type::text ORDER BY date_fed DESC, created_at DESC))[1],
-			(array_agg(id ORDER BY date_fed DESC, created_at DESC))[1],
+			(array_agg(type::text ORDER BY date_fed DESC, created_at DESC)
+				FILTER (WHERE id IS NOT NULL))[1],
+			(array_agg(quantity ORDER BY date_fed DESC, created_at DESC)
+				FILTER (WHERE id IS NOT NULL))[1],
+			(array_agg(quantity_unit::text ORDER BY date_fed DESC, created_at DESC)
+				FILTER (WHERE id IS NOT NULL))[1],
+			(array_agg(feeder_type::text ORDER BY date_fed DESC, created_at DESC)
+				FILTER (WHERE id IS NOT NULL))[1],
+			(array_agg(id ORDER BY date_fed DESC, created_at DESC)
+				FILTER (WHERE id IS NOT NULL))[1],
 			(array_agg(id ORDER BY date_fed) FILTER (WHERE status = 'open'))[1],
 			(array_agg(id ORDER BY date_fed) FILTER (WHERE status = 'unverified'))[1]
 		FROM scoped

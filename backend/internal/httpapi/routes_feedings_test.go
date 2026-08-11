@@ -202,6 +202,7 @@ type feedingFixture struct {
 	apiaryID uuid.UUID
 	hiveA    uuid.UUID
 	hiveB    uuid.UUID
+	hiveC    uuid.UUID
 	ctx      context.Context
 }
 
@@ -263,7 +264,7 @@ func newFeedingFixture(t *testing.T) *feedingFixture {
 	for _, target := range []struct {
 		label string
 		id    *uuid.UUID
-	}{{"A3", &fixture.hiveA}, {"B1", &fixture.hiveB}} {
+	}{{"A3", &fixture.hiveA}, {"B1", &fixture.hiveB}, {"C2", &fixture.hiveC}} {
 		if err := pool.QueryRow(ctx, `
 			INSERT INTO hives (apiary_id, position_label) VALUES ($1,$2) RETURNING id`,
 			fixture.apiaryID, target.label).Scan(target.id); err != nil {
@@ -581,7 +582,7 @@ func TestFeedingDeleteRejectsRefilledRecord(t *testing.T) {
 	}
 }
 
-func TestFeedingsStatusReturnsOneUrgentFirstRowPerHive(t *testing.T) {
+func TestFeedingsStatusReturnsEveryHiveUrgentFirst(t *testing.T) {
 	fixture := newFeedingFixture(t)
 	// Hive A3: three legacy records with no recorded end, the shape the audit
 	// found in production. One hive row, not three.
@@ -606,7 +607,7 @@ func TestFeedingsStatusReturnsOneUrgentFirstRowPerHive(t *testing.T) {
 	byHive := map[uuid.UUID]feedingStatusRow{}
 	first := -1
 	for index, row := range rows {
-		if row.HiveID == fixture.hiveA || row.HiveID == fixture.hiveB {
+		if row.HiveID == fixture.hiveA || row.HiveID == fixture.hiveB || row.HiveID == fixture.hiveC {
 			if _, duplicate := byHive[row.HiveID]; duplicate {
 				t.Fatalf("hive %s appeared twice in the status list", row.HiveID)
 			}
@@ -616,8 +617,8 @@ func TestFeedingsStatusReturnsOneUrgentFirstRowPerHive(t *testing.T) {
 			}
 		}
 	}
-	if len(byHive) != 2 {
-		t.Fatalf("got %d fixture rows, want 2", len(byHive))
+	if len(byHive) != 3 {
+		t.Fatalf("got %d fixture rows, want 3", len(byHive))
 	}
 
 	rowA := byHive[fixture.hiveA]
@@ -641,6 +642,12 @@ func TestFeedingsStatusReturnsOneUrgentFirstRowPerHive(t *testing.T) {
 	rowB := byHive[fixture.hiveB]
 	if rowB.State != feedingStateOK || rowB.OpenFeeders != 1 {
 		t.Fatalf("B1 = %q with %d open feeders, want ok/1", rowB.State, rowB.OpenFeeders)
+	}
+
+	rowC := byHive[fixture.hiveC]
+	if rowC.State != feedingStateOK || rowC.OpenFeeders != 0 ||
+		rowC.UnverifiedFeeders != 0 || rowC.LatestFeedAt != nil {
+		t.Fatalf("never-fed C2 row = %#v, want explicit ok/empty status", rowC)
 	}
 
 	// Urgent first: A3 must sort ahead of B1.

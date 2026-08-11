@@ -49,6 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
  * per role — leaving Inventory unreachable in the field.
  */
 const MOBILE_PRIORITY = [
+  "/dashboard",
   "/apiaries",
   "/hives",
   "/harvest",
@@ -56,7 +57,6 @@ const MOBILE_PRIORITY = [
   "/reports",
   "/recommendations",
   "/queens",
-  "/dashboard",
   "/settings",
 ];
 

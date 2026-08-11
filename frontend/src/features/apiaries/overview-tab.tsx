@@ -4,11 +4,11 @@
  * Apiary overview: the default landing view for a yard. Summarizes hive
  * status, feeder state, and active blooms as cards, then shows current
  * conditions and the week's forecast (which is itself summary content).
- * Deeper work lives in the peer tabs and dedicated routes.
+ * Deeper work lives in the Layout peer view and dedicated drill-down routes.
  */
 
 import Link from "next/link";
-import { Droplets, Flower2, Hexagon } from "lucide-react";
+import { Camera, Droplets, Flower2, Hexagon } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -97,7 +97,7 @@ export function OverviewTab({
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {!hivesReady ? (
           <Skeleton className="h-24" />
         ) : (
@@ -135,9 +135,16 @@ export function OverviewTab({
             label="In bloom"
             value={String(blooms.data?.length ?? 0)}
             sub={activeBloomNames || "Nothing recorded in bloom"}
-            href={`/apiaries/${apiaryId}?tab=flora`}
+            href={`/apiaries/${apiaryId}/flora`}
           />
         )}
+        <OverviewStat
+          icon={Camera}
+          label="Photos"
+          value="Gallery"
+          sub="View and add yard photos"
+          href={`/apiaries/${apiaryId}/photos`}
+        />
       </div>
 
       <ForecastTab apiaryId={apiaryId} />

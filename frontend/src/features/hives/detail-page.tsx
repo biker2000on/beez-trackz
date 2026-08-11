@@ -3,11 +3,10 @@
 /**
  * Hive detail.
  *
- * The strip used to carry nine tabs, four of which (Inspections, Feedings,
- * Splits, History) were filtered subsets of the Timeline. It is now
- * Timeline | Health | Equipment | Queen | Photos, with the four subsets
- * demoted to filter chips on the timeline — nothing was dropped, the chips
- * still open the richer per-type lists with their own actions.
+ * The strip used to carry nine tabs. It now has three peer views: a default
+ * Overview, Timeline, and Health. Equipment, Queen, and Photos are dedicated
+ * drill-down routes reached from the overview; timeline subsets remain URL-
+ * backed filter chips rather than competing peer tabs.
  *
  * Both the active tab and the active chip live in search params, so a hive is
  * deep-linkable and coming back from an inspection or a session detail does
@@ -83,14 +82,13 @@ import {
 import { InspectionCard } from "@/features/inspections/inspection-card";
 import { InspectionFormDialog } from "@/features/inspections/inspection-form-dialog";
 import { useHiveInspections } from "@/features/inspections/hooks";
-import { PhotoSection } from "@/features/photos/photo-gallery";
 import { PhotoUpload } from "@/features/photos/photo-upload";
 import { HiveTimeline } from "@/features/operations/hive-timeline";
 import type { HiveTimelineEntry } from "@/features/operations/hooks";
 import { VarroaPanel } from "@/features/operations/varroa-panel";
-import { EquipmentTab } from "./equipment-tab";
 import { HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
+import { HiveOverviewTab } from "./overview-tab";
 import {
   useArchiveHive,
   useDeadoutHive,
@@ -100,10 +98,9 @@ import {
   useUnarchiveHive,
 } from "./hooks";
 import { formatDate } from "./lib";
-import { QueenTab } from "./queen-tab";
 import { SplitDialog } from "./split-dialog";
 
-const TABS = ["timeline", "health", "equipment", "queen", "photos"] as const;
+export const HIVE_TABS = ["overview", "timeline", "health"] as const;
 
 /**
  * Timeline filter chips. `types` filters the merged timeline; the four chips
@@ -138,7 +135,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
       apiaryRole(access.data, hive.data.apiaryId) ?? "",
     );
 
-  const [tab, setTab] = useSearchParamState("tab", "timeline", TABS);
+  const [tab, setTab] = useSearchParamState("tab", "overview", HIVE_TABS);
   const [filter, setFilter] = useSearchParamState("view", "all", FILTER_VALUES);
 
   const [editOpen, setEditOpen] = React.useState(false);
@@ -310,13 +307,14 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
       <Tabs value={tab} onValueChange={setTab}>
         <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
           <TabsList className="min-w-max">
+            <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="timeline">Timeline</TabsTrigger>
             <TabsTrigger value="health">Health</TabsTrigger>
-            <TabsTrigger value="equipment">Equipment</TabsTrigger>
-            <TabsTrigger value="queen">Queen</TabsTrigger>
-            <TabsTrigger value="photos">Photos</TabsTrigger>
           </TabsList>
         </div>
+        <TabsContent value="overview" className="pt-4">
+          <HiveOverviewTab hiveId={data.id} />
+        </TabsContent>
         <TabsContent value="timeline" className="grid gap-4 pt-4">
           <div
             className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:px-0"
@@ -367,18 +365,6 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
               setFilter("inspections");
             }}
           />
-        </TabsContent>
-        <TabsContent value="equipment" className="pt-4">
-          <EquipmentTab
-            hiveId={data.id}
-            canManage={access.data?.isAdmin ?? false}
-          />
-        </TabsContent>
-        <TabsContent value="queen" className="pt-4">
-          <QueenTab hiveId={data.id} canEdit={canEdit} />
-        </TabsContent>
-        <TabsContent value="photos" className="pt-4">
-          <PhotoSection ownerType="hive" ownerId={data.id} canEdit={canEdit} />
         </TabsContent>
       </Tabs>
 

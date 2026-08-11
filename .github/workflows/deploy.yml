@@ -54,6 +54,12 @@ jobs:
         run: |
           npm run lint
           npm run build
+      - name: Install browser for navigation tests
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Test responsive navigation
+        working-directory: frontend
+        run: npm run test:e2e
 
   # Publish jobs are gated on main itself (ASI-7-001): "not a PR" alone let
   # any branch matching the push trigger clobber :latest, which prod pulls.

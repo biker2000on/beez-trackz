@@ -4,8 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
-  Camera,
-  Flower2,
   Hexagon,
   LayoutDashboard,
   ListChecks,
@@ -24,19 +22,16 @@ import { useShortcut } from "@/components/shortcuts/provider";
 import { useSearchParamState } from "@/lib/url-state";
 import ApiaryCanvas from "@/features/canvas";
 import { useApiaryHives } from "@/features/canvas/lib/use-canvas-data";
-import { PhotoSection } from "@/features/photos/photo-gallery";
 
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { DeleteApiaryDialog } from "./delete-apiary-dialog";
-import { FloraTab } from "./flora-tab";
 import { OverviewTab } from "./overview-tab";
 import { useApiary } from "./hooks";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
-// Overview is the default landing view; the forecast lives on it, and bulk
-// recording moved to a dedicated route (/apiaries/[id]/bulk) — a workflow,
-// not a peer view of the yard.
-const APIARY_TABS = ["overview", "layout", "flora", "photos"] as const;
+// Overview and Layout are the only peer views. Flora, Photos, and bulk
+// recording are dedicated routes reached from the overview/header.
+export const APIARY_TABS = ["overview", "layout"] as const;
 
 export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const apiary = useApiary(apiaryId);
@@ -182,14 +177,6 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
               <Map />
               Layout
             </TabsTrigger>
-            <TabsTrigger value="flora" className="h-9">
-              <Flower2 />
-              Flora
-            </TabsTrigger>
-            <TabsTrigger value="photos" className="h-9">
-              <Camera />
-              Photos
-            </TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="overview">
@@ -210,16 +197,6 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
               <ApiaryCanvas apiaryId={apiaryId} />
             </div>
           </div>
-        </TabsContent>
-        <TabsContent value="flora">
-          <FloraTab apiaryId={apiaryId} canEdit={canEdit} />
-        </TabsContent>
-        <TabsContent value="photos">
-          <PhotoSection
-            ownerType="apiary"
-            ownerId={apiaryId}
-            canEdit={canEdit}
-          />
         </TabsContent>
       </Tabs>
 

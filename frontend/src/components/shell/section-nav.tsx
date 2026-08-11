@@ -23,6 +23,8 @@ import { cn } from "@/lib/utils";
 export interface SectionLink {
   href: string;
   label: string;
+  /** Additional route prefixes represented by this section. */
+  matches?: readonly string[];
 }
 
 /** The section whose href best matches the pathname (root needs an exact match). */
@@ -33,6 +35,13 @@ export function activeSection(
 ): SectionLink | undefined {
   let best: SectionLink | undefined;
   for (const section of sections) {
+    if (
+      section.matches?.some(
+        (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+      )
+    ) {
+      return section;
+    }
     if (section.href === rootHref) {
       if (pathname === rootHref) return section;
       continue;

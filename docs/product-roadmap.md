@@ -44,8 +44,9 @@ hive detail, zero tab state in URLs, and a mobile bottom nav that drops 4 of
 ### P0 — Feeding lifecycle and one-row hive status
 **Complete 2026-08-11.** Explicit open/closed/unverified feeder states with
 refill/close endpoints, an audited reversible backfill (originals preserved in
-`feeding_status_backfills`), and a per-hive `GET /feedings/status` row driving
-the dashboard widget.
+`feeding_status_backfills`), and a per-visible-active-hive
+`GET /feedings/status` row driving the dashboard widget, including explicit
+zero-history rows for hives that have never been fed.
 
 Closed 2026-08-11: a feeding recorded without a feeder is a feed event —
 created closed (`not_installed`) so it can never overstate active feeders,
@@ -86,16 +87,20 @@ filter chips; tab state in URLs; bottom nav pins 4 role-aware items plus a
 More sheet; `/genealogy` renamed `/queens` (redirect kept); `/transcribe`
 linked from apiary detail.
 
-Closed 2026-08-11: the apiary page opens on an Overview tab (hive status,
-feeders, blooms, weather + field alerts) with four peer tabs (Overview |
-Layout | Flora | Photos) and Bulk record promoted to its own route
-(`/apiaries/[id]/bulk`); Honey's strip slimmed to five sections (Serial
-lookup reached from Lots & QR, Activity from the overview); Honey and
-Reports share one SectionNav component that collapses to a select on
-phones instead of overflow-scrolling; the two deploy-equipment UIs are one
-dialog (stock-fixed or hive-fixed); and the four hand-rolled bulk-select
-toggles share `useBulkSelect` (the queens tree's manage mode doubles as a
-view switcher and keeps its own wiring).
+Closed 2026-08-11, with adversarial follow-up completed the same day: Apiary
+opens on an Overview and has only one peer view, Layout; Flora, Photos, and
+Bulk record are dedicated routes. Hive opens on a true summary Overview and
+has three peer views (Overview | Timeline | Health); Equipment, Queen, and
+Photos are dedicated drill-down routes. Honey has three invariant workflow
+groups (Overview | Production | Sales), while detail routes such as Activity,
+Harvests, Lots, and Serial lookup resolve to a group without expanding the
+strip. Reports uses three groups (Outcomes | Finance | Sales & planning) on
+detail pages and no redundant strip above its card-based home. Both menus
+collapse to a select on phones. Home remains pinned in the mobile bar, with
+all other destinations reachable through More. Responsive browser regression
+tests cover 390 px and 1024 px layouts, group invariance, tab counts, and URL
+state. The two deploy-equipment UIs are one dialog, and the four hand-rolled
+bulk-select toggles share `useBulkSelect`.
 
 Apiary, Hive, and Honey need default overview pages with promoted field
 actions. Keep tabs only for two or three peer views; move larger workflows to
@@ -115,11 +120,11 @@ Specific defects from the 2026-08-03 review to close as part of this work:
   overview page with quick actions; sub-routes for harvests, lots, and
   sales; a dedicated full-screen `/harvest/market-day`; Business reports
   merged into Reports. Eliminate nested tabs entirely.
-- `/hives/[id]` has 9 tabs, and four (Inspections, Feedings, Splits,
+- `/hives/[id]` had 9 tabs, and four (Inspections, Feedings, Splits,
   History) are filtered subsets of the Timeline tab. Replace them with
-  filter chips on the timeline; target strip: Timeline | Health (Varroa +
-  inspections) | Equipment | Queen | Photos. Collapse the 8-button action
-  row to 2–3 primary actions plus overflow.
+  filter chips on the timeline; final strip: Overview | Timeline | Health,
+  with Equipment, Queen, and Photos reached from overview cards. Collapse the
+  8-button action row to 2–3 primary actions plus overflow.
 - Any surviving tab strip must persist its active tab in the URL
   (deep-linkable, back-button-safe); returning from a session or receipt
   detail must not reset to the default tab.
