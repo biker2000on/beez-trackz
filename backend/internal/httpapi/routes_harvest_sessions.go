@@ -323,6 +323,10 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Session not found")
 		return
 	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	var hiveApiaryID uuid.UUID
 	if err := s.pool.QueryRow(ctx,
 		`SELECT apiary_id FROM hives WHERE id=$1`, hiveID).Scan(&hiveApiaryID); err != nil {
@@ -331,10 +335,6 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	if hiveApiaryID != sessionApiaryID {
 		writeError(w, http.StatusBadRequest, "hive must belong to the harvest session apiary")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 

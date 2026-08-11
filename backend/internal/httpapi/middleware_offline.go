@@ -3,8 +3,11 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -224,9 +227,30 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 			return
 		}
 		user := principalFrom(r)
+		if user == nil {
+			// The middleware is mounted after requireSession, but a nil
+			// principal must fail closed rather than panic if that ever
+			// changes.
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		// Fingerprint the request so a reused mutation id (client bug, UUID
+		// collision) cannot silently return request A's stored response to a
+		// different request B — B's write would never happen.
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "could not read request body")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		digest := sha256.Sum256(append(
+			[]byte(r.Method+"\n"+r.URL.Path+"\n"), bodyBytes...))
+		requestHash := hex.EncodeToString(digest[:])
+
 		tag, err := s.pool.Exec(r.Context(), `
-			INSERT INTO offline_mutation_receipts (user_id,mutation_id)
-			VALUES ($1,$2) ON CONFLICT DO NOTHING`, user.ID, mutationID)
+			INSERT INTO offline_mutation_receipts (user_id,mutation_id,request_hash)
+			VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, user.ID, mutationID, requestHash)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -236,13 +260,21 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 			var status *int
 			var body []byte
 			var updated time.Time
+			var storedHash *string
 			err = s.pool.QueryRow(r.Context(), `
-				SELECT state,response_status,response_body,updated_at
+				SELECT state,response_status,response_body,updated_at,request_hash
 				FROM offline_mutation_receipts
 				WHERE user_id=$1 AND mutation_id=$2`,
-				user.ID, mutationID).Scan(&state, &status, &body, &updated)
+				user.ID, mutationID).Scan(&state, &status, &body, &updated, &storedHash)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			// Receipts from before the hash column exist with NULL — those
+			// replay unchecked, exactly as they did before.
+			if storedHash != nil && *storedHash != requestHash {
+				writeError(w, http.StatusConflict,
+					"offline mutation id was reused for a different request")
 				return
 			}
 			if state == "complete" && status != nil {

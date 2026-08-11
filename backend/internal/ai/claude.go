@@ -60,7 +60,7 @@ func (c *Claude) send(ctx context.Context, messages []claudeMessage, maxTokens i
 		return "", fmt.Errorf("claude request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, aiMaxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("claude response: %w", err)
 	}

@@ -425,7 +425,7 @@ deployment.
   singleflight/mutex.
 - **Regression verification:** Stub server: 404 install response surfaces an
   error; two concurrent Transcribe calls produce one install POST.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-6-001: Image job has no dimension guard — decompression-bomb OOM with automatic retry
 
@@ -441,7 +441,7 @@ deployment.
   over ~50 MP.
 - **Regression verification:** Enqueue a 100 MP PNG; job fails fast with
   SkipRetry, worker RSS stable.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-5-007: Every worker replica runs its own periodic scheduler, and the recommendations dedup check races
 
@@ -459,7 +459,7 @@ deployment.
   `ON CONFLICT DO NOTHING`; enqueue with `asynq.Unique(6h)`.
 - **Regression verification:** Run `recs.Run` twice concurrently; row count
   equals single-run count.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-4-002: `offline_mutation_receipts` grows forever (bodies up to 2 MB each)
 
@@ -475,7 +475,7 @@ deployment.
   offline_mutation_receipts WHERE created_at < now() - interval '30 days'`.
 - **Regression verification:** Insert an old receipt, run cleanup, assert
   deletion; fresh replay still works.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-6-002: AI provider responses read with `io.ReadAll` and no size cap, against user-configurable endpoints
 
@@ -488,7 +488,7 @@ deployment.
 - **Recommendation:** Wrap with `io.LimitReader(resp.Body, 10<<20)`.
 - **Regression verification:** Stub streaming endless bytes; call returns a
   bounded error without memory growth.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-7-001: Production floats on `:latest` with `pull_policy: always`; any push to a matching branch silently becomes prod
 
@@ -509,7 +509,7 @@ deployment.
   triggers; consider dropping `pull_policy: always`.
 - **Regression verification:** `docker compose config` on the NAS shows a
   sha-pinned image; a test-branch push does not update `latest`.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-7-002: Migrate-on-boot with no backup step and no rollback path in the deploy flow
 
@@ -531,7 +531,7 @@ deployment.
   scheduled dump to also cover restart-triggered upgrades (ASI-7-001).
 - **Regression verification:** A fresh backup file timestamp precedes each
   deploy's `goose: successfully migrated` log line.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-7-003: CI's deploy-notification job curls a dead webhook and double-swallows failure — green CI implies a deploy that never happened
 
@@ -547,7 +547,7 @@ deployment.
   "manual deploy required" summary step.
 - **Regression verification:** Workflow run for a main push has no webhook
   step; README documents the real deploy.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-003: `parseCents` turns European decimal-comma input into a 100× price
 
@@ -564,7 +564,7 @@ deployment.
   a decimal separator (or reject non-grouping commas) before stripping.
 - **Regression verification:** Enter `24,50` in Receive Stock unit cost →
   $24.50 or a validation error, never $2,450.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-004: Transcription flow dead-ends on a failed status poll — spinner forever
 
@@ -582,7 +582,7 @@ deployment.
   Retry action.
 - **Regression verification:** Block one status GET after upload, then
   unblock; polling resumes and the review panel appears.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-005: Sale lines with quantity but blank/invalid price silently record a $0 sale
 
@@ -598,7 +598,7 @@ deployment.
   quantity > 0, or require explicit confirmation for $0 lines.
 - **Regression verification:** Record a sale with no price typed → field
   error, not a $0 line.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-2-001: Worker, recommendations, auth, config, and storage packages have no tests at all
 
@@ -617,7 +617,10 @@ deployment.
   each finding's "regression verification" is the seed of the suite.
 - **Regression verification:** `go test ./...` shows test files in
   jobs/recs/auth at minimum.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Seeded 2026-08-11 (jobs: image-bomb guard; auth: full session
+  round-trip suite; config: required-secrets test; recs covered via the
+  DB-enforced dedup; storage still untested — grow the suite as fixes land)
+  · **Owner:** Claude
 
 ### Low
 
@@ -635,7 +638,7 @@ deployment.
   private hosts on write and test.
 - **Regression verification:** `?baseUrl=http://169.254.169.254/` as admin →
   400, no outbound probe.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-3-008: MinIO credentials default to `beeztrackz:beeztrackz` instead of being required
 
@@ -647,7 +650,7 @@ deployment.
   compose network; an inconsistency in an otherwise fail-fast config.
 - **Recommendation:** Require both variables, matching the `SESSION_SECRET`
   treatment.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-3-009: `secureCookies()` silently emits non-Secure cookies when `APP_URL` is misconfigured
 
@@ -659,7 +662,7 @@ deployment.
   forgets the var issues the 30-day session cookie without `Secure`, silently.
 - **Recommendation:** Startup warning (or refusal) when `APP_URL` is
   non-loopback and not https.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-3-010: GitHub Actions pinned by tag, not SHA
 
@@ -670,7 +673,7 @@ deployment.
   minimal (`contents: read, packages: write`). Risk is amplified by
   ASI-7-001 (a poisoned image would be auto-pulled).
 - **Recommendation:** Pin to commit SHAs or enable Dependabot for workflows.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-006: Public honey-story page formats date-only values with `new Date()` — can display the previous day
 
@@ -685,7 +688,7 @@ deployment.
 - **Recommendation:** Reuse the UTC-pinned formatting used elsewhere.
 - **Regression verification:** Container `TZ=America/New_York`, story with
   `harvestDate: "2026-07-01"` renders "July 1, 2026".
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-007: Empty/whitespace hive references fuzzy-match the wrong hive in transcription review
 
@@ -699,7 +702,7 @@ deployment.
 - **Recommendation:** `if ref == "" || label == "" { continue }`.
 - **Regression verification:** Unit test with `hiveReference: " "` expects no
   match.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-008: Cancelled sales keep serials linked as "sold"
 
@@ -712,7 +715,7 @@ deployment.
   resolves as sold.
 - **Recommendation:** Decide policy: unlink or annotate serials on
   cancellation.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-009: `jar_serials.sale_id ON DELETE SET NULL` contradicts its own CHECK constraint
 
@@ -726,7 +729,7 @@ deployment.
   unachievable.
 - **Recommendation:** Trigger clearing `sold_at`/`linked_by`, or change to
   RESTRICT and fix the comment.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-1-010: Minor correctness cluster (backend)
 
@@ -749,7 +752,9 @@ deployment.
     while movement dates were parsed local; evening-entered legacy movements
     can miss their run link (benign: link stays NULL).
 - **Recommendation:** Fix opportunistically alongside neighboring work.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (first four bullets fixed; the 00005 backfill
+  is a historical one-shot already applied in prod — re-running it is not
+  worth a migration for a benign NULL link) · **Owner:** Claude
 
 #### ASI-5-008: Offline receipts are keyed only by client-supplied UUID; latent nil-principal deref
 
@@ -764,7 +769,7 @@ deployment.
   `requireSession`.
 - **Recommendation:** Store a hash of `(method, path, body)` and 409 on
   mismatch; add a nil guard.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-5-009: Reliability cluster (worker/API edges)
 
@@ -784,7 +789,10 @@ deployment.
     guard then refuses to retry over. Operator-run tool; acceptable, worth a
     tx per table.
 - **Recommendation:** Per bullet.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (photo enqueue failure now compensates by
+  deleting the row and object; transcribe status writes run detached from the
+  job context; migrate-legacy left as-is per the "acceptable" call — it is a
+  one-shot operator tool) · **Owner:** Claude
 
 #### ASI-6-003: Service-worker caches grow without bound and have no deploy-time versioning; 5-second soft timeout serves stale data silently
 
@@ -801,7 +809,7 @@ deployment.
 - **Recommendation:** Interpolate a build id into the cache names (the SW is
   a template string — easy); consider caching the late response and/or a
   staleness indicator.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-3-011: `reorderUrl` rendered into `href` without scheme validation on the public page
 
@@ -811,7 +819,7 @@ deployment.
 - **Evidence:** Owner-entered value lands directly in `<a href>`; a
   `javascript:` value would execute for any public QR visitor. Requires a
   compromised owner/API, but `^https?://` validation is one line.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-7-004: Deployment hardening cluster
 
@@ -830,7 +838,7 @@ deployment.
     always returns `ok` without checking DB/Redis/MinIO — pair with a
     `pool.Ping` readiness probe); no resource limits anywhere, and whisper
     alone loads a ~1.6 GB model. Gate `web` on `service_healthy`.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 #### ASI-8-001: Legacy root stack still tracked (known; roadmap item exists)
 
@@ -844,7 +852,10 @@ deployment.
   roadmap ("Retire the legacy stack"); listed here for completeness with the
   concrete risk.
 - **Recommendation:** Complete the roadmap item in one deletion commit.
-- **Status:** Open (pre-existing, tracked) · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (legacy root stack deleted in one commit: root
+  package.json/lockfile, Dockerfile, entrypoint, drizzle/, scripts/, legacy
+  configs, .prompts/, root public/; the dev docker-compose.yml and DESIGN.md
+  remain — they belong to the new stack) · **Owner:** Claude
 
 #### ASI-8-002: Frontend minor cluster
 
@@ -862,7 +873,7 @@ deployment.
     the UI. Detach `onstop` in `reset`.
   - `canvas/lib/tiles.ts:12` — satellite layer sends apiary tile coordinates
     to arcgisonline.com; deliberate feature, worth a privacy note in docs.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 · **Owner:** Claude
 
 ## Check Results
 

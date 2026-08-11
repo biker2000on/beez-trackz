@@ -32,10 +32,19 @@ x-api-env: &api-env
 
 services:
   api:
+    # Pin BEEZ_IMAGE_TAG to a CI-published sha in the stack .env — floating
+    # on :latest turns any container restart into an unintended upgrade.
     image: ghcr.io/biker2000on/beez-trackz-api:${BEEZ_IMAGE_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
     environment: *api-env
+    healthcheck:
+      # /healthz pings the database, so this doubles as a DB-reachability probe.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     depends_on:
       db:
         condition: service_healthy
@@ -61,9 +70,14 @@ services:
     restart: unless-stopped
     command: ["worker"]
     environment: *api-env
+    healthcheck:
+      test: ["CMD", "pgrep", "worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 
   web:
     image: ghcr.io/biker2000on/beez-trackz-web:${BEEZ_IMAGE_TAG:-latest}
@@ -71,9 +85,15 @@ services:
     restart: unless-stopped
     environment:
       API_URL: http://api:8080
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     labels:
       traefik.enable: "true"
       traefik.http.routers.beez-trackz.rule: Host(`beez.adventureintandem.com`)
@@ -116,13 +136,26 @@ services:
   # the compose network. The model (~1.6 GB) downloads into the cache volume on
   # first use, so the first transcription after deploy is slow.
   whisper:
-    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    # Digest-pinned (ASI-7-004): latest-cpu floats and restart-pulls could
+    # silently upgrade. Bump the digest deliberately.
+    image: ghcr.io/speaches-ai/speaches:latest-cpu@sha256:1d4f852ff5b148d675bcd751f414835c0bcef2541c1df8ffdeb43714968aafe6
     restart: unless-stopped
+    # The ~1.6 GB model plus inference is the stack's biggest memory user;
+    # bound it so a runaway transcription cannot take down the NAS.
+    mem_limit: 6g
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     volumes:
       - whisper-models:/home/ubuntu/.cache/huggingface/hub
 
   minio:
-    image: minio/minio:latest
+    # Digest-pinned (ASI-7-004): MinIO has shipped breaking releases and
+    # restart-pulls could silently upgrade. Bump the digest deliberately.
+    image: minio/minio:latest@sha256:9966a92a734f9411e32f4f41d7d9d826fcdc0f68c4e20b70295bd4e7c11f8a2f
     restart: unless-stopped
     command: server /data
     environment:

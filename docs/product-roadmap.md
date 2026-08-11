@@ -416,7 +416,12 @@ coordinates, cache provider results, and show feeder-aware field alerts.
 ## Housekeeping
 
 ### Retire the legacy stack from the repo
-**Root `src/` deleted 2026-08-04; remaining legacy root files still to prune.**
+**Complete 2026-08-11.** Root `src/` was deleted 2026-08-04; the remaining
+legacy root files (`drizzle/`, `drizzle.config.ts`, `package.json`/lockfile,
+`Dockerfile`, `docker-entrypoint.sh`, `next.config.ts`, `tailwind.config.ts`,
+`components.json`, `vitest.config.ts`, `scripts/`, `.prompts/`, root
+`public/`, and legacy configs) are gone. The root `docker-compose.yml` (dev
+infra for the new stack) and `DESIGN.md` remain by design.
 
 The pre-rewrite Next.js app lived at the repo root and confused tooling,
 agents, and reviews. The `src/` tree is gone; still present and candidates
@@ -504,6 +509,12 @@ untracked with `.gitignore`/`.dockerignore` coverage.
   --cached`, extend `.gitignore`, add `backend/.dockerignore`.
 
 ### P1 — Worker/AI robustness
+**Fixed 2026-08-11** — whisper installs use a 30-minute dedicated client,
+fail on non-409 4xx, and are serialized; image jobs guard dimensions via
+`DecodeConfig` (SkipRetry over 50 MP); all AI reads are capped at 10 MB;
+recs dedup is a partial unique index with `asynq.Unique` on both scheduler
+and manual runs; a daily job prunes receipts older than 30 days; test suites
+seeded in `jobs`, `auth`, and `config`.
 
 - **ASI-5-006** Whisper self-install: unpinned ~1.6 GB download under a
   5-minute timeout, 404 treated as success, concurrent installs unserialized.
@@ -519,6 +530,12 @@ untracked with `.gitignore`/`.dockerignore` coverage.
   seed a suite from the regression checks in the report as fixes land.
 
 ### P1 — Deployment process (config/docs, not code)
+**Fixed 2026-08-11** — CI publish jobs gate on main only and actions are
+SHA-pinned; the dead webhook job is replaced by a "manual deploy required"
+summary carrying the sha to pin; README documents the backup → pin →
+pull/up → verify deploy path with rollback; minio/speaches are
+digest-pinned; api/web/worker/whisper have healthchecks (`/healthz` now
+pings the DB); runtime containers run non-root; whisper is memory-bounded.
 
 - **ASI-7-001** Prod floats on `:latest` with `pull_policy: always`, and CI
   publishes `latest` from any push to `main` *or* a recreated
@@ -535,6 +552,10 @@ untracked with `.gitignore`/`.dockerignore` coverage.
   (`/healthz` exists but is unused and checks nothing).
 
 ### P2 — Field-facing correctness papercuts
+**Fixed 2026-08-11** — comma-decimal prices parse correctly, transcription
+polling survives a failed first poll, sale lines with quantity require a
+price, the public story page formats dates in UTC, and a 401 on any
+non-auth endpoint redirects to /login.
 
 - **ASI-1-003** `parseCents` turns `"24,50"` into $2,450 — comma-decimal
   locales silently record 100× equipment costs.
@@ -549,6 +570,9 @@ untracked with `.gitignore`/`.dockerignore` coverage.
   scenario).
 
 ### P2 — Low-severity backlog
+**Fixed 2026-08-11** (details per finding in `asi-review.md`). Deliberately
+left: migrate-legacy per-table transactions (one-shot operator tool) and the
+already-applied 00005 backfill's UTC quirk (benign NULL link).
 
 Remaining Lows in the report: SSRF-shaped AI base-URL fetches (ASI-3-007),
 MinIO default-credential fallback (ASI-3-008), silent non-Secure cookies on

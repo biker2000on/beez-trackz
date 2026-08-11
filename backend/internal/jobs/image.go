@@ -25,6 +25,10 @@ const (
 	imgThumbWidth  = 200
 	imgMediumWidth = 1200
 	imgJPEGQuality = 85
+	// imgMaxPixels bounds decoded size. The 10 MB file cap does not: a small
+	// PNG declaring 30000x30000 decodes to ~3.6 GB RGBA — an OOM the retry
+	// policy would then repeat at full worker concurrency.
+	imgMaxPixels = 50_000_000
 )
 
 // handleProcessImage downloads the original photo from MinIO, generates
@@ -58,6 +62,9 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("process image: download %s: %w", originalKey, err)
 	}
 
+	if err := imgCheckDimensions(data); err != nil {
+		return fmt.Errorf("process image: %s: %v: %w", originalKey, err, asynq.SkipRetry)
+	}
 	src, format, err := imgDecode(data)
 	if err != nil {
 		return fmt.Errorf("process image: decode %s: %v: %w", originalKey, err, asynq.SkipRetry)
@@ -102,6 +109,26 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 
 	slog.Info("process image: done", "photoId", payload.PhotoID,
 		"thumbKey", thumbKey, "mediumKey", mediumKey)
+	return nil
+}
+
+// imgCheckDimensions reads only the image header and rejects anything whose
+// decoded size would exceed imgMaxPixels. An unreadable header is not an
+// error here — imgDecode will produce the real one.
+func imgCheckDimensions(data []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		wcfg, werr := webp.DecodeConfig(bytes.NewReader(data))
+		if werr != nil {
+			return nil
+		}
+		cfg = wcfg
+	}
+	if cfg.Width > 0 && cfg.Height > 0 &&
+		int64(cfg.Width)*int64(cfg.Height) > imgMaxPixels {
+		return fmt.Errorf("image is %dx%d, over the %d-pixel limit",
+			cfg.Width, cfg.Height, imgMaxPixels)
+	}
 	return nil
 }
 

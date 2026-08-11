@@ -169,6 +169,11 @@ export function useAudioRecorder(): AudioRecorderState {
   }, [clearTimer, releaseStream, revokeUrl, stop]);
 
   const reset = React.useCallback(() => {
+    // Detach onstop before stopping: reset() during an active recording must
+    // discard the take, not let the recorder's async onstop resurrect it as
+    // "recorded" after the state below is cleared.
+    const recorder = recorderRef.current;
+    if (recorder) recorder.onstop = null;
     stop();
     revokeUrl();
     setBlob(null);

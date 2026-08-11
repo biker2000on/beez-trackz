@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 )
 
 // Config holds all runtime configuration, sourced from environment variables.
@@ -41,8 +43,8 @@ func Load() (*Config, error) {
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		RedisURL:         getenv("REDIS_URL", "redis://localhost:6379"),
 		MinioEndpoint:    getenv("MINIO_ENDPOINT", "localhost:9000"),
-		MinioAccessKey:   getenv("MINIO_ACCESS_KEY", "beeztrackz"),
-		MinioSecretKey:   getenv("MINIO_SECRET_KEY", "beeztrackz"),
+		MinioAccessKey:   os.Getenv("MINIO_ACCESS_KEY"),
+		MinioSecretKey:   os.Getenv("MINIO_SECRET_KEY"),
 		MinioUseSSL:      os.Getenv("MINIO_USE_SSL") == "true",
 		MinioBucket:      getenv("MINIO_BUCKET", "beeztrackz-media"),
 		SessionSecret:    os.Getenv("SESSION_SECRET"),
@@ -56,6 +58,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.SessionSecret == "" {
 		return nil, fmt.Errorf("SESSION_SECRET is required")
+	}
+	// Storage credentials fail fast like the secrets above — a silent
+	// default would ship a guessable credential to any deployment that
+	// forgot the variables.
+	if cfg.MinioAccessKey == "" || cfg.MinioSecretKey == "" {
+		return nil, fmt.Errorf("MINIO_ACCESS_KEY and MINIO_SECRET_KEY are required")
+	}
+	// Session cookies derive their Secure flag from APP_URL; a TLS
+	// deployment that forgot the variable would silently issue 30-day
+	// cookies without Secure.
+	if !strings.HasPrefix(cfg.AppURL, "https://") &&
+		!strings.HasPrefix(cfg.AppURL, "http://localhost") &&
+		!strings.HasPrefix(cfg.AppURL, "http://127.0.0.1") {
+		slog.Warn("APP_URL is not https; session cookies will be issued without the Secure flag",
+			"appUrl", cfg.AppURL)
 	}
 	return cfg, nil
 }

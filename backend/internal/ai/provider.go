@@ -22,3 +22,8 @@ type Provider interface {
 // aiHTTPClient is shared by all providers. Transcription of long recordings can
 // be slow, so the timeout is generous.
 var aiHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+
+// aiMaxResponseBytes caps every provider response read. Ollama and Whisper
+// base URLs are admin-configurable, so a misbehaving endpoint could otherwise
+// stream indefinitely into worker memory for the life of the timeout.
+const aiMaxResponseBytes = 10 << 20

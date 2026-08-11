@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -29,7 +31,16 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, que
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// Container healthcheck target. It pings the database because "process
+	// up but DB unreachable" is exactly the state a restart-or-alert should
+	// catch; an unconditional "ok" checked nothing.
+	r.Get("/healthz", func(w http.ResponseWriter, req *http.Request) {
+		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		defer cancel()
+		if err := pool.Ping(ctx); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "database unavailable")
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})

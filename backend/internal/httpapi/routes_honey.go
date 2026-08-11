@@ -248,14 +248,24 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	// Look up honey_oz per jar size so we can derive the pounds jarred.
+	// Inside the transaction: a read on the pool before Begin could see a
+	// jar-size edit the transaction then wouldn't, deriving amount_lbs from
+	// stale ounces.
 	ozBySize := make(map[uuid.UUID]*float64)
 	if len(lines) > 0 {
 		ids := make([]uuid.UUID, 0, len(lines))
 		for _, l := range lines {
 			ids = append(ids, l.JarSizeID)
 		}
-		rows, err := s.pool.Query(ctx, `SELECT id, honey_oz FROM jar_sizes WHERE id = ANY($1)`, ids)
+		rows, err := tx.Query(ctx, `SELECT id, honey_oz FROM jar_sizes WHERE id = ANY($1)`, ids)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -276,13 +286,6 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
 
 	// Jarring and its loss line both draw down bulk honey. Lock the bulk pool
 	// and validate the whole request against it before writing anything —
@@ -1237,8 +1240,15 @@ func (s *Server) honeyCancelSaleByID(
 ) {
 	// Cancelling twice is not an error: the endpoint is idempotent so an
 	// offline queue replaying a cancel does not surface a spurious failure.
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
 	var totalAmount, amountPaid money
-	err := s.pool.QueryRow(r.Context(), `
+	err = tx.QueryRow(ctx, `
 		UPDATE honey_sales
 		SET order_status='cancelled',
 			cancelled_at=COALESCE(cancelled_at, now()),
@@ -1252,6 +1262,19 @@ func (s *Server) honeyCancelSaleByID(
 		return
 	}
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	// The jars are physically back on the shelf, so their serials must stop
+	// resolving as sold — a cancelled sale that kept its serial links made
+	// the serial lookup disagree with inventory.
+	if _, err := tx.Exec(ctx, `
+		UPDATE jar_serials SET sale_id=NULL, sold_at=NULL, linked_by=NULL
+		WHERE sale_id=$1`, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}

@@ -188,6 +188,11 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 	payload, _ := json.Marshal(jobs.ProcessImagePayload{PhotoID: photoID})
 	if _, err := s.queue.EnqueueContext(ctx,
 		asynq.NewTask(jobs.TypeProcessImage, payload), asynq.MaxRetry(3)); err != nil {
+		// Compensate like the insert-failure path above: without this the
+		// photo row survives with no thumbnail job (and no repair sweep
+		// exists), and the client's retry duplicates the photo.
+		_, _ = s.pool.Exec(ctx, `DELETE FROM photos WHERE id = $1`, photoID)
+		_ = s.store.Delete(ctx, key)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue image processing")
 		return
 	}

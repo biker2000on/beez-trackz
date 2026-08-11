@@ -39,29 +39,23 @@ func Run(ctx context.Context, pool *pgxpool.Pool, now time.Time) (created, skipp
 		}
 
 		for _, res := range results {
-			var exists bool
-			err := pool.QueryRow(ctx, `
-				SELECT EXISTS (
-					SELECT 1 FROM ai_recommendations
-					WHERE type = $1
-					  AND hive_id IS NOT DISTINCT FROM $2
-					  AND dismissed = false
-				)`, r.Type, res.HiveID).Scan(&exists)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("dedup check (%s): %w", r.Type, err))
-				continue
-			}
-			if exists {
-				skippedDuplicates++
-				continue
-			}
-
-			_, err = pool.Exec(ctx, `
+			// Dedup is enforced by the partial unique index
+			// ai_recommendations_active_unique; a check-then-insert here
+			// raced concurrent runs and produced duplicate cards.
+			tag, err := pool.Exec(ctx, `
 				INSERT INTO ai_recommendations (hive_id, type, message, priority)
-				VALUES ($1, $2, $3, $4)`,
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (type,
+					COALESCE(hive_id, '00000000-0000-0000-0000-000000000000'::uuid))
+					WHERE dismissed = false
+				DO NOTHING`,
 				res.HiveID, r.Type, res.Message, res.Priority)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("insert recommendation (%s): %w", r.Type, err))
+				continue
+			}
+			if tag.RowsAffected() == 0 {
+				skippedDuplicates++
 				continue
 			}
 			created++

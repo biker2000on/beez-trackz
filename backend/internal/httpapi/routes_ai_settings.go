@@ -4,11 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/ai"
 )
+
+// aiValidBaseURL accepts only absolute http/https URLs. Base URLs are fetched
+// server-side, so any other scheme (file:, gopher:, …) or a relative value is
+// an SSRF-shaped input.
+func aiValidBaseURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
+		parsed.Host != ""
+}
 
 func (s *Server) mountAISettings(r chi.Router) {
 	admin := r.With(s.requireAdmin)
@@ -117,9 +127,17 @@ func (s *Server) handleAISettingsPut(w http.ResponseWriter, r *http.Request) {
 			cfg.APIKeys.Google = req.APIKeys.Google
 		}
 		if req.APIKeys.OllamaURL != "" {
+			if !aiValidBaseURL(req.APIKeys.OllamaURL) {
+				writeError(w, http.StatusBadRequest, "ollamaUrl must be an http or https URL")
+				return
+			}
 			cfg.APIKeys.OllamaURL = req.APIKeys.OllamaURL
 		}
 		if req.APIKeys.WhisperURL != "" {
+			if !aiValidBaseURL(req.APIKeys.WhisperURL) {
+				writeError(w, http.StatusBadRequest, "whisperUrl must be an http or https URL")
+				return
+			}
 			cfg.APIKeys.WhisperURL = req.APIKeys.WhisperURL
 		}
 	}
@@ -204,6 +222,10 @@ func (s *Server) handleAISettingsTest(w http.ResponseWriter, r *http.Request) {
 		if baseURL == "" {
 			baseURL = ai.DefaultOllamaURL
 		}
+		if !aiValidBaseURL(baseURL) {
+			writeError(w, http.StatusBadRequest, "ollamaUrl must be an http or https URL")
+			return
+		}
 		if _, err := ai.ListOllamaModels(ctx, baseURL); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"error": fmt.Sprintf("Ollama not reachable at %s", baseURL)})
 			return
@@ -216,6 +238,10 @@ func (s *Server) handleAISettingsTest(w http.ResponseWriter, r *http.Request) {
 		}
 		if baseURL == "" {
 			baseURL = ai.DefaultWhisperURL
+		}
+		if !aiValidBaseURL(baseURL) {
+			writeError(w, http.StatusBadRequest, "whisperUrl must be an http or https URL")
+			return
 		}
 		if err := ai.WhisperHealthy(ctx, baseURL); err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"error": fmt.Sprintf("Whisper not reachable at %s", baseURL)})
@@ -231,6 +257,10 @@ func (s *Server) handleAISettingsTest(w http.ResponseWriter, r *http.Request) {
 // to the stored/env Ollama URL, and returns an empty list on errors (legacy).
 func (s *Server) handleAIOllamaModels(w http.ResponseWriter, r *http.Request) {
 	baseURL := r.URL.Query().Get("baseUrl")
+	if baseURL != "" && !aiValidBaseURL(baseURL) {
+		writeError(w, http.StatusBadRequest, "baseUrl must be an http or https URL")
+		return
+	}
 	if baseURL == "" {
 		if cfg, err := ai.LoadConfig(r.Context(), s.pool); err == nil {
 			baseURL = cfg.APIKeys.OllamaURL

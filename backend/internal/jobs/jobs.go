@@ -8,9 +8,10 @@ import (
 
 // Task type names shared between the API (enqueuer) and the worker.
 const (
-	TypeProcessImage       = "media:process_image"
-	TypeTranscribeAudio    = "ai:transcribe_audio"
-	TypeGenerateRecs       = "recs:generate"
+	TypeProcessImage    = "media:process_image"
+	TypeTranscribeAudio = "ai:transcribe_audio"
+	TypeGenerateRecs    = "recs:generate"
+	TypeCleanupReceipts = "maintenance:cleanup_receipts"
 )
 
 type ProcessImagePayload struct {

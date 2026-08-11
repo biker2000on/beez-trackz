@@ -1,6 +1,22 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// Interpolating the build id into the cache names gives every deploy a fresh
+// cache generation, and activate() deletes the previous one. Stale API and
+// static entries used to accumulate across deploys until the literal "-v2"
+// suffix was bumped by hand.
+function nextBuildId(): string {
+  try {
+    return readFileSync(join(process.cwd(), ".next", "BUILD_ID"), "utf8").trim();
+  } catch {
+    return "dev";
+  }
+}
+const BUILD_ID = nextBuildId();
+
 const serviceWorker = String.raw`
-const SHELL_CACHE = "beez-trackz-shell-v2";
-const DATA_CACHE = "beez-trackz-api-v2";
+const SHELL_CACHE = "beez-trackz-shell-${BUILD_ID}";
+const DATA_CACHE = "beez-trackz-api-${BUILD_ID}";
 const QUEUE_DB = "beez-trackz-offline";
 const QUEUE_STORE = "mutations";
 const SHELL = [
@@ -267,19 +283,28 @@ function cacheableAPI(url) {
 
 async function networkFirstAPI(request) {
   const cache = await caches.open(DATA_CACHE);
+  // The network response refreshes the cache whenever it arrives — even
+  // after the timeout below already served the cached copy, the late fresh
+  // response is stored for next time instead of being discarded (rural
+  // links routinely exceed the soft timeout).
+  const network = fetch(request).then((response) => {
+    if (response.ok) {
+      void cache.put(request, response.clone());
+    }
+    return response;
+  });
   try {
-    const response = await Promise.race([
-      fetch(request),
+    return await Promise.race([
+      network,
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("network timeout")), 5000),
       ),
     ]);
-    if (response.ok) await cache.put(request, response.clone());
-    return response;
-  } catch (error) {
+  } catch {
     const cached = await cache.match(request);
     if (cached) return cached;
-    throw error;
+    // Nothing cached: better to keep waiting on the slow network than fail.
+    return network;
   }
 }
 

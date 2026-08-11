@@ -33,6 +33,7 @@ func NewWorker(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*a
 	mux.HandleFunc(TypeProcessImage, h.handleProcessImage)
 	mux.HandleFunc(TypeTranscribeAudio, h.handleTranscribeAudio)
 	mux.HandleFunc(TypeGenerateRecs, h.handleGenerateRecs)
+	mux.HandleFunc(TypeCleanupReceipts, h.handleCleanupReceipts)
 	return srv, mux, nil
 }
 

@@ -128,3 +128,25 @@ func TestParseTranscriptionBatchKeepsHiveAssociations(t *testing.T) {
 		t.Fatalf("second match = %#v, want two", matched[1].MatchedHiveID)
 	}
 }
+
+// ASI-1-007: a whitespace-only reference (or an empty position label) makes
+// strings.Contains true for everything and used to pre-select the first hive.
+func TestMatchHiveReferencesIgnoresEmptyValues(t *testing.T) {
+	blank := " "
+	labeled := "A3"
+	matched := MatchHiveReferences(
+		[]ParsedInspection{
+			{HiveReference: &blank},
+			{HiveReference: &labeled},
+		},
+		[]HiveRef{
+			{ID: "empty-label", PositionLabel: ""},
+			{ID: "a3", PositionLabel: "A3"},
+		})
+	if matched[0].MatchedHiveID != nil {
+		t.Errorf("whitespace reference matched hive %q", *matched[0].MatchedHiveID)
+	}
+	if matched[1].MatchedHiveID == nil || *matched[1].MatchedHiveID != "a3" {
+		t.Errorf("A3 reference = %#v, want a3", matched[1].MatchedHiveID)
+	}
+}

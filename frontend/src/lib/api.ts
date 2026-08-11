@@ -42,6 +42,20 @@ function buildUrl(path: string, params?: QueryParams): string {
   return qs ? `${url}?${qs}` : url;
 }
 
+// After a session expiry every call 401s with a generic toast while the user
+// keeps filling forms whose submissions will be lost. Redirect to /login
+// once instead. Auth endpoints are exempt — the login/status flows interpret
+// their own 401s.
+let redirectingToLogin = false;
+
+function handleUnauthorized(path: string) {
+  if (typeof window === "undefined" || redirectingToLogin) return;
+  if (path.startsWith("/auth/") || path.startsWith("auth/")) return;
+  if (window.location.pathname.startsWith("/login")) return;
+  redirectingToLogin = true;
+  window.location.assign("/login");
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -69,6 +83,7 @@ async function request<T>(
   }
 
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized(path);
     const message =
       (data as { error?: string } | null)?.error ??
       `Request failed (${res.status})`;

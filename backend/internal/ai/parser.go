@@ -404,7 +404,12 @@ func MatchHiveReferences(inspections []ParsedInspection, hives []HiveRef) []Matc
 		if insp.HiveReference != nil {
 			ref := strings.ToLower(strings.TrimSpace(*insp.HiveReference))
 			for _, h := range hives {
-				label := strings.ToLower(h.PositionLabel)
+				label := strings.ToLower(strings.TrimSpace(h.PositionLabel))
+				// An empty side makes strings.Contains true for everything —
+				// a whitespace reference would pre-select the first hive.
+				if ref == "" || label == "" {
+					continue
+				}
 				if ref == label || strings.Contains(ref, label) || strings.Contains(label, ref) {
 					id := h.ID
 					matched.MatchedHiveID = &id

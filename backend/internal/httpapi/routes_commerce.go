@@ -366,6 +366,24 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	// The lot's weight cannot drop below what its runs already bottled —
+	// existing runs would exceed capacity and every future run would 400.
+	var alreadyBottledLbs float64
+	if err := tx.QueryRow(r.Context(), `
+		SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
+			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
+		FROM bottling_runs run
+		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
+		WHERE run.lot_id = $1`, id).Scan(&alreadyBottledLbs); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if req.HoneyWeightLbs < alreadyBottledLbs-honeyPoundTolerance {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"Lot weight cannot be below the %.2f lbs its bottling runs already used",
+			alreadyBottledLbs))
+		return
+	}
 	tag, err := tx.Exec(r.Context(), `
 		UPDATE harvest_lots SET lot_code=$1, public_slug=$2, extraction_date=$3,
 			honey_weight_lbs=$4, honey_variety=$5, season=$6, apiary_region=$7,
@@ -1567,12 +1585,18 @@ func (s *Server) marketDayReconciliation(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
+	// Compare against a half-open server-local day range. `date::date` cast
+	// the timestamptz in the DB session's timezone while the stored instants
+	// were parsed server-local — near-midnight sales landed on the adjacent
+	// day's reconciliation.
+	dayStart := parsed
+	dayEnd := parsed.AddDate(0, 0, 1)
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT payment_method, channel, COUNT(*), SUM(total_amount_cents), SUM(amount_paid_cents),
 			SUM(total_amount_cents-amount_paid_cents)
 		FROM honey_sales
-		WHERE date::date=$1::date AND order_status <> 'cancelled'
-		GROUP BY payment_method, channel ORDER BY payment_method, channel`, parsed)
+		WHERE date >= $1 AND date < $2 AND order_status <> 'cancelled'
+		GROUP BY payment_method, channel ORDER BY payment_method, channel`, dayStart, dayEnd)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

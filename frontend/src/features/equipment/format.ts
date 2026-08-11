@@ -32,9 +32,21 @@ export function formatCents(cents: number | null | undefined): string {
   });
 }
 
-/** Parse a currency input ("12.50") into integer cents; empty becomes null. */
+/**
+ * Parse a currency input ("12.50") into integer cents; empty becomes null.
+ *
+ * A comma followed by exactly 1–2 trailing digits is a decimal separator —
+ * comma-decimal mobile keyboards only offer the comma key, and stripping it
+ * turned "24,50" into $2,450. Other commas are thousands grouping.
+ */
 export function parseCents(value: string): number | null {
-  const trimmed = value.trim().replace(/[$,]/g, "");
+  let trimmed = value.trim().replace(/\$/g, "");
+  const decimalComma = /^(\d{1,3}(?:\.\d{3})*|\d+),(\d{1,2})$/.exec(trimmed);
+  if (decimalComma) {
+    trimmed = `${decimalComma[1].replace(/\./g, "")}.${decimalComma[2]}`;
+  } else {
+    trimmed = trimmed.replace(/,/g, "");
+  }
   if (trimmed === "") return null;
   const amount = Number(trimmed);
   if (!Number.isFinite(amount)) return null;

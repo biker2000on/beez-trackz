@@ -10,6 +10,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
@@ -82,23 +84,39 @@ func whisperFilename(mimeType string) string {
 	}
 }
 
+// whisperInstallClient gives model installs their own generous timeout: the
+// download is ~1.6 GB from HuggingFace, and cutting it off at the shared
+// client's 5 minutes made every transcription attempt re-trigger a partial
+// download through asynq's retries on a slow link.
+var whisperInstallClient = &http.Client{Timeout: 30 * time.Minute}
+
+// whisperInstallMu serializes installs across worker goroutines so concurrent
+// transcriptions trigger one download, not one per worker slot.
+var whisperInstallMu sync.Mutex
+
 // installModel asks the server to download the model (speaches requires an
 // explicit POST /v1/models/{id} before a model can serve). Blocks until the
 // download finishes; the model cache volume makes this a once-per-install cost.
 func (w *Whisper) installModel(ctx context.Context) error {
+	whisperInstallMu.Lock()
+	defer whisperInstallMu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		w.baseURL+"/v1/models/"+w.model, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := aiHTTPClient.Do(req)
+	resp, err := whisperInstallClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("whisper model install: %w", err)
 	}
 	defer resp.Body.Close()
-	// 2xx = installed now; 409/4xx "already exists" also leaves it usable.
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("whisper model install failed: %d", resp.StatusCode)
+	// 2xx = installed now; 409 = already installed. Anything else — a 404
+	// from a typo'd model name especially — is a real failure. Treating it
+	// as success produced a confusing retry loop instead of an error.
+	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusConflict {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return fmt.Errorf("whisper model install failed: %d %s",
+			resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	return nil
 }
@@ -153,7 +171,7 @@ func (w *Whisper) transcribeOnce(ctx context.Context, audio []byte, mimeType str
 		return "", fmt.Errorf("whisper request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, aiMaxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("whisper response: %w", err)
 	}

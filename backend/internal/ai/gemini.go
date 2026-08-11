@@ -60,7 +60,7 @@ func (g *Gemini) generate(ctx context.Context, parts []geminiPart) (string, erro
 		return "", fmt.Errorf("gemini request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, aiMaxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("gemini response: %w", err)
 	}

@@ -37,6 +37,22 @@ function apiOrigin() {
   return process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 }
 
+// This is the one public page, so a stored value landing in an href must be
+// scheme-checked — a javascript: URL would run for every QR visitor.
+function safeReorderUrl(raw: string | null | undefined): string | null {
+  return raw && /^https?:\/\//i.test(raw) ? raw : null;
+}
+
+// Date-only values ("2026-07-01") parse as UTC midnight; formatting them in
+// the server's timezone shows the previous day anywhere west of UTC. Pin to
+// UTC like the rest of the app's date formatters.
+function formatStoryDate(iso: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "long",
+    timeZone: "UTC",
+  }).format(new Date(iso));
+}
+
 async function getStory(slug: string): Promise<HoneyStory | null> {
   const response = await fetch(`${apiOrigin()}/api/v1/public/honey-stories/${encodeURIComponent(slug)}`, {
     cache: "no-store",
@@ -75,14 +91,11 @@ export default async function HoneyStoryPage({
   if (!story) notFound();
 
   const region = story.apiaryRegion ?? story.sourceApiaries.join(", ");
-  const harvestDate = story.harvestDate
-    ? new Intl.DateTimeFormat("en-US", { dateStyle: "long" }).format(new Date(story.harvestDate))
-    : null;
+  const harvestDate = story.harvestDate ? formatStoryDate(story.harvestDate) : null;
   const latestBottlingDate = story.bottlingRuns[0]?.bottledDate
-    ? new Intl.DateTimeFormat("en-US", { dateStyle: "long" }).format(
-        new Date(story.bottlingRuns[0].bottledDate),
-      )
+    ? formatStoryDate(story.bottlingRuns[0].bottledDate)
     : null;
+  const reorderUrl = safeReorderUrl(story.reorderUrl);
 
   return (
     <main className="min-h-screen bg-[#fffaf0] text-stone-900">
@@ -212,8 +225,8 @@ export default async function HoneyStoryPage({
             Join the apiary’s opt-in list. No spam—just an occasional note when a new lot is bottled.
           </p>
           <HoneyStorySignup slug={story.slug} />
-          {story.reorderUrl && (
-            <ButtonLink href={story.reorderUrl}>Buy or reorder this honey</ButtonLink>
+          {reorderUrl && (
+            <ButtonLink href={reorderUrl}>Buy or reorder this honey</ButtonLink>
           )}
         </section>
 

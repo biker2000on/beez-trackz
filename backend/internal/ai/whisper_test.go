@@ -111,6 +111,25 @@ func TestWhisperTranscribeSurfacesServerErrors(t *testing.T) {
 	}
 }
 
+// ASI-5-006: a 404 from the install endpoint (typo'd model name) must surface
+// as an error, not be treated as a successful install and loop forever.
+func TestWhisperInstallFailureSurfacesError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/models/"):
+			http.Error(w, `{"detail":"model does not exist"}`, http.StatusNotFound)
+		default:
+			http.Error(w, `{"detail":"Model 'x' is not installed locally. You can download the model using POST /v1/models"}`, http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	_, err := NewWhisper(server.URL, "typo/model").Transcribe(context.Background(), []byte("x"), "audio/webm")
+	if err == nil || !strings.Contains(err.Error(), "install failed") {
+		t.Fatalf("want install-failed error, got %v", err)
+	}
+}
+
 func TestWhisperChatAndImageUnsupported(t *testing.T) {
 	provider := NewWhisper("", "")
 	if _, err := provider.Chat(context.Background(), "hi", ""); err == nil {

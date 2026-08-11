@@ -57,8 +57,12 @@ export function useTranscriptionFlow(options: {
     queryFn: () => getTranscription(mediaFileId!, mode),
     enabled: mediaFileId !== null,
     // Keep polling while the job is queued or running; stop on a final state.
+    // Undefined data (the first status fetch failed on a flaky field link)
+    // must keep polling too — returning false there stopped polling forever
+    // and left the spinner up after a successful upload.
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
+      if (query.state.data === undefined) return POLL_INTERVAL_MS;
+      const status = query.state.data.status;
       return status === "pending" || status === "processing"
         ? POLL_INTERVAL_MS
         : false;

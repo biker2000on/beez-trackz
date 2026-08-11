@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -237,10 +238,16 @@ func (s *Server) handleRecommendationRestore(w http.ResponseWriter, r *http.Requ
 	s.singleRecommendationState(w, r, "open", 0)
 }
 
-// POST /recommendations/run — enqueue the recommendation engine job.
+// POST /recommendations/run — enqueue the recommendation engine job. Unique
+// so overlapping manual runs (or a manual run racing the scheduler) collapse
+// into one execution instead of racing the dedup.
 func (s *Server) handleRecommendationsRun(w http.ResponseWriter, r *http.Request) {
 	task := asynq.NewTask(jobs.TypeGenerateRecs, nil)
-	if _, err := s.queue.Enqueue(task); err != nil {
+	if _, err := s.queue.Enqueue(task, asynq.Unique(time.Minute)); err != nil {
+		if errors.Is(err, asynq.ErrDuplicateTask) {
+			writeJSON(w, http.StatusOK, map[string]any{"queued": true, "alreadyQueued": true})
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to queue recommendation check")
 		return
 	}

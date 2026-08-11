@@ -63,7 +63,7 @@ func (o *Ollama) chat(ctx context.Context, messages []ollamaMessage) (string, er
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("Ollama API error: %d %s", resp.StatusCode, resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, aiMaxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("ollama response: %w", err)
 	}

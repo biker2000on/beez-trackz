@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
@@ -38,7 +39,13 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 	}
 
 	fail := func(cause error) error {
-		if _, uerr := h.pool.Exec(ctx, `
+		// Detached from the job context: if the final retry's context was
+		// canceled, writing the failure on it would itself fail and strand
+		// the row in 'processing' forever.
+		writeCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if _, uerr := h.pool.Exec(writeCtx, `
 			UPDATE media_files
 			SET transcription_status = 'failed', transcription_error = $2
 			WHERE id = $1`, p.RecordingID, cause.Error()); uerr != nil {

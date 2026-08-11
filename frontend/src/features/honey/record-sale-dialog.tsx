@@ -113,6 +113,20 @@ export function RecordSaleDialog({
   const total = subtotal - discountAmount;
 
   const onSubmit = form.handleSubmit((values) => {
+    // A blank or unparseable price on a line being sold must be an error,
+    // not a silent $0 sale understating revenue. Explicit "0" still works
+    // for a deliberate giveaway.
+    const missingPrice = lines.some((line) => {
+      const qty = parseNum(line.quantity) ?? 0;
+      const price = parseNum(line.unitPrice ?? "");
+      return qty > 0 && (price === null || price < 0);
+    });
+    if (missingPrice) {
+      setLineError(
+        "Every jar line with a quantity needs a price — enter 0 for a giveaway.",
+      );
+      return;
+    }
     const saleLines = lines
       .map((line) => ({
         jarSizeId: line.jarSizeId,
