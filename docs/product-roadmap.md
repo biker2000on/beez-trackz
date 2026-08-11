@@ -434,6 +434,121 @@ surfaces on the Honey overview's next actions; wholesale price lists apply
 from the sale dialog's wholesale channel, prefilling line prices and
 enforcing the minimum server-side.
 
+## ASI review backlog (2026-08-04)
+
+The full-stack ASI review (`asi-review.md`, commit e9fd757) found no Critical
+issues and confirmed the shipped ledger invariants hold — with the exceptions
+below. Items are ordered by recommended attack order; IDs reference the
+report, which carries evidence, exact locations, and regression checks.
+
+### P0 — Make offline sync trustworthy (the queue can lose *and* duplicate data)
+
+These four share one test harness and should land together:
+
+- **ASI-5-002 (High)** Logging back in after session expiry wipes every
+  still-pending queued mutation (`sw.js` clears the queue on login success).
+  Clear only the data cache; keep the queue and replay it after login.
+- **ASI-5-003 (High)** One mutation that 500s wedges the whole queue forever —
+  `replayQueue` breaks on 5xx leaving the item `pending`, and the review
+  dialog hides pending items. Add a retry cap that promotes to `failed`.
+- **ASI-5-001 (High)** Server-side, the receipt-completion write runs on the
+  request context with its error discarded; a disconnect at the wrong moment
+  leaves the receipt `processing` and a later replay re-executes the handler —
+  the double-booked sale the middleware exists to prevent. Use
+  `context.WithoutCancel` for receipt bookkeeping and stop storing truncated
+  (>2 MB) bodies.
+- **ASI-5-005 (Medium)** Handlers collapse transient DB errors into 4xx, which
+  the idempotency layer stores as the permanent answer — a deadlock during a
+  queued market-day sale silently loses the sale. Map non-constraint pg errors
+  to 500 so replays retry.
+
+### P0 — Close the negative-stock gap and bound uploads
+
+- **ASI-1-001 (High)** Reversing a `jarring` movement bypasses the shipped
+  negative-stock validation (no lock, no availability check) — sold jars can
+  be reversed into negative stock, double-counting honey. Related:
+  **ASI-1-002 (Medium)** reversing a bottling-run movement strands the run,
+  its serials, and lot capacity (refuse, or void the run in the same tx), and
+  **ASI-5-004 (Medium)** true-up/entry-delete shrink bulk without the bulk
+  lock or a floor against already-jarred pounds.
+- **ASI-4-001 (High)** Transcription uploads are effectively unbounded
+  (`ParseMultipartForm` doesn't cap request size; no `MaxBytesReader`) — an
+  OOM path on the NAS.
+
+### P1 — Security mediums
+
+- **ASI-3-001** Public honey-story subscribe can overwrite existing customer
+  records (`ON CONFLICT ... DO UPDATE SET name=...`) and has no rate limit.
+- **ASI-3-002** Stored XSS via client-controlled photo Content-Type — an
+  editor→admin escalation; whitelist upload types, serve with `nosniff`.
+- **ASI-3-003** No brute-force protection on login (in-app throttle or a
+  traefik rate-limit rule).
+- **ASI-3-004** Session JWTs are non-revocable for 30 days and echoed in the
+  login response body; stop returning the token, consider shorter sessions.
+- **ASI-3-005** `SESSION_SECRET` doubles as the MinIO root password in prod
+  compose — split the vars, then rotate.
+- **ASI-3-006** `backend/server.exe~` (34 MB binary) is committed — `git rm
+  --cached`, extend `.gitignore`, add `backend/.dockerignore`.
+
+### P1 — Worker/AI robustness
+
+- **ASI-5-006** Whisper self-install: unpinned ~1.6 GB download under a
+  5-minute timeout, 404 treated as success, concurrent installs unserialized.
+- **ASI-6-001** Image jobs decode without a dimension guard — decompression
+  bomb OOMs the worker with retries; check `DecodeConfig`, `SkipRetry` >50 MP.
+- **ASI-6-002** All AI provider responses are `io.ReadAll` with no size cap
+  against admin-configurable endpoints; wrap in `io.LimitReader`.
+- **ASI-5-007** Every worker replica runs its own scheduler and the recs dedup
+  check races — duplicate recommendation cards once workers scale.
+- **ASI-4-002** `offline_mutation_receipts` grows forever; add a 30-day
+  cleanup job.
+- **ASI-2-001** `jobs`, `recs`, `auth`, `config`, `storage` have zero tests —
+  seed a suite from the regression checks in the report as fixes land.
+
+### P1 — Deployment process (config/docs, not code)
+
+- **ASI-7-001** Prod floats on `:latest` with `pull_policy: always`, and CI
+  publishes `latest` from any push to `main` *or* a recreated
+  `rewrite/go-stack` — a container restart can become an unintended upgrade
+  plus migration. Pin `BEEZ_IMAGE_TAG` to a sha; gate publish jobs on main.
+- **ASI-7-002** Migrate-on-boot with no backup step or rollback procedure
+  anywhere in the repo — document/script the SSH `pg_dump` → `compose pull &&
+  up` deploy path in README.
+- **ASI-7-003** CI's `notify-dockhand` job curls the dead webhook and
+  double-swallows failure — green CI implies a deploy that never happened.
+  Delete or replace with a "manual deploy required" notice.
+- **ASI-7-004** Cluster: runtime containers run as root; `minio:latest` /
+  `speaches:latest-cpu` unpinned; no healthchecks on api/web/worker/whisper
+  (`/healthz` exists but is unused and checks nothing).
+
+### P2 — Field-facing correctness papercuts
+
+- **ASI-1-003** `parseCents` turns `"24,50"` into $2,450 — comma-decimal
+  locales silently record 100× equipment costs.
+- **ASI-1-004** Transcription status polling stops permanently if the first
+  poll fails — spinner forever after a successful upload.
+- **ASI-1-005** Sale lines with quantity but no price silently record $0.
+- **ASI-1-006** Public honey-story page renders date-only values via
+  `new Date()` — shows the previous day in western timezones; the one page
+  not using the UTC-pinned formatters.
+- **ASI-8-002** No global 401 handling — an expired session leaves the user
+  filling forms that fail with generic toasts (feeds the ASI-5-002 data-loss
+  scenario).
+
+### P2 — Low-severity backlog
+
+Remaining Lows in the report: SSRF-shaped AI base-URL fetches (ASI-3-007),
+MinIO default-credential fallback (ASI-3-008), silent non-Secure cookies on
+misconfigured `APP_URL` (ASI-3-009), tag-pinned GitHub Actions (ASI-3-010),
+transcription hive-match on empty references (ASI-1-007), cancelled sales
+keeping serials "sold" (ASI-1-008), the `jar_serials` ON DELETE/CHECK
+contradiction (ASI-1-009), a minor backend correctness cluster (ASI-1-010),
+offline receipts unverified against method/path (ASI-5-008), a worker-edge
+reliability cluster (ASI-5-009), service-worker cache growth and the 5-second
+stale-serve (ASI-6-003), `reorderUrl` scheme validation (ASI-3-011), and the
+frontend minor cluster (ASI-8-002). The legacy-stack cleanup (ASI-8-001) is
+already tracked under Housekeeping above.
+
 ## Longer arc
 
 ### Bloom calendar intelligence
