@@ -56,14 +56,18 @@ export default function AppLayout({
   return (
     <ShortcutsProvider>
       <div className="flex min-h-dvh flex-1 flex-col">
-        <Sidebar />
+        <React.Suspense fallback={null}>
+          <Sidebar />
+        </React.Suspense>
         <div className="flex flex-1 flex-col md:pl-60">
           <OfflineBanner />
           <main className="flex-1 px-4 py-6 pb-24 md:px-8 md:pb-8">
             {children}
           </main>
         </div>
-        <BottomNav />
+        <React.Suspense fallback={null}>
+          <BottomNav />
+        </React.Suspense>
       </div>
     </ShortcutsProvider>
   );

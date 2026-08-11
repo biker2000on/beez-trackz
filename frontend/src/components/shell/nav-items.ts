@@ -11,42 +11,335 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export interface NavItem {
+export interface NavRoute {
   label: string;
+  href: string;
+  keywords?: readonly string[];
+  matches?: readonly string[];
+  /** Match only this path/query destination, not every descendant path. */
+  exact?: boolean;
+  adminOnly?: boolean;
+  requiresEdit?: boolean;
+  children?: readonly NavRoute[];
+}
+
+export interface NavItem extends NavRoute {
   /** Short label for the mobile bottom nav. */
   shortLabel: string;
-  href: string;
   icon: LucideIcon;
   /** Key used in the `g` + key navigation sequence. */
   shortcutKey: string;
-  adminOnly?: boolean;
 }
 
 /**
- * Every top-level destination, in sidebar order. Labels and routes agree:
- * "Queens" goes to `/queens` (`/genealogy` redirects there).
- *
- * The Honey module keeps the `/harvest` path because `/honey/[slug]` is the
- * public harvest-lot story route; "Harvests" is a subsection of Honey at
- * `/harvest/harvests`.
+ * The canonical protected-route index. Desktop/mobile navigation and Ctrl-K
+ * all consume this tree so a route cannot be added to one surface and remain
+ * hidden from the others.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Dashboard", shortLabel: "Home", href: "/dashboard", icon: LayoutDashboard, shortcutKey: "d" },
-  { label: "Apiaries", shortLabel: "Yards", href: "/apiaries", icon: MapPin, shortcutKey: "a" },
-  { label: "Hives", shortLabel: "Hives", href: "/hives", icon: Hexagon, shortcutKey: "h" },
-  { label: "Honey", shortLabel: "Honey", href: "/harvest", icon: Droplets, shortcutKey: "y", adminOnly: true },
-  { label: "Inventory", shortLabel: "Gear", href: "/inventory", icon: Package, shortcutKey: "i", adminOnly: true },
-  { label: "Reports", shortLabel: "Reports", href: "/reports", icon: ChartNoAxesCombined, shortcutKey: "o" },
-  { label: "Queens", shortLabel: "Queens", href: "/queens", icon: Crown, shortcutKey: "q" },
-  { label: "Recommendations", shortLabel: "Recs", href: "/recommendations", icon: Sparkles, shortcutKey: "r" },
-  { label: "Settings", shortLabel: "Settings", href: "/settings", icon: Settings, shortcutKey: "s" },
+  {
+    label: "Dashboard",
+    shortLabel: "Home",
+    href: "/dashboard",
+    icon: LayoutDashboard,
+    shortcutKey: "d",
+    keywords: ["home"],
+  },
+  {
+    label: "Apiaries",
+    shortLabel: "Yards",
+    href: "/apiaries",
+    icon: MapPin,
+    shortcutKey: "a",
+    keywords: ["yards", "apiary", "apiarty"],
+    children: [
+      {
+        label: "Voice walkthrough",
+        href: "/transcribe",
+        keywords: ["batch transcription", "record apiary"],
+        requiresEdit: true,
+      },
+    ],
+  },
+  {
+    label: "Hives",
+    shortLabel: "Hives",
+    href: "/hives",
+    icon: Hexagon,
+    shortcutKey: "h",
+    keywords: ["colonies"],
+  },
+  {
+    label: "Honey",
+    shortLabel: "Honey",
+    href: "/harvest",
+    icon: Droplets,
+    shortcutKey: "y",
+    adminOnly: true,
+    children: [
+      {
+        label: "Activity",
+        href: "/harvest/activity",
+        keywords: ["ledger", "timeline"],
+      },
+      {
+        label: "Production",
+        href: "/harvest/production",
+        matches: [
+          "/harvest/harvests",
+          "/harvest/jars",
+          "/harvest/lots",
+          "/harvest/serials",
+          "/harvest/sessions",
+        ],
+        children: [
+          { label: "Harvests", href: "/harvest/harvests", keywords: ["extraction sessions"] },
+          { label: "Jars", href: "/harvest/jars", keywords: ["bottling inventory"] },
+          {
+            label: "Lots & QR",
+            href: "/harvest/lots",
+            keywords: ["traceability labels"],
+            children: [
+              {
+                label: "Serial lookup",
+                href: "/harvest/serials",
+                keywords: ["jar qr lookup"],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        label: "Sales",
+        href: "/harvest/sales",
+        keywords: ["orders receipts"],
+        children: [
+          {
+            label: "Market day",
+            href: "/harvest/market-day",
+            keywords: ["point of sale pos"],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    label: "Inventory",
+    shortLabel: "Gear",
+    href: "/inventory",
+    icon: Package,
+    shortcutKey: "i",
+    adminOnly: true,
+    keywords: ["equipment gear stock"],
+  },
+  {
+    label: "Reports",
+    shortLabel: "Reports",
+    href: "/reports",
+    icon: ChartNoAxesCombined,
+    shortcutKey: "o",
+    children: [
+      {
+        label: "Outcomes",
+        href: "/reports/outcomes",
+        matches: ["/reports/survival", "/reports/yield"],
+        children: [
+          { label: "Winter survival", href: "/reports/survival" },
+          { label: "Honey yield", href: "/reports/yield" },
+        ],
+      },
+      {
+        label: "Finance",
+        href: "/reports/finance",
+        matches: [
+          "/reports/economics",
+          "/reports/profitability",
+          "/reports/expenses",
+        ],
+        children: [
+          { label: "Apiary economics", href: "/reports/economics" },
+          { label: "Profitability", href: "/reports/profitability" },
+          { label: "Expenses", href: "/reports/expenses" },
+        ],
+      },
+      {
+        label: "Sales & planning",
+        href: "/reports/sales-planning",
+        matches: ["/reports/bottling", "/reports/customers"],
+        children: [
+          { label: "Bottle next", href: "/reports/bottling" },
+          { label: "Customers & wholesale", href: "/reports/customers" },
+        ],
+      },
+    ],
+  },
+  {
+    label: "Queens",
+    shortLabel: "Queens",
+    href: "/queens",
+    icon: Crown,
+    shortcutKey: "q",
+    keywords: ["genealogy lineage"],
+  },
+  {
+    label: "Recommendations",
+    shortLabel: "Recs",
+    href: "/recommendations",
+    icon: Sparkles,
+    shortcutKey: "r",
+    keywords: ["actions priorities"],
+  },
+  {
+    label: "Settings",
+    shortLabel: "Settings",
+    href: "/settings",
+    icon: Settings,
+    shortcutKey: "s",
+  },
 ];
+
+/** Context-only destinations that need a real apiary or hive id. */
+export function contextualNavRoutes(
+  parentHref: string,
+  pathname: string,
+): NavRoute[] {
+  const apiary = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
+  if (parentHref === "/apiaries" && apiary) {
+    const base = `/apiaries/${apiary}`;
+    return [
+      { label: "Overview", href: base, exact: true },
+      { label: "Layout", href: `${base}?tab=layout`, exact: true },
+      { label: "Flora", href: `${base}/flora`, keywords: ["blooms forage"] },
+      { label: "Photos", href: `${base}/photos` },
+      { label: "Print tags", href: `${base}/labels`, keywords: ["labels qr"] },
+      { label: "Bulk record", href: `${base}/bulk`, requiresEdit: true },
+      {
+        label: "Voice walkthrough",
+        href: `/transcribe?apiary=${apiary}`,
+        requiresEdit: true,
+      },
+    ];
+  }
+
+  const hive = pathname.match(/^\/hives\/([^/]+)/)?.[1];
+  if (parentHref === "/hives" && hive) {
+    const base = `/hives/${hive}`;
+    return [
+      { label: "Overview", href: base, exact: true },
+      {
+        label: "Timeline",
+        href: `${base}?tab=timeline`,
+        exact: true,
+        keywords: ["inspections feedings treatments mites splits moves harvests"],
+      },
+      { label: "Health", href: `${base}?tab=health`, keywords: ["varroa inspections"], exact: true },
+      { label: "Equipment", href: `${base}/equipment` },
+      { label: "Queen", href: `${base}/queen`, keywords: ["lineage genealogy"] },
+      { label: "Photos", href: `${base}/photos` },
+      {
+        label: "Voice inspection",
+        href: `${base}/transcribe`,
+        keywords: ["record transcribe"],
+        requiresEdit: true,
+      },
+    ];
+  }
+  return [];
+}
+
+export function visibleNavRoutes<T extends NavRoute>(
+  routes: readonly T[],
+  isAdmin: boolean,
+  canEdit = true,
+): T[] {
+  return routes
+    .filter(
+      (route) =>
+        (isAdmin || !route.adminOnly) && (canEdit || !route.requiresEdit),
+    )
+    .map((route) => ({
+      ...route,
+      children: route.children
+        ? visibleNavRoutes(route.children, isAdmin, canEdit)
+        : undefined,
+    })) as T[];
+}
+
+/** Merge static and current-record children without duplicating a label. */
+export function navRouteChildren(
+  route: NavRoute,
+  pathname: string,
+  isAdmin: boolean,
+  canEdit: boolean,
+) {
+  const contextual = contextualNavRoutes(route.href, pathname);
+  const contextualLabels = new Set(contextual.map((child) => child.label));
+  const staticChildren = (route.children ?? []).filter(
+    (child) => !contextualLabels.has(child.label),
+  );
+  return visibleNavRoutes(
+    [...staticChildren, ...contextual],
+    isAdmin,
+    canEdit,
+  );
+}
+
+/** Backward-compatible name used by top-level navigation callers. */
+export function visibleNavItems(items: NavItem[], isAdmin: boolean) {
+  return visibleNavRoutes(items, isAdmin);
+}
+
+export function routePath(href: string) {
+  return href.split("?")[0];
+}
+
+export function isNavRouteActive(route: NavRoute, currentHref: string): boolean {
+  if (
+    route.children?.some((child) => isNavRouteActive(child, currentHref))
+  ) {
+    return true;
+  }
+  const [pathname, currentQuery = ""] = currentHref.split("?");
+  const path = routePath(route.href);
+  if (route.exact) {
+    if (pathname !== path) return false;
+    const routeQuery = route.href.split("?")[1];
+    const currentParams = new URLSearchParams(currentQuery);
+    if (!routeQuery) return !currentParams.has("tab");
+    const routeParams = new URLSearchParams(routeQuery);
+    return Array.from(routeParams).every(
+      ([key, value]) => currentParams.get(key) === value,
+    );
+  }
+  return (
+    pathname === path ||
+    pathname.startsWith(`${path}/`) ||
+    (route.matches?.some(
+      (match) => pathname === match || pathname.startsWith(`${match}/`),
+    ) ?? false)
+  );
+}
+
+export interface IndexedNavRoute extends NavRoute {
+  breadcrumbs: string[];
+}
+
+export function flattenNavRoutes(
+  routes: readonly NavRoute[],
+  parents: readonly string[] = [],
+): IndexedNavRoute[] {
+  return routes.flatMap((route) => {
+    const breadcrumbs = [...parents, route.label];
+    return [
+      { ...route, breadcrumbs },
+      ...flattenNavRoutes(route.children ?? [], breadcrumbs),
+    ];
+  });
+}
 
 /**
  * Order the bottom bar fills its four fixed slots from; the fifth slot is
- * always "More", which opens a sheet with every remaining destination. The
- * old bar silently dropped four of nine destinations — and a different four
- * per role — leaving Inventory unreachable in the field.
+ * always More. More itself renders the complete folded route tree.
  */
 const MOBILE_PRIORITY = [
   "/dashboard",
@@ -60,11 +353,6 @@ const MOBILE_PRIORITY = [
   "/settings",
 ];
 
-export function visibleNavItems(items: NavItem[], isAdmin: boolean) {
-  return items.filter((item) => isAdmin || !item.adminOnly);
-}
-
-/** The four items pinned to the bottom bar for this role. */
 export function primaryMobileItems(isAdmin: boolean): NavItem[] {
   const visible = visibleNavItems(NAV_ITEMS, isAdmin);
   return MOBILE_PRIORITY.map((href) =>
@@ -74,7 +362,6 @@ export function primaryMobileItems(isAdmin: boolean): NavItem[] {
     .slice(0, 4);
 }
 
-/** Everything not pinned, shown in the "More" sheet. */
 export function overflowMobileItems(isAdmin: boolean): NavItem[] {
   const pinned = new Set(primaryMobileItems(isAdmin).map((item) => item.href));
   return visibleNavItems(NAV_ITEMS, isAdmin).filter(

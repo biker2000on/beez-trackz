@@ -109,10 +109,11 @@ export interface BloomPredictions {
 
 // --- queries ---
 
-export function useApiaries() {
+export function useApiaries(enabled = true) {
   return useQuery({
     queryKey: ["apiaries", "list"],
     queryFn: () => api.get<ApiaryListItem[]>("/apiaries"),
+    enabled,
   });
 }
 

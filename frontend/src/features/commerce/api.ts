@@ -194,10 +194,11 @@ function useCommerceMutation<TInput, TResult = unknown>(
   });
 }
 
-export function useHarvestLots() {
+export function useHarvestLots(enabled = true) {
   return useQuery({
     queryKey: ["commerce", "harvest-lots"],
     queryFn: () => api.get<HarvestLot[]>("/harvest-lots"),
+    enabled,
   });
 }
 

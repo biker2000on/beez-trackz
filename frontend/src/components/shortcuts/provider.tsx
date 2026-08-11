@@ -1,10 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { ArrowRight, Command, Keyboard, Search } from "lucide-react";
 
-import { NAV_ITEMS, visibleNavItems } from "@/components/shell/nav-items";
+import {
+  NAV_ITEMS,
+  contextualNavRoutes,
+  flattenNavRoutes,
+  visibleNavItems,
+  visibleNavRoutes,
+} from "@/components/shell/nav-items";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,12 +20,26 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useAccessProfile } from "@/features/access/api";
+import { apiaryRole, useAccessProfile } from "@/features/access/api";
+import { useApiaries } from "@/features/apiaries/hooks";
+import { useHarvestLots } from "@/features/commerce/api";
+import { useHives } from "@/features/hives/hooks";
+import { useHarvestSessions, useHoneySales } from "@/features/honey/hooks";
 
 interface ShortcutEntry {
   key: string;
   description: string;
   handler: () => void;
+}
+
+interface PaletteCommand {
+  id: string;
+  label: string;
+  description: string;
+  hint: string;
+  searchText: string;
+  contextKey?: string;
+  run: () => void;
 }
 
 interface ShortcutsContextValue {
@@ -52,7 +72,71 @@ function isDialogOpen(): boolean {
   );
 }
 
+function normalizeSearch(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function editDistance(left: string, right: string) {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    let diagonal = previous[0];
+    previous[0] = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const above = previous[rightIndex];
+      previous[rightIndex] = Math.min(
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + 1,
+        diagonal + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+      diagonal = above;
+    }
+  }
+  return previous[right.length];
+}
+
+/** Token-aware fuzzy score, including common one-character misspellings. */
+function commandScore(command: PaletteCommand, query: string): number | null {
+  const normalizedQuery = normalizeSearch(query);
+  const haystack = normalizeSearch(
+    `${command.label} ${command.description} ${command.searchText}`,
+  );
+  if (!normalizedQuery) return 0;
+  const exactIndex = haystack.indexOf(normalizedQuery);
+  if (exactIndex >= 0) return 1000 - exactIndex;
+
+  const words = haystack.split(" ").filter(Boolean);
+  let score = 0;
+  for (const token of normalizedQuery.split(" ").filter(Boolean)) {
+    const substringIndex = haystack.indexOf(token);
+    if (substringIndex >= 0) {
+      score += 100 - Math.min(substringIndex, 50);
+      continue;
+    }
+    const tolerance = token.length >= 7 ? 2 : token.length >= 4 ? 1 : 0;
+    let best = Number.POSITIVE_INFINITY;
+    for (const word of words) {
+      if (Math.abs(word.length - token.length) > tolerance) continue;
+      best = Math.min(best, editDistance(token, word));
+    }
+    if (best > tolerance) return null;
+    score += 30 - best * 5;
+  }
+  return score;
+}
+
+function uniqueCommands(commands: PaletteCommand[]) {
+  return Array.from(
+    new Map(commands.map((command) => [command.id, command])).values(),
+  );
+}
+
 const GOTO_TIMEOUT_MS = 1500;
+const MAX_SEARCH_RESULTS = 60;
 
 export function ShortcutsProvider({
   children,
@@ -60,11 +144,16 @@ export function ShortcutsProvider({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const access = useAccessProfile();
-  const navigation = visibleNavItems(
-    NAV_ITEMS,
-    access.data?.isAdmin === true,
+  const isAdmin = access.data?.isAdmin === true;
+  const canEditAny =
+    isAdmin || access.data?.memberships.some((entry) => entry.role === "editor") === true;
+  const navigation = React.useMemo(
+    () => visibleNavItems(NAV_ITEMS, isAdmin),
+    [isAdmin],
   );
+
   const [helpOpen, setHelpOpen] = React.useState(false);
   const [commandOpen, setCommandOpen] = React.useState(false);
   const [commandQuery, setCommandQuery] = React.useState("");
@@ -72,6 +161,14 @@ export function ShortcutsProvider({
   const [entries, setEntries] = React.useState<Map<string, ShortcutEntry>>(
     () => new Map(),
   );
+
+  // Ctrl-K is a live record index, not just a static page list. These queries
+  // are shared with the rest of the app through React Query's cache.
+  const apiaries = useApiaries(commandOpen);
+  const hives = useHives({ includeArchived: true }, commandOpen);
+  const sales = useHoneySales(isAdmin && commandOpen);
+  const sessions = useHarvestSessions(isAdmin && commandOpen);
+  const lots = useHarvestLots(isAdmin && commandOpen);
   const entriesRef = React.useRef(entries);
   React.useEffect(() => {
     entriesRef.current = entries;
@@ -127,7 +224,6 @@ export function ShortcutsProvider({
       if (isDialogOpen()) return;
 
       const key = event.key;
-
       if (key === "?") {
         event.preventDefault();
         clearGoto();
@@ -169,28 +265,156 @@ export function ShortcutsProvider({
   }, [navigation, router]);
 
   const pageShortcuts = Array.from(entries.values());
-  const commands = [
-    ...navigation.map((item) => ({
-      id: `nav:${item.href}`,
-      label: `Go to ${item.label}`,
-      hint: `g ${item.shortcutKey}`,
-      run: () => router.push(item.href),
-    })),
-    ...pageShortcuts.map((entry) => ({
-      id: `page:${entry.key}`,
-      label: entry.description,
-      hint: entry.key,
-      run: entry.handler,
-    })),
-  ];
-  const normalizedQuery = commandQuery.trim().toLowerCase();
-  const filteredCommands = normalizedQuery
-    ? commands.filter((command) =>
-        command.label.toLowerCase().includes(normalizedQuery),
-      )
-    : commands;
+  const staticCommands = React.useMemo(() => {
+    const routes = visibleNavRoutes(NAV_ITEMS, isAdmin, canEditAny);
+    return flattenNavRoutes(routes).map<PaletteCommand>((route) => {
+      const topLevel = route.breadcrumbs.length === 1
+        ? navigation.find((item) => item.href === route.href)
+        : undefined;
+      return {
+        id: `route:${route.href}`,
+        label: route.breadcrumbs.join(" › "),
+        description: route.href,
+        hint: topLevel ? `g ${topLevel.shortcutKey}` : "Route",
+        searchText: `${route.keywords?.join(" ") ?? ""} ${route.href}`,
+        run: () => router.push(route.href),
+      };
+    });
+  }, [canEditAny, isAdmin, navigation, router]);
 
-  function runCommand(command: (typeof commands)[number]) {
+  const recordCommands = React.useMemo(() => {
+    const commands: PaletteCommand[] = [];
+    for (const apiary of apiaries.data ?? []) {
+      const role = apiaryRole(access.data, apiary.id);
+      const canEdit = role === "admin" || role === "editor";
+      const routes = visibleNavRoutes(
+        contextualNavRoutes("/apiaries", `/apiaries/${apiary.id}`),
+        isAdmin,
+        canEdit,
+      );
+      for (const route of flattenNavRoutes(routes)) {
+        commands.push({
+          id: `apiary:${apiary.id}:${route.href}`,
+          label: `Apiaries › ${apiary.name} › ${route.label}`,
+          description: route.href,
+          hint: "Apiary",
+          contextKey: `apiary:${apiary.id}`,
+          searchText: `apiary apiarty yard ${apiary.name} ${route.keywords?.join(" ") ?? ""}`,
+          run: () => router.push(route.href),
+        });
+      }
+    }
+
+    for (const hive of hives.data ?? []) {
+      const role = apiaryRole(access.data, hive.apiaryId);
+      const canEdit = role === "admin" || role === "editor";
+      const routes = visibleNavRoutes(
+        contextualNavRoutes("/hives", `/hives/${hive.id}`),
+        isAdmin,
+        canEdit,
+      );
+      for (const route of flattenNavRoutes(routes)) {
+        commands.push({
+          id: `hive:${hive.id}:${route.href}`,
+          label: `Hives › ${hive.apiaryName} › ${hive.positionLabel} › ${route.label}`,
+          description: route.href,
+          hint: "Hive",
+          contextKey: `hive:${hive.id}`,
+          searchText: `hive colony ${hive.positionLabel} ${hive.apiaryName} ${hive.status} ${route.keywords?.join(" ") ?? ""}`,
+          run: () => router.push(route.href),
+        });
+      }
+    }
+
+    if (isAdmin) {
+      for (const sale of sales.data ?? []) {
+        const name =
+          sale.orderNumber ??
+          sale.customerName ??
+          `${sale.date} ${sale.channel.replaceAll("_", " ")}`;
+        const href = `/harvest/sales/${sale.id}`;
+        commands.push({
+          id: `sale:${sale.id}`,
+          label: `Honey › Sales › ${name}`,
+          description: href,
+          hint: "Sale",
+          searchText: `${sale.customerName ?? ""} ${sale.location ?? ""} ${sale.orderStatus} ${sale.paymentMethod} ${sale.totalAmount}`,
+          run: () => router.push(href),
+        });
+      }
+      for (const session of sessions.data ?? []) {
+        const href = `/harvest/sessions/${session.id}`;
+        commands.push({
+          id: `session:${session.id}`,
+          label: `Honey › Production › ${session.apiaryName} extraction ${session.date}`,
+          description: href,
+          hint: "Session",
+          searchText: `${session.apiaryName} ${session.notes ?? ""} harvest extraction session`,
+          run: () => router.push(href),
+        });
+      }
+      for (const lot of lots.data ?? []) {
+        if (!lot.isPublic || !lot.publicSlug) continue;
+        const href = `/honey/${lot.publicSlug}`;
+        commands.push({
+          id: `lot-story:${lot.id}`,
+          label: `Honey › Lots › ${lot.lotCode} story`,
+          description: href,
+          hint: "Lot",
+          searchText: `${lot.lotCode} ${lot.honeyVariety ?? ""} ${lot.season ?? ""} ${lot.apiaryRegion ?? ""} public story traceability`,
+          run: () => router.push(href),
+        });
+      }
+    }
+    return commands;
+  }, [
+    access.data,
+    apiaries.data,
+    hives.data,
+    isAdmin,
+    lots.data,
+    router,
+    sales.data,
+    sessions.data,
+  ]);
+
+  const pageCommands = pageShortcuts.map<PaletteCommand>((entry) => ({
+    id: `page:${entry.key}`,
+    label: entry.description,
+    description: "Action on this page",
+    hint: entry.key,
+    searchText: `action ${entry.description}`,
+    run: entry.handler,
+  }));
+
+  const currentApiaryId = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
+  const currentHiveId = pathname.match(/^\/hives\/([^/]+)/)?.[1];
+  const contextCommands = recordCommands.filter(
+    (command) =>
+      command.contextKey === `apiary:${currentApiaryId}` ||
+      command.contextKey === `hive:${currentHiveId}`,
+  );
+  const normalizedQuery = commandQuery.trim();
+  const filteredCommands = normalizedQuery
+    ? uniqueCommands([...staticCommands, ...recordCommands, ...pageCommands])
+        .map((command) => ({
+          command,
+          score: commandScore(command, normalizedQuery),
+        }))
+        .filter(
+          (entry): entry is { command: PaletteCommand; score: number } =>
+            entry.score != null,
+        )
+        .sort((left, right) => right.score - left.score)
+        .slice(0, MAX_SEARCH_RESULTS)
+        .map((entry) => entry.command)
+    : uniqueCommands([...contextCommands, ...pageCommands, ...staticCommands]);
+  const indexing =
+    apiaries.isPending ||
+    hives.isPending ||
+    (isAdmin && (sales.isPending || sessions.isPending || lots.isPending));
+
+  function runCommand(command: PaletteCommand) {
     setCommandOpen(false);
     setCommandQuery("");
     command.run();
@@ -207,8 +431,8 @@ export function ShortcutsProvider({
               Keyboard shortcuts
             </DialogTitle>
             <DialogDescription>
-              Press <Kbd>g</Kbd> then a letter to jump between pages, or{" "}
-              <Kbd>Ctrl/⌘ K</Kbd> for the command palette.
+              Press <Kbd>g</Kbd> then a letter to jump between sections, or{" "}
+              <Kbd>Ctrl/⌘ K</Kbd> to search every route, apiary, and hive.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -255,7 +479,7 @@ export function ShortcutsProvider({
               </h3>
               <ul className="grid gap-1.5">
                 <li className="flex items-center justify-between text-sm">
-                  <span>Open command palette</span>
+                  <span>Search routes and records</span>
                   <Kbd>Ctrl/⌘ K</Kbd>
                 </li>
                 <li className="flex items-center justify-between text-sm">
@@ -275,11 +499,11 @@ export function ShortcutsProvider({
           if (!open) setCommandQuery("");
         }}
       >
-        <DialogContent className="top-[18%] max-w-lg translate-y-0 gap-2 p-3">
+        <DialogContent className="top-[10%] max-w-xl translate-y-0 gap-2 p-3 sm:top-[15%]">
           <DialogHeader className="sr-only">
             <DialogTitle>Command palette</DialogTitle>
             <DialogDescription>
-              Search navigation and actions available on this page.
+              Search every application route, apiary, hive, and available page action.
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center gap-2 border-b px-1 pb-3">
@@ -295,7 +519,10 @@ export function ShortcutsProvider({
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
                   setActiveCommand((current) =>
-                    Math.min(current + 1, filteredCommands.length - 1),
+                    Math.min(
+                      current + 1,
+                      Math.max(filteredCommands.length - 1, 0),
+                    ),
                   );
                 } else if (event.key === "ArrowUp") {
                   event.preventDefault();
@@ -308,16 +535,16 @@ export function ShortcutsProvider({
                   runCommand(filteredCommands[activeCommand]);
                 }
               }}
-              placeholder="Type a page or action…"
+              placeholder="Search routes, apiaries, hives, sales…"
               aria-label="Search commands"
               className="h-10 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
             />
             <Kbd>Esc</Kbd>
           </div>
-          <div className="max-h-80 overflow-y-auto py-1">
+          <div className="max-h-[min(60vh,28rem)] overflow-y-auto py-1">
             {filteredCommands.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                No matching commands
+                {indexing ? "Still indexing records…" : "No matching routes or records"}
               </p>
             ) : (
               <ul className="grid gap-1">
@@ -326,16 +553,21 @@ export function ShortcutsProvider({
                     <Button
                       type="button"
                       variant="ghost"
-                      className={`h-11 w-full justify-start px-3 ${
+                      className={`h-auto min-h-12 w-full justify-start px-3 py-2 ${
                         index === activeCommand ? "bg-secondary" : ""
                       }`}
                       onMouseEnter={() => setActiveCommand(index)}
                       onClick={() => runCommand(command)}
                     >
-                      <Command className="size-4 text-muted-foreground" />
-                      <span className="flex-1 text-left">{command.label}</span>
+                      <Command className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block truncate">{command.label}</span>
+                        <span className="block truncate text-xs font-normal text-muted-foreground">
+                          {command.description}
+                        </span>
+                      </span>
                       <Kbd>{command.hint}</Kbd>
-                      <ArrowRight className="size-3 text-muted-foreground" />
+                      <ArrowRight className="size-3 shrink-0 text-muted-foreground" />
                     </Button>
                   </li>
                 ))}
@@ -350,7 +582,7 @@ export function ShortcutsProvider({
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border bg-muted px-1.5 font-mono text-[11px] font-medium text-muted-foreground">
+    <kbd className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center whitespace-nowrap rounded border bg-muted px-1.5 font-mono text-[11px] font-medium text-muted-foreground">
       {children}
     </kbd>
   );
@@ -395,7 +627,7 @@ export function CommandPaletteButton() {
       onClick={context.openCommands}
     >
       <Search />
-      Quick actions
+      Search everything
       <span className="ml-auto">
         <Kbd>Ctrl/⌘ K</Kbd>
       </span>

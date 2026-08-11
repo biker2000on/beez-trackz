@@ -99,7 +99,7 @@ export interface HiveListFilters {
 
 // --- queries ---
 
-export function useHives(filters: HiveListFilters = {}) {
+export function useHives(filters: HiveListFilters = {}, enabled = true) {
   return useQuery({
     queryKey: ["hives", "list", filters],
     queryFn: () =>
@@ -110,6 +110,7 @@ export function useHives(filters: HiveListFilters = {}) {
           includeArchived: filters.includeArchived ? "true" : undefined,
         },
       }),
+    enabled,
   });
 }
 

@@ -47,10 +47,11 @@ export function useHoneyTimeline(limit = 100) {
   });
 }
 
-export function useHoneySales() {
+export function useHoneySales(enabled = true) {
   return useQuery({
     queryKey: ["honey", "sales"],
     queryFn: () => api.get<HoneySale[]>("/honey/sales"),
+    enabled,
   });
 }
 
@@ -68,10 +69,11 @@ export function useHarvests() {
   });
 }
 
-export function useHarvestSessions() {
+export function useHarvestSessions(enabled = true) {
   return useQuery({
     queryKey: ["harvest-sessions"],
     queryFn: () => api.get<HarvestSessionRow[]>("/harvest-sessions"),
+    enabled,
   });
 }
 
