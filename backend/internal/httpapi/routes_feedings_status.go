@@ -78,8 +78,15 @@ type feedingStatusRow struct {
 	// Action is the field action to take, empty when nothing is needed.
 	Action string `json:"action"`
 	// ActionFeedingID is the feeding the action applies to (close/refill).
+	// It always matches the Action: the oldest unverified record when the
+	// action is a verify, otherwise the oldest open feeder. A hive with both
+	// used to get "Verify and close" pointed at an open feeder.
 	ActionFeedingID *uuid.UUID `json:"actionFeedingId"`
 	LatestFeedingID *uuid.UUID `json:"latestFeedingId"`
+
+	// Per-state action candidates, resolved by feedingStatusEvaluate.
+	oldestOpenID       *uuid.UUID
+	oldestUnverifiedID *uuid.UUID
 }
 
 func feedingDaysSince(t *time.Time, now time.Time) *int {
@@ -120,6 +127,7 @@ func feedingStatusEvaluate(row *feedingStatusRow, now time.Time) {
 		}
 		row.State = feedingStateAttention
 		row.Action = "Verify and close"
+		row.ActionFeedingID = row.oldestUnverifiedID
 		if row.UnverifiedFeeders == 1 {
 			row.Evidence = fmt.Sprintf(
 				"Feeder on %s open %d days with no refill and no recorded end date — verify and close",
@@ -129,11 +137,16 @@ func feedingStatusEvaluate(row *feedingStatusRow, now time.Time) {
 				"%d feeding records on %s have no recorded end date (oldest %d days) — verify and close",
 				row.UnverifiedFeeders, row.HiveName, days)
 		}
+		if row.OpenFeeders > 0 {
+			row.Evidence += fmt.Sprintf("; %d current feeder(s) also on the hive",
+				row.OpenFeeders)
+		}
 
 	case row.OpenFeeders > 0 && row.OpenFeederAgeDays != nil &&
 		*row.OpenFeederAgeDays > feedingAttentionDays:
 		row.State = feedingStateAttention
 		row.Action = "Refill or close"
+		row.ActionFeedingID = row.oldestOpenID
 		if row.OpenFeeders == 1 {
 			row.Evidence = fmt.Sprintf(
 				"Feeder on %s open %d days with no refill — refill it or close the record",
@@ -148,6 +161,7 @@ func feedingStatusEvaluate(row *feedingStatusRow, now time.Time) {
 		*row.OpenFeederAgeDays > feedingStaleDays:
 		row.State = feedingStateStale
 		row.Action = "Check level"
+		row.ActionFeedingID = row.oldestOpenID
 		row.Evidence = fmt.Sprintf(
 			"Feeder on %s filled %d days ago (%s) — check the level",
 			row.HiveName, *row.OpenFeederAgeDays, feedType)
@@ -158,11 +172,13 @@ func feedingStatusEvaluate(row *feedingStatusRow, now time.Time) {
 			days = *row.OpenFeederAgeDays
 		}
 		row.State = feedingStateOK
+		row.ActionFeedingID = row.oldestOpenID
 		row.Evidence = fmt.Sprintf("Feeder on %s filled %s (%s)",
 			row.HiveName, feedingAgo(days), feedType)
 
 	default:
 		row.State = feedingStateOK
+		row.ActionFeedingID = nil
 		if row.DaysSinceLastFeed == nil {
 			row.Evidence = fmt.Sprintf("No feeder on %s", row.HiveName)
 			break
@@ -240,8 +256,8 @@ func (s *Server) handleFeedingsStatus(w http.ResponseWriter, r *http.Request) {
 			(array_agg(quantity_unit::text ORDER BY date_fed DESC, created_at DESC))[1],
 			(array_agg(feeder_type::text ORDER BY date_fed DESC, created_at DESC))[1],
 			(array_agg(id ORDER BY date_fed DESC, created_at DESC))[1],
-			(array_agg(id ORDER BY date_fed)
-				FILTER (WHERE status IN ('open','unverified')))[1]
+			(array_agg(id ORDER BY date_fed) FILTER (WHERE status = 'open'))[1],
+			(array_agg(id ORDER BY date_fed) FILTER (WHERE status = 'unverified'))[1]
 		FROM scoped
 		GROUP BY hive_id, hive_name, apiary_id, apiary_name`,
 		user.IsAdmin, user.ID)
@@ -259,7 +275,8 @@ func (s *Server) handleFeedingsStatus(w http.ResponseWriter, r *http.Request) {
 			&row.OpenFeeders, &row.UnverifiedFeeders,
 			&row.OldestOpenAt, &row.OldestUnverifiedAt, &row.LatestFeedAt,
 			&row.LatestFeedType, &row.LatestQuantity, &row.LatestQuantityUnit,
-			&row.LatestFeederType, &row.LatestFeedingID, &row.ActionFeedingID); err != nil {
+			&row.LatestFeederType, &row.LatestFeedingID,
+			&row.oldestOpenID, &row.oldestUnverifiedID); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}

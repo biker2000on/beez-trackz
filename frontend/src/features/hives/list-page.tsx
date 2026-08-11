@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useShortcut } from "@/components/shortcuts/provider";
+import { useBulkSelect } from "@/lib/use-bulk-select";
 import { useApiaries } from "@/features/apiaries/hooks";
 import { HiveCard, HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
@@ -77,25 +78,20 @@ export function HivesListPage() {
   });
 
   const [createOpen, setCreateOpen] = React.useState(false);
-  const [bulkMode, setBulkMode] = React.useState(false);
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const bulkUpdate = useBulkUpdateHives();
+  const {
+    bulkMode,
+    selected,
+    setSelected,
+    toggle: toggleSelect,
+    toggleMode,
+    exit: exitBulkMode,
+  } = useBulkSelect(
+    (hives.data ?? []).map((hive) => hive.id),
+    { selectAll: "Select all visible hives" },
+  );
 
   useShortcut("n", "New hive", () => setCreateOpen(true));
-  useShortcut("b", "Toggle bulk select", () => {
-    setBulkMode((prev) => {
-      if (prev) setSelected(new Set());
-      return !prev;
-    });
-  });
-  useShortcut("x", "Select all visible hives", () => {
-    if (!bulkMode) return;
-    setSelected(
-      selected.size === (hives.data?.length ?? 0)
-        ? new Set()
-        : new Set((hives.data ?? []).map((hive) => hive.id)),
-    );
-  });
 
   function setArchivedParam(next: boolean) {
     const params = new URLSearchParams(searchParams.toString());
@@ -103,20 +99,6 @@ export function HivesListPage() {
     else params.delete("archived");
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname);
-  }
-
-  function toggleSelect(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function exitBulkMode() {
-    setBulkMode(false);
-    setSelected(new Set());
   }
 
   async function applyBulk(payload: {
@@ -152,9 +134,7 @@ export function HivesListPage() {
         <div className="flex items-center gap-2">
           <Button
             variant={bulkMode ? "secondary" : "outline"}
-            onClick={() =>
-              bulkMode ? exitBulkMode() : setBulkMode(true)
-            }
+            onClick={toggleMode}
           >
             <CheckSquare className="size-4" />
             {bulkMode ? "Done" : "Bulk select"}

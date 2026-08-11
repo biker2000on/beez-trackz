@@ -5,11 +5,11 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Camera,
-  CloudSun,
   Flower2,
   Hexagon,
   LayoutDashboard,
   ListChecks,
+  Map,
   MapPin,
   Mic,
   Pencil,
@@ -27,14 +27,16 @@ import { useApiaryHives } from "@/features/canvas/lib/use-canvas-data";
 import { PhotoSection } from "@/features/photos/photo-gallery";
 
 import { ApiaryFormDialog } from "./apiary-form-dialog";
-import { BulkActionsTab } from "./bulk-actions-tab";
 import { DeleteApiaryDialog } from "./delete-apiary-dialog";
 import { FloraTab } from "./flora-tab";
-import { ForecastTab } from "./forecast-tab";
+import { OverviewTab } from "./overview-tab";
 import { useApiary } from "./hooks";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
-const APIARY_TABS = ["layout", "flora", "forecast", "bulk", "photos"] as const;
+// Overview is the default landing view; the forecast lives on it, and bulk
+// recording moved to a dedicated route (/apiaries/[id]/bulk) — a workflow,
+// not a peer view of the yard.
+const APIARY_TABS = ["overview", "layout", "flora", "photos"] as const;
 
 export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const apiary = useApiary(apiaryId);
@@ -46,7 +48,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   // Deep-linkable and back-button safe: the active tab lives in the URL.
-  const [tab, setTab] = useSearchParamState("tab", "layout", APIARY_TABS);
+  const [tab, setTab] = useSearchParamState("tab", "overview", APIARY_TABS);
 
   useShortcut("e", "Edit apiary", () => {
     if (canEdit) setEditOpen(true);
@@ -122,14 +124,23 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
             {canEdit ? (
-              // Batch transcription used to be an orphan route with no inbound
-              // link; the yard you are standing in is its natural entry point.
-              <Button asChild variant="outline">
-                <Link href={`/transcribe?apiary=${apiaryId}`}>
-                  <Mic />
-                  Voice walkthrough
-                </Link>
-              </Button>
+              <>
+                {/* Batch transcription used to be an orphan route with no
+                    inbound link; the yard you are standing in is its natural
+                    entry point. */}
+                <Button asChild variant="outline">
+                  <Link href={`/transcribe?apiary=${apiaryId}`}>
+                    <Mic />
+                    Voice walkthrough
+                  </Link>
+                </Button>
+                <Button asChild variant="outline">
+                  <Link href={`/apiaries/${apiaryId}/bulk`}>
+                    <ListChecks />
+                    Bulk record
+                  </Link>
+                </Button>
+              </>
             ) : null}
             <Button asChild variant="outline">
               <Link href={`/apiaries/${apiaryId}/labels`}>
@@ -163,30 +174,31 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
       <Tabs value={tab} onValueChange={setTab} className="min-w-0">
         <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
           <TabsList className="h-11 min-w-max">
-            <TabsTrigger value="layout" className="h-9">
+            <TabsTrigger value="overview" className="h-9">
               <LayoutDashboard />
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="layout" className="h-9">
+              <Map />
               Layout
             </TabsTrigger>
             <TabsTrigger value="flora" className="h-9">
               <Flower2 />
               Flora
             </TabsTrigger>
-            <TabsTrigger value="forecast" className="h-9">
-              <CloudSun />
-              Forecast
-            </TabsTrigger>
-            {canEdit ? (
-              <TabsTrigger value="bulk" className="h-9">
-                <ListChecks />
-                Bulk record
-              </TabsTrigger>
-            ) : null}
             <TabsTrigger value="photos" className="h-9">
               <Camera />
               Photos
             </TabsTrigger>
           </TabsList>
         </div>
+        <TabsContent value="overview">
+          <OverviewTab
+            apiaryId={apiaryId}
+            hives={hives.data ?? []}
+            hivesReady={!hives.isPending}
+          />
+        </TabsContent>
         <TabsContent value="layout" className="min-w-0">
           <div className="relative">
             {!canEdit ? (
@@ -202,14 +214,6 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
         <TabsContent value="flora">
           <FloraTab apiaryId={apiaryId} canEdit={canEdit} />
         </TabsContent>
-        <TabsContent value="forecast">
-          <ForecastTab apiaryId={apiaryId} />
-        </TabsContent>
-        {canEdit ? (
-          <TabsContent value="bulk">
-            <BulkActionsTab apiaryId={apiaryId} />
-          </TabsContent>
-        ) : null}
         <TabsContent value="photos">
           <PhotoSection
             ownerType="apiary"

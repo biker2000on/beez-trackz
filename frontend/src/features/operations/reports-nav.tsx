@@ -8,10 +8,9 @@
  * keeps the season you are looking at.
  */
 
-import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 
-import { cn } from "@/lib/utils";
+import { SectionNav } from "@/components/shell/section-nav";
 
 export const REPORT_SECTIONS = [
   { href: "/reports", label: "Overview", description: "Headline numbers for the season." },
@@ -28,38 +27,14 @@ export function ReportsSectionNav() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const year = searchParams.get("year");
-  const suffix = year ? `?year=${encodeURIComponent(year)}` : "";
 
   return (
-    <nav
-      aria-label="Report sections"
-      className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0"
-    >
-      <ul className="inline-flex min-w-max items-center gap-1 rounded-lg bg-muted p-1">
-        {REPORT_SECTIONS.map((section) => {
-          const active =
-            section.href === "/reports"
-              ? pathname === "/reports"
-              : pathname.startsWith(section.href);
-          return (
-            <li key={section.href}>
-              <Link
-                href={`${section.href}${suffix}`}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  active
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {section.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
+    <SectionNav
+      label="Report sections"
+      sections={REPORT_SECTIONS}
+      rootHref="/reports"
+      pathname={pathname}
+      hrefSuffix={year ? `?year=${encodeURIComponent(year)}` : ""}
+    />
   );
 }

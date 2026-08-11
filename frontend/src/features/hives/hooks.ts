@@ -77,20 +77,6 @@ export interface HiveSplit {
   childLabel: string;
 }
 
-export interface EquipmentStockRow {
-  id: string;
-  typeId: string;
-  typeName: string;
-  typeCategory: string;
-  totalOwned: number;
-  storageLocation: string | null;
-  notes: string | null;
-  frameCondition: string | null;
-  framesPerBox: number | null;
-  deployed: number;
-  available: number;
-}
-
 export interface HiveDeployment {
   id: string;
   stockId: string;
@@ -166,13 +152,6 @@ export function useHiveDeployments(id: string) {
   return useQuery({
     queryKey: ["hives", "detail", id, "deployments"],
     queryFn: () => api.get<HiveDeployment[]>(`/hives/${id}/deployments`),
-  });
-}
-
-export function useEquipmentStock() {
-  return useQuery({
-    queryKey: ["equipment", "stock"],
-    queryFn: () => api.get<EquipmentStockRow[]>("/equipment/stock"),
   });
 }
 
@@ -291,26 +270,9 @@ export function useCreateQueen() {
   });
 }
 
-export function useDeployEquipment() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: {
-      stockId: string;
-      hiveId: string;
-      quantity?: number;
-      notes?: string | null;
-    }) =>
-      api.post<{ success: boolean; id: string }>(
-        "/equipment/deployments",
-        payload,
-      ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["hives"] });
-      void queryClient.invalidateQueries({ queryKey: ["equipment"] });
-    },
-  });
-}
-
+// Deploying lives in features/equipment (shared DeployDialog +
+// useDeployEquipment); this module keeps only the hive-scoped reads and the
+// full-return action.
 export function useRemoveDeployment() {
   const queryClient = useQueryClient();
   return useMutation({

@@ -102,8 +102,9 @@ func honeyValidJarLines(lines []honeyJarLineReq) ([]honeyParsedJarLine, error) {
 // GET /harvests
 func (s *Server) honeyListHarvests(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hh.id, hh.hive_id, hh.date, hh.super_weight_before, hh.super_weight_after,
-		       hh.calculated_honey_weight, hh.notes, h.position_label, a.name
+		SELECT hh.id, hh.hive_id, hh.session_id, hh.date, hh.super_weight_before,
+		       hh.super_weight_after, hh.calculated_honey_weight, hh.direct_weight,
+		       hh.notes, h.position_label, a.name
 		FROM honey_harvests hh
 		JOIN hives h ON h.id = hh.hive_id
 		JOIN apiaries a ON a.id = h.apiary_id
@@ -116,21 +117,25 @@ func (s *Server) honeyListHarvests(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type harvestRow struct {
-		ID                    uuid.UUID `json:"id"`
-		HiveID                uuid.UUID `json:"hiveId"`
-		Date                  time.Time `json:"date"`
-		SuperWeightBefore     float64   `json:"superWeightBefore"`
-		SuperWeightAfter      float64   `json:"superWeightAfter"`
-		CalculatedHoneyWeight float64   `json:"calculatedHoneyWeight"`
-		Notes                 *string   `json:"notes"`
-		HiveName              string    `json:"hiveName"`
-		ApiaryName            string    `json:"apiaryName"`
+		ID                    uuid.UUID  `json:"id"`
+		HiveID                uuid.UUID  `json:"hiveId"`
+		SessionID             *uuid.UUID `json:"sessionId"`
+		Date                  time.Time  `json:"date"`
+		SuperWeightBefore     float64    `json:"superWeightBefore"`
+		SuperWeightAfter      float64    `json:"superWeightAfter"`
+		CalculatedHoneyWeight float64    `json:"calculatedHoneyWeight"`
+		DirectWeight          bool       `json:"directWeight"`
+		Notes                 *string    `json:"notes"`
+		HiveName              string     `json:"hiveName"`
+		ApiaryName            string     `json:"apiaryName"`
 	}
 	out := make([]harvestRow, 0)
 	for rows.Next() {
 		var h harvestRow
-		if err := rows.Scan(&h.ID, &h.HiveID, &h.Date, &h.SuperWeightBefore, &h.SuperWeightAfter,
-			&h.CalculatedHoneyWeight, &h.Notes, &h.HiveName, &h.ApiaryName); err != nil {
+		if err := rows.Scan(&h.ID, &h.HiveID, &h.SessionID, &h.Date,
+			&h.SuperWeightBefore, &h.SuperWeightAfter,
+			&h.CalculatedHoneyWeight, &h.DirectWeight,
+			&h.Notes, &h.HiveName, &h.ApiaryName); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -143,14 +148,14 @@ func (s *Server) honeyListHarvests(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// POST /harvests {hiveId, date, superWeightBefore, superWeightAfter, notes?}
+// POST /harvests {hiveId, date, superWeightBefore+superWeightAfter |
+// harvestedWeight, notes?} — a standalone (session-less) harvest, measured
+// either as a super-weight pair or as the harvested honey directly.
 func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		HiveID            string   `json:"hiveId"`
-		Date              string   `json:"date"`
-		SuperWeightBefore *float64 `json:"superWeightBefore"`
-		SuperWeightAfter  *float64 `json:"superWeightAfter"`
-		Notes             *string  `json:"notes"`
+		HiveID string `json:"hiveId"`
+		Date   string `json:"date"`
+		hsEntryReq
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -174,22 +179,20 @@ func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
-	if req.SuperWeightBefore == nil || req.SuperWeightAfter == nil {
-		writeError(w, http.StatusBadRequest, "Both weights are required")
-		return
-	}
-	honeyWeight := *req.SuperWeightBefore - *req.SuperWeightAfter
-	if honeyWeight < 0 {
-		writeError(w, http.StatusBadRequest, "Weight before must be greater than weight after")
+	before, after, honeyWeight, direct, msg := hsEntryWeights(req.hsEntryReq)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
 	var id uuid.UUID
 	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO honey_harvests (hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO honey_harvests
+			(hive_id, date, super_weight_before, super_weight_after,
+			 calculated_honey_weight, direct_weight, notes, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id`,
-		hiveID, date, *req.SuperWeightBefore, *req.SuperWeightAfter, honeyWeight,
+		hiveID, date, before, after, honeyWeight, direct,
 		honeyTrimPtr(req.Notes), actorID(r)).Scan(&id)
 	if err != nil {
 		if honeyIsFKViolation(err) {
@@ -203,9 +206,10 @@ func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 		"id":                    id,
 		"hiveId":                hiveID,
 		"date":                  date,
-		"superWeightBefore":     *req.SuperWeightBefore,
-		"superWeightAfter":      *req.SuperWeightAfter,
+		"superWeightBefore":     before,
+		"superWeightAfter":      after,
 		"calculatedHoneyWeight": honeyWeight,
+		"directWeight":          direct,
 		"notes":                 honeyTrimPtr(req.Notes),
 	})
 }

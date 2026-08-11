@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +113,10 @@ func TestFeedingStatusEvaluateStates(t *testing.T) {
 			if row.State != test.wantState {
 				t.Fatalf("state = %q, want %q", row.State, test.wantState)
 			}
+			if test.wantAction == "Verify and close" &&
+				row.ActionFeedingID != row.oldestUnverifiedID {
+				t.Fatal("verify action does not target the oldest unverified record")
+			}
 			if row.Action != test.wantAction {
 				t.Fatalf("action = %q, want %q", row.Action, test.wantAction)
 			}
@@ -129,6 +134,38 @@ func TestFeedingStatusEvaluateStates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A hive with both an unverified legacy record and a current open feeder must
+// point its "Verify and close" action at the unverified record — closing the
+// live feeder as "verified" would have destroyed a valid record.
+func TestFeedingStatusMixedStatesTargetTheUnverifiedRecord(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	syrup := "sugar_syrup_1to1"
+	openID := uuid.New()
+	unverifiedID := uuid.New()
+	row := feedingStatusRow{
+		HiveName:           "A3",
+		OpenFeeders:        1,
+		UnverifiedFeeders:  1,
+		OldestOpenAt:       timePtr(now.AddDate(0, 0, -2)),
+		OldestUnverifiedAt: timePtr(now.AddDate(0, 0, -120)),
+		LatestFeedAt:       timePtr(now.AddDate(0, 0, -2)),
+		LatestFeedType:     &syrup,
+		oldestOpenID:       &openID,
+		oldestUnverifiedID: &unverifiedID,
+	}
+	feedingStatusEvaluate(&row, now)
+	if row.Action != "Verify and close" {
+		t.Fatalf("action = %q, want Verify and close", row.Action)
+	}
+	if row.ActionFeedingID == nil || *row.ActionFeedingID != unverifiedID {
+		t.Fatalf("action targets %v, want the unverified record %v",
+			row.ActionFeedingID, unverifiedID)
+	}
+	if !strings.Contains(row.Evidence, "current feeder") {
+		t.Errorf("evidence %q does not mention the remaining open feeder", row.Evidence)
 	}
 }
 
@@ -320,6 +357,57 @@ func (f *feedingFixture) readStatus(t *testing.T, id uuid.UUID) (string, *time.T
 		t.Fatalf("read feeding status: %v", err)
 	}
 	return status, closedAt, reason
+}
+
+// A feeding recorded with no feeder is a feed event (syrup poured, patty on
+// the frames), not equipment on the hive: it must never open the feeder
+// lifecycle or count as an active feeder.
+func TestFeedingWithoutFeederIsRecordedClosed(t *testing.T) {
+	fixture := newFeedingFixture(t)
+
+	response := fixture.call(t, fixture.server.handleFeedingCreate, http.MethodPost,
+		"/feedings", map[string]any{
+			"hiveId":       fixture.hiveA.String(),
+			"dateFed":      time.Now().Format("2006-01-02"),
+			"type":         "pollen_patty",
+			"quantity":     1,
+			"quantityUnit": "lbs",
+		}, nil)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create = %d (%s)", response.Code, response.Body.String())
+	}
+	var created feedingJSON
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Status != feedingStatusClosed ||
+		created.ClosedReason == nil || *created.ClosedReason != "not_installed" {
+		t.Fatalf("feederless feeding = %q / %v, want closed / not_installed",
+			created.Status, created.ClosedReason)
+	}
+	if created.DateEmpty == nil {
+		t.Error("feederless feeding was left without a date_empty")
+	}
+
+	// Naming a feeder still opens the lifecycle.
+	response = fixture.call(t, fixture.server.handleFeedingCreate, http.MethodPost,
+		"/feedings", map[string]any{
+			"hiveId":       fixture.hiveA.String(),
+			"dateFed":      time.Now().Format("2006-01-02"),
+			"type":         "sugar_syrup_1to1",
+			"quantity":     2,
+			"quantityUnit": "quarts",
+			"feederType":   "top",
+		}, nil)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create with feeder = %d (%s)", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Status != feedingStatusOpen {
+		t.Fatalf("feeder feeding status = %q, want open", created.Status)
+	}
 }
 
 func TestFeedingRefillClosesPredecessorAndOpensOneSuccessor(t *testing.T) {

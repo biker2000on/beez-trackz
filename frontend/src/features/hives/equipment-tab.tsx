@@ -5,33 +5,12 @@ import { PackagePlus, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  useDeployEquipment,
-  useEquipmentStock,
-  useHiveDeployments,
-  useRemoveDeployment,
-} from "./hooks";
+// The shared dialog covers both directions (stock fixed → pick hive, hive
+// fixed → pick stock); this tab used to carry its own copy.
+import { DeployDialog } from "@/features/equipment/stock-dialogs";
+import { useHiveDeployments, useRemoveDeployment } from "./hooks";
 import { formatDate } from "./lib";
 
 export function EquipmentTab({
@@ -144,150 +123,5 @@ export function EquipmentTab({
         hiveId={hiveId}
       /> : null}
     </div>
-  );
-}
-
-function DeployDialog({
-  open,
-  onOpenChange,
-  hiveId,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  hiveId: string;
-}) {
-  const stock = useEquipmentStock();
-  const deploy = useDeployEquipment();
-  const [stockId, setStockId] = React.useState("");
-  const [quantity, setQuantity] = React.useState("1");
-  const [notes, setNotes] = React.useState("");
-
-  React.useEffect(() => {
-    if (open) {
-      // Reset draft state each time a fresh deploy workflow begins.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStockId("");
-      setQuantity("1");
-      setNotes("");
-    }
-  }, [open]);
-
-  const availableStock = (stock.data ?? []).filter(
-    (row) => row.available > 0,
-  );
-  const selected = availableStock.find((row) => row.id === stockId);
-  const max = selected?.available ?? 1;
-
-  async function onSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!stockId) {
-      toast.error("Choose equipment to deploy");
-      return;
-    }
-    const qty = Number(quantity);
-    if (!Number.isInteger(qty) || qty < 1) {
-      toast.error("Quantity must be at least 1");
-      return;
-    }
-    if (qty > max) {
-      toast.error(`Only ${max} available`);
-      return;
-    }
-    try {
-      await deploy.mutateAsync({
-        stockId,
-        hiveId,
-        quantity: qty,
-        notes: notes.trim() === "" ? null : notes,
-      });
-      toast.success("Equipment deployed");
-      onOpenChange(false);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError
-          ? error.message
-          : "Could not deploy equipment",
-      );
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Deploy equipment</DialogTitle>
-          <DialogDescription>
-            Move equipment from storage onto this hive.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
-          <div className="grid gap-2">
-            <Label>Equipment</Label>
-            <Select value={stockId} onValueChange={setStockId}>
-              <SelectTrigger>
-                <SelectValue
-                  placeholder={
-                    stock.isPending
-                      ? "Loading…"
-                      : availableStock.length === 0
-                        ? "Nothing available in storage"
-                        : "Select equipment"
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {availableStock.map((row) => (
-                  <SelectItem key={row.id} value={row.id}>
-                    {row.typeName}
-                    {row.frameCondition ? ` (${row.frameCondition})` : ""} —{" "}
-                    {row.available} available
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selected && (
-              <Badge variant="secondary" className="justify-self-start">
-                {selected.available} in storage
-              </Badge>
-            )}
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="deploy-qty">Quantity</Label>
-            <Input
-              id="deploy-qty"
-              type="number"
-              min="1"
-              max={max}
-              value={quantity}
-              onChange={(event) => setQuantity(event.target.value)}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="deploy-notes">Notes</Label>
-            <Textarea
-              id="deploy-notes"
-              rows={2}
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={deploy.isPending || !stockId}
-            >
-              {deploy.isPending ? "Deploying…" : "Deploy"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

@@ -296,12 +296,17 @@ export function useCreateSession() {
   });
 }
 
-export interface HarvestBody {
+/** One harvest measurement: a super-weight pair or a direct harvested weight. */
+export interface HarvestMeasurement {
+  superWeightBefore?: number;
+  superWeightAfter?: number;
+  harvestedWeight?: number;
+  notes?: string;
+}
+
+export interface HarvestBody extends HarvestMeasurement {
   hiveId: string;
   date: string;
-  superWeightBefore: number;
-  superWeightAfter: number;
-  notes?: string;
 }
 
 export function useCreateHarvest() {
@@ -312,28 +317,26 @@ export function useCreateHarvest() {
   });
 }
 
-export interface SessionEntryBody {
+export interface SessionEntryBody extends HarvestMeasurement {
   hiveId: string;
-  superWeightBefore: number;
-  superWeightAfter: number;
-  notes?: string;
 }
 
-export function useAddSessionEntry(sessionId: string) {
+/** Saves a whole walkthrough of hive entries in one transaction. */
+export function useAddSessionEntries(sessionId: string) {
   return useHoneyMutation({
-    mutationFn: (body: SessionEntryBody) =>
-      api.post(`/harvest-sessions/${sessionId}/entries`, body),
-    successMessage: "Entry added",
+    mutationFn: (entries: SessionEntryBody[]) =>
+      api.post<{ count: number }>(`/harvest-sessions/${sessionId}/entries`, {
+        entries,
+      }),
+    successMessage: "Entries saved",
     invalidate: [["harvest-sessions"], ["harvests"]],
   });
 }
 
 export function useTrueUpSession(sessionId: string) {
   return useHoneyMutation({
-    mutationFn: (totalExtractedWeight: number) =>
-      api.post(`/harvest-sessions/${sessionId}/true-up`, {
-        totalExtractedWeight,
-      }),
+    mutationFn: (body: { totalExtractedWeight: number; reason?: string }) =>
+      api.post(`/harvest-sessions/${sessionId}/true-up`, body),
     successMessage: "Extracted weight saved",
     invalidate: [["harvest-sessions"]],
   });
@@ -341,9 +344,12 @@ export function useTrueUpSession(sessionId: string) {
 
 export function useDeleteSessionEntry() {
   return useHoneyMutation({
-    mutationFn: (entryId: string) =>
-      api.delete(`/harvest-entries/${entryId}`),
-    successMessage: "Entry deleted",
+    mutationFn: ({ entryId, reason }: { entryId: string; reason?: string }) =>
+      api.delete(
+        `/harvest-entries/${entryId}`,
+        reason ? { reason } : undefined,
+      ),
+    successMessage: "Entry removed",
     invalidate: [["harvest-sessions"], ["harvests"]],
   });
 }

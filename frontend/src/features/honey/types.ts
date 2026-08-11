@@ -90,10 +90,12 @@ export interface HoneySale {
 export interface HarvestRow {
   id: string;
   hiveId: string;
+  sessionId: string | null;
   date: string;
   superWeightBefore: number;
   superWeightAfter: number;
   calculatedHoneyWeight: number;
+  directWeight: boolean;
   notes: string | null;
   hiveName: string;
   apiaryName: string;
@@ -115,8 +117,18 @@ export interface HarvestSessionEntry {
   superWeightBefore: number;
   superWeightAfter: number;
   calculatedHoneyWeight: number;
+  directWeight: boolean;
   notes: string | null;
   hiveName: string;
+}
+
+export interface SessionTrueUp {
+  id: string;
+  previousWeightLbs: number | null;
+  newWeightLbs: number;
+  reason: string | null;
+  recordedAt: string;
+  recordedBy: string | null;
 }
 
 export interface HarvestSessionDetail {
@@ -129,6 +141,7 @@ export interface HarvestSessionDetail {
   entries: HarvestSessionEntry[];
   calculatedTotal: number;
   difference: number | null;
+  trueUpHistory: SessionTrueUp[];
 }
 
 /** Minimal hive shape used for select lists (GET /hives). */

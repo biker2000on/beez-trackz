@@ -117,8 +117,26 @@ type feedingFields struct {
 }
 
 // feedingInsert is the single insert path for feedings.
-func feedingInsert(ctx context.Context, q inspectionQuerier, f feedingFields) (uuid.UUID, error) {
+//
+// A feeding with no feeder is a feed event — syrup poured, a patty laid on
+// the frames — not equipment left on the hive. It is recorded closed with
+// reason not_installed ("no feeder was ever left") so it can never surface
+// as an open feeder demanding a refill-or-close decision. Only feedings
+// that name a feeder open the lifecycle.
+func feedingInsert(ctx context.Context, q inspectionQuerier, f feedingFields, actor *uuid.UUID) (uuid.UUID, error) {
 	var id uuid.UUID
+	if f.FeederType == nil {
+		err := q.QueryRow(ctx, `
+			INSERT INTO feedings
+				(hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes,
+				 status, closed_at, closed_reason, date_empty,
+				 status_changed_at, status_changed_by)
+			VALUES ($1, $2, $3, $4, $5, NULL, $6,
+				'closed', now(), 'not_installed', $2, now(), $7)
+			RETURNING id`,
+			f.HiveID, f.DateFed, f.Type, f.Quantity, f.QuantityUnit, f.Notes, actor).Scan(&id)
+		return id, err
+	}
 	err := q.QueryRow(ctx, `
 		INSERT INTO feedings (hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -201,7 +219,7 @@ func (s *Server) handleFeedingCreate(w http.ResponseWriter, r *http.Request) {
 		QuantityUnit: req.QuantityUnit,
 		FeederType:   feedingFeederPtr(req.FeederType),
 		Notes:        inspectionTrimPtr(req.Notes),
-	})
+	}, actorID(r))
 	if err != nil {
 		if inspectionIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "Hive not found")
@@ -272,7 +290,7 @@ func (s *Server) handleFeedingsBulk(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = tx.Rollback(ctx) }()
 	for _, hiveID := range hiveIDs {
 		fields.HiveID = hiveID
-		if _, err := feedingInsert(ctx, tx, fields); err != nil {
+		if _, err := feedingInsert(ctx, tx, fields, actorID(r)); err != nil {
 			if inspectionIsFKViolation(err) {
 				writeError(w, http.StatusBadRequest, "Hive not found")
 				return

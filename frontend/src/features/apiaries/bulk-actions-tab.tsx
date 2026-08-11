@@ -338,13 +338,13 @@ function BulkFeedingCard({
             </div>
           </div>
           <div className="grid gap-2">
-            <Label>Feeder type</Label>
+            <Label>Feeder</Label>
             <Select value={feederType} onValueChange={setFeederType}>
               <SelectTrigger>
-                <SelectValue placeholder="Optional" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Not specified</SelectItem>
+                <SelectItem value="none">No feeder — fed directly</SelectItem>
                 {FEEDER_TYPES.map(([value, label]) => (
                   <SelectItem key={value} value={value}>
                     {label}
@@ -352,6 +352,11 @@ function BulkFeedingCard({
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              {feederType === "none"
+                ? "Recorded as one-time feeds; nothing stays on the hives to track."
+                : "Each hive gets an open feeder to refill or close later."}
+            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="bulk-feed-notes">Notes</Label>

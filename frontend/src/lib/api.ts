@@ -106,8 +106,9 @@ export const api = {
   patch<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
     return request<T>("PATCH", path, body, options);
   },
-  delete<T>(path: string, options?: RequestOptions): Promise<T> {
-    return request<T>("DELETE", path, undefined, options);
+  // Some soft-delete endpoints accept an optional {reason} body.
+  delete<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return request<T>("DELETE", path, body, options);
   },
 };
 

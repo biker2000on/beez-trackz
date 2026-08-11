@@ -15,6 +15,8 @@ import {
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import {
+  feederTypeLabel,
+  feedingTypeLabel,
   useFeedingStatus,
   type FeedingStatusRow,
 } from "@/features/feedings/hooks";
@@ -36,14 +38,35 @@ const STATE_LABEL: Record<FeedingStatusRow["state"], string> = {
   ok: "OK",
 };
 
+function feedingAgo(days: number): string {
+  if (days === 0) return "today";
+  if (days === 1) return "yesterday";
+  return `${days}d ago`;
+}
+
+/** "Last fed 3d ago · 1:1 sugar syrup · 2 quarts · top feeder" */
+function latestFeedSummary(row: FeedingStatusRow): string | null {
+  if (row.daysSinceLastFeed === null || !row.latestFeedType) return null;
+  const parts = [
+    `Last fed ${feedingAgo(row.daysSinceLastFeed)}`,
+    feedingTypeLabel(row.latestFeedType),
+  ];
+  if (row.latestQuantity !== null && row.latestQuantityUnit) {
+    parts.push(`${row.latestQuantity} ${row.latestQuantityUnit}`);
+  }
+  const feeder = feederTypeLabel(row.latestFeederType);
+  if (feeder) parts.push(feeder.toLowerCase());
+  return parts.join(" · ");
+}
+
 /** One row per hive: counts, the latest feed, and the evidence-backed state. */
 function FeedingRow({ row }: { row: FeedingStatusRow }) {
-  const feeders = row.openFeeders + row.unverifiedFeeders;
+  const latest = latestFeedSummary(row);
 
   return (
     <li className="flex items-start justify-between gap-3 border-b border-border/60 pb-2 last:border-0 last:pb-0">
       <div className="min-w-0 space-y-0.5">
-        <p className="flex items-center gap-2 text-sm">
+        <p className="flex flex-wrap items-center gap-2 text-sm">
           <Link
             href={`/hives/${row.hiveId}`}
             className="font-medium underline-offset-4 hover:underline"
@@ -53,17 +76,28 @@ function FeedingRow({ row }: { row: FeedingStatusRow }) {
           <Badge variant="outline" className={cn(STATE_BADGE[row.state])}>
             {STATE_LABEL[row.state]}
           </Badge>
-          <span className="text-xs text-muted-foreground">
-            {feeders} {feeders === 1 ? "feeder" : "feeders"}
-          </span>
+          {row.openFeeders > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {row.openFeeders} open{" "}
+              {row.openFeeders === 1 ? "feeder" : "feeders"}
+            </span>
+          )}
+          {row.unverifiedFeeders > 0 && (
+            <span className="text-xs font-medium text-destructive">
+              {row.unverifiedFeeders} unverified
+            </span>
+          )}
         </p>
-        <p className="text-xs text-muted-foreground">{row.evidence}</p>
+        {latest && <p className="text-xs text-muted-foreground">{latest}</p>}
+        {row.state !== "ok" && (
+          <p className="text-xs text-muted-foreground">{row.evidence}</p>
+        )}
       </div>
-      {row.actionFeedingId ? (
+      {row.actionFeedingId && row.action ? (
         <FeedingQuickActions
           feedingId={row.actionFeedingId}
           hiveName={row.hiveName}
-          unverified={row.unverifiedFeeders > 0}
+          unverified={row.action === "Verify and close"}
         />
       ) : null}
     </li>

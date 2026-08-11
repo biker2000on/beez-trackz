@@ -197,16 +197,18 @@ export function FeedingDialog({
             </div>
           </div>
           <div className="grid gap-2">
-            <Label>Feeder type</Label>
+            <Label>Feeder</Label>
             <Select
               value={watched.feederType}
               onValueChange={(value) => form.setValue("feederType", value)}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Optional" />
+                <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NO_FEEDER}>Not specified</SelectItem>
+                <SelectItem value={NO_FEEDER}>
+                  No feeder — fed directly
+                </SelectItem>
                 {FEEDER_TYPES.map(([value, label]) => (
                   <SelectItem key={value} value={value}>
                     {label}
@@ -214,6 +216,11 @@ export function FeedingDialog({
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              {watched.feederType === NO_FEEDER
+                ? "Recorded as a one-time feed; nothing stays on the hive to track."
+                : "The feeder stays on the hive until you refill or close it."}
+            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="feeding-notes">Notes</Label>

@@ -38,6 +38,7 @@ import { formatCents, formatDate, parseCents, parseNum, todayISO } from "./forma
 import {
   useAdjustStock,
   useDeployEquipment,
+  useEquipmentStock,
   useHiveOptions,
   useMarkDamaged,
   useReceiveStock,
@@ -108,37 +109,79 @@ const wholeNumber = (min: number, message: string) =>
 // --- deploy to hive ---
 
 const deploySchema = z.object({
-  hiveId: z.string().min(1, "Hive is required"),
+  hiveId: z.string(),
+  stockId: z.string(),
   quantity: wholeNumber(1, "Quantity must be at least 1"),
   notes: z.string(),
 });
 type DeployValues = z.infer<typeof deploySchema>;
 
-export function DeployDialog({ stock, open, onOpenChange }: StockDialogProps) {
+/**
+ * The one deploy dialog. From the inventory table the stock row is fixed and
+ * the hive is chosen; from a hive's Equipment tab the hive is fixed and the
+ * stock row is chosen. Both directions used to be independent
+ * implementations with different validation.
+ */
+export function DeployDialog({
+  stock,
+  hiveId,
+  open,
+  onOpenChange,
+}: {
+  stock?: EquipmentStockRow;
+  hiveId?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const hives = useHiveOptions();
+  const stockRows = useEquipmentStock();
   const mutation = useDeployEquipment();
   const form = useForm<DeployValues>({
     resolver: zodResolver(deploySchema),
-    defaultValues: { hiveId: "", quantity: "1", notes: "" },
+    defaultValues: {
+      hiveId: hiveId ?? "",
+      stockId: stock?.id ?? "",
+      quantity: "1",
+      notes: "",
+    },
   });
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({ hiveId: "", quantity: "1", notes: "" });
+    form.reset({
+      hiveId: hiveId ?? "",
+      stockId: stock?.id ?? "",
+      quantity: "1",
+      notes: "",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const availableStock = (stockRows.data ?? []).filter(
+    (row) => row.available > 0,
+  );
+  const selectedStock =
+    stock ??
+    availableStock.find((row) => row.id === form.watch("stockId"));
+
   const onSubmit = form.handleSubmit((values) => {
+    if (!values.hiveId) {
+      form.setError("hiveId", { message: "Hive is required" });
+      return;
+    }
+    if (!values.stockId) {
+      form.setError("stockId", { message: "Choose equipment to deploy" });
+      return;
+    }
     const quantity = parseNum(values.quantity)!;
-    if (quantity > stock.available) {
-      form.setError("quantity", {
-        message: `Only ${stock.available} available`,
-      });
+    const available = selectedStock?.available ?? 0;
+    if (quantity > available) {
+      form.setError("quantity", { message: `Only ${available} available` });
       return;
     }
     mutation.mutate(
       {
-        stockId: stock.id,
+        stockId: values.stockId,
         hiveId: values.hiveId,
         quantity,
         notes: values.notes.trim() || undefined,
@@ -152,33 +195,72 @@ export function DeployDialog({ stock, open, onOpenChange }: StockDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Deploy {stock.typeName}</DialogTitle>
+          <DialogTitle>
+            {stock ? `Deploy ${stock.typeName}` : "Deploy equipment"}
+          </DialogTitle>
           <DialogDescription>
-            {stock.available} in storage available to deploy.
+            {stock
+              ? `${stock.available} in storage available to deploy.`
+              : "Move equipment from storage onto this hive."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="grid gap-4">
-          <div className="grid gap-1.5">
-            <Label>Hive</Label>
-            <Select
-              value={form.watch("hiveId")}
-              onValueChange={(value) =>
-                form.setValue("hiveId", value, { shouldValidate: true })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Choose a hive" />
-              </SelectTrigger>
-              <SelectContent>
-                {(hives.data ?? []).map((hive) => (
-                  <SelectItem key={hive.id} value={hive.id}>
-                    {hive.positionLabel} — {hive.apiaryName}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <FieldError message={errors.hiveId?.message} />
-          </div>
+          {!stock && (
+            <div className="grid gap-1.5">
+              <Label>Equipment</Label>
+              <Select
+                value={form.watch("stockId")}
+                onValueChange={(value) =>
+                  form.setValue("stockId", value, { shouldValidate: true })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={
+                      stockRows.isPending
+                        ? "Loading…"
+                        : availableStock.length === 0
+                          ? "Nothing available in storage"
+                          : "Select equipment"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableStock.map((row) => (
+                    <SelectItem key={row.id} value={row.id}>
+                      {row.typeName}
+                      {row.frameCondition ? ` (${row.frameCondition})` : ""} —{" "}
+                      {row.available} available
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldError message={errors.stockId?.message} />
+            </div>
+          )}
+          {!hiveId && (
+            <div className="grid gap-1.5">
+              <Label>Hive</Label>
+              <Select
+                value={form.watch("hiveId")}
+                onValueChange={(value) =>
+                  form.setValue("hiveId", value, { shouldValidate: true })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a hive" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(hives.data ?? []).map((hive) => (
+                    <SelectItem key={hive.id} value={hive.id}>
+                      {hive.positionLabel} — {hive.apiaryName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FieldError message={errors.hiveId?.message} />
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label htmlFor="deploy-quantity">Quantity</Label>
             <Input
@@ -187,7 +269,7 @@ export function DeployDialog({ stock, open, onOpenChange }: StockDialogProps) {
               inputMode="numeric"
               step={1}
               min={1}
-              max={stock.available}
+              max={selectedStock?.available ?? undefined}
               {...form.register("quantity")}
             />
             <FieldError message={errors.quantity?.message} />
@@ -211,7 +293,9 @@ export function DeployDialog({ stock, open, onOpenChange }: StockDialogProps) {
             </Button>
             <Button
               type="submit"
-              disabled={mutation.isPending || stock.available < 1}
+              disabled={
+                mutation.isPending || (selectedStock?.available ?? 0) < 1
+              }
             >
               {mutation.isPending ? "Deploying…" : "Deploy"}
             </Button>

@@ -2,16 +2,14 @@
 
 /**
  * Harvest session detail (/harvest/sessions/[id]): calculated vs actual
- * extraction summary cards, per-hive entries with delete, an add-entry form
- * with a live calculated-weight badge, and the true-up form.
+ * extraction summary, per-hive entries, a batch entry editor that saves the
+ * whole walkthrough in one operation, and the true-up (finalization) flow
+ * with its audit history.
  */
 
 import * as React from "react";
 import Link from "next/link";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowLeft, Plus, Scale, Trash2 } from "lucide-react";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
+import { ArrowLeft, Plus, Scale, Trash2, X } from "lucide-react";
 
 import {
   AlertDialog,
@@ -54,18 +52,20 @@ import { cn } from "@/lib/utils";
 
 import { formatDate, formatLbs, parseNum } from "./format";
 import {
-  useAddSessionEntry,
+  useAddSessionEntries,
   useApiaryOptions,
   useDeleteSessionEntry,
   useHarvestSession,
   useHiveOptions,
   useTrueUpSession,
+  type SessionEntryBody,
 } from "./hooks";
-import type { HarvestSessionEntry } from "./types";
+import type { HarvestSessionEntry, SessionTrueUp } from "./types";
 
-function FieldError({ message }: { message?: string }) {
-  if (!message) return null;
-  return <p className="text-xs text-destructive">{message}</p>;
+/** A session with a recorded extracted weight is finalized: the true-up is
+ * authoritative and new entries would change nothing. */
+export function sessionFinalized(totalExtractedWeight: number | null): boolean {
+  return totalExtractedWeight != null && totalExtractedWeight !== 0;
 }
 
 export function SessionDetail({ id }: { id: string }) {
@@ -74,6 +74,7 @@ export function SessionDetail({ id }: { id: string }) {
   const deleteEntry = useDeleteSessionEntry();
   const [confirmEntry, setConfirmEntry] =
     React.useState<HarvestSessionEntry | null>(null);
+  const [deleteReason, setDeleteReason] = React.useState("");
 
   if (session.isPending) {
     return (
@@ -100,6 +101,7 @@ export function SessionDetail({ id }: { id: string }) {
   }
 
   const data = session.data;
+  const finalized = sessionFinalized(data.totalExtractedWeight);
   const apiaryName =
     apiaries.data?.find((apiary) => apiary.id === data.apiaryId)?.name ?? null;
 
@@ -107,9 +109,14 @@ export function SessionDetail({ id }: { id: string }) {
     <div className="mx-auto grid w-full max-w-5xl gap-6">
       <div className="grid gap-1">
         <BackLink />
-        <h1 className="text-2xl font-bold tracking-tight">
-          Harvest session · {formatDate(data.date)}
-        </h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">
+            Harvest session · {formatDate(data.date)}
+          </h1>
+          <Badge variant={finalized ? "secondary" : "accent"}>
+            {finalized ? "Finalized" : "In progress"}
+          </Badge>
+        </div>
         <p className="text-sm text-muted-foreground">
           {apiaryName ?? "Apiary"}
           {data.notes ? ` — ${data.notes}` : ""}
@@ -130,9 +137,9 @@ export function SessionDetail({ id }: { id: string }) {
               : "—"
           }
           sub={
-            data.totalExtractedWeight != null
-              ? "From true-up"
-              : "Record after bottling"
+            finalized
+              ? "From true-up — this weight is authoritative"
+              : "Record after bottling to finalize"
           }
         />
         <SummaryCard
@@ -154,13 +161,14 @@ export function SessionDetail({ id }: { id: string }) {
         <CardHeader>
           <CardTitle>Hive entries</CardTitle>
           <CardDescription>
-            Super weights per hive; honey = before − after.
+            One row per hive: a super-weight pair (honey = before − after) or a
+            directly weighed harvest.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {data.entries.length === 0 ? (
             <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">
-              No entries yet. Add the first hive below.
+              No entries yet. Record the walkthrough below.
             </p>
           ) : (
             <div className="rounded-lg border">
@@ -168,8 +176,8 @@ export function SessionDetail({ id }: { id: string }) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Hive</TableHead>
-                    <TableHead className="text-right">Before</TableHead>
-                    <TableHead className="text-right">After</TableHead>
+                    <TableHead className="text-right">Super before</TableHead>
+                    <TableHead className="text-right">Super after</TableHead>
                     <TableHead className="text-right">Honey</TableHead>
                     <TableHead>Notes</TableHead>
                     <TableHead />
@@ -181,12 +189,23 @@ export function SessionDetail({ id }: { id: string }) {
                       <TableCell className="font-medium">
                         {entry.hiveName}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatLbs(entry.superWeightBefore)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatLbs(entry.superWeightAfter)}
-                      </TableCell>
+                      {entry.directWeight ? (
+                        <TableCell
+                          colSpan={2}
+                          className="text-right text-xs text-muted-foreground"
+                        >
+                          Weighed directly
+                        </TableCell>
+                      ) : (
+                        <>
+                          <TableCell className="text-right tabular-nums">
+                            {formatLbs(entry.superWeightBefore)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatLbs(entry.superWeightAfter)}
+                          </TableCell>
+                        </>
+                      )}
                       <TableCell className="text-right font-medium tabular-nums">
                         {formatLbs(entry.calculatedHoneyWeight)}
                       </TableCell>
@@ -199,8 +218,11 @@ export function SessionDetail({ id }: { id: string }) {
                           variant="ghost"
                           size="icon-sm"
                           className="text-muted-foreground hover:text-destructive"
-                          aria-label={`Delete entry for ${entry.hiveName}`}
-                          onClick={() => setConfirmEntry(entry)}
+                          aria-label={`Remove entry for ${entry.hiveName}`}
+                          onClick={() => {
+                            setDeleteReason("");
+                            setConfirmEntry(entry);
+                          }}
                         >
                           <Trash2 className="size-4" />
                         </Button>
@@ -214,12 +236,30 @@ export function SessionDetail({ id }: { id: string }) {
         </CardContent>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
-        <AddEntryCard sessionId={id} apiaryId={data.apiaryId} />
+      <div className="grid items-start gap-6 lg:grid-cols-[3fr_2fr]">
+        {finalized ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Session finalized</CardTitle>
+              <CardDescription>
+                The trued-up extracted weight is authoritative, so new hive
+                entries would not change any total. Adjust the true-up to
+                correct the extracted weight.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          <AddEntriesCard
+            sessionId={id}
+            apiaryId={data.apiaryId}
+            existingHiveIds={data.entries.map((entry) => entry.hiveId)}
+          />
+        )}
         <TrueUpCard
           sessionId={id}
           currentWeight={data.totalExtractedWeight}
           calculatedTotal={data.calculatedTotal}
+          history={data.trueUpHistory}
         />
       </div>
 
@@ -231,24 +271,38 @@ export function SessionDetail({ id }: { id: string }) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+            <AlertDialogTitle>Remove this entry?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirmEntry
-                ? `The ${formatLbs(confirmEntry.calculatedHoneyWeight)} entry for ${confirmEntry.hiveName} will be removed from this session.`
-                : ""}{" "}
-              This cannot be undone.
+                ? `The ${formatLbs(confirmEntry.calculatedHoneyWeight)} entry for ${confirmEntry.hiveName} stops counting toward this session. `
+                : ""}
+              The record is archived with your reason, not destroyed.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="grid gap-1.5">
+            <Label htmlFor="entry-delete-reason">Reason</Label>
+            <Input
+              id="entry-delete-reason"
+              placeholder="e.g. Weighed the wrong hive"
+              value={deleteReason}
+              onChange={(event) => setDeleteReason(event.target.value)}
+            />
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
-                if (confirmEntry) deleteEntry.mutate(confirmEntry.id);
+                if (confirmEntry) {
+                  deleteEntry.mutate({
+                    entryId: confirmEntry.id,
+                    reason: deleteReason.trim() || undefined,
+                  });
+                }
                 setConfirmEntry(null);
               }}
             >
-              Delete
+              Remove entry
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -295,206 +349,394 @@ function SummaryCard({
   );
 }
 
-// --- add entry ---
+// --- batch entry editor ---
 
-const entrySchema = z.object({
-  hiveId: z.string().min(1, "Hive is required"),
-  superWeightBefore: z
-    .string()
-    .refine((v) => parseNum(v) != null, "Enter the weight before extraction"),
-  superWeightAfter: z
-    .string()
-    .refine((v) => parseNum(v) != null, "Enter the weight after extraction"),
-  notes: z.string(),
-});
-type EntryValues = z.infer<typeof entrySchema>;
+type MeasureMode = "supers" | "direct";
 
-function AddEntryCard({
+interface EntryLine {
+  key: number;
+  hiveId: string;
+  before: string;
+  after: string;
+  weight: string;
+  notes: string;
+}
+
+let lineKey = 0;
+function emptyLine(): EntryLine {
+  lineKey += 1;
+  return { key: lineKey, hiveId: "", before: "", after: "", weight: "", notes: "" };
+}
+
+function lineHoney(line: EntryLine, mode: MeasureMode): number | null {
+  if (mode === "direct") return parseNum(line.weight);
+  const before = parseNum(line.before);
+  const after = parseNum(line.after);
+  return before != null && after != null ? before - after : null;
+}
+
+function AddEntriesCard({
   sessionId,
   apiaryId,
+  existingHiveIds,
 }: {
   sessionId: string;
   apiaryId: string;
+  existingHiveIds: string[];
 }) {
   const hives = useHiveOptions();
-  const mutation = useAddSessionEntry(sessionId);
-  const form = useForm<EntryValues>({
-    resolver: zodResolver(entrySchema),
-    defaultValues: {
-      hiveId: "",
-      superWeightBefore: "",
-      superWeightAfter: "",
-      notes: "",
-    },
-  });
+  const mutation = useAddSessionEntries(sessionId);
+  const [mode, setMode] = React.useState<MeasureMode>("supers");
+  const [lines, setLines] = React.useState<EntryLine[]>(() => [emptyLine()]);
+  const [error, setError] = React.useState<string | null>(null);
 
-  // Prefer hives from the session's apiary; fall back to all hives.
+  // Hives from the session's apiary that don't already have an entry.
+  const taken = new Set(existingHiveIds);
   const apiaryHives = (hives.data ?? []).filter(
     (hive) => hive.apiaryId === apiaryId,
   );
-  const options = apiaryHives.length > 0 ? apiaryHives : (hives.data ?? []);
+  const pool = apiaryHives.length > 0 ? apiaryHives : (hives.data ?? []);
+  const chosen = new Set(lines.map((line) => line.hiveId).filter(Boolean));
 
-  const before = parseNum(form.watch("superWeightBefore"));
-  const after = parseNum(form.watch("superWeightAfter"));
-  const calculated = before != null && after != null ? before - after : null;
+  const patchLine = (key: number, patch: Partial<EntryLine>) => {
+    setLines((current) =>
+      current.map((line) => (line.key === key ? { ...line, ...patch } : line)),
+    );
+  };
 
-  const onSubmit = form.handleSubmit((values) => {
-    const b = parseNum(values.superWeightBefore)!;
-    const a = parseNum(values.superWeightAfter)!;
-    if (b - a < 0) {
-      form.setError("superWeightAfter", {
-        message: "Weight before must be greater than weight after",
-      });
+  const filledLines = lines.filter(
+    (line) =>
+      line.hiveId ||
+      line.before.trim() ||
+      line.after.trim() ||
+      line.weight.trim(),
+  );
+  const total = filledLines.reduce(
+    (sum, line) => sum + (lineHoney(line, mode) ?? 0),
+    0,
+  );
+
+  const onSave = () => {
+    setError(null);
+    if (filledLines.length === 0) {
+      setError("Add at least one hive entry.");
       return;
     }
-    mutation.mutate(
-      {
-        hiveId: values.hiveId,
-        superWeightBefore: b,
-        superWeightAfter: a,
-        notes: values.notes.trim() || undefined,
-      },
-      {
-        onSuccess: () =>
-          form.reset({
-            hiveId: "",
-            superWeightBefore: "",
-            superWeightAfter: "",
-            notes: "",
-          }),
-      },
-    );
-  });
+    const entries: SessionEntryBody[] = [];
+    for (const [index, line] of filledLines.entries()) {
+      const name = filledLines.length > 1 ? `Row ${index + 1}: ` : "";
+      if (!line.hiveId) {
+        setError(`${name}choose a hive.`);
+        return;
+      }
+      if (mode === "direct") {
+        const weight = parseNum(line.weight);
+        if (weight == null || weight <= 0) {
+          setError(`${name}enter the harvested weight.`);
+          return;
+        }
+        entries.push({
+          hiveId: line.hiveId,
+          harvestedWeight: weight,
+          notes: line.notes.trim() || undefined,
+        });
+        continue;
+      }
+      const before = parseNum(line.before);
+      const after = parseNum(line.after);
+      if (before == null || after == null) {
+        setError(`${name}enter both super weights.`);
+        return;
+      }
+      if (before - after < 0) {
+        setError(`${name}super weight before must be greater than after.`);
+        return;
+      }
+      entries.push({
+        hiveId: line.hiveId,
+        superWeightBefore: before,
+        superWeightAfter: after,
+        notes: line.notes.trim() || undefined,
+      });
+    }
+    mutation.mutate(entries, {
+      onSuccess: () => setLines([emptyLine()]),
+    });
+  };
 
-  const { errors } = form.formState;
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Add hive entry</CardTitle>
+        <CardTitle>Add hive entries</CardTitle>
         <CardDescription>
-          Weigh the supers before and after extraction.
+          Record the whole walkthrough, then save it as one batch.
         </CardDescription>
       </CardHeader>
-      <CardContent>
-        <form onSubmit={onSubmit} className="grid gap-4">
-          <div className="grid gap-1.5">
-            <Label>Hive</Label>
-            <Select
-              value={form.watch("hiveId")}
-              onValueChange={(value) =>
-                form.setValue("hiveId", value, { shouldValidate: true })
-              }
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Choose a hive" />
-              </SelectTrigger>
-              <SelectContent>
-                {options.map((hive) => (
-                  <SelectItem key={hive.id} value={hive.id}>
-                    {hive.positionLabel} — {hive.apiaryName}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <FieldError message={errors.hiveId?.message} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="entry-before">Before (lbs)</Label>
-              <Input
-                id="entry-before"
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                min={0}
-                {...form.register("superWeightBefore")}
-              />
-              <FieldError message={errors.superWeightBefore?.message} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="entry-after">After (lbs)</Label>
-              <Input
-                id="entry-after"
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                min={0}
-                {...form.register("superWeightAfter")}
-              />
-              <FieldError message={errors.superWeightAfter?.message} />
-            </div>
-          </div>
-          {calculated != null && (
-            <Badge
-              variant={calculated < 0 ? "destructive" : "accent"}
-              className="justify-self-start tabular-nums"
-            >
-              Honey: {formatLbs(calculated)}
-            </Badge>
-          )}
-          <div className="grid gap-1.5">
-            <Label htmlFor="entry-notes">Notes</Label>
-            <Input
-              id="entry-notes"
-              placeholder="Optional notes"
-              {...form.register("notes")}
-            />
-          </div>
+      <CardContent className="grid gap-4">
+        <div
+          role="group"
+          aria-label="Measurement method"
+          className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-1"
+        >
+          <ModeButton
+            active={mode === "supers"}
+            onClick={() => setMode("supers")}
+          >
+            Weigh supers
+          </ModeButton>
+          <ModeButton
+            active={mode === "direct"}
+            onClick={() => setMode("direct")}
+          >
+            Direct weight
+          </ModeButton>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {mode === "supers"
+            ? "Weigh each hive's supers before and after extraction; honey = before − after."
+            : "Weigh the extracted honey itself — buckets on a scale, one weight per hive."}
+        </p>
+
+        <div className="grid gap-3">
+          {lines.map((line, index) => {
+            const honey = lineHoney(line, mode);
+            return (
+              <div
+                key={line.key}
+                className="grid gap-2 rounded-lg border p-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <Select
+                    value={line.hiveId}
+                    onValueChange={(value) =>
+                      patchLine(line.key, { hiveId: value })
+                    }
+                  >
+                    <SelectTrigger
+                      className="w-full"
+                      aria-label={`Hive for row ${index + 1}`}
+                    >
+                      <SelectValue placeholder="Choose a hive" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {pool.map((hive) => (
+                        <SelectItem
+                          key={hive.id}
+                          value={hive.id}
+                          disabled={
+                            (taken.has(hive.id) || chosen.has(hive.id)) &&
+                            hive.id !== line.hiveId
+                          }
+                        >
+                          {hive.positionLabel}
+                          {taken.has(hive.id) ? " — already entered" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {lines.length > 1 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Remove row ${index + 1}`}
+                      onClick={() =>
+                        setLines((current) =>
+                          current.filter((l) => l.key !== line.key),
+                        )
+                      }
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {mode === "supers" ? (
+                    <>
+                      <div className="grid gap-1">
+                        <Label
+                          htmlFor={`before-${line.key}`}
+                          className="text-xs"
+                        >
+                          Super weight before (lbs)
+                        </Label>
+                        <Input
+                          id={`before-${line.key}`}
+                          type="number"
+                          inputMode="decimal"
+                          step="0.1"
+                          min={0}
+                          value={line.before}
+                          onChange={(event) =>
+                            patchLine(line.key, { before: event.target.value })
+                          }
+                        />
+                      </div>
+                      <div className="grid gap-1">
+                        <Label
+                          htmlFor={`after-${line.key}`}
+                          className="text-xs"
+                        >
+                          Super weight after (lbs)
+                        </Label>
+                        <Input
+                          id={`after-${line.key}`}
+                          type="number"
+                          inputMode="decimal"
+                          step="0.1"
+                          min={0}
+                          value={line.after}
+                          onChange={(event) =>
+                            patchLine(line.key, { after: event.target.value })
+                          }
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="col-span-2 grid gap-1">
+                      <Label
+                        htmlFor={`weight-${line.key}`}
+                        className="text-xs"
+                      >
+                        Harvested weight (lbs)
+                      </Label>
+                      <Input
+                        id={`weight-${line.key}`}
+                        type="number"
+                        inputMode="decimal"
+                        step="0.1"
+                        min={0}
+                        value={line.weight}
+                        onChange={(event) =>
+                          patchLine(line.key, { weight: event.target.value })
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <Input
+                    aria-label={`Notes for row ${index + 1}`}
+                    placeholder="Notes (optional)"
+                    value={line.notes}
+                    onChange={(event) =>
+                      patchLine(line.key, { notes: event.target.value })
+                    }
+                  />
+                  {honey != null && (
+                    <Badge
+                      variant={honey < 0 ? "destructive" : "accent"}
+                      className="shrink-0 tabular-nums"
+                    >
+                      {formatLbs(honey)}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        <div className="flex flex-wrap items-center gap-3">
           <Button
-            type="submit"
-            className="justify-self-start"
-            disabled={mutation.isPending}
+            type="button"
+            variant="outline"
+            onClick={() => setLines((current) => [...current, emptyLine()])}
           >
             <Plus />
-            {mutation.isPending ? "Adding…" : "Add entry"}
+            Add hive
           </Button>
-        </form>
+          <Button
+            type="button"
+            disabled={mutation.isPending || filledLines.length === 0}
+            onClick={onSave}
+          >
+            {mutation.isPending
+              ? "Saving…"
+              : `Save ${filledLines.length || ""} ${filledLines.length === 1 ? "entry" : "entries"}`.replace("  ", " ")}
+          </Button>
+          {filledLines.length > 1 && (
+            <span className="text-sm text-muted-foreground tabular-nums">
+              Total {formatLbs(total)}
+            </span>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-// --- true-up ---
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+        active
+          ? "bg-card text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
 
-const trueUpSchema = z.object({
-  totalExtractedWeight: z
-    .string()
-    .refine((v) => parseNum(v) != null, "Enter the extracted weight"),
-});
-type TrueUpValues = z.infer<typeof trueUpSchema>;
+// --- true-up ---
 
 function TrueUpCard({
   sessionId,
   currentWeight,
   calculatedTotal,
+  history,
 }: {
   sessionId: string;
   currentWeight: number | null;
   calculatedTotal: number;
+  history: SessionTrueUp[];
 }) {
   const mutation = useTrueUpSession(sessionId);
-  const form = useForm<TrueUpValues>({
-    resolver: zodResolver(trueUpSchema),
-    defaultValues: {
-      totalExtractedWeight: currentWeight != null ? String(currentWeight) : "",
-    },
-  });
+  const [weight, setWeight] = React.useState(
+    currentWeight != null ? String(currentWeight) : "",
+  );
+  const [reason, setReason] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    form.reset({
-      totalExtractedWeight: currentWeight != null ? String(currentWeight) : "",
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Sync the input when a save round-trips a new authoritative weight.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setWeight(currentWeight != null ? String(currentWeight) : "");
   }, [currentWeight]);
 
-  const entered = parseNum(form.watch("totalExtractedWeight"));
+  const entered = parseNum(weight);
   const liveDifference = entered != null ? calculatedTotal - entered : null;
 
-  const onSubmit = form.handleSubmit((values) => {
-    mutation.mutate(parseNum(values.totalExtractedWeight)!);
-  });
+  const onSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const value = parseNum(weight);
+    if (value == null || value <= 0) {
+      setError("Enter the extracted weight.");
+      return;
+    }
+    setError(null);
+    mutation.mutate(
+      { totalExtractedWeight: value, reason: reason.trim() || undefined },
+      { onSuccess: () => setReason("") },
+    );
+  };
 
-  const { errors } = form.formState;
   return (
     <Card>
       <CardHeader>
@@ -503,7 +745,8 @@ function TrueUpCard({
           True-up
         </CardTitle>
         <CardDescription>
-          After bottling, record the actual total weight extracted.
+          After bottling, record the actual total extracted. This finalizes
+          the session — the trued-up weight becomes authoritative.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -516,9 +759,23 @@ function TrueUpCard({
               inputMode="decimal"
               step="0.1"
               min={0}
-              {...form.register("totalExtractedWeight")}
+              value={weight}
+              onChange={(event) => setWeight(event.target.value)}
             />
-            <FieldError message={errors.totalExtractedWeight?.message} />
+            {error && <p className="text-xs text-destructive">{error}</p>}
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="true-up-reason">Reason</Label>
+            <Input
+              id="true-up-reason"
+              placeholder={
+                currentWeight != null
+                  ? "Why the correction — kept for the audit trail"
+                  : "Optional — e.g. scale recheck after bottling"
+              }
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
           </div>
           {liveDifference != null && (
             <p className="text-xs text-muted-foreground">
@@ -534,9 +791,36 @@ function TrueUpCard({
             className="justify-self-start"
             disabled={mutation.isPending}
           >
-            {mutation.isPending ? "Saving…" : "Save extracted weight"}
+            {mutation.isPending
+              ? "Saving…"
+              : currentWeight != null
+                ? "Update extracted weight"
+                : "Finalize session"}
           </Button>
         </form>
+
+        {history.length > 0 && (
+          <div className="mt-4 border-t pt-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              True-up history
+            </p>
+            <ul className="mt-2 grid gap-1.5">
+              {history.map((item) => (
+                <li key={item.id} className="text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground tabular-nums">
+                    {item.previousWeightLbs != null
+                      ? `${formatLbs(item.previousWeightLbs)} → `
+                      : ""}
+                    {formatLbs(item.newWeightLbs)}
+                  </span>{" "}
+                  · {formatDate(item.recordedAt)}
+                  {item.recordedBy ? ` · ${item.recordedBy}` : ""}
+                  {item.reason ? ` — ${item.reason}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

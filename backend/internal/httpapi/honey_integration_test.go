@@ -1105,6 +1105,94 @@ func TestLoginOmitsTokenAndThrottlesFailures(t *testing.T) {
 	}
 }
 
+// Harvest entry polish: a whole yard's entries save in one transaction, a
+// line can carry a directly measured weight, and a trued-up (finalized)
+// session refuses new entries instead of silently ignoring them.
+func TestHarvestSessionBatchEntriesAndFinalization(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+
+	var apiaryID, hiveA, hiveB, sessionID uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO apiaries (name) VALUES ('Batch yard') RETURNING id`).Scan(&apiaryID); err != nil {
+		t.Fatalf("seed apiary: %v", err)
+	}
+	for label, target := range map[string]*uuid.UUID{"H1": &hiveA, "H2": &hiveB} {
+		if err := server.pool.QueryRow(ctx,
+			`INSERT INTO hives (apiary_id, position_label) VALUES ($1,$2) RETURNING id`,
+			apiaryID, label).Scan(target); err != nil {
+			t.Fatalf("seed hive %s: %v", label, err)
+		}
+	}
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO harvest_sessions (apiary_id, date) VALUES ($1, now()) RETURNING id`,
+		apiaryID).Scan(&sessionID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	// One batch: a super-weight pair and a direct measurement.
+	response, body := call(t, server.hsAddEntry, adminRequest(
+		http.MethodPost, "/api/v1/harvest-sessions/"+sessionID.String()+"/entries",
+		map[string]any{"entries": []map[string]any{
+			{"hiveId": hiveA.String(), "superWeightBefore": 60, "superWeightAfter": 20},
+			{"hiveId": hiveB.String(), "harvestedWeight": 35},
+		}}, "id", sessionID.String()))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("batch entries = %d %v", response.Code, body)
+	}
+	if count, ok := body["count"].(float64); !ok || count != 2 {
+		t.Fatalf("batch count = %v, want 2", body["count"])
+	}
+
+	var total float64
+	var directCount int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(calculated_honey_weight),0),
+		       count(*) FILTER (WHERE direct_weight)
+		FROM honey_harvests WHERE session_id=$1`, sessionID).
+		Scan(&total, &directCount); err != nil {
+		t.Fatalf("read entries: %v", err)
+	}
+	if total != 75 || directCount != 1 {
+		t.Fatalf("total=%v direct=%d, want 75 lbs with 1 direct entry", total, directCount)
+	}
+
+	// A line that fails validation aborts the whole batch.
+	response, body = call(t, server.hsAddEntry, adminRequest(
+		http.MethodPost, "/api/v1/harvest-sessions/"+sessionID.String()+"/entries",
+		map[string]any{"entries": []map[string]any{
+			{"hiveId": hiveA.String(), "harvestedWeight": 10},
+			{"hiveId": hiveB.String(), "superWeightBefore": 10, "superWeightAfter": 40},
+		}}, "id", sessionID.String()))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid batch = %d %v, want 400", response.Code, body)
+	}
+	var rows int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT count(*) FROM honey_harvests WHERE session_id=$1`, sessionID).Scan(&rows); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if rows != 2 {
+		t.Fatalf("rows after failed batch = %d, want 2 (nothing partial)", rows)
+	}
+
+	// Finalize with a true-up, then a new entry must be refused.
+	response, body = call(t, server.hsTrueUp, adminRequest(
+		http.MethodPost, "/api/v1/harvest-sessions/"+sessionID.String()+"/true-up",
+		map[string]any{"totalExtractedWeight": 70}, "id", sessionID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("true-up = %d %v", response.Code, body)
+	}
+	response, body = call(t, server.hsAddEntry, adminRequest(
+		http.MethodPost, "/api/v1/harvest-sessions/"+sessionID.String()+"/entries",
+		map[string]any{"entries": []map[string]any{
+			{"hiveId": hiveA.String(), "harvestedWeight": 5},
+		}}, "id", sessionID.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("entry after finalize = %d %v, want 409", response.Code, body)
+	}
+}
+
 // ASI-5-001: the receipt-completion write must survive the client
 // disconnecting right after the handler commits; otherwise a later replay
 // re-executes the mutation.

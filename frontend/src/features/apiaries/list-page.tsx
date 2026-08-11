@@ -27,6 +27,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
+import { useBulkSelect } from "@/lib/use-bulk-select";
 import { useAccessProfile } from "@/features/access/api";
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { useApiaries, useBulkDeleteApiaries } from "./hooks";
@@ -52,35 +53,20 @@ export function ApiariesListPage() {
   }, [apiaries.data, router]);
   const bulkDelete = useBulkDeleteApiaries();
   const [createOpen, setCreateOpen] = React.useState(false);
-  const [bulkMode, setBulkMode] = React.useState(false);
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const {
+    bulkMode,
+    selected,
+    setSelected,
+    toggle: toggleSelected,
+    toggleMode,
+    exit: exitBulkMode,
+  } = useBulkSelect(
+    (apiaries.data ?? []).map((apiary) => apiary.id),
+    { selectAll: "Select all apiaries", enabled: isAdmin },
+  );
 
   useShortcut("n", "New apiary", () => isAdmin && setCreateOpen(true));
-  useShortcut("b", "Toggle bulk select", () => {
-    if (!isAdmin) return;
-    setBulkMode((active) => {
-      if (active) setSelected(new Set());
-      return !active;
-    });
-  });
-  useShortcut("x", "Select all apiaries", () => {
-    if (!isAdmin || !bulkMode) return;
-    setSelected(
-      selected.size === (apiaries.data?.length ?? 0)
-        ? new Set()
-        : new Set((apiaries.data ?? []).map((apiary) => apiary.id)),
-    );
-  });
-
-  function toggleSelected(id: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
 
   async function deleteSelected() {
     const result = await bulkDelete.mutateAsync(Array.from(selected));
@@ -97,8 +83,7 @@ export function ApiariesListPage() {
         { description: "Apiaries containing hives are protected." },
       );
     }
-    setSelected(new Set());
-    setBulkMode(false);
+    exitBulkMode();
     setConfirmDelete(false);
   }
 
@@ -109,10 +94,7 @@ export function ApiariesListPage() {
         {isAdmin ? <div className="flex gap-2">
           <Button
             variant={bulkMode ? "secondary" : "outline"}
-            onClick={() => {
-              setBulkMode((active) => !active);
-              setSelected(new Set());
-            }}
+            onClick={toggleMode}
           >
             <CheckSquare />
             {bulkMode ? "Done" : "Bulk select"}
@@ -258,10 +240,7 @@ export function ApiariesListPage() {
             variant="ghost"
             size="icon-sm"
             aria-label="Exit bulk select"
-            onClick={() => {
-              setBulkMode(false);
-              setSelected(new Set());
-            }}
+            onClick={exitBulkMode}
           >
             <X />
           </Button>

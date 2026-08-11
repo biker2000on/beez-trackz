@@ -2,7 +2,14 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ExternalLink, PackagePlus, Pencil, Plus, QrCode } from "lucide-react";
+import {
+  ExternalLink,
+  PackagePlus,
+  Pencil,
+  Plus,
+  QrCode,
+  ScanSearch,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -52,7 +59,13 @@ export function LotsTab() {
 
   return (
     <div className="grid gap-4">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button asChild size="sm" variant="outline">
+          <Link href="/harvest/serials">
+            <ScanSearch />
+            Serial lookup
+          </Link>
+        </Button>
         <Button size="sm" onClick={() => setCreateOpen(true)}><Plus /> New harvest lot</Button>
       </div>
       {lots.data.length === 0 ? (

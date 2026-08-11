@@ -469,13 +469,17 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 		inspectionHiveIDs = append(inspectionHiveIDs, *hiveID)
 
 		for _, feeding := range item.Feedings {
-			var eventID uuid.UUID
-			err = tx.QueryRow(ctx, `
-				INSERT INTO feedings
-					(hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes)
-				VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-				*hiveID, now, feeding.Type, feeding.Quantity, feeding.QuantityUnit,
-				feeding.FeederType, feeding.Notes).Scan(&eventID)
+			// The shared insert path applies the feeder-lifecycle rule: a
+			// feeding with no feeder is recorded closed, not left open.
+			eventID, err := feedingInsert(ctx, tx, feedingFields{
+				HiveID:       *hiveID,
+				DateFed:      now,
+				Type:         feeding.Type,
+				Quantity:     feeding.Quantity,
+				QuantityUnit: feeding.QuantityUnit,
+				FeederType:   feedingFeederPtr(feeding.FeederType),
+				Notes:        feeding.Notes,
+			}, actorID(r))
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid feeding extracted from transcript")
 				return

@@ -34,7 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useShortcut } from "@/components/shortcuts/provider";
+import { useBulkSelect } from "@/lib/use-bulk-select";
 import { cn } from "@/lib/utils";
 
 import { formatDate, formatLbs, formatMoney } from "./format";
@@ -93,34 +93,21 @@ export function ActivityTab() {
   const timeline = useHoneyTimeline(100);
   const deleteEntries = useDeleteTimelineEntries();
 
-  const [bulkMode, setBulkMode] = React.useState(false);
-  const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [confirmTarget, setConfirmTarget] = React.useState<
     { kind: "single"; entry: TimelineEntry } | { kind: "bulk" } | null
   >(null);
   const entries = timeline.data ?? [];
-
-  useShortcut("b", "Bulk-select activity rows", () => {
-    setBulkMode((mode) => !mode);
-    setSelected(new Set());
-  });
-  useShortcut("x", "Select all activity rows", () => {
-    if (!bulkMode) return;
-    setSelected(
-      selected.size === entries.length
-        ? new Set()
-        : new Set(entries.map((entry) => entry.id)),
-    );
-  });
-
-  function toggleSelected(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const {
+    bulkMode,
+    selected,
+    setSelected,
+    toggle: toggleSelected,
+    toggleMode,
+    exit: exitBulkMode,
+  } = useBulkSelect(
+    entries.map((entry) => entry.id),
+    { mode: "Bulk-select activity rows", selectAll: "Select all activity rows" },
+  );
 
   function runDelete() {
     if (!confirmTarget) return;
@@ -133,10 +120,7 @@ export function ActivityTab() {
     setConfirmTarget(null);
     if (targets.length === 0) return;
     deleteEntries.mutate(targets, {
-      onSettled: () => {
-        setSelected(new Set());
-        setBulkMode(false);
-      },
+      onSettled: () => exitBulkMode(),
     });
   }
 
@@ -176,10 +160,7 @@ export function ActivityTab() {
           type="button"
           variant={bulkMode ? "secondary" : "ghost"}
           size="sm"
-          onClick={() => {
-            setBulkMode((mode) => !mode);
-            setSelected(new Set());
-          }}
+          onClick={toggleMode}
         >
           <ListChecks />
           {bulkMode ? "Done" : "Select"}

@@ -42,14 +42,18 @@ hive detail, zero tab state in URLs, and a mobile bottom nav that drops 4 of
 9 destinations with no overflow menu.**
 
 ### P0 — Feeding lifecycle and one-row hive status
-**Mostly shipped 2026-08-04.** Explicit open/closed/unverified feeder states with
+**Complete 2026-08-11.** Explicit open/closed/unverified feeder states with
 refill/close endpoints, an audited reversible backfill (originals preserved in
 `feeding_status_backfills`), and a per-hive `GET /feedings/status` row driving
 the dashboard widget.
 
-New feedings without a physical feeder still default open and can overstate
-active feeders. Finish the latest feed date/type visibility and make mixed
-open/unverified records resolve to an unambiguous action target.
+Closed 2026-08-11: a feeding recorded without a feeder is a feed event —
+created closed (`not_installed`) so it can never overstate active feeders,
+with the dialog making the choice explicit ("No feeder — fed directly"); the
+dashboard row shows the latest feed (date, type, quantity, feeder) and
+separates open from unverified counts; and on mixed hives the action always
+targets the record it names (verify → oldest unverified, refill/close →
+oldest open).
 
 At audit time, 81 feeding records had no empty date across 22 hives (two to
 six records per hive), and every one was older than 90 days. First verify
@@ -74,17 +78,24 @@ semantics are verified), rather than giving generic advice equal weight with
 setup or analytics.
 
 ### P1 — Replace embedded workflow tabs with clear overviews
-**Partially shipped 2026-08-04.** Honey overview + sub-routes with a full-screen
-`/harvest/market-day`; Business reports merged into `/reports`; hive detail
-9 tabs → 5 with timeline filter chips; tab state in URLs; bottom nav pins 4
-role-aware items plus a More sheet; `/genealogy` renamed `/queens` (redirect
-kept); `/transcribe` linked from apiary detail. Deferred: the `/harvest` →
-`/honey` route rename (collides with the public `/honey/[slug]` story pages)
-and consolidating the two deploy-equipment UIs / four bulk-select toggles.
+**Complete 2026-08-11** (except the deliberately deferred `/harvest` →
+`/honey` route rename, which collides with the public `/honey/[slug]` story
+pages). Honey overview + sub-routes with a full-screen `/harvest/market-day`;
+Business reports merged into `/reports`; hive detail 9 tabs → 5 with timeline
+filter chips; tab state in URLs; bottom nav pins 4 role-aware items plus a
+More sheet; `/genealogy` renamed `/queens` (redirect kept); `/transcribe`
+linked from apiary detail.
 
-The embedded-tab replacement remains incomplete: Apiary and Hive each retain
-five tabs, while Honey and Reports retain dense horizontal seven- and
-eight-link strips.
+Closed 2026-08-11: the apiary page opens on an Overview tab (hive status,
+feeders, blooms, weather + field alerts) with four peer tabs (Overview |
+Layout | Flora | Photos) and Bulk record promoted to its own route
+(`/apiaries/[id]/bulk`); Honey's strip slimmed to five sections (Serial
+lookup reached from Lots & QR, Activity from the overview); Honey and
+Reports share one SectionNav component that collapses to a select on
+phones instead of overflow-scrolling; the two deploy-equipment UIs are one
+dialog (stock-fixed or hive-fixed); and the four hand-rolled bulk-select
+toggles share `useBulkSelect` (the queens tree's manage mode doubles as a
+view switcher and keeps its own wiring).
 
 Apiary, Hive, and Honey need default overview pages with promoted field
 actions. Keep tabs only for two or three peer views; move larger workflows to
@@ -166,10 +177,16 @@ Make the Honey workflow show its allowed path and the next useful action:
 sale**. Each stage should show its status and available quantity, while still
 allowing the deliberate shortcuts that real operations need.
 
-Harvest entry captures the date and apiary once per session. Remaining work:
-save multiple hive line items in one operation, permit direct harvested-weight
-entry, replace ambiguous **Before** and **After** with explicit measurement
-labels, and unify lifecycle/status handling.
+Harvest entry captures the date and apiary once per session. **Closed
+2026-08-11:** the session page records the whole walkthrough as line items
+saved in one transaction; each line (and the standalone harvest dialog) takes
+either a super-weight pair or a directly measured harvested weight
+(`direct_weight` column, migration 00011); every surface labels the pair
+"Super weight before/after (lbs)"; and sessions have an explicit lifecycle —
+In progress → Finalized by true-up, with finalized sessions refusing new
+entries, the true-up capturing a reason, its history rendered, session
+entries no longer double-listed under Individual harvests, and entry
+deletion presented as the audited archive it is.
 
 ### P1 — GnuCash-web-ready inventory and honey integration
 **Foundations shipped 2026-08-04; live GnuCash sync and external/accounting

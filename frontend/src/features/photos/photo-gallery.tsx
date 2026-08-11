@@ -27,7 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useShortcut } from "@/components/shortcuts/provider";
+import { useBulkSelect } from "@/lib/use-bulk-select";
 import { formatDate } from "@/features/hives/lib";
 import { PhotoUpload } from "./photo-upload";
 import {
@@ -52,41 +52,28 @@ export function PhotoGallery({
   const photos = usePhotos(ownerType, ownerId);
   const bulkDelete = useBulkDeletePhotos(ownerType, ownerId);
   const [detailPhoto, setDetailPhoto] = React.useState<Photo | null>(null);
-  const [bulkMode, setBulkMode] = React.useState(false);
-  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [confirmDelete, setConfirmDelete] = React.useState(false);
-
-  useShortcut("b", "Toggle bulk-select photos", () => {
-    if (!canEdit) return;
-    setBulkMode((active) => {
-      if (active) setSelectedIds(new Set());
-      return !active;
-    });
-  });
-  useShortcut("x", "Select all photos", () => {
-    if (!canEdit || !bulkMode) return;
-    setSelectedIds(
-      selectedIds.size === (photos.data?.length ?? 0)
-        ? new Set()
-        : new Set((photos.data ?? []).map((photo) => photo.id)),
-    );
-  });
-
-  function togglePhoto(id: string) {
-    setSelectedIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
+  const {
+    bulkMode,
+    selected: selectedIds,
+    setSelected,
+    toggle: togglePhoto,
+    toggleMode,
+    exit: exitBulkMode,
+  } = useBulkSelect(
+    (photos.data ?? []).map((photo) => photo.id),
+    {
+      mode: "Toggle bulk-select photos",
+      selectAll: "Select all photos",
+      enabled: canEdit,
+    },
+  );
 
   async function deleteSelected() {
     try {
       const count = await bulkDelete.mutateAsync(Array.from(selectedIds));
       toast.success(`${count} photo${count === 1 ? "" : "s"} deleted`);
-      setSelectedIds(new Set());
-      setBulkMode(false);
+      exitBulkMode();
       setConfirmDelete(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Bulk delete failed");
@@ -126,10 +113,7 @@ export function PhotoGallery({
           <Button
             variant={bulkMode ? "secondary" : "outline"}
             size="sm"
-            onClick={() => {
-              setBulkMode((active) => !active);
-              setSelectedIds(new Set());
-            }}
+            onClick={toggleMode}
           >
             <CheckSquare />
             {bulkMode ? "Done" : "Bulk select"}
@@ -179,7 +163,7 @@ export function PhotoGallery({
             variant="outline"
             size="sm"
             onClick={() =>
-              setSelectedIds(
+              setSelected(
                 selectedIds.size === photos.data.length
                   ? new Set()
                   : new Set(photos.data.map((photo) => photo.id)),
@@ -202,10 +186,7 @@ export function PhotoGallery({
             variant="ghost"
             size="icon-sm"
             aria-label="Exit bulk select"
-            onClick={() => {
-              setBulkMode(false);
-              setSelectedIds(new Set());
-            }}
+            onClick={exitBulkMode}
           >
             <X />
           </Button>

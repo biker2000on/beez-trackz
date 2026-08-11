@@ -52,6 +52,7 @@ import {
   useHarvestSessions,
   useHiveOptions,
 } from "./hooks";
+import { sessionFinalized } from "./session-detail";
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -63,6 +64,12 @@ export function HarvestsTab() {
   const harvests = useHarvests();
   const [sessionDialogOpen, setSessionDialogOpen] = React.useState(false);
   const [harvestDialogOpen, setHarvestDialogOpen] = React.useState(false);
+
+  // Session entries live on their session's page; listing them here as well
+  // double-counted every entry with no marker of where it belonged.
+  const standalone = (harvests.data ?? []).filter(
+    (harvest) => !harvest.sessionId,
+  );
 
   return (
     <div className="grid gap-6">
@@ -96,6 +103,7 @@ export function HarvestsTab() {
                 <TableRow>
                   <TableHead>Date</TableHead>
                   <TableHead>Apiary</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="text-right">Hives</TableHead>
                   <TableHead className="text-right">Calculated</TableHead>
                   <TableHead className="text-right">Extracted</TableHead>
@@ -103,33 +111,43 @@ export function HarvestsTab() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sessions.data.map((session) => (
-                  <TableRow key={session.id}>
-                    <TableCell>{formatDate(session.date)}</TableCell>
-                    <TableCell className="font-medium">
-                      {session.apiaryName}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {session.entryCount}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatLbs(session.calculatedTotal)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {session.totalExtractedWeight != null
-                        ? formatLbs(session.totalExtractedWeight)
-                        : "—"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button asChild variant="ghost" size="sm">
-                        <Link href={`/harvest/sessions/${session.id}`}>
-                          View
-                          <ChevronRight />
-                        </Link>
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {sessions.data.map((session) => {
+                  const finalized = sessionFinalized(
+                    session.totalExtractedWeight,
+                  );
+                  return (
+                    <TableRow key={session.id}>
+                      <TableCell>{formatDate(session.date)}</TableCell>
+                      <TableCell className="font-medium">
+                        {session.apiaryName}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={finalized ? "secondary" : "accent"}>
+                          {finalized ? "Finalized" : "In progress"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {session.entryCount}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatLbs(session.calculatedTotal)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {session.totalExtractedWeight != null
+                          ? formatLbs(session.totalExtractedWeight)
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button asChild variant="ghost" size="sm">
+                          <Link href={`/harvest/sessions/${session.id}`}>
+                            View
+                            <ChevronRight />
+                          </Link>
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -155,9 +173,10 @@ export function HarvestsTab() {
           <p className="py-4 text-center text-sm text-muted-foreground">
             Could not load harvests.
           </p>
-        ) : harvests.data.length === 0 ? (
+        ) : standalone.length === 0 ? (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">
-            No harvests recorded yet.
+            No standalone harvests. Harvests recorded inside a session appear
+            on that session&apos;s page.
           </p>
         ) : (
           <div className="rounded-lg border">
@@ -167,13 +186,13 @@ export function HarvestsTab() {
                   <TableHead>Date</TableHead>
                   <TableHead>Hive</TableHead>
                   <TableHead>Apiary</TableHead>
-                  <TableHead className="text-right">Before</TableHead>
-                  <TableHead className="text-right">After</TableHead>
+                  <TableHead className="text-right">Super before</TableHead>
+                  <TableHead className="text-right">Super after</TableHead>
                   <TableHead className="text-right">Honey</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {harvests.data.map((harvest) => (
+                {standalone.map((harvest) => (
                   <TableRow key={harvest.id}>
                     <TableCell>{formatDate(harvest.date)}</TableCell>
                     <TableCell className="font-medium">
@@ -182,12 +201,23 @@ export function HarvestsTab() {
                     <TableCell className="text-muted-foreground">
                       {harvest.apiaryName}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatLbs(harvest.superWeightBefore)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatLbs(harvest.superWeightAfter)}
-                    </TableCell>
+                    {harvest.directWeight ? (
+                      <TableCell
+                        colSpan={2}
+                        className="text-right text-xs text-muted-foreground"
+                      >
+                        Weighed directly
+                      </TableCell>
+                    ) : (
+                      <>
+                        <TableCell className="text-right tabular-nums">
+                          {formatLbs(harvest.superWeightBefore)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatLbs(harvest.superWeightAfter)}
+                        </TableCell>
+                      </>
+                    )}
                     <TableCell className="text-right font-medium tabular-nums">
                       {formatLbs(harvest.calculatedHoneyWeight)}
                     </TableCell>
@@ -320,15 +350,21 @@ function NewSessionDialog({
 const harvestSchema = z.object({
   hiveId: z.string().min(1, "Hive is required"),
   date: z.string().min(1, "Date is required"),
-  superWeightBefore: z
-    .string()
-    .refine((v) => parseNum(v) != null, "Enter the weight before extraction"),
-  superWeightAfter: z
-    .string()
-    .refine((v) => parseNum(v) != null, "Enter the weight after extraction"),
+  superWeightBefore: z.string(),
+  superWeightAfter: z.string(),
+  harvestedWeight: z.string(),
   notes: z.string(),
 });
 type HarvestValues = z.infer<typeof harvestSchema>;
+
+const EMPTY_HARVEST: HarvestValues = {
+  hiveId: "",
+  date: "",
+  superWeightBefore: "",
+  superWeightAfter: "",
+  harvestedWeight: "",
+  notes: "",
+};
 
 function NewHarvestDialog({
   open,
@@ -339,39 +375,66 @@ function NewHarvestDialog({
 }) {
   const hives = useHiveOptions();
   const mutation = useCreateHarvest();
+  const [mode, setMode] = React.useState<"supers" | "direct">("supers");
   const form = useForm<HarvestValues>({
     resolver: zodResolver(harvestSchema),
-    defaultValues: {
-      hiveId: "",
-      date: todayISO(),
-      superWeightBefore: "",
-      superWeightAfter: "",
-      notes: "",
-    },
+    defaultValues: { ...EMPTY_HARVEST, date: todayISO() },
   });
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({
-      hiveId: "",
-      date: todayISO(),
-      superWeightBefore: "",
-      superWeightAfter: "",
-      notes: "",
-    });
+    setMode("supers");
+    form.reset({ ...EMPTY_HARVEST, date: todayISO() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const before = parseNum(form.watch("superWeightBefore"));
   const after = parseNum(form.watch("superWeightAfter"));
-  const calculated = before != null && after != null ? before - after : null;
+  const direct = parseNum(form.watch("harvestedWeight"));
+  const calculated =
+    mode === "direct"
+      ? direct
+      : before != null && after != null
+        ? before - after
+        : null;
 
   const onSubmit = form.handleSubmit((values) => {
-    const b = parseNum(values.superWeightBefore)!;
-    const a = parseNum(values.superWeightAfter)!;
+    if (mode === "direct") {
+      const weight = parseNum(values.harvestedWeight);
+      if (weight == null || weight <= 0) {
+        form.setError("harvestedWeight", {
+          message: "Enter the harvested weight",
+        });
+        return;
+      }
+      mutation.mutate(
+        {
+          hiveId: values.hiveId,
+          date: values.date,
+          harvestedWeight: weight,
+          notes: values.notes.trim() || undefined,
+        },
+        { onSuccess: () => onOpenChange(false) },
+      );
+      return;
+    }
+    const b = parseNum(values.superWeightBefore);
+    const a = parseNum(values.superWeightAfter);
+    if (b == null) {
+      form.setError("superWeightBefore", {
+        message: "Enter the super weight before extraction",
+      });
+      return;
+    }
+    if (a == null) {
+      form.setError("superWeightAfter", {
+        message: "Enter the super weight after extraction",
+      });
+      return;
+    }
     if (b - a < 0) {
       form.setError("superWeightAfter", {
-        message: "Weight before must be greater than weight after",
+        message: "Super weight before must be greater than after",
       });
       return;
     }
@@ -394,7 +457,8 @@ function NewHarvestDialog({
         <DialogHeader>
           <DialogTitle>New harvest</DialogTitle>
           <DialogDescription>
-            Super weights before and after extraction for one hive.
+            One hive&apos;s harvest, outside a session — weigh the supers or
+            the extracted honey directly.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="grid gap-4">
@@ -424,32 +488,75 @@ function NewHarvestDialog({
             <Input id="harvest-date" type="date" {...form.register("date")} />
             <FieldError message={errors.date?.message} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="harvest-before">Weight before (lbs)</Label>
-              <Input
-                id="harvest-before"
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                min={0}
-                {...form.register("superWeightBefore")}
-              />
-              <FieldError message={errors.superWeightBefore?.message} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="harvest-after">Weight after (lbs)</Label>
-              <Input
-                id="harvest-after"
-                type="number"
-                inputMode="decimal"
-                step="0.1"
-                min={0}
-                {...form.register("superWeightAfter")}
-              />
-              <FieldError message={errors.superWeightAfter?.message} />
-            </div>
+          <div
+            role="group"
+            aria-label="Measurement method"
+            className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-1"
+          >
+            {(
+              [
+                ["supers", "Weigh supers"],
+                ["direct", "Direct weight"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={mode === value}
+                onClick={() => setMode(value)}
+                className={
+                  mode === value
+                    ? "rounded-md bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm"
+                    : "rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+                }
+              >
+                {label}
+              </button>
+            ))}
           </div>
+          {mode === "supers" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label htmlFor="harvest-before">
+                  Super weight before (lbs)
+                </Label>
+                <Input
+                  id="harvest-before"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.1"
+                  min={0}
+                  {...form.register("superWeightBefore")}
+                />
+                <FieldError message={errors.superWeightBefore?.message} />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="harvest-after">Super weight after (lbs)</Label>
+                <Input
+                  id="harvest-after"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.1"
+                  min={0}
+                  {...form.register("superWeightAfter")}
+                />
+                <FieldError message={errors.superWeightAfter?.message} />
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-1.5">
+              <Label htmlFor="harvest-weight">Harvested weight (lbs)</Label>
+              <Input
+                id="harvest-weight"
+                type="number"
+                inputMode="decimal"
+                step="0.1"
+                min={0}
+                {...form.register("harvestedWeight")}
+              />
+              <FieldError message={errors.harvestedWeight?.message} />
+            </div>
+          )}
           {calculated != null && (
             <Badge
               variant={calculated < 0 ? "destructive" : "accent"}

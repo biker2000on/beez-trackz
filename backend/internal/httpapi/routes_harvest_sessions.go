@@ -185,12 +185,13 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		SuperWeightBefore     float64   `json:"superWeightBefore"`
 		SuperWeightAfter      float64   `json:"superWeightAfter"`
 		CalculatedHoneyWeight float64   `json:"calculatedHoneyWeight"`
+		DirectWeight          bool      `json:"directWeight"`
 		Notes                 *string   `json:"notes"`
 		HiveName              string    `json:"hiveName"`
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT hh.id, hh.hive_id, hh.super_weight_before, hh.super_weight_after,
-		       hh.calculated_honey_weight, hh.notes, h.position_label
+		       hh.calculated_honey_weight, hh.direct_weight, hh.notes, h.position_label
 		FROM honey_harvests hh
 		JOIN hives h ON h.id = hh.hive_id
 		WHERE hh.session_id = $1 AND hh.deleted_at IS NULL
@@ -205,7 +206,7 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var e entryRow
 		if err := rows.Scan(&e.ID, &e.HiveID, &e.SuperWeightBefore, &e.SuperWeightAfter,
-			&e.CalculatedHoneyWeight, &e.Notes, &e.HiveName); err != nil {
+			&e.CalculatedHoneyWeight, &e.DirectWeight, &e.Notes, &e.HiveName); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -277,7 +278,46 @@ func (s *Server) hsTrueUpHistory(ctx context.Context, sessionID uuid.UUID) ([]ma
 	return out, rows.Err()
 }
 
-// POST /harvest-sessions/{id}/entries {hiveId, superWeightBefore, superWeightAfter, notes?}
+// hsEntryReq is one hive line of a harvest-entry submission. A line carries
+// either a super-weight pair (honey = before − after) or a directly measured
+// harvested weight — never both.
+type hsEntryReq struct {
+	HiveID            string   `json:"hiveId"`
+	SuperWeightBefore *float64 `json:"superWeightBefore"`
+	SuperWeightAfter  *float64 `json:"superWeightAfter"`
+	HarvestedWeight   *float64 `json:"harvestedWeight"`
+	Notes             *string  `json:"notes"`
+}
+
+// hsEntryWeights resolves a line to (before, after, honey, direct) or a
+// user-facing validation message.
+func hsEntryWeights(entry hsEntryReq) (before, after, honey float64, direct bool, msg string) {
+	hasPair := entry.SuperWeightBefore != nil || entry.SuperWeightAfter != nil
+	switch {
+	case entry.HarvestedWeight != nil && hasPair:
+		return 0, 0, 0, false, "Enter either super weights or a harvested weight, not both"
+	case entry.HarvestedWeight != nil:
+		if *entry.HarvestedWeight <= 0 {
+			return 0, 0, 0, false, "Harvested weight must be greater than zero"
+		}
+		return *entry.HarvestedWeight, 0, *entry.HarvestedWeight, true, ""
+	case entry.SuperWeightBefore == nil || entry.SuperWeightAfter == nil:
+		return 0, 0, 0, false, "Both super weights are required"
+	default:
+		honey = *entry.SuperWeightBefore - *entry.SuperWeightAfter
+		if honey < 0 {
+			return 0, 0, 0, false, "Super weight before must be greater than super weight after"
+		}
+		return *entry.SuperWeightBefore, *entry.SuperWeightAfter, honey, false, ""
+	}
+}
+
+// POST /harvest-sessions/{id}/entries
+//
+// Accepts a batch — {entries: [{hiveId, superWeightBefore, superWeightAfter |
+// harvestedWeight, notes?}, ...]} — saved in one transaction so a walkthrough
+// of the whole yard is one operation. The legacy single-entry body (the same
+// fields at the top level) still works and returns the legacy shape.
 func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := uuidParam(r, "id")
 	if err != nil {
@@ -285,40 +325,31 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		HiveID            string   `json:"hiveId"`
-		SuperWeightBefore *float64 `json:"superWeightBefore"`
-		SuperWeightAfter  *float64 `json:"superWeightAfter"`
-		Notes             *string  `json:"notes"`
+		hsEntryReq
+		Entries []hsEntryReq `json:"entries"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.HiveID == "" {
-		writeError(w, http.StatusBadRequest, "Hive is required")
-		return
+	batch := req.Entries != nil
+	entries := req.Entries
+	if !batch {
+		entries = []hsEntryReq{req.hsEntryReq}
 	}
-	hiveID, err := uuid.Parse(req.HiveID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid hiveId")
-		return
-	}
-	if req.SuperWeightBefore == nil || req.SuperWeightAfter == nil {
-		writeError(w, http.StatusBadRequest, "Both weights are required")
-		return
-	}
-	honeyWeight := *req.SuperWeightBefore - *req.SuperWeightAfter
-	if honeyWeight < 0 {
-		writeError(w, http.StatusBadRequest, "Weight before must be greater than weight after")
+	if len(entries) == 0 {
+		writeError(w, http.StatusBadRequest, "Add at least one hive entry")
 		return
 	}
 
 	ctx := r.Context()
 	var sessionDate time.Time
 	var sessionApiaryID uuid.UUID
-	err = s.pool.QueryRow(ctx,
-		`SELECT date,apiary_id FROM harvest_sessions WHERE id = $1`, sessionID).
-		Scan(&sessionDate, &sessionApiaryID)
+	var totalExtractedWeight *float64
+	err = s.pool.QueryRow(ctx, `
+		SELECT date, apiary_id, total_extracted_weight
+		FROM harvest_sessions WHERE id = $1`, sessionID).
+		Scan(&sessionDate, &sessionApiaryID, &totalExtractedWeight)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Session not found")
 		return
@@ -327,41 +358,107 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	var hiveApiaryID uuid.UUID
-	if err := s.pool.QueryRow(ctx,
-		`SELECT apiary_id FROM hives WHERE id=$1`, hiveID).Scan(&hiveApiaryID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid hiveId")
-		return
-	}
-	if hiveApiaryID != sessionApiaryID {
-		writeError(w, http.StatusBadRequest, "hive must belong to the harvest session apiary")
+	// A trued-up session is finalized: its extracted weight is authoritative,
+	// so a new entry would be silently ignored by every total. Refuse rather
+	// than accept a record that changes nothing.
+	if totalExtractedWeight != nil && *totalExtractedWeight != 0 {
+		writeError(w, http.StatusConflict,
+			"This session is finalized by a true-up; adjust the true-up instead of adding entries")
 		return
 	}
 
-	var id uuid.UUID
-	err = s.pool.QueryRow(ctx, `
-		INSERT INTO honey_harvests (session_id, hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id`,
-		sessionID, hiveID, sessionDate, *req.SuperWeightBefore, *req.SuperWeightAfter,
-		honeyWeight, hsTrimPtr(req.Notes), actorID(r)).Scan(&id)
-	if err != nil {
-		if hsIsFKViolation(err) {
-			writeError(w, http.StatusBadRequest, "invalid hiveId")
+	type resolvedEntry struct {
+		hiveID        uuid.UUID
+		before, after float64
+		honey         float64
+		direct        bool
+		notes         *string
+	}
+	resolved := make([]resolvedEntry, 0, len(entries))
+	for i, entry := range entries {
+		lineName := fmt.Sprintf("Entry %d: ", i+1)
+		if !batch {
+			lineName = ""
+		}
+		if entry.HiveID == "" {
+			writeError(w, http.StatusBadRequest, lineName+"Hive is required")
 			return
 		}
+		hiveID, err := uuid.Parse(entry.HiveID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, lineName+"invalid hiveId")
+			return
+		}
+		before, after, honey, direct, msg := hsEntryWeights(entry)
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, lineName+msg)
+			return
+		}
+		var hiveApiaryID uuid.UUID
+		if err := s.pool.QueryRow(ctx,
+			`SELECT apiary_id FROM hives WHERE id=$1`, hiveID).Scan(&hiveApiaryID); err != nil {
+			writeError(w, http.StatusBadRequest, lineName+"invalid hiveId")
+			return
+		}
+		if hiveApiaryID != sessionApiaryID {
+			writeError(w, http.StatusBadRequest,
+				lineName+"hive must belong to the harvest session apiary")
+			return
+		}
+		resolved = append(resolved, resolvedEntry{
+			hiveID: hiveID, before: before, after: after,
+			honey: honey, direct: direct, notes: hsTrimPtr(entry.Notes),
+		})
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	defer tx.Rollback(ctx)
+	actor := actorID(r)
+	created := make([]map[string]any, 0, len(resolved))
+	for _, entry := range resolved {
+		var id uuid.UUID
+		err = tx.QueryRow(ctx, `
+			INSERT INTO honey_harvests
+				(session_id, hive_id, date, super_weight_before, super_weight_after,
+				 calculated_honey_weight, direct_weight, notes, created_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			RETURNING id`,
+			sessionID, entry.hiveID, sessionDate, entry.before, entry.after,
+			entry.honey, entry.direct, entry.notes, actor).Scan(&id)
+		if err != nil {
+			if hsIsFKViolation(err) {
+				writeError(w, http.StatusBadRequest, "invalid hiveId")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		created = append(created, map[string]any{
+			"id":                    id,
+			"sessionId":             sessionID,
+			"hiveId":                entry.hiveID,
+			"date":                  sessionDate,
+			"superWeightBefore":     entry.before,
+			"superWeightAfter":      entry.after,
+			"calculatedHoneyWeight": entry.honey,
+			"directWeight":          entry.direct,
+			"notes":                 entry.notes,
+		})
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !batch {
+		writeJSON(w, http.StatusCreated, created[0])
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":                    id,
-		"sessionId":             sessionID,
-		"hiveId":                hiveID,
-		"date":                  sessionDate,
-		"superWeightBefore":     *req.SuperWeightBefore,
-		"superWeightAfter":      *req.SuperWeightAfter,
-		"calculatedHoneyWeight": honeyWeight,
-		"notes":                 hsTrimPtr(req.Notes),
+		"entries": created, "count": len(created),
 	})
 }
 
