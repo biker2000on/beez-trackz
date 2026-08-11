@@ -827,3 +827,253 @@ func TestExpenseDeleteSoftDeletesAndLeavesAggregates(t *testing.T) {
 		t.Error("a soft-deleted expense still appears in the listing")
 	}
 }
+
+// --- ASI review regressions (2026-08-04) ---
+
+// ASI-1-001: reversing a jarring movement removes jars, so it must clear the
+// same availability bar as any other withdrawal — sold jars cannot be
+// reversed into negative stock.
+func TestReverseJarringBlockedWhenJarsAreSold(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedHarvest(t, server, 100)
+	jarStock(t, server, jarSizeID, 10)
+
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"jarSizeId": jarSizeID.String(), "quantity": 10, "unitPrice": 12},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("record sale = %d %v", response.Code, body)
+	}
+
+	var movementID uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT id FROM honey_movements WHERE kind='jarring'`).Scan(&movementID); err != nil {
+		t.Fatalf("read movement: %v", err)
+	}
+	response, body = call(t, server.honeyReverseMovement, adminRequest(
+		http.MethodDelete, "/api/v1/honey/movements/"+movementID.String(), nil,
+		"id", movementID.String()))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("reversing a sold-out jarring = %d %v, want 400", response.Code, body)
+	}
+
+	var reversals int
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM honey_movements WHERE reverses_movement_id=$1`,
+		movementID).Scan(&reversals); err != nil {
+		t.Fatalf("count reversals: %v", err)
+	}
+	if reversals != 0 {
+		t.Errorf("a reversal row was written despite the shortfall")
+	}
+}
+
+// ASI-1-002: a run-linked movement cannot be reversed on its own — the run,
+// its serials, and the lot's bottled total would survive and disagree with
+// the ledger.
+func TestReverseBottlingRunMovementRefused(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedHarvest(t, server, 100)
+
+	response, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots", map[string]any{
+			"lotCode":        "2026-TEST-01",
+			"extractionDate": time.Now().Format("2006-01-02"),
+			"honeyWeightLbs": 50,
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", response.Code, body)
+	}
+	lotID, _ := body["id"].(string)
+
+	response, body = call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots/"+lotID+"/bottling-runs", map[string]any{
+			"bottledDate": time.Now().Format("2006-01-02"),
+			"jarSizeId":   jarSizeID.String(),
+			"quantity":    10,
+		}, "id", lotID))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create bottling run = %d %v", response.Code, body)
+	}
+
+	var movementID uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT id FROM honey_movements WHERE bottling_run_id IS NOT NULL`).Scan(&movementID); err != nil {
+		t.Fatalf("read run movement: %v", err)
+	}
+	response, body = call(t, server.honeyReverseMovement, adminRequest(
+		http.MethodDelete, "/api/v1/honey/movements/"+movementID.String(), nil,
+		"id", movementID.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("reversing a run-linked movement = %d %v, want 409", response.Code, body)
+	}
+}
+
+// ASI-5-004: a true-up cannot take back pounds that were already jarred, and
+// a true-up of exactly 0 is rejected because the bulk formula would silently
+// treat it as unset.
+func TestTrueUpCannotShrinkBulkBelowJarredPounds(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
+	ctx := context.Background()
+
+	var apiaryID, hiveID, sessionID uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO apiaries (name) VALUES ('True-up yard') RETURNING id`).Scan(&apiaryID); err != nil {
+		t.Fatalf("seed apiary: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO hives (apiary_id, position_label) VALUES ($1,'H1') RETURNING id`,
+		apiaryID).Scan(&hiveID); err != nil {
+		t.Fatalf("seed hive: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO harvest_sessions (apiary_id, date) VALUES ($1, now()) RETURNING id`,
+		apiaryID).Scan(&sessionID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO honey_harvests
+			(hive_id, session_id, date, super_weight_before, super_weight_after, calculated_honey_weight)
+		VALUES ($1, $2, now(), 100, 0, 100)`, hiveID, sessionID); err != nil {
+		t.Fatalf("seed entry: %v", err)
+	}
+	jarStock(t, server, jarSizeID, 90) // 90 lbs of the 100 are now jarred
+
+	trueUp := func(weight float64) (*httptest.ResponseRecorder, map[string]any) {
+		return call(t, server.hsTrueUp, adminRequest(
+			http.MethodPost, "/api/v1/harvest-sessions/"+sessionID.String()+"/true-up",
+			map[string]any{"totalExtractedWeight": weight}, "id", sessionID.String()))
+	}
+
+	if response, body := trueUp(50); response.Code != http.StatusBadRequest {
+		t.Errorf("true-up to 50 with 90 jarred = %d %v, want 400", response.Code, body)
+	}
+	if response, body := trueUp(0); response.Code != http.StatusBadRequest {
+		t.Errorf("true-up to 0 = %d %v, want 400 (formula treats 0 as unset)", response.Code, body)
+	}
+	if response, body := trueUp(95); response.Code != http.StatusOK {
+		t.Errorf("true-up to 95 = %d %v, want 200", response.Code, body)
+	}
+}
+
+// ASI-5-004: soft-deleting a harvest entry is a bulk withdrawal too.
+func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
+	seedHarvest(t, server, 100)
+	jarStock(t, server, jarSizeID, 90)
+
+	var entryID uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT id FROM honey_harvests`).Scan(&entryID); err != nil {
+		t.Fatalf("read entry: %v", err)
+	}
+	response, body := call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/api/v1/harvest-entries/"+entryID.String(), nil,
+		"id", entryID.String()))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("deleting the only entry with 90 lbs jarred = %d %v, want 400",
+			response.Code, body)
+	}
+
+	// A second small entry keeps bulk above zero, so it can still be deleted.
+	seedHarvest(t, server, 5)
+	var smallID uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT id FROM honey_harvests WHERE calculated_honey_weight=5`).Scan(&smallID); err != nil {
+		t.Fatalf("read small entry: %v", err)
+	}
+	response, body = call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/api/v1/harvest-entries/"+smallID.String(), nil,
+		"id", smallID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("deleting a covered entry = %d %v, want 200", response.Code, body)
+	}
+}
+
+// ASI-5-001: the receipt-completion write must survive the client
+// disconnecting right after the handler commits; otherwise a later replay
+// re-executes the mutation.
+func TestOfflineReceiptCompletesAfterClientDisconnect(t *testing.T) {
+	server := honeyTestServer(t)
+	mutationID := uuid.New().String()
+
+	var cancel context.CancelFunc
+	handler := server.offlineMutations(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+		cancel() // the flaky-signal market-day disconnect
+	}))
+
+	request := adminRequest(http.MethodPost, "/api/v1/expenses", map[string]any{})
+	ctx, cancelFunc := context.WithCancel(request.Context())
+	cancel = cancelFunc
+	defer cancelFunc()
+	request = request.WithContext(ctx)
+	request.Header.Set("X-Offline-Mutation-ID", mutationID)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("mutation = %d %s", response.Code, response.Body.String())
+	}
+
+	var state string
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT state FROM offline_mutation_receipts WHERE mutation_id=$1`,
+		mutationID).Scan(&state); err != nil {
+		t.Fatalf("read receipt: %v", err)
+	}
+	if state != "complete" {
+		t.Errorf("receipt state = %q after client disconnect, want complete", state)
+	}
+}
+
+// ASI-5-001 aggravator: a response over the capture limit is truncated to
+// invalid JSON; storing it used to fail the jsonb insert and strand the
+// receipt in 'processing'. The body is skipped instead and the replay serves
+// the stored status.
+func TestOfflineReceiptSkipsTruncatedBody(t *testing.T) {
+	server := honeyTestServer(t)
+	mutationID := uuid.New().String()
+	blob := strings.Repeat("x", offlineResponseLimit)
+	handler := server.offlineMutations(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, map[string]any{"blob": blob})
+	}))
+
+	send := func() *httptest.ResponseRecorder {
+		request := adminRequest(http.MethodPost, "/api/v1/expenses", map[string]any{})
+		request.Header.Set("X-Offline-Mutation-ID", mutationID)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	if first := send(); first.Code != http.StatusCreated {
+		t.Fatalf("first submission = %d", first.Code)
+	}
+	var state string
+	var storedBody []byte
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT state, response_body FROM offline_mutation_receipts WHERE mutation_id=$1`,
+		mutationID).Scan(&state, &storedBody); err != nil {
+		t.Fatalf("read receipt: %v", err)
+	}
+	if state != "complete" {
+		t.Fatalf("receipt state = %q, want complete", state)
+	}
+	if len(storedBody) != 0 {
+		t.Error("a truncated body was stored instead of skipped")
+	}
+	second := send()
+	if second.Code != http.StatusCreated ||
+		second.Header().Get("X-Offline-Replayed") != "true" {
+		t.Errorf("replay = %d, replayed header %q; want stored 201",
+			second.Code, second.Header().Get("X-Offline-Replayed"))
+	}
+}

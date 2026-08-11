@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
@@ -301,14 +303,15 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
 		reorderURL, public, actorID(r)).Scan(&id)
 	if err != nil {
-		writeError(w, http.StatusConflict, "lot code or public slug already exists")
+		writeDBError(w, err, "lot code or public slug already exists",
+			"invalid reference")
 		return
 	}
 	for _, harvestID := range req.HarvestIDs {
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO harvest_lot_harvests (lot_id, harvest_id) VALUES ($1, $2)`,
 			id, harvestID); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid harvestId")
+			writeDBError(w, err, "duplicate harvestId", "invalid harvestId")
 			return
 		}
 	}
@@ -316,7 +319,7 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO harvest_lot_photos (lot_id, photo_id, sort_order) VALUES ($1, $2, $3)`,
 			id, photoID, i); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid photoId")
+			writeDBError(w, err, "duplicate photoId", "invalid photoId")
 			return
 		}
 	}
@@ -373,7 +376,8 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
 		reorderURL, public, id)
 	if err != nil {
-		writeError(w, http.StatusConflict, "lot code or public slug already exists")
+		writeDBError(w, err, "lot code or public slug already exists",
+			"invalid reference")
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -390,13 +394,13 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, harvestID := range req.HarvestIDs {
 		if _, err := tx.Exec(r.Context(), `INSERT INTO harvest_lot_harvests VALUES ($1,$2)`, id, harvestID); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid harvestId")
+			writeDBError(w, err, "duplicate harvestId", "invalid harvestId")
 			return
 		}
 	}
 	for i, photoID := range req.PhotoIDs {
 		if _, err := tx.Exec(r.Context(), `INSERT INTO harvest_lot_photos VALUES ($1,$2,$3)`, id, photoID, i); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid photoId")
+			writeDBError(w, err, "duplicate photoId", "invalid photoId")
 			return
 		}
 	}
@@ -452,7 +456,11 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	if err := tx.QueryRow(ctx,
 		`SELECT lot_code, honey_weight_lbs FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
 		Scan(&lotCode, &lotWeightLbs); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid harvest lot")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "invalid harvest lot")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 
@@ -461,7 +469,11 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	var honeyOz *float64
 	if err := tx.QueryRow(ctx, `SELECT honey_oz FROM jar_sizes WHERE id=$1`, *req.JarSizeID).
 		Scan(&honeyOz); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid jar size")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "invalid jar size")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	runLbs := 0.0
@@ -508,7 +520,8 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		RETURNING id`, lotID, date, req.JarSizeID, req.Quantity, req.HoneyLbs,
 		honeyTrimPtr(req.Notes), actor).Scan(&runID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid harvest lot or jar size")
+		writeDBError(w, err, "duplicate bottling run",
+			"invalid harvest lot or jar size")
 		return
 	}
 	// bottling_run_id is a real foreign key now. The old link was the text
@@ -519,7 +532,7 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		VALUES ($1, 'jarring', $2, $3, $4, $5, $6, $7, $8)`,
 		date, req.JarSizeID, req.Quantity, runLbs,
 		"bottling run "+lotCode, honeyTrimPtr(req.Notes), runID, actor); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid jar size")
+		writeDBError(w, err, "duplicate movement", "invalid jar size")
 		return
 	}
 	serials := make([]string, 0)
@@ -907,7 +920,8 @@ func (s *Server) customerCreate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.Notes), req.EmailOptIn, referral, honeyTrimPtr(req.ReferredBy),
 		actorID(r)).Scan(&id)
 	if err != nil {
-		writeError(w, http.StatusConflict, "referral code already exists")
+		writeDBError(w, err, "referral code or email already exists",
+			"invalid reference")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "referralCode": referral})
@@ -931,7 +945,8 @@ func (s *Server) customerUpdate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.Notes), req.EmailOptIn, honeyTrimPtr(req.ReferralCode),
 		honeyTrimPtr(req.ReferredBy), id)
 	if err != nil {
-		writeError(w, http.StatusConflict, "referral code already exists")
+		writeDBError(w, err, "referral code or email already exists",
+			"invalid reference")
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -999,7 +1014,7 @@ func (s *Server) priceListCreate(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO wholesale_price_lists (name,minimum_order_amount_cents,created_by)
 		VALUES ($1,$2,$3) RETURNING id`,
 		strings.TrimSpace(req.Name), req.MinimumOrderAmount, actorID(r)).Scan(&id); err != nil {
-		writeError(w, http.StatusConflict, "price list name already exists")
+		writeDBError(w, err, "price list name already exists", "invalid reference")
 		return
 	}
 	for _, item := range req.Items {
@@ -1011,7 +1026,7 @@ func (s *Server) priceListCreate(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO wholesale_price_list_items (price_list_id, jar_size_id, unit_price_cents, created_by)
 			VALUES ($1,$2,$3,$4)`,
 			id, item.JarSizeID, item.UnitPrice, actorID(r)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid jarSizeId")
+			writeDBError(w, err, "duplicate jarSizeId", "invalid jarSizeId")
 			return
 		}
 	}

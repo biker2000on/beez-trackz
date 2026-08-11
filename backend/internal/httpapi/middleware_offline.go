@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -164,6 +166,20 @@ func (s *Server) offlineMutationConflicts(
 	return updatedAt != nil && updatedAt.After(*queuedAt), nil
 }
 
+// receiptExec runs receipt bookkeeping detached from the request context. If
+// the client disconnects right after the handler commits, r.Context() is
+// canceled and a bookkeeping write on it would silently fail — leaving the
+// receipt in 'processing' so a later replay re-executes the mutation.
+func (s *Server) receiptExec(r *http.Request, query string, args ...any) {
+	ctx, cancel := context.WithTimeout(
+		context.WithoutCancel(r.Context()), 10*time.Second)
+	defer cancel()
+	if _, err := s.pool.Exec(ctx, query, args...); err != nil {
+		slog.Error("offline receipt bookkeeping failed",
+			"err", err, "method", r.Method, "path", r.URL.Path)
+	}
+}
+
 // offlineMutations makes queued PWA writes safe to replay. A UUID identifies
 // one logical mutation; completed responses are returned verbatim on retry.
 // For updates and deletes, a queue timestamp also protects against overwriting
@@ -255,7 +271,7 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 
 		conflict, err := s.offlineMutationConflicts(r, queuedAt)
 		if err != nil {
-			_, _ = s.pool.Exec(r.Context(), `
+			s.receiptExec(r, `
 				DELETE FROM offline_mutation_receipts
 				WHERE user_id=$1 AND mutation_id=$2`,
 				user.ID, mutationID)
@@ -263,7 +279,7 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 			return
 		}
 		if conflict {
-			_, _ = s.pool.Exec(r.Context(), `
+			s.receiptExec(r, `
 				DELETE FROM offline_mutation_receipts
 				WHERE user_id=$1 AND mutation_id=$2`,
 				user.ID, mutationID)
@@ -280,18 +296,21 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 		if status >= http.StatusInternalServerError {
-			_, _ = s.pool.Exec(r.Context(), `
+			s.receiptExec(r, `
 				DELETE FROM offline_mutation_receipts
 				WHERE user_id=$1 AND mutation_id=$2`,
 				user.ID, mutationID)
 			return
 		}
 		var responseBody any
-		if capture.body.Len() > 0 &&
+		// A body at the capture limit was truncated to invalid JSON; storing
+		// it would fail the jsonb insert and strand the receipt in
+		// 'processing'. Replays then get the status with an empty body.
+		if capture.body.Len() > 0 && capture.body.Len() < offlineResponseLimit &&
 			strings.Contains(capture.Header().Get("Content-Type"), "application/json") {
 			responseBody = json.RawMessage(capture.body.Bytes())
 		}
-		_, _ = s.pool.Exec(r.Context(), `
+		s.receiptExec(r, `
 			UPDATE offline_mutation_receipts
 			SET state='complete',response_status=$3,response_body=$4
 			WHERE user_id=$1 AND mutation_id=$2`,

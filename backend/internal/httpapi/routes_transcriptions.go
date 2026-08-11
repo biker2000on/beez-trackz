@@ -141,7 +141,17 @@ func (s *Server) transcriptionParseAndMatch(ctx context.Context, row *transcript
 // row, stores the audio in MinIO under audio/{id}.webm, and enqueues the
 // transcription job.
 func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Request) {
+	// ParseMultipartForm's argument only controls the memory-vs-tempfile
+	// spill, not the request size; without MaxBytesReader a single multi-GB
+	// upload is read fully into RAM. Bound a bit above the file limit to
+	// leave room for the other multipart fields.
+	r.Body = http.MaxBytesReader(w, r.Body, transcriptionMaxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(transcriptionMaxUploadBytes); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusBadRequest, "Audio must be under 64MB")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
@@ -155,6 +165,10 @@ func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer file.Close()
+	if header != nil && header.Size > transcriptionMaxUploadBytes {
+		writeError(w, http.StatusBadRequest, "Audio must be under 64MB")
+		return
+	}
 
 	ownerType := r.FormValue("ownerType")
 	if ownerType != "hive" && ownerType != "apiary" {

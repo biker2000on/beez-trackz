@@ -634,6 +634,36 @@ func (s *Server) honeyReverseMovement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A run-linked movement cannot be reversed on its own: the bottling run,
+	// its serials, and the lot's bottled total would all survive the reversal
+	// and permanently disagree with the ledger.
+	if bottlingRunID != nil {
+		writeError(w, http.StatusConflict,
+			"this movement belongs to a bottling run and cannot be reversed on its own")
+		return
+	}
+
+	// Reversing a movement that added jars removes them, so the removal must
+	// clear the same availability bar as any other jar withdrawal — otherwise
+	// jars that were already sold could be reversed into negative stock.
+	if jarSizeID != nil && quantity != nil && *quantity > 0 &&
+		(kind == "jarring" || kind == "jar_adjustment") {
+		onHand, labels, unknown, lockErr := honeyLockJarSizes(ctx, tx, []uuid.UUID{*jarSizeID})
+		if lockErr != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if unknown {
+			writeError(w, http.StatusBadRequest, "invalid jarSizeId")
+			return
+		}
+		if message := honeyCheckJarAvailability(onHand, labels,
+			map[uuid.UUID]int{*jarSizeID: *quantity}); message != "" {
+			writeError(w, http.StatusBadRequest, message)
+			return
+		}
+	}
+
 	reversalReason := "reversal of " + kind
 	if v := honeyTrimPtr(req.Reason); v != nil {
 		reversalReason = *v
@@ -1041,11 +1071,8 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.Location), req.Channel, req.PaymentMethod, totalAmount,
 		req.DiscountAmount, amountPaid, req.Tax, req.OrderStatus, orderNumber, dueDate,
 		req.WholesalePriceListID, honeyTrimPtr(req.Notes), actor); err != nil {
-		if honeyIsFKViolation(err) {
-			writeError(w, http.StatusBadRequest, "invalid customer, harvest lot, or wholesale price list")
-			return
-		}
-		writeError(w, http.StatusConflict, "order number already exists")
+		writeDBError(w, err, "order number already exists",
+			"invalid customer, harvest lot, or wholesale price list")
 		return
 	}
 	for _, line := range lines {

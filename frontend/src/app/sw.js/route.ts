@@ -130,6 +130,11 @@ async function broadcastQueueStatus() {
   );
 }
 
+// A mutation the server keeps 500ing on must not wedge everything queued
+// behind it forever: after this many 5xx replay attempts it is promoted to
+// "failed", which surfaces it in the review dialog for retry or discard.
+const MAX_REPLAY_ATTEMPTS = 5;
+
 async function replayQueue() {
   const items = await queueItems();
   for (const item of items) {
@@ -175,6 +180,18 @@ async function replayQueue() {
         await saveQueueItem(item);
         continue;
       }
+      // 5xx: count the attempt. Network errors (offline) are not counted —
+      // being offline is the queue's normal condition, not the item's fault.
+      item.retryCount = (item.retryCount || 0) + 1;
+      if (item.retryCount >= MAX_REPLAY_ATTEMPTS) {
+        item.state = "failed";
+        item.error =
+          errorBody?.error ||
+          "The server kept failing while replaying this change.";
+        await saveQueueItem(item);
+        continue;
+      }
+      await saveQueueItem(item);
       break;
     } catch {
       break;
@@ -319,9 +336,17 @@ self.addEventListener("fetch", (event) => {
       url.pathname === "/api/v1/auth/oidc/callback")
   ) {
     event.respondWith(
-      fetch(request).then(async (response) => {
+      fetch(request).then((response) => {
         if (response.ok || response.redirected) {
-          await clearPrivateOfflineState();
+          // Clear cached API data from the previous session, but keep the
+          // mutation queue: the common case is the same beekeeper signing
+          // back in after a session expiry with a day of queued field work
+          // that must replay, not be destroyed. (Logout still clears both.)
+          event.waitUntil(
+            caches
+              .delete(DATA_CACHE)
+              .then(() => replayQueue()),
+          );
         }
         return response;
       }),
@@ -408,6 +433,7 @@ self.addEventListener("message", (event) => {
         if (item) {
           item.state = "pending";
           item.error = null;
+          item.retryCount = 0;
           item.queuedAt = new Date().toISOString();
           await saveQueueItem(item);
           await replayQueue();

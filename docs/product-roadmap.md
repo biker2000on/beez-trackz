@@ -442,6 +442,9 @@ below. Items are ordered by recommended attack order; IDs reference the
 report, which carries evidence, exact locations, and regression checks.
 
 ### P0 — Make offline sync trustworthy (the queue can lose *and* duplicate data)
+**Fixed 2026-08-11** — all four items below, with regression tests in
+`honey_integration_test.go` (receipt completion after client disconnect,
+truncated-body skip) and `db_errors_test.go` (error mapping).
 
 These four share one test harness and should land together:
 
@@ -463,6 +466,10 @@ These four share one test harness and should land together:
   to 500 so replays retry.
 
 ### P0 — Close the negative-stock gap and bound uploads
+**Fixed 2026-08-11** — jarring reversals now clear the availability check,
+run-linked movements refuse reversal (409; a void-run action remains future
+work), true-up/entry-delete hold the bulk lock with a jarred-pounds floor,
+and transcription uploads are bounded. Regression tests alongside.
 
 - **ASI-1-001 (High)** Reversing a `jarring` movement bypasses the shipped
   negative-stock validation (no lock, no availability check) — sold jars can

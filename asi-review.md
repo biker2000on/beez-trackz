@@ -122,7 +122,8 @@ deployment.
 - **Regression verification:** Integration test — handler commits, cancel the
   request context before the completion UPDATE, replay the same mutation ID;
   assert the stored response is returned and exactly one row was created.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (receipt bookkeeping on `context.WithoutCancel`
+  with logging; truncated bodies skipped; tests added) · **Owner:** Claude
 
 #### ASI-5-002: Logging back in destroys the pending offline mutation queue
 
@@ -143,7 +144,8 @@ deployment.
 - **Regression verification:** Queue a mutation offline, delete the session
   cookie, reconnect, log in; the queued item must replay and appear
   server-side.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (login/OIDC success clears only the data cache
+  and triggers replay; logout still clears both) · **Owner:** Claude
 
 #### ASI-5-003: One poisoned pending mutation wedges the entire offline queue with no escape hatch
 
@@ -166,7 +168,9 @@ deployment.
 - **Regression verification:** Queue two mutations, make the server 500 on the
   first; the first must eventually surface in review and the second must
   replay after the first is discarded.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (per-item retry count; 5 consecutive 5xx
+  failures promote to `failed`; network errors uncounted; explicit user retry
+  resets the budget) · **Owner:** Claude
 
 #### ASI-1-001: Reversing a jarring movement bypasses the shipped negative-stock validation
 
@@ -191,7 +195,8 @@ deployment.
   inserting; return the standard 400 shortfall message.
 - **Regression verification:** Integration test — jar N, sell N, reverse the
   jarring movement must 400; reversing an unsold jarring must still succeed.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (jarring / positive jar_adjustment reversals
+  lock jar sizes and clear the availability check; test added) · **Owner:** Claude
 
 #### ASI-4-001: Transcription upload size is effectively unbounded
 
@@ -211,7 +216,8 @@ deployment.
   `header.Size > transcriptionMaxUploadBytes`.
 - **Regression verification:** POST a body just over 64 MB; expect 400 with
   bounded memory.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (`MaxBytesReader` + `header.Size` check,
+  mirroring the photos route) · **Owner:** Claude
 
 ### Medium
 
@@ -344,7 +350,8 @@ deployment.
   unsold serials in the same transaction.
 - **Regression verification:** Lot 10 lbs → bottle 10 → reverse → a new 10-lb
   run must be consistent with whichever policy is chosen.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (refuse policy: 409 on run-linked movements; a
+  void-run endpoint remains future work; test added) · **Owner:** Claude
 
 #### ASI-5-004: Harvest true-up and entry soft-delete reduce bulk stock without the bulk lock or a floor
 
@@ -364,7 +371,9 @@ deployment.
   override/reason or reject.
 - **Regression verification:** Harvest 100 lbs, jar 90, true-up to 50 →
   expect 400 or flagged override, not silent −40 bulk.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (both handlers take the bulk advisory lock and
+  floor at already-jarred pounds; zero true-ups rejected explicitly because
+  the formula treats 0 as unset; tests added) · **Owner:** Claude
 
 #### ASI-5-005: Handlers collapse transient DB errors into 4xx, which the idempotency layer then makes permanent
 
@@ -383,7 +392,9 @@ deployment.
   receipt on 500, allowing retry).
 - **Regression verification:** Inject a non-constraint error into each
   handler: assert 500, and that a replayed mutation after a 500 re-executes.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (shared `writeDBError` maps 23505→409,
+  23503→400, everything else→500; applied across the cited honey/commerce
+  handlers; unit test added) · **Owner:** Claude
 
 #### ASI-5-006: Whisper model self-install: unpinned multi-GB download under a 5-minute timeout, brittle detection, 4xx treated as success, unserialized concurrent installs
 

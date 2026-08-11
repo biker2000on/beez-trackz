@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -392,6 +393,13 @@ func (s *Server) hsTrueUp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Total weight must be zero or greater")
 		return
 	}
+	// The bulk formula treats a stored 0 as "no true-up" (NULLIF) and falls
+	// back to the per-entry sum, so a zero true-up would silently not stick.
+	if *req.TotalExtractedWeight == 0 {
+		writeError(w, http.StatusBadRequest,
+			"A true-up of exactly 0 lbs cannot be recorded; delete the session's harvest entries instead")
+		return
+	}
 
 	ctx := r.Context()
 	tx, err := s.pool.Begin(ctx)
@@ -410,6 +418,35 @@ func (s *Server) hsTrueUp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	// The extracted weight feeds TotalHarvestedLbs directly, so shrinking it
+	// is a bulk withdrawal: it must hold the bulk advisory lock like every
+	// other bulk-affecting writer and cannot take back pounds that were
+	// already jarred or used.
+	bulk, err := honeyLockBulk(ctx, tx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	var entrySum float64
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(calculated_honey_weight), 0)
+		FROM honey_harvests WHERE session_id = $1 AND deleted_at IS NULL`, id).
+		Scan(&entrySum); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	oldContribution := entrySum
+	if previous != nil && *previous != 0 {
+		oldContribution = *previous
+	}
+	if delta := *req.TotalExtractedWeight - oldContribution; delta < 0 &&
+		bulk.BulkOnHandLbs+delta < -honeyPoundTolerance {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"True-up would remove %.2f lbs from bulk honey but only %.2f lbs remain unjarred",
+			-delta, bulk.BulkOnHandLbs))
 		return
 	}
 	if _, err := tx.Exec(ctx, `
@@ -451,17 +488,59 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		Reason *string `json:"reason"`
 	}
 	_ = decodeJSON(r, &req)
-	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE honey_harvests
-		SET deleted_at=now(), deleted_by=$2, deletion_reason=$3
-		WHERE id = $1 AND deleted_at IS NULL`,
-		id, actorID(r), hsTrimPtr(req.Reason))
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+
+	// Deleting an entry shrinks TotalHarvestedLbs unless the session has an
+	// authoritative trued-up weight, so it is a bulk withdrawal too: hold the
+	// bulk advisory lock and refuse to remove pounds that were already jarred.
+	var weight float64
+	var countsTowardBulk bool
+	err = tx.QueryRow(ctx, `
+		SELECT hh.calculated_honey_weight,
+		       hh.session_id IS NULL OR COALESCE(hs.total_extracted_weight, 0) = 0
+		FROM honey_harvests hh
+		LEFT JOIN harvest_sessions hs ON hs.id = hh.session_id
+		WHERE hh.id = $1 AND hh.deleted_at IS NULL
+		FOR UPDATE OF hh`, id).Scan(&weight, &countsTowardBulk)
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "entry not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if countsTowardBulk && weight > 0 {
+		bulk, err := honeyLockBulk(ctx, tx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if bulk.BulkOnHandLbs-weight < -honeyPoundTolerance {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"Deleting this entry would remove %.2f lbs from bulk honey but only %.2f lbs remain unjarred",
+				weight, bulk.BulkOnHandLbs))
+			return
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE honey_harvests
+		SET deleted_at=now(), deleted_by=$2, deletion_reason=$3
+		WHERE id = $1 AND deleted_at IS NULL`,
+		id, actorID(r), hsTrimPtr(req.Reason)); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "softDeleted": true})
