@@ -322,9 +322,9 @@ deployment.
   `SESSION_SECRET`.
 - **Regression verification:** `grep SESSION_SECRET docker-compose.prod.yml`
   shows only the api service's `SESSION_SECRET` key.
-- **Status:** Fixed 2026-08-11 in compose (distinct required
-  `MINIO_SECRET_KEY`). Operator steps remain: add `MINIO_SECRET_KEY` to the
-  NAS `.env` before the next deploy, then rotate `SESSION_SECRET`. · **Owner:** Claude
+- **Status:** Fixed 2026-08-11 and deployed: the stack `.env` on the NAS now
+  carries a distinct generated `MINIO_SECRET_KEY`, and `SESSION_SECRET` was
+  rotated in the same deploy (all sessions invalidated by design). · **Owner:** Claude
 
 #### ASI-3-006: 34 MB compiled binary committed to the repo (`backend/server.exe~`)
 

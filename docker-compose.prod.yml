@@ -85,8 +85,12 @@ services:
     restart: unless-stopped
     environment:
       API_URL: http://api:8080
+      # Next standalone binds to $HOSTNAME, which Docker sets to the
+      # container id — that leaves loopback unbound and the healthcheck (and
+      # anything else on 127.0.0.1) unreachable. Bind everything.
+      HOSTNAME: 0.0.0.0
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -155,7 +159,7 @@ services:
   minio:
     # Digest-pinned (ASI-7-004): MinIO has shipped breaking releases and
     # restart-pulls could silently upgrade. Bump the digest deliberately.
-    image: minio/minio:latest@sha256:9966a92a734f9411e32f4f41d7d9d826fcdc0f68c4e20b70295bd4e7c11f8a2f
+    image: minio/minio:latest@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     restart: unless-stopped
     command: server /data
     environment:
