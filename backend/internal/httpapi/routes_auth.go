@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,6 +166,15 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 
 // POST /auth/login {password}
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// One instance-wide password on an internet-exposed endpoint: throttle
+	// repeated failures per client IP before touching bcrypt.
+	ip := clientIP(r)
+	if isBlocked, wait := loginThrottle.blocked(ip); isBlocked {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests,
+			"too many failed attempts; try again later")
+		return
+	}
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -186,9 +196,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(*row.PasswordHash), []byte(req.Password)) != nil {
+		loginThrottle.fail(ip)
 		writeError(w, http.StatusUnauthorized, "Invalid password")
 		return
 	}
+	loginThrottle.success(ip)
 	name := ""
 	if row.DisplayName != nil {
 		name = *row.DisplayName
@@ -198,8 +210,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "session error")
 		return
 	}
+	// The token travels only in the HttpOnly cookie. Echoing it in the body
+	// invited localStorage storage, which would undo HttpOnly entirely;
+	// /access/tokens is the supported (and revocable) path for API use.
 	http.SetCookie(w, auth.NewSessionCookie(token, s.secureCookies()))
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "token": token, "displayName": name})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "displayName": name})
 }
 
 // POST /auth/logout

@@ -239,7 +239,8 @@ deployment.
   throttle on `/public/*` POSTs (in-app or traefik).
 - **Regression verification:** POST subscribe with an existing customer's
   email and a new name; stored `name`/`referred_by` must be unchanged.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (conflict updates only `email_opt_in`; per-IP
+  throttle on the subscribe route; test added) · **Owner:** Claude
 
 #### ASI-3-002: Stored XSS via photo uploads served with client-controlled Content-Type
 
@@ -262,7 +263,9 @@ deployment.
   `Content-Security-Policy: sandbox` on the file route).
 - **Regression verification:** Upload a text/html payload named `evil.jpg` —
   rejected; a pre-existing object must serve as `image/jpeg` + `nosniff`.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (upload whitelisted to `photoContentTypes`
+  values; serve derives Content-Type from the key extension only, with
+  `nosniff` + `Content-Security-Policy: sandbox`) · **Owner:** Claude
 
 #### ASI-3-003: No brute-force protection on the password login endpoint
 
@@ -278,7 +281,8 @@ deployment.
   after 5 failures), or a traefik rate-limit rule on `/api/v1/auth/login`
   documented in the prod compose.
 - **Regression verification:** 20 rapid wrong-password POSTs get delayed/429'd.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (in-memory per-IP failure throttle: 5 free
+  attempts, then exponential delay capped at 15 min; tests added) · **Owner:** Claude
 
 #### ASI-3-004: Session tokens are non-revocable for 30 days and the JWT is echoed in the login response body
 
@@ -299,7 +303,9 @@ deployment.
   Optionally shorten `SessionDuration`.
 - **Regression verification:** Login response contains no `token`; cookie auth
   still works.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (token removed from the login body — the
+  frontend never read it; session duration unchanged, per-token revocation
+  still future work) · **Owner:** Claude
 
 #### ASI-3-005: `SESSION_SECRET` doubles as the MinIO root password in production
 
@@ -316,7 +322,9 @@ deployment.
   `SESSION_SECRET`.
 - **Regression verification:** `grep SESSION_SECRET docker-compose.prod.yml`
   shows only the api service's `SESSION_SECRET` key.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 in compose (distinct required
+  `MINIO_SECRET_KEY`). Operator steps remain: add `MINIO_SECRET_KEY` to the
+  NAS `.env` before the next deploy, then rotate `SESSION_SECRET`. · **Owner:** Claude
 
 #### ASI-3-006: 34 MB compiled binary committed to the repo (`backend/server.exe~`)
 
@@ -331,7 +339,9 @@ deployment.
 - **Recommendation:** `git rm --cached backend/server.exe~`; add `*.exe~` to
   `.gitignore`; add `backend/.dockerignore` covering `*.exe*`.
 - **Regression verification:** `git ls-files | grep -i exe` returns nothing.
-- **Status:** Open · **Owner:** Unassigned
+- **Status:** Fixed 2026-08-11 (`git rm --cached`, `*.exe~` ignored,
+  `backend/.dockerignore` added; the blob remains in history — a history
+  rewrite was deliberately not done) · **Owner:** Claude
 
 #### ASI-1-002: Reversing a bottling-run movement strands the run, lot accounting, and serials
 

@@ -54,3 +54,4 @@ sw.js
 # rewrite tooling
 .claude/
 *.exe
+*.exe~

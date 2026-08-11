@@ -51,7 +51,8 @@ func (s *Server) mountPublicCommerce(r chi.Router) {
 	r.Get("/public/honey-stories/{slug}", s.publicHoneyStory)
 	r.Get("/public/honey-stories/{slug}/qr", s.publicHoneyStoryQR)
 	r.Get("/public/honey-stories/{slug}/photos/{photoId}", s.publicHoneyStoryPhoto)
-	r.Post("/public/honey-stories/{slug}/subscribe", s.publicHoneyStorySubscribe)
+	r.With(throttleMiddleware(publicPostThrottle)).
+		Post("/public/honey-stories/{slug}/subscribe", s.publicHoneyStorySubscribe)
 }
 
 var slugCleaner = regexp.MustCompile(`[^a-z0-9]+`)
@@ -702,12 +703,14 @@ func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Reques
 	}
 	var id uuid.UUID
 	referral := strings.ToUpper(uuid.NewString()[:8])
+	// An unauthenticated signup must never rewrite an existing customer:
+	// name and referred_by feed receipts and sale displays, so on conflict
+	// only the opt-in flag may change.
 	err = s.pool.QueryRow(r.Context(), `
 		INSERT INTO customers (name,email,email_opt_in,referral_code,referred_by)
 		VALUES ($1,$2,true,$3,$4)
 		ON CONFLICT (lower(email)) WHERE email IS NOT NULL DO UPDATE SET
-			name=EXCLUDED.name, email_opt_in=true,
-			referred_by=COALESCE(EXCLUDED.referred_by,customers.referred_by)
+			email_opt_in=true
 		RETURNING id`,
 		name, email, referral, honeyTrimPtr(req.ReferredBy)).Scan(&id)
 	if err != nil {

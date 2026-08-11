@@ -7,6 +7,8 @@
 # Required in .env (dockhand: .env.dockhand):
 #   POSTGRES_PASSWORD=<password>
 #   SESSION_SECRET=<openssl rand -base64 32>
+#   MINIO_SECRET_KEY=<openssl rand -base64 32>   (distinct from SESSION_SECRET —
+#     a MinIO credential leak must not double as a session-forging key)
 # Optional:
 #   OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET  (Pocket ID; empty = disabled)
 #   ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY / OLLAMA_URL (AI fallback keys)
@@ -16,10 +18,7 @@ x-api-env: &api-env
   REDIS_URL: redis://redis:6379
   MINIO_ENDPOINT: minio:9000
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-beeztrackz}
-  # Reuse the existing Dockhand-managed application secret for MinIO. This
-  # keeps the cutover self-contained: the legacy stack already has
-  # SESSION_SECRET configured as a Dockhand secret, while MINIO is new.
-  MINIO_SECRET_KEY: ${SESSION_SECRET:?SESSION_SECRET is required}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required and must differ from SESSION_SECRET}
   MINIO_BUCKET: ${MINIO_BUCKET:-beeztrackz-media}
   SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
   APP_URL: ${APP_URL:-https://beez.adventureintandem.com}
@@ -128,7 +127,7 @@ services:
     command: server /data
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-beeztrackz}
-      MINIO_ROOT_PASSWORD: ${SESSION_SECRET:?SESSION_SECRET is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required and must differ from SESSION_SECRET}
     volumes:
       - ${MINIO_DATA_DIR:-/mnt/docker/volumes/beez-trackz/minio}:/data
     healthcheck:

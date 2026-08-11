@@ -50,6 +50,18 @@ func photoContentTypeForKey(key string) string {
 	return "application/octet-stream"
 }
 
+// photoAllowedContentTypes is the upload whitelist: exactly the types this
+// server is willing to serve back. Anything else — most importantly
+// text/html — is rejected at upload rather than stored and replayed
+// (stored-XSS via a client-controlled Content-Type).
+var photoAllowedContentTypes = func() map[string]bool {
+	allowed := make(map[string]bool, len(photoContentTypes))
+	for _, ct := range photoContentTypes {
+		allowed[ct] = true
+	}
+	return allowed
+}()
+
 // photoFileURL builds the API URL that streams a MinIO object key.
 func photoFileURL(key *string) *string {
 	if key == nil || *key == "" {
@@ -141,9 +153,15 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	contentType := header.Header.Get("Content-Type")
+	contentType := strings.TrimSpace(
+		strings.SplitN(header.Header.Get("Content-Type"), ";", 2)[0])
 	if contentType == "" || contentType == "application/octet-stream" {
 		contentType = photoContentTypeForKey(header.Filename)
+	}
+	if !photoAllowedContentTypes[contentType] {
+		writeError(w, http.StatusBadRequest,
+			"Unsupported photo type; use JPEG, PNG, GIF, WebP, or BMP")
+		return
 	}
 
 	key := fmt.Sprintf("photos/%s/%s/%d_%s",
@@ -375,16 +393,18 @@ func (s *Server) servePhotoKey(w http.ResponseWriter, r *http.Request, key strin
 	}
 	defer obj.Close()
 
-	contentType := info.ContentType
-	if contentType == "" || contentType == "application/octet-stream" {
-		contentType = photoContentTypeForKey(key)
-	}
+	// The Content-Type comes solely from the key's extension, never from the
+	// stored (client-supplied) object metadata, and nosniff + a sandboxed CSP
+	// stop the browser from executing anything that slipped through anyway.
+	contentType := photoContentTypeForKey(key)
 	cacheControl := "private, max-age=3600"
 	if strings.Contains(key, "_thumb") || strings.Contains(key, "_medium") {
 		cacheControl = "private, max-age=31536000, immutable"
 	}
 
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.Header().Set("Cache-Control", cacheControl)
 	if info.Size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))

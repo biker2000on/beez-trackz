@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
@@ -995,6 +996,112 @@ func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 		"id", smallID.String()))
 	if response.Code != http.StatusOK {
 		t.Fatalf("deleting a covered entry = %d %v, want 200", response.Code, body)
+	}
+}
+
+// ASI-3-001: a public signup may set the opt-in flag on an existing customer
+// but must never rewrite the CRM record's name or referral.
+func TestPublicSubscribeCannotRewriteExistingCustomer(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO customers (name, email, email_opt_in, referral_code)
+		VALUES ('Real Name', 'buyer@example.com', false, 'REF12345')`); err != nil {
+		t.Fatalf("seed customer: %v", err)
+	}
+	response, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots", map[string]any{
+			"lotCode":        "2026-STORY-01",
+			"publicSlug":     "asi-story",
+			"extractionDate": time.Now().Format("2006-01-02"),
+			"honeyWeightLbs": 10,
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", response.Code, body)
+	}
+
+	response, body = call(t, server.publicHoneyStorySubscribe, adminRequest(
+		http.MethodPost, "/api/v1/public/honey-stories/asi-story/subscribe",
+		map[string]any{
+			"name":       "Attacker",
+			"email":      "buyer@example.com",
+			"referredBy": "EVIL",
+		}, "slug", "asi-story"))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("subscribe = %d %v", response.Code, body)
+	}
+
+	var name string
+	var referredBy *string
+	var optIn bool
+	if err := server.pool.QueryRow(ctx, `
+		SELECT name, referred_by, email_opt_in FROM customers
+		WHERE lower(email)='buyer@example.com'`).Scan(&name, &referredBy, &optIn); err != nil {
+		t.Fatalf("read customer: %v", err)
+	}
+	if name != "Real Name" {
+		t.Errorf("subscribe rewrote the customer name to %q", name)
+	}
+	if referredBy != nil {
+		t.Errorf("subscribe stamped referred_by = %q", *referredBy)
+	}
+	if !optIn {
+		t.Error("subscribe did not set the opt-in flag")
+	}
+}
+
+// ASI-3-003 / ASI-3-004: repeated login failures from one IP get throttled,
+// and a successful login no longer echoes the session JWT in the body.
+func TestLoginOmitsTokenAndThrottlesFailures(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-horse"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `DELETE FROM user_settings`); err != nil {
+		t.Fatalf("clear settings: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO user_settings (password_hash, display_name)
+		VALUES ($1, 'Tester')`, string(hash)); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
+
+	send := func(password, remoteAddr string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+			strings.NewReader(`{"password":"`+password+`"}`))
+		request.RemoteAddr = remoteAddr
+		response := httptest.NewRecorder()
+		server.handleLogin(response, request)
+		return response
+	}
+
+	good := send("correct-horse", "198.51.100.7:1000")
+	if good.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", good.Code, good.Body.String())
+	}
+	if strings.Contains(good.Body.String(), `"token"`) {
+		t.Error("login response still echoes the session token")
+	}
+	if len(good.Result().Cookies()) == 0 {
+		t.Error("login did not set the session cookie")
+	}
+
+	throttled := false
+	for i := 0; i < 10; i++ {
+		response := send("wrong-password", "198.51.100.8:1000")
+		if response.Code == http.StatusTooManyRequests {
+			throttled = true
+			break
+		}
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("failed login = %d, want 401 or 429", response.Code)
+		}
+	}
+	if !throttled {
+		t.Error("ten rapid wrong-password attempts were never throttled")
 	}
 }
 

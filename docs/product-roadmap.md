@@ -483,6 +483,12 @@ and transcription uploads are bounded. Regression tests alongside.
   OOM path on the NAS.
 
 ### P1 — Security mediums
+**Fixed 2026-08-11** — subscribe no longer rewrites customers and /public/*
+POSTs are rate limited; photo uploads are whitelisted and served nosniff with
+extension-derived types; login has an exponential per-IP failure throttle and
+no longer echoes the JWT; prod compose requires a distinct `MINIO_SECRET_KEY`
+(add to the NAS `.env`, then rotate `SESSION_SECRET`); `backend/server.exe~`
+untracked with `.gitignore`/`.dockerignore` coverage.
 
 - **ASI-3-001** Public honey-story subscribe can overwrite existing customer
   records (`ON CONFLICT ... DO UPDATE SET name=...`) and has no rate limit.
