@@ -21,6 +21,7 @@ type recFixture struct {
 	apiaryID uuid.UUID
 	hiveID   uuid.UUID
 	ctx      context.Context
+	recCount int
 }
 
 // newRecFixture creates an isolated admin user, apiary, hive, and no
@@ -76,13 +77,22 @@ func newRecFixture(t *testing.T) *recFixture {
 
 func (f *recFixture) pool() *pgxpool.Pool { return f.server.pool }
 
+// recTypes rotates seed rows across the enum: undismissed duplicates of the
+// same (type, hive) are now rejected by ai_recommendations_active_unique.
+var recTypes = []string{
+	"inspection_due", "treatment_reminder", "equipment_needed",
+	"seasonal_prep", "feeder_check",
+}
+
 func (f *recFixture) insertRec(t *testing.T, priority string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
+	recType := recTypes[f.recCount%len(recTypes)]
+	f.recCount++
 	if err := f.pool().QueryRow(f.ctx, `
 		INSERT INTO ai_recommendations (hive_id, type, message, priority)
-		VALUES ($1,'inspection_due','Test recommendation',$2) RETURNING id`,
-		f.hiveID, priority).Scan(&id); err != nil {
+		VALUES ($1,$2,'Test recommendation',$3) RETURNING id`,
+		f.hiveID, recType, priority).Scan(&id); err != nil {
 		t.Fatalf("insert recommendation: %v", err)
 	}
 	return id
