@@ -161,6 +161,8 @@ export function ShortcutsProvider({
   const [entries, setEntries] = React.useState<Map<string, ShortcutEntry>>(
     () => new Map(),
   );
+  const commandResultsRef = React.useRef<HTMLDivElement>(null);
+  const commandItemRefs = React.useRef<Array<HTMLLIElement | null>>([]);
 
   // Ctrl-K is a live record index, not just a static page list. These queries
   // are shared with the rest of the app through React Query's cache.
@@ -414,6 +416,20 @@ export function ShortcutsProvider({
     hives.isPending ||
     (isAdmin && (sales.isPending || sessions.isPending || lots.isPending));
 
+  React.useLayoutEffect(() => {
+    const results = commandResultsRef.current;
+    const activeItem = commandItemRefs.current[activeCommand];
+    if (!commandOpen || !results || !activeItem) return;
+
+    const resultsBounds = results.getBoundingClientRect();
+    const itemBounds = activeItem.getBoundingClientRect();
+    if (itemBounds.top < resultsBounds.top) {
+      results.scrollTop -= resultsBounds.top - itemBounds.top;
+    } else if (itemBounds.bottom > resultsBounds.bottom) {
+      results.scrollTop += itemBounds.bottom - resultsBounds.bottom;
+    }
+  }, [activeCommand, commandOpen, filteredCommands.length]);
+
   function runCommand(command: PaletteCommand) {
     setCommandOpen(false);
     setCommandQuery("");
@@ -499,7 +515,7 @@ export function ShortcutsProvider({
           if (!open) setCommandQuery("");
         }}
       >
-        <DialogContent className="top-[10%] max-w-xl translate-y-0 gap-2 p-3 sm:top-[15%]">
+        <DialogContent className="top-[10%] max-w-[calc(100%-2rem)] translate-y-0 gap-2 overflow-hidden p-3 sm:top-[15%] sm:max-w-3xl">
           <DialogHeader className="sr-only">
             <DialogTitle>Command palette</DialogTitle>
             <DialogDescription>
@@ -541,7 +557,11 @@ export function ShortcutsProvider({
             />
             <Kbd>Esc</Kbd>
           </div>
-          <div className="max-h-[min(60vh,28rem)] overflow-y-auto py-1">
+          <div
+            ref={commandResultsRef}
+            data-command-results
+            className="max-h-[min(60vh,28rem)] min-w-0 overflow-x-hidden overflow-y-auto py-1"
+          >
             {filteredCommands.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
                 {indexing ? "Still indexing records…" : "No matching routes or records"}
@@ -549,11 +569,18 @@ export function ShortcutsProvider({
             ) : (
               <ul className="grid gap-1">
                 {filteredCommands.map((command, index) => (
-                  <li key={command.id}>
+                  <li
+                    key={command.id}
+                    ref={(node) => {
+                      commandItemRefs.current[index] = node;
+                    }}
+                    className="min-w-0 overflow-hidden"
+                  >
                     <Button
                       type="button"
                       variant="ghost"
-                      className={`h-auto min-h-12 w-full justify-start px-3 py-2 ${
+                      aria-current={index === activeCommand ? "true" : undefined}
+                      className={`h-auto min-h-12 w-full min-w-0 max-w-full justify-start overflow-hidden px-3 py-2 ${
                         index === activeCommand ? "bg-secondary" : ""
                       }`}
                       onMouseEnter={() => setActiveCommand(index)}
@@ -623,13 +650,14 @@ export function CommandPaletteButton() {
     <Button
       type="button"
       variant="ghost"
-      className="w-full justify-start text-muted-foreground"
+      aria-label="Search everything"
+      className="w-full min-w-0 justify-start gap-2 overflow-hidden px-2 text-muted-foreground"
       onClick={context.openCommands}
     >
-      <Search />
-      Search everything
-      <span className="ml-auto">
-        <Kbd>Ctrl/⌘ K</Kbd>
+      <Search className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-left">Search</span>
+      <span className="shrink-0">
+        <Kbd>Ctrl K</Kbd>
       </span>
     </Button>
   );

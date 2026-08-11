@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// These routes share one Next.js development server. Serial execution avoids
+// cold-compilation races while keeping the browser assertions deterministic.
+test.describe.configure({ mode: "serial" });
+
 async function mockApp(page: Page) {
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -204,4 +208,66 @@ test("Home remains pinned in the mobile bottom bar", async ({ page }) => {
   await page.goto("/harvest/activity");
   const mainNav = page.getByRole("navigation", { name: "Main navigation" });
   await expect(mainNav.getByRole("link", { name: "Home" })).toBeVisible();
+});
+
+test("command palette follows keyboard selection without horizontal overflow", async ({
+  page,
+}) => {
+  const hives = Array.from({ length: 12 }, (_, index) => ({
+    id: `h${index + 1}`,
+    apiaryId: "a1",
+    apiaryName: "North Ridge Apiary With A Deliberately Long Descriptive Name",
+    positionLabel: `Hive Position ${index + 1} With Extra Descriptive Context`,
+    status: "active",
+    isArchived: false,
+  }));
+  await page.route("**/api/v1/hives?includeArchived=true", (route) =>
+    route.fulfill({ json: hives }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/hives");
+
+  const searchButton = page.getByRole("button", { name: "Search everything" });
+  await expect(searchButton).toBeVisible();
+  expect(
+    await searchButton.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog", { name: "Command palette" });
+  const input = dialog.getByRole("textbox", { name: "Search commands" });
+  await input.fill("hive position");
+  await expect(
+    dialog.getByText("Hive Position 1", { exact: false }).first(),
+  ).toBeVisible();
+  for (let index = 0; index < 20; index += 1) {
+    await input.press("ArrowDown");
+  }
+
+  const activeCommand = dialog.locator('button[aria-current="true"]');
+  await expect(activeCommand).toHaveCount(1);
+  const measurements = await activeCommand.evaluate((element) => {
+    const results = element.closest<HTMLElement>("[data-command-results]");
+    const palette = element.closest<HTMLElement>('[role="dialog"]');
+    if (!results || !palette) throw new Error("Command palette structure missing");
+    const itemBounds = element.getBoundingClientRect();
+    const resultsBounds = results.getBoundingClientRect();
+    return {
+      itemVisible:
+        itemBounds.top >= resultsBounds.top &&
+        itemBounds.bottom <= resultsBounds.bottom,
+      resultsScrolled: results.scrollTop > 0,
+      resultsFit: results.scrollWidth <= results.clientWidth,
+      paletteFit: palette.scrollWidth <= palette.clientWidth,
+      paletteWidth: palette.clientWidth,
+    };
+  });
+
+  expect(measurements.itemVisible).toBe(true);
+  expect(measurements.resultsScrolled).toBe(true);
+  expect(measurements.resultsFit).toBe(true);
+  expect(measurements.paletteFit).toBe(true);
+  expect(measurements.paletteWidth).toBeGreaterThanOrEqual(700);
 });
