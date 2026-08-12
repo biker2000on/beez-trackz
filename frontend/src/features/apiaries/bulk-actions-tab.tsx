@@ -16,6 +16,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -169,7 +170,7 @@ function BulkInspectionCard({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm onSubmit={onSubmit} className="grid gap-4">
           <HivePicker
             hives={hives}
             isLoading={isLoading}
@@ -206,7 +207,7 @@ function BulkInspectionCard({
               ? "Saving…"
               : `Record for ${selected.size} hive${selected.size === 1 ? "" : "s"}`}
           </Button>
-        </form>
+        </ShortcutForm>
       </CardContent>
     </Card>
   );
@@ -274,7 +275,7 @@ function BulkFeedingCard({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm onSubmit={onSubmit} className="grid gap-4">
           <HivePicker
             hives={hives}
             isLoading={isLoading}
@@ -376,7 +377,7 @@ function BulkFeedingCard({
               ? "Saving…"
               : `Feed ${selected.size} hive${selected.size === 1 ? "" : "s"}`}
           </Button>
-        </form>
+        </ShortcutForm>
       </CardContent>
     </Card>
   );

@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -164,7 +165,7 @@ export function QueenTab({
     list.find((queen) => queen.status === "active") ?? null;
   const past = list.filter((queen) => queen !== current);
 
-  async function onSubmit(values: QueenValues) {
+  async function onSubmit(values: QueenValues, resetAfter = false) {
     try {
       await createQueen.mutateAsync({
         hiveId,
@@ -177,7 +178,17 @@ export function QueenTab({
         notes: values.notes.trim() === "" ? null : values.notes,
       });
       toast.success("Queen added");
-      setAddOpen(false);
+      if (resetAfter) {
+        form.reset({
+          origin: "purchased",
+          parentQueenId: NO_PARENT,
+          introducedDate: todayInput(),
+          status: "active",
+          notes: "",
+        });
+      } else {
+        setAddOpen(false);
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not add the queen",
@@ -226,8 +237,10 @@ export function QueenTab({
               Record a new queen for this hive.
             </DialogDescription>
           </DialogHeader>
-          <form
-            onSubmit={form.handleSubmit(onSubmit)}
+          <ShortcutForm
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+            onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
+            onEscape={() => setAddOpen(false)}
             className="grid gap-4"
             noValidate
           >
@@ -323,7 +336,7 @@ export function QueenTab({
                 {form.formState.isSubmitting ? "Saving…" : "Add queen"}
               </Button>
             </DialogFooter>
-          </form>
+          </ShortcutForm>
         </DialogContent>
       </Dialog> : null}
     </div>

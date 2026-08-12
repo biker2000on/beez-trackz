@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -131,7 +132,15 @@ export function MarketDayTab({
         </div>
         <Card className="lg:sticky lg:top-6">
           <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShoppingBasket className="size-4" /> Current sale</CardTitle></CardHeader>
-          <CardContent className="grid gap-4">
+          <CardContent>
+            <ShortcutForm
+              className="grid gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                checkout();
+              }}
+              onSubmitAndReset={checkout}
+            >
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
               <div className="grid gap-1"><Label>Channel</Label><Select value={channel} onValueChange={(value) => setChannel(value as typeof channel)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="farmers_market">Farmers market</SelectItem><SelectItem value="farm_stand">Farm stand</SelectItem><SelectItem value="pickup">Pickup</SelectItem><SelectItem value="direct">Direct</SelectItem></SelectContent></Select></div>
@@ -158,7 +167,8 @@ export function MarketDayTab({
               {discountAmount > 0 && <div className="flex justify-between text-muted-foreground"><span>Discount</span><span>−{formatMoney(discountAmount)}</span></div>}
             </div>
             <div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Total</span><span className="text-3xl font-bold tabular-nums">{formatMoney(total)}</span></div>
-            <Button size="lg" className="h-14 text-base" onClick={checkout} disabled={sale.isPending || lines.length === 0}>{sale.isPending ? "Completing…" : "Complete sale"}</Button>
+            <Button type="submit" size="lg" className="h-14 text-base" disabled={sale.isPending || lines.length === 0}>{sale.isPending ? "Completing…" : "Complete sale"}</Button>
+            </ShortcutForm>
           </CardContent>
         </Card>
       </div>

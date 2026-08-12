@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -93,7 +94,7 @@ export function ReturnDeploymentDialog({
 
   const quantity = parseNum(form.watch("quantity")) ?? 0;
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitReturn = (resetAfter: boolean) => form.handleSubmit((values) => {
     const returning = parseNum(values.quantity)!;
     if (returning > outstanding) {
       form.setError("quantity", {
@@ -110,9 +111,23 @@ export function ReturnDeploymentDialog({
         date: values.date,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          const remaining = outstanding - returning;
+          if (resetAfter && remaining > 0) {
+            form.reset({
+              quantity: String(remaining),
+              reason: "season_end",
+              condition: "good",
+              date: todayISO(),
+              notes: "",
+            });
+          } else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitReturn(false);
 
   const { errors } = form.formState;
   return (
@@ -125,7 +140,12 @@ export function ReturnDeploymentDialog({
             {deployment.hiveLabel}.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitReturn(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="return-quantity">Quantity</Label>
@@ -214,7 +234,7 @@ export function ReturnDeploymentDialog({
               {mutation.isPending ? "Returning…" : "Return"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

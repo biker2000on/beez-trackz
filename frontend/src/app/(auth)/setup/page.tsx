@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Label } from "@/components/ui/label";
 
 const setupSchema = z
@@ -80,7 +81,7 @@ export default function SetupPage() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form
+        <ShortcutForm
           onSubmit={form.handleSubmit(onSubmit)}
           className="grid gap-4"
           noValidate
@@ -148,7 +149,7 @@ export default function SetupPage() {
           >
             {form.formState.isSubmitting ? "Setting up…" : "Create account"}
           </Button>
-        </form>
+        </ShortcutForm>
       </CardContent>
     </Card>
   );

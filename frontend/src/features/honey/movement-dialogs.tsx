@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Textarea } from "@/components/ui/textarea";
 
 import { formatLbs, parseNum, todayISO } from "./format";
@@ -87,7 +88,7 @@ export function JarHoneyDialog({
     return sum + (row?.honeyOz && qty > 0 ? (row.honeyOz * qty) / 16 : 0);
   }, 0);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitJarring = (resetAfter: boolean) => form.handleSubmit((values) => {
     const jarLines = lines
       .map((line) => ({
         jarSizeId: line.jarSizeId,
@@ -113,9 +114,17 @@ export function JarHoneyDialog({
           : {}),
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) {
+            form.reset({ date: todayISO(), lossLbs: "", lossReason: "", notes: "" });
+            setLines(makeJarLines(inventory));
+          } else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitJarring(false);
 
   const { errors } = form.formState;
   return (
@@ -127,7 +136,12 @@ export function JarHoneyDialog({
             Record jars filled from your bulk honey.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitJarring(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label htmlFor="jarring-date">Date</Label>
             <Input id="jarring-date" type="date" {...form.register("date")} />
@@ -185,7 +199,7 @@ export function JarHoneyDialog({
               {mutation.isPending ? "Saving…" : "Record jarring"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -225,7 +239,7 @@ export function BulkMovementDialog({
   }, [open]);
 
   const isLoss = kind === "loss";
-  const onSubmit = form.handleSubmit((values) => {
+  const submitMovement = (resetAfter: boolean) => form.handleSubmit((values) => {
     mutation.mutate(
       {
         date: values.date,
@@ -234,9 +248,15 @@ export function BulkMovementDialog({
         reason: values.reason.trim() || undefined,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) form.reset({ date: todayISO(), amountLbs: "", reason: "", notes: "" });
+          else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitMovement(false);
 
   const { errors } = form.formState;
   const idPrefix = isLoss ? "loss" : "bulk-use";
@@ -251,7 +271,12 @@ export function BulkMovementDialog({
               : "Record bulk honey used for cooking, mead, gifts in bulk, and so on."}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitMovement(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor={`${idPrefix}-date`}>Date</Label>
@@ -309,7 +334,7 @@ export function BulkMovementDialog({
                   : "Record use"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -347,7 +372,7 @@ export function GiveAwayDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitGiveAway = (resetAfter: boolean) => form.handleSubmit((values) => {
     const jarLines = lines
       .map((line) => ({
         jarSizeId: line.jarSizeId,
@@ -366,9 +391,17 @@ export function GiveAwayDialog({
         reason: values.reason.trim() || undefined,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) {
+            form.reset({ date: todayISO(), reason: "", notes: "" });
+            setLines(makeJarLines(inventory));
+          } else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitGiveAway(false);
 
   const { errors } = form.formState;
   return (
@@ -380,7 +413,12 @@ export function GiveAwayDialog({
             Record jars given away as gifts or samples.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitGiveAway(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label htmlFor="give-date">Date</Label>
             <Input id="give-date" type="date" {...form.register("date")} />
@@ -424,7 +462,7 @@ export function GiveAwayDialog({
               {mutation.isPending ? "Saving…" : "Record give-away"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -461,7 +499,7 @@ export function AdjustJarsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitAdjustment = (resetAfter: boolean) => form.handleSubmit((values) => {
     const deltas = lines
       .map((line) => ({
         jarSizeId: line.jarSizeId,
@@ -479,9 +517,17 @@ export function AdjustJarsDialog({
         lines: deltas,
         reason: values.reason.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) {
+            form.reset({ date: todayISO(), reason: "" });
+            setLines(makeJarLines(inventory));
+          } else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitAdjustment(false);
 
   const { errors } = form.formState;
   return (
@@ -493,7 +539,12 @@ export function AdjustJarsDialog({
             Correct on-hand counts with a positive or negative delta per size.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitAdjustment(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label htmlFor="adjust-date">Date</Label>
             <Input id="adjust-date" type="date" {...form.register("date")} />
@@ -530,7 +581,7 @@ export function AdjustJarsDialog({
               {mutation.isPending ? "Saving…" : "Apply adjustments"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

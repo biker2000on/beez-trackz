@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -107,7 +108,7 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
     items: typeList.filter((t) => t.category === category),
   })).filter((group) => group.items.length > 0);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitStock = (resetAfter: boolean) => form.handleSubmit((values) => {
     const condition = values.frameCondition;
     const unitCostCents = parseCents(values.unitCost);
     if (values.unitCost.trim() !== "" && unitCostCents == null) {
@@ -126,9 +127,15 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
           ? { frameCondition: condition }
           : {}),
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) form.reset(EMPTY_STOCK);
+          else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitStock(false);
 
   const { errors } = form.formState;
   return (
@@ -140,7 +147,12 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
             Start tracking a batch of equipment you own.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitStock(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label>Equipment type</Label>
             <Select
@@ -252,7 +264,7 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
               {mutation.isPending ? "Adding…" : "Add stock"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -289,7 +301,7 @@ export function AddTypeDialog({ open, onOpenChange }: AddDialogProps) {
 
   const isBox = form.watch("category") === "box";
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitType = (resetAfter: boolean) => form.handleSubmit((values) => {
     const framesPerBox = parseNum(values.framesPerBox);
     mutation.mutate(
       {
@@ -297,9 +309,15 @@ export function AddTypeDialog({ open, onOpenChange }: AddDialogProps) {
         category: values.category,
         ...(isBox && framesPerBox != null ? { framesPerBox } : {}),
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) form.reset({ name: "", category: "", framesPerBox: "" });
+          else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitType(false);
 
   const { errors } = form.formState;
   return (
@@ -311,7 +329,12 @@ export function AddTypeDialog({ open, onOpenChange }: AddDialogProps) {
             Add a custom type to the equipment catalog.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitType(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label htmlFor="type-name">Name</Label>
             <Input
@@ -371,7 +394,7 @@ export function AddTypeDialog({ open, onOpenChange }: AddDialogProps) {
               {mutation.isPending ? "Adding…" : "Add type"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

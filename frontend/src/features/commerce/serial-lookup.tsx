@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/features/honey/format";
@@ -40,7 +41,7 @@ export function SerialLookup({ initialSerial = "" }: { initialSerial?: string })
     <div className="grid gap-4">
       <Card>
         <CardContent className="pt-6">
-          <form onSubmit={submit} className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+          <ShortcutForm onSubmit={submit} className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
             <div className="grid gap-1.5">
               <Label htmlFor="jar-serial">Jar serial</Label>
               <Input
@@ -56,7 +57,7 @@ export function SerialLookup({ initialSerial = "" }: { initialSerial?: string })
             <Button type="submit" disabled={draft.trim().length === 0}>
               <Search /> Look up
             </Button>
-          </form>
+          </ShortcutForm>
           <p className="mt-2 text-xs text-muted-foreground">
             Printed on the jar label. Capitalisation does not matter.
           </p>

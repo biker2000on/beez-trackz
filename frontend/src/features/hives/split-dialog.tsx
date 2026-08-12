@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -97,7 +98,7 @@ export function SplitDialog({
 
   const watched = form.watch();
 
-  async function onSubmit(values: SplitValues) {
+  async function onSubmit(values: SplitValues, resetAfter = false) {
     try {
       const result = await createSplit.mutateAsync({
         parentHiveId: hive.id,
@@ -110,8 +111,20 @@ export function SplitDialog({
         notes: values.notes.trim() === "" ? null : values.notes,
       });
       toast.success("Split recorded — new hive created");
-      onOpenChange(false);
-      router.push(`/hives/${result.id}`);
+      if (resetAfter) {
+        form.reset({
+          apiaryId: hive.apiaryId,
+          positionLabel: "",
+          splitDate: todayInput(),
+          splitType: "walk-away",
+          framesMoved: "",
+          notes: "",
+        });
+        requestAnimationFrame(() => form.setFocus("positionLabel"));
+      } else {
+        onOpenChange(false);
+        router.push(`/hives/${result.id}`);
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError
@@ -130,8 +143,10 @@ export function SplitDialog({
             Creates a new child hive linked back to this one.
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
+        <ShortcutForm
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+          onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
+          onEscape={() => onOpenChange(false)}
           className="grid gap-4"
           noValidate
         >
@@ -235,7 +250,7 @@ export function SplitDialog({
               {form.formState.isSubmitting ? "Splitting…" : "Record split"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

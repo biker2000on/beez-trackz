@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -178,7 +179,21 @@ function LotFormDialog({
     () => lot?.photos.map((photo) => photo.id).join(", ") ?? "",
   );
 
-  function submit() {
+  function resetDraft() {
+    setLotCode("");
+    setDate(todayISO());
+    setWeight("");
+    setVariety("");
+    setSeason("");
+    setRegion("");
+    setBloom("");
+    setStory("");
+    setReorder("");
+    setHarvestIds([]);
+    setPhotoIds("");
+  }
+
+  function submit(resetAfter = false) {
     const pounds = Number(weight);
     if (!lotCode.trim() || !date || !Number.isFinite(pounds) || pounds < 0) return;
     const payload = {
@@ -202,7 +217,12 @@ function LotFormDialog({
         { onSuccess: () => onOpenChange(false) },
       );
     } else {
-      create.mutate(payload, { onSuccess: () => onOpenChange(false) });
+      create.mutate(payload, {
+        onSuccess: () => {
+          if (resetAfter) resetDraft();
+          else onOpenChange(false);
+        },
+      });
     }
   }
 
@@ -210,7 +230,15 @@ function LotFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90dvh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>{lot ? `Edit lot ${lot.lotCode}` : "Create harvest lot"}</DialogTitle></DialogHeader>
-        <div className="grid gap-4">
+        <ShortcutForm
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+          onSubmitAndReset={lot ? undefined : () => submit(true)}
+          onEscape={() => onOpenChange(false)}
+        >
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label htmlFor="lot-code">Lot code</Label><Input id="lot-code" value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
@@ -238,8 +266,8 @@ function LotFormDialog({
             <div className="grid gap-1.5"><Label>Reorder link</Label><Input type="url" value={reorder} onChange={(e) => setReorder(e.target.value)} placeholder="https://…" /></div>
             <div className="grid gap-1.5"><Label>Curated photo IDs</Label><Input value={photoIds} onChange={(e) => setPhotoIds(e.target.value)} placeholder="Optional, comma separated" /></div>
           </div>
-        </div>
-        <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} disabled={busy}><QrCode />{busy ? "Saving…" : lot ? "Save lot" : "Create lot & QR"}</Button></DialogFooter>
+          <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={busy}><QrCode />{busy ? "Saving…" : lot ? "Save lot" : "Create lot & QR"}</Button></DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -254,7 +282,15 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
   const [pounds, setPounds] = React.useState("");
   const [serialize, setSerialize] = React.useState(false);
 
-  function submit() {
+  function resetDraft() {
+    setDate(todayISO());
+    setJarSizeId("");
+    setQuantity("");
+    setPounds("");
+    setSerialize(false);
+  }
+
+  function submit(resetAfter = false) {
     const qty = Number(quantity);
     if (!Number.isInteger(qty) || qty <= 0) return;
     // A run without a jar size creates no inventory movement; the API 400s.
@@ -268,13 +304,26 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
       quantity: qty,
       honeyLbs: pounds.trim() ? Number(pounds) : undefined,
       serialize,
-    }, { onSuccess: () => onOpenChange(false) });
+    }, {
+      onSuccess: () => {
+        if (resetAfter) resetDraft();
+        else onOpenChange(false);
+      },
+    });
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader><DialogTitle>Bottle {lot.lotCode}</DialogTitle></DialogHeader>
-        <div className="grid gap-4">
+        <ShortcutForm
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+          onSubmitAndReset={() => submit(true)}
+          onEscape={() => onOpenChange(false)}
+        >
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label>Jar size</Label><Select value={jarSizeId || undefined} onValueChange={setJarSizeId}><SelectTrigger><SelectValue placeholder="Select size" /></SelectTrigger><SelectContent>{(inventory.data ?? []).map((row) => <SelectItem key={row.jarSizeId} value={row.jarSizeId}>{row.label}</SelectItem>)}</SelectContent></Select></div>
@@ -284,8 +333,8 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
             <div className="grid gap-1.5"><Label>Honey used (lb)</Label><Input type="number" min="0" step="0.1" value={pounds} onChange={(e) => setPounds(e.target.value)} /></div>
           </div>
           <label className="flex items-center gap-2 text-sm"><Checkbox checked={serialize} onCheckedChange={(value) => setSerialize(value === true)} />Generate an individual serial number for every jar</label>
-        </div>
-        <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} disabled={create.isPending}>{create.isPending ? "Saving…" : "Record bottling run"}</Button></DialogFooter>
+          <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={create.isPending}>{create.isPending ? "Saving…" : "Record bottling run"}</Button></DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

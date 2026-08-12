@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -146,7 +147,16 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   const [assignment, setAssignment] = React.useState("general");
   const [vendor, setVendor] = React.useState("");
   const [notes, setNotes] = React.useState("");
-  function save() {
+  function resetDraft() {
+    setDate(todayISO());
+    setCategory("feed");
+    setDescription("");
+    setAmount("");
+    setAssignment("general");
+    setVendor("");
+    setNotes("");
+  }
+  function save(resetAfter = false) {
     const value = Number(amount);
     if (!description.trim() || !Number.isFinite(value) || value < 0) return;
     const [kind, id] = assignment.split(":");
@@ -156,18 +166,23 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
       hiveId: kind === "hive" ? id : undefined,
       harvestLotId: kind === "lot" ? id : undefined,
       vendor: vendor.trim() || undefined, notes: notes.trim() || undefined,
-    }, { onSuccess: () => onOpenChange(false) });
+    }, {
+      onSuccess: () => {
+        if (resetAfter) resetDraft();
+        else onOpenChange(false);
+      },
+    });
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Add expense</DialogTitle></DialogHeader>
-      <div className="grid gap-4">
+      <ShortcutForm className="grid gap-4" onSubmit={(event) => { event.preventDefault(); save(); }} onSubmitAndReset={() => save(true)} onEscape={() => onOpenChange(false)}>
         <div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div><div className="grid gap-1.5"><Label>Category</Label><Select value={category} onValueChange={setCategory}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{EXPENSE_CATEGORIES.map((value) => <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>)}</SelectContent></Select></div></div>
         <div className="grid gap-1.5"><Label>Description</Label><Input value={description} onChange={(e) => setDescription(e.target.value)} /></div>
         <div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Amount</Label><Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></div><div className="grid gap-1.5"><Label>Vendor</Label><Input value={vendor} onChange={(e) => setVendor(e.target.value)} /></div></div>
         <div className="grid gap-1.5"><Label>Assign cost</Label><Select value={assignment} onValueChange={setAssignment}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="general">General operation</SelectItem>{(apiaries.data ?? []).map((row) => <SelectItem key={`apiary:${row.id}`} value={`apiary:${row.id}`}>Apiary · {row.name}</SelectItem>)}{(hives.data ?? []).map((row) => <SelectItem key={`hive:${row.id}`} value={`hive:${row.id}`}>Hive · {row.apiaryName} / {row.positionLabel}</SelectItem>)}{(lots.data ?? []).map((row) => <SelectItem key={`lot:${row.id}`} value={`lot:${row.id}`}>Lot · {row.lotCode}</SelectItem>)}</SelectContent></Select></div>
         <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
-      </div>
-      <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={save} disabled={create.isPending}>{create.isPending ? "Saving…" : "Save expense"}</Button></DialogFooter>
+        <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={create.isPending}>{create.isPending ? "Saving…" : "Save expense"}</Button></DialogFooter>
+      </ShortcutForm>
     </DialogContent></Dialog>
   );
 }
@@ -229,7 +244,15 @@ function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpe
   const [notes, setNotes] = React.useState(customer?.notes ?? "");
   const [optIn, setOptIn] = React.useState(customer?.emailOptIn ?? false);
 
-  function submit() {
+  function resetDraft() {
+    setName("");
+    setEmail("");
+    setPhone("");
+    setNotes("");
+    setOptIn(false);
+  }
+
+  function submit(resetAfter = false) {
     if (customer) {
       update.mutate({
         id: customer.id,
@@ -243,17 +266,33 @@ function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpe
         referredBy: customer.referredBy ?? undefined,
       }, { onSuccess: () => onOpenChange(false) });
     } else {
-      create.mutate({ name, email: email.trim() || undefined, phone: phone.trim() || undefined, emailOptIn: optIn }, { onSuccess: () => onOpenChange(false) });
+      create.mutate({ name, email: email.trim() || undefined, phone: phone.trim() || undefined, emailOptIn: optIn }, {
+        onSuccess: () => {
+          if (resetAfter) resetDraft();
+          else onOpenChange(false);
+        },
+      });
     }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>{customer ? `Edit ${customer.name}` : "Add customer"}</DialogTitle></DialogHeader><div className="grid gap-3"><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div><div className="grid gap-1.5"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div></div>{customer && <div className="grid gap-1.5"><Label>Notes</Label><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>}<label className="flex items-center gap-2 text-sm"><Checkbox checked={optIn} onCheckedChange={(value) => setOptIn(value === true)} />Customer opted into seasonal release and reorder emails</label></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button onClick={submit} disabled={busy || !name.trim()}>{customer ? "Save changes" : "Save customer"}</Button></DialogFooter></DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>{customer ? `Edit ${customer.name}` : "Add customer"}</DialogTitle></DialogHeader><ShortcutForm className="grid gap-3" onSubmit={(event) => { event.preventDefault(); submit(); }} onSubmitAndReset={customer ? undefined : () => submit(true)} onEscape={() => onOpenChange(false)}><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div><div className="grid gap-1.5"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div></div>{customer && <div className="grid gap-1.5"><Label>Notes</Label><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>}<label className="flex items-center gap-2 text-sm"><Checkbox checked={optIn} onCheckedChange={(value) => setOptIn(value === true)} />Customer opted into seasonal release and reorder emails</label><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={busy || !name.trim()}>{customer ? "Save changes" : "Save customer"}</Button></DialogFooter></ShortcutForm></DialogContent></Dialog>;
 }
 
 function PriceListDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const inventory = useJarInventory(); const create = useCreateWholesalePriceList();
   const [name, setName] = React.useState(""); const [minimum, setMinimum] = React.useState("0"); const [prices, setPrices] = React.useState<Record<string, string>>({});
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Wholesale price list</DialogTitle></DialogHeader><div className="grid gap-3"><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="2026 wholesale" /></div><div className="grid gap-1.5"><Label>Minimum order</Label><Input type="number" min="0" step="0.01" value={minimum} onChange={(e) => setMinimum(e.target.value)} /></div></div>{(inventory.data ?? []).map((row) => <div key={row.jarSizeId} className="grid grid-cols-[1fr_120px] items-center gap-3"><Label>{row.label}</Label><Input type="number" min="0" step="0.01" value={prices[row.jarSizeId] ?? ""} onChange={(e) => setPrices((current) => ({ ...current, [row.jarSizeId]: e.target.value }))} placeholder="Price" /></div>)}</div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={create.isPending || !name.trim()} onClick={() => create.mutate({ name, minimumOrderAmount: Number(minimum), items: Object.entries(prices).filter(([, price]) => price !== "").map(([jarSizeId, price]) => ({ jarSizeId, unitPrice: Number(price) })) }, { onSuccess: () => onOpenChange(false) })}>Save price list</Button></DialogFooter></DialogContent></Dialog>;
+  function submit(resetAfter = false) {
+    create.mutate({ name, minimumOrderAmount: Number(minimum), items: Object.entries(prices).filter(([, price]) => price !== "").map(([jarSizeId, price]) => ({ jarSizeId, unitPrice: Number(price) })) }, {
+      onSuccess: () => {
+        if (resetAfter) {
+          setName("");
+          setMinimum("0");
+          setPrices({});
+        } else onOpenChange(false);
+      },
+    });
+  }
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Wholesale price list</DialogTitle></DialogHeader><ShortcutForm className="grid gap-3" onSubmit={(event) => { event.preventDefault(); submit(); }} onSubmitAndReset={() => submit(true)} onEscape={() => onOpenChange(false)}><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="2026 wholesale" /></div><div className="grid gap-1.5"><Label>Minimum order</Label><Input type="number" min="0" step="0.01" value={minimum} onChange={(e) => setMinimum(e.target.value)} /></div></div>{(inventory.data ?? []).map((row) => <div key={row.jarSizeId} className="grid grid-cols-[1fr_120px] items-center gap-3"><Label>{row.label}</Label><Input type="number" min="0" step="0.01" value={prices[row.jarSizeId] ?? ""} onChange={(e) => setPrices((current) => ({ ...current, [row.jarSizeId]: e.target.value }))} placeholder="Price" /></div>)}<DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={create.isPending || !name.trim()}>Save price list</Button></DialogFooter></ShortcutForm></DialogContent></Dialog>;
 }
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {

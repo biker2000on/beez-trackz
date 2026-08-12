@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -90,7 +91,7 @@ export function FeedingDialog({
 
   const watched = form.watch();
 
-  async function onSubmit(values: FeedingValues) {
+  async function onSubmit(values: FeedingValues, resetAfter = false) {
     try {
       await createFeeding.mutateAsync({
         hiveId,
@@ -102,7 +103,19 @@ export function FeedingDialog({
         notes: values.notes.trim() === "" ? null : values.notes,
       });
       toast.success("Feeding recorded");
-      onOpenChange(false);
+      if (resetAfter) {
+        form.reset({
+          dateFed: todayInput(),
+          type: "sugar_syrup_1to1",
+          quantity: "",
+          quantityUnit: "quarts",
+          feederType: NO_FEEDER,
+          notes: "",
+        });
+        requestAnimationFrame(() => form.setFocus("quantity"));
+      } else {
+        onOpenChange(false);
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError
@@ -121,8 +134,10 @@ export function FeedingDialog({
             Record what you fed and how much.
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
+        <ShortcutForm
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+          onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
+          onEscape={() => onOpenChange(false)}
           className="grid gap-4"
           noValidate
         >
@@ -238,7 +253,7 @@ export function FeedingDialog({
               {form.formState.isSubmitting ? "Saving…" : "Record feeding"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

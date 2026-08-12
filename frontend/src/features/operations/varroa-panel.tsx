@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -50,7 +51,15 @@ export function VarroaPanel({
   const [sample, setSample] = React.useState("300");
   const [notes, setNotes] = React.useState("");
 
-  async function save() {
+  function resetDraft() {
+    setDate(todayInput());
+    setMethod("alcohol_wash");
+    setCount("");
+    setSample("300");
+    setNotes("");
+  }
+
+  async function save(resetAfter = false) {
     const mitesCount = Number(count);
     const sampleSize = sample.trim() === "" ? undefined : Number(sample);
     if (!Number.isInteger(mitesCount) || mitesCount < 0 || (sampleSize != null && (!Number.isInteger(sampleSize) || sampleSize <= 0))) {
@@ -67,9 +76,8 @@ export function VarroaPanel({
         notes: notes.trim() || undefined,
       });
       toast.success("Varroa count recorded");
-      setOpen(false);
-      setCount("");
-      setNotes("");
+      resetDraft();
+      if (!resetAfter) setOpen(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save count");
     }
@@ -151,7 +159,15 @@ export function VarroaPanel({
       {canEdit ? <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>Record Varroa count</DialogTitle></DialogHeader>
-          <div className="grid gap-4">
+          <ShortcutForm
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save();
+            }}
+            onSubmitAndReset={() => save(true)}
+            onEscape={() => setOpen(false)}
+          >
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="mite-date">Date</Label>
@@ -178,11 +194,11 @@ export function VarroaPanel({
               </div>
             </div>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={() => void save()} disabled={create.isPending}>{create.isPending ? "Saving…" : "Save count"}</Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={create.isPending}>{create.isPending ? "Saving…" : "Save count"}</Button>
+            </DialogFooter>
+          </ShortcutForm>
         </DialogContent>
       </Dialog> : null}
     </div>

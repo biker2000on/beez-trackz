@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -63,6 +64,24 @@ const saleSchema = z.object({
 });
 type SaleValues = z.infer<typeof saleSchema>;
 
+function saleDefaults(): SaleValues {
+  return {
+    date: todayISO(),
+    location: "",
+    customerName: "",
+    customerId: "none",
+    harvestLotId: "none",
+    channel: "direct",
+    paymentMethod: "cash",
+    orderStatus: "paid",
+    discountAmount: "0",
+    amountPaid: "",
+    dueDate: "",
+    wholesalePriceListId: "none",
+    notes: "",
+  };
+}
+
 export function RecordSaleDialog({
   open,
   onOpenChange,
@@ -79,24 +98,14 @@ export function RecordSaleDialog({
   const priceLists = useWholesalePriceLists();
   const form = useForm<SaleValues>({
     resolver: zodResolver(saleSchema),
-    defaultValues: {
-      date: todayISO(), location: "", customerName: "", customerId: "none", harvestLotId: "none",
-      channel: "direct", paymentMethod: "cash", orderStatus: "paid",
-      discountAmount: "0", amountPaid: "", dueDate: "",
-      wholesalePriceListId: "none", notes: "",
-    },
+    defaultValues: saleDefaults(),
   });
   const [lines, setLines] = React.useState<JarLineValue[]>([]);
   const [lineError, setLineError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({
-      date: todayISO(), location: "", customerName: "", customerId: "none", harvestLotId: "none",
-      channel: "direct", paymentMethod: "cash", orderStatus: "paid",
-      discountAmount: "0", amountPaid: "", dueDate: "",
-      wholesalePriceListId: "none", notes: "",
-    });
+    form.reset(saleDefaults());
     // Each opening is a new sale draft.
     setLines(makeJarLines(inventory, { withPrice: true }));
     setLineError(null);
@@ -112,7 +121,15 @@ export function RecordSaleDialog({
   const discountAmount = Math.min(subtotal, Math.max(0, parseNum(form.watch("discountAmount")) ?? 0));
   const total = subtotal - discountAmount;
 
-  const onSubmit = form.handleSubmit((values) => {
+  function resetSaleDraft() {
+    form.reset(saleDefaults());
+    setLines(makeJarLines(inventory, { withPrice: true }));
+    setLineError(null);
+    mutation.reset();
+    requestAnimationFrame(() => form.setFocus("location"));
+  }
+
+  const submitSale = (resetAfter: boolean) => form.handleSubmit((values) => {
     // A blank or unparseable price on a line being sold must be an error,
     // not a silent $0 sale understating revenue. Explicit "0" still works
     // for a deliberate giveaway.
@@ -156,9 +173,16 @@ export function RecordSaleDialog({
         lines: saleLines,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) resetSaleDraft();
+          else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitSale(false);
+  const onSubmitAndReset = submitSale(true);
 
   const apiError =
     mutation.error instanceof Error ? mutation.error.message : null;
@@ -174,7 +198,12 @@ export function RecordSaleDialog({
             defaults.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={onSubmitAndReset}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           {apiError && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" />
@@ -336,7 +365,7 @@ export function RecordSaleDialog({
               {mutation.isPending ? "Saving…" : "Record sale"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

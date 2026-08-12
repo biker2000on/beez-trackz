@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -186,7 +187,7 @@ export function InspectionFormDialog({
     return value === NOT_RATED ? null : Number(value);
   }
 
-  async function onSubmit(values: InspectionValues) {
+  async function onSubmit(values: InspectionValues, resetAfter = false) {
     const miteCount = values.miteCount.trim() === "" ? null : Number(values.miteCount);
     const miteSample = values.miteSampleSize.trim() === "" ? undefined : Number(values.miteSampleSize);
     if (
@@ -239,7 +240,12 @@ export function InspectionFormDialog({
         await createInspection.mutateAsync({ hiveId, ...payload });
         toast.success("Inspection recorded");
       }
-      onOpenChange(false);
+      if (resetAfter && !isEdit) {
+        form.reset(toValues(null));
+        requestAnimationFrame(() => form.setFocus("date"));
+      } else {
+        onOpenChange(false);
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError
@@ -262,8 +268,10 @@ export function InspectionFormDialog({
               : "Record what you observed in the hive."}
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
+        <ShortcutForm
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+          onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
+          onEscape={() => onOpenChange(false)}
           className="grid gap-5"
           noValidate
         >
@@ -556,7 +564,7 @@ export function InspectionFormDialog({
                   : "Record inspection"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

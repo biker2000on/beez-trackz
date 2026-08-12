@@ -15,6 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -110,7 +111,14 @@ export function BatchTranscribePage() {
               right hive.
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid max-w-sm gap-4">
+          <CardContent>
+            <ShortcutForm
+              className="grid max-w-sm gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (apiaryId) setSheetOpen(true);
+              }}
+            >
             <div className="grid gap-1.5">
               <Label htmlFor="batch-apiary">Apiary</Label>
               {apiaries.isPending ? (
@@ -143,14 +151,14 @@ export function BatchTranscribePage() {
               )}
             </div>
             <Button
-              type="button"
+              type="submit"
               size="lg"
               disabled={apiaryId === ""}
-              onClick={() => setSheetOpen(true)}
             >
               <Mic />
               Start recording
             </Button>
+            </ShortcutForm>
           </CardContent>
         </Card>
       )}

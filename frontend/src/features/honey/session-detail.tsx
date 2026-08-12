@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -750,7 +751,7 @@ function TrueUpCard({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm onSubmit={onSubmit} className="grid gap-4">
           <div className="grid gap-1.5">
             <Label htmlFor="true-up-weight">Total extracted (lbs)</Label>
             <Input
@@ -797,7 +798,7 @@ function TrueUpCard({
                 ? "Update extracted weight"
                 : "Finalize session"}
           </Button>
-        </form>
+        </ShortcutForm>
 
         {history.length > 0 && (
           <div className="mt-4 border-t pt-3">

@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -66,7 +67,13 @@ function UserDialog({
   );
 
   const saving = create.isPending || update.isPending;
-  const submit = async () => {
+  const resetDraft = () => {
+    setDisplayName("");
+    setEmail("");
+    setIsActive(true);
+    setRoles({});
+  };
+  const submit = async (resetAfter = false) => {
     const payload: AccessUserPayload = {
       displayName,
       email,
@@ -79,7 +86,8 @@ function UserDialog({
       if (user) await update.mutateAsync({ id: user.id, payload });
       else await create.mutateAsync(payload);
       toast.success(user ? "Access updated" : "Collaborator added");
-      onOpenChange(false);
+      if (resetAfter && !user) resetDraft();
+      else onOpenChange(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save access");
     }
@@ -95,7 +103,15 @@ function UserDialog({
             for each apiary.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <ShortcutForm
+          className="grid gap-4 py-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+          onSubmitAndReset={user ? undefined : () => submit(true)}
+          onEscape={() => onOpenChange(false)}
+        >
           <div className="grid gap-2">
             <Label htmlFor="access-name">Display name</Label>
             <Input
@@ -153,15 +169,15 @@ function UserDialog({
               ))}
             </div>
           </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={saving} onClick={submit}>
-            {saving ? "Saving…" : "Save access"}
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save access"}
+            </Button>
+          </DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -199,17 +215,23 @@ function TokenManager() {
           viewer, and editor permissions.
         </p>
       </div>
-      <div className="flex gap-2">
+      <ShortcutForm
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void createToken();
+        }}
+      >
         <Input
           placeholder="Token name, e.g. Claude Desktop"
           value={name}
           onChange={(event) => setName(event.target.value)}
         />
-        <Button disabled={!name.trim() || create.isPending} onClick={createToken}>
+        <Button type="submit" disabled={!name.trim() || create.isPending}>
           <KeyRound />
           Create
         </Button>
-      </div>
+      </ShortcutForm>
       {newToken ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950">
           <p className="text-sm font-medium">Copy this token now</p>

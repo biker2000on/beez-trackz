@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -270,16 +271,22 @@ function NewSessionDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitSession = (resetAfter: boolean) => form.handleSubmit((values) => {
     mutation.mutate(
       {
         apiaryId: values.apiaryId,
         date: values.date,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: () => {
+          if (resetAfter) form.reset({ apiaryId: "", date: todayISO(), notes: "" });
+          else onOpenChange(false);
+        },
+      },
     );
   });
+  const onSubmit = submitSession(false);
 
   const { errors } = form.formState;
   return (
@@ -291,7 +298,12 @@ function NewSessionDialog({
             One extraction day at one apiary — add per-hive weights next.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitSession(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label>Apiary</Label>
             <Select
@@ -339,7 +351,7 @@ function NewSessionDialog({
               {mutation.isPending ? "Creating…" : "Create session"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -398,7 +410,15 @@ function NewHarvestDialog({
         ? before - after
         : null;
 
-  const onSubmit = form.handleSubmit((values) => {
+  const finishHarvest = (resetAfter: boolean) => {
+    if (resetAfter) {
+      setMode("supers");
+      form.reset({ ...EMPTY_HARVEST, date: todayISO() });
+    } else {
+      onOpenChange(false);
+    }
+  };
+  const submitHarvest = (resetAfter: boolean) => form.handleSubmit((values) => {
     if (mode === "direct") {
       const weight = parseNum(values.harvestedWeight);
       if (weight == null || weight <= 0) {
@@ -414,7 +434,7 @@ function NewHarvestDialog({
           harvestedWeight: weight,
           notes: values.notes.trim() || undefined,
         },
-        { onSuccess: () => onOpenChange(false) },
+        { onSuccess: () => finishHarvest(resetAfter) },
       );
       return;
     }
@@ -446,9 +466,10 @@ function NewHarvestDialog({
         superWeightAfter: a,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      { onSuccess: () => finishHarvest(resetAfter) },
     );
   });
+  const onSubmit = submitHarvest(false);
 
   const { errors } = form.formState;
   return (
@@ -461,7 +482,12 @@ function NewHarvestDialog({
             the extracted honey directly.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitHarvest(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label>Hive</Label>
             <Select
@@ -586,7 +612,7 @@ function NewHarvestDialog({
               {mutation.isPending ? "Saving…" : "Record harvest"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

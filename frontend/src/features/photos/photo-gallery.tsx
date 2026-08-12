@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBulkSelect } from "@/lib/use-bulk-select";
 import { formatDate } from "@/features/hives/lib";
@@ -304,7 +305,14 @@ function PhotoDetailDialog({
           </DialogDescription>
         </DialogHeader>
         {photo && (
-          <div className="grid gap-4">
+          <ShortcutForm
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void onSave();
+            }}
+            onEscape={onClose}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={photo.mediumUrl ?? photo.originalUrl ?? ""}
@@ -339,14 +347,13 @@ function PhotoDetailDialog({
                 {deletePhoto.isPending ? "Deleting…" : "Delete"}
               </Button>
               <Button
-                type="button"
-                onClick={onSave}
+                type="submit"
                 disabled={updatePhoto.isPending}
               >
                 {updatePhoto.isPending ? "Saving…" : "Save"}
               </Button>
             </DialogFooter> : null}
-          </div>
+          </ShortcutForm>
         )}
       </DialogContent>
     </Dialog>

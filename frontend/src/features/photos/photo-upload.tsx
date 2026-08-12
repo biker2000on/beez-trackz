@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { cn } from "@/lib/utils";
 import { useUploadPhoto, type PhotoOwnerType } from "./hooks";
 
@@ -70,7 +71,13 @@ export function PhotoUpload({
   }
 
   return (
-    <div className="grid gap-3">
+    <ShortcutForm
+      className="grid gap-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void onUpload();
+      }}
+    >
       <div
         className={cn(
           "relative grid place-items-center rounded-lg border-2 border-dashed p-6 text-center transition-colors",
@@ -143,15 +150,14 @@ export function PhotoUpload({
             />
           </div>
           <Button
-            type="button"
+            type="submit"
             className="justify-self-start"
-            onClick={onUpload}
             disabled={upload.isPending}
           >
             {upload.isPending ? "Uploading…" : "Upload photo"}
           </Button>
         </>
       )}
-    </div>
+    </ShortcutForm>
   );
 }

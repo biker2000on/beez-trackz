@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 
 export function HoneyStorySignup({ slug }: { slug: string }) {
   const [email, setEmail] = useState("");
@@ -51,7 +52,7 @@ export function HoneyStorySignup({ slug }: { slug: string }) {
   }
 
   return (
-    <form className="space-y-3" onSubmit={submit}>
+    <ShortcutForm className="space-y-3" onSubmit={submit}>
       <Input
         aria-label="Your name"
         autoComplete="name"
@@ -72,6 +73,6 @@ export function HoneyStorySignup({ slug }: { slug: string }) {
         {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
         Let me know about the next harvest
       </Button>
-    </form>
+    </ShortcutForm>
   );
 }

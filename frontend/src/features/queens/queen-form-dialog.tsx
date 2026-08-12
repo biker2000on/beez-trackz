@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -119,7 +120,7 @@ export function QueenFormDialog({
 
   const parentCandidates = queens.filter((q) => q.id !== queen?.id);
 
-  async function onSubmit(values: QueenFormValues) {
+  async function onSubmit(values: QueenFormValues, resetAfter = false) {
     const payload = toPayload(values, queen);
     try {
       if (queen) {
@@ -129,7 +130,8 @@ export function QueenFormDialog({
         await createQueen.mutateAsync(payload);
         toast.success("Queen added");
       }
-      onOpenChange(false);
+      if (resetAfter && !editing) form.reset(toFormValues());
+      else onOpenChange(false);
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not save the queen",
@@ -148,8 +150,10 @@ export function QueenFormDialog({
               : "Record a new queen and link her into the family tree."}
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
+        <ShortcutForm
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+          onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
+          onEscape={() => onOpenChange(false)}
           className="grid gap-4"
           noValidate
         >
@@ -274,7 +278,7 @@ export function QueenFormDialog({
                   : "Add queen"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

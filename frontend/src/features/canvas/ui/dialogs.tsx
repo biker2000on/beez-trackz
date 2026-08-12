@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -73,7 +74,18 @@ export function StandSettingsDialog({
             Rename the stand or change its slot grid.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <ShortcutForm
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSave(
+              label.trim() || stand.label,
+              parseInt(rows, 10),
+              parseInt(cols, 10),
+            );
+          }}
+          onEscape={() => onOpenChange(false)}
+        >
           <div className="space-y-2">
             <Label htmlFor="canvas-stand-label">Label</Label>
             <Input
@@ -122,23 +134,13 @@ export function StandSettingsDialog({
               ? "Shrinking the grid: hives left outside it become unassigned until moved."
               : "Shrinking a stand keeps hive records; hives outside the new grid show as unassigned until moved."}
           </p>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() =>
-              onSave(
-                label.trim() || stand.label,
-                parseInt(rows, 10),
-                parseInt(cols, 10),
-              )
-            }
-          >
-            Save
-          </Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">Save</Button>
+          </DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -218,10 +220,18 @@ export function FacingDialog({
             Which way does the hive entrance face?
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <ShortcutForm
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSave(degrees);
+          }}
+          onEscape={() => onOpenChange(false)}
+        >
           <div className="grid grid-cols-4 gap-2">
             {COMPASS_PRESETS.map((preset) => (
               <Button
+                type="button"
                 key={preset.label}
                 variant={degrees === preset.degrees ? "default" : "outline"}
                 size="sm"
@@ -241,13 +251,13 @@ export function FacingDialog({
               onValueChange={([v]) => setDegrees(v)}
             />
           </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={() => onSave(degrees)}>Save</Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">Save</Button>
+          </DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -281,6 +291,15 @@ export function MoveToSlotDialog({
           <DialogTitle>Move {hiveName}</DialogTitle>
           <DialogDescription>Pick an empty slot for this hive.</DialogDescription>
         </DialogHeader>
+        <ShortcutForm
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const target = options.find((option) => slotKey(option) === selected);
+            if (target) onMove(target);
+          }}
+          onEscape={() => onOpenChange(false)}
+        >
         {options.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No empty slots available. Add a stand or resize an existing one.
@@ -303,19 +322,17 @@ export function MoveToSlotDialog({
           </div>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
+            type="submit"
             disabled={!selected || options.length === 0}
-            onClick={() => {
-              const target = options.find((o) => slotKey(o) === selected);
-              if (target) onMove(target);
-            }}
           >
             Move
           </Button>
         </DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -348,6 +365,14 @@ export function AssignHiveDialog({
             Move an existing hive into this slot.
           </DialogDescription>
         </DialogHeader>
+        <ShortcutForm
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (selected) onAssign(selected);
+          }}
+          onEscape={() => onOpenChange(false)}
+        >
         {hives.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No hives available to assign.
@@ -371,16 +396,17 @@ export function AssignHiveDialog({
           </div>
         )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button
+            type="submit"
             disabled={!selected || hives.length === 0}
-            onClick={() => onAssign(selected)}
           >
             Assign
           </Button>
         </DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -482,7 +508,14 @@ export function HiveEditDialog({
         <DialogHeader>
           <DialogTitle>Edit hive — {hive.positionLabel}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-4">
+        <ShortcutForm
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleSave();
+          }}
+          onEscape={() => onOpenChange(false)}
+        >
           <div className="space-y-2">
             <Label htmlFor="canvas-hive-label">Position label</Label>
             <Input
@@ -532,15 +565,15 @@ export function HiveEditDialog({
               placeholder="Optional notes…"
             />
           </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving || !positionLabel.trim()}>
+          <Button type="submit" disabled={saving || !positionLabel.trim()}>
             {saving ? "Saving…" : "Save changes"}
           </Button>
-        </DialogFooter>
+          </DialogFooter>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

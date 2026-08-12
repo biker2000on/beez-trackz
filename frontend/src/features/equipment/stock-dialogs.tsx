@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -164,7 +165,13 @@ export function DeployDialog({
     stock ??
     availableStock.find((row) => row.id === form.watch("stockId"));
 
-  const onSubmit = form.handleSubmit((values) => {
+  const resetDeploy = () => form.reset({
+    hiveId: hiveId ?? "",
+    stockId: stock?.id ?? "",
+    quantity: "1",
+    notes: "",
+  });
+  const submitDeploy = (resetAfter: boolean) => form.handleSubmit((values) => {
     if (!values.hiveId) {
       form.setError("hiveId", { message: "Hive is required" });
       return;
@@ -186,9 +193,10 @@ export function DeployDialog({
         quantity,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      { onSuccess: () => resetAfter ? resetDeploy() : onOpenChange(false) },
     );
   });
+  const onSubmit = submitDeploy(false);
 
   const { errors } = form.formState;
   return (
@@ -204,7 +212,12 @@ export function DeployDialog({
               : "Move equipment from storage onto this hive."}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitDeploy(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           {!stock && (
             <div className="grid gap-1.5">
               <Label>Equipment</Label>
@@ -300,7 +313,7 @@ export function DeployDialog({
               {mutation.isPending ? "Deploying…" : "Deploy"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -341,7 +354,7 @@ export function ReceiveDialog({ stock, open, onOpenChange }: StockDialogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaults]);
 
-  const onSubmit = form.handleSubmit((values) => {
+  const submitReceive = (resetAfter: boolean) => form.handleSubmit((values) => {
     const unitCostCents = parseCents(values.unitCost);
     if (values.unitCost.trim() !== "" && unitCostCents == null) {
       form.setError("unitCost", { message: "Enter an amount like 24.50" });
@@ -356,9 +369,10 @@ export function ReceiveDialog({ stock, open, onOpenChange }: StockDialogProps) {
         date: values.date,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      { onSuccess: () => resetAfter ? form.reset(defaults) : onOpenChange(false) },
     );
   });
+  const onSubmit = submitReceive(false);
 
   const { errors } = form.formState;
   return (
@@ -371,7 +385,12 @@ export function ReceiveDialog({ stock, open, onOpenChange }: StockDialogProps) {
             owned today.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitReceive(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="receive-quantity">Quantity</Label>
@@ -436,7 +455,7 @@ export function ReceiveDialog({ stock, open, onOpenChange }: StockDialogProps) {
               {mutation.isPending ? "Saving…" : "Receive"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -496,7 +515,14 @@ export function AdjustStockDialog({
         ? stock.retired
         : stock.available;
 
-  const onSubmit = form.handleSubmit((values) => {
+  const resetAdjustment = () => form.reset({
+    quantity: "",
+    reason: "purchased",
+    from: "serviceable",
+    date: todayISO(),
+    notes: "",
+  });
+  const submitAdjustment = (resetAfter: boolean) => form.handleSubmit((values) => {
     const quantity = parseNum(values.quantity)!;
     if (quantity < 0 && -quantity > pool) {
       form.setError("quantity", { message: `Only ${pool} to remove` });
@@ -511,9 +537,10 @@ export function AdjustStockDialog({
         date: values.date,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      { onSuccess: () => resetAfter ? resetAdjustment() : onOpenChange(false) },
     );
   });
+  const onSubmit = submitAdjustment(false);
 
   const { errors } = form.formState;
   return (
@@ -526,7 +553,12 @@ export function AdjustStockDialog({
             owned, {stock.available} available.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitAdjustment(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="adjust-quantity">± Quantity</Label>
@@ -615,7 +647,7 @@ export function AdjustStockDialog({
               {mutation.isPending ? "Saving…" : "Apply adjustment"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -705,7 +737,14 @@ export function StateChangeDialog({
         ? stock.retired
         : stock.available;
 
-  const onSubmit = form.handleSubmit((values) => {
+  const resetState = () => form.reset({
+    quantity: "1",
+    reason: copy.reason,
+    from: defaultFrom,
+    date: todayISO(),
+    notes: "",
+  });
+  const submitState = (resetAfter: boolean) => form.handleSubmit((values) => {
     const quantity = parseNum(values.quantity)!;
     if (quantity > pool) {
       form.setError("quantity", { message: `Only ${pool} to move` });
@@ -720,9 +759,10 @@ export function StateChangeDialog({
         date: values.date,
         notes: values.notes.trim() || undefined,
       },
-      { onSuccess: () => onOpenChange(false) },
+      { onSuccess: () => resetAfter ? resetState() : onOpenChange(false) },
     );
   });
+  const onSubmit = submitState(false);
 
   const { errors } = form.formState;
   return (
@@ -734,7 +774,12 @@ export function StateChangeDialog({
           </DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onSubmitAndReset={submitState(true)}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           {mode === "retire" && (
             <div className="grid gap-1.5">
               <Label htmlFor="state-from">Retire from</Label>
@@ -812,7 +857,7 @@ export function StateChangeDialog({
               {mutation.isPending ? "Saving…" : copy.action}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );
@@ -881,7 +926,11 @@ export function EditDetailsDialog({
             costs.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-4">
+        <ShortcutForm
+          onSubmit={onSubmit}
+          onEscape={() => onOpenChange(false)}
+          className="grid gap-4"
+        >
           <div className="grid gap-1.5">
             <Label htmlFor="stock-location">Storage location</Label>
             <Input
@@ -932,7 +981,7 @@ export function EditDetailsDialog({
               {mutation.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

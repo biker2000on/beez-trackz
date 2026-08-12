@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -146,8 +147,9 @@ export function FloraTab({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form
+          <ShortcutForm
             onSubmit={form.handleSubmit(onSubmit)}
+            onSubmitAndReset={form.handleSubmit(onSubmit)}
             className="grid gap-4"
             noValidate
           >
@@ -241,7 +243,7 @@ export function FloraTab({
             >
               {form.formState.isSubmitting ? "Saving…" : "Record bloom"}
             </Button>
-          </form>
+          </ShortcutForm>
         </CardContent>
       </Card> : null}
 

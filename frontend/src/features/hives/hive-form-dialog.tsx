@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -116,7 +117,7 @@ export function HiveFormDialog({
   const watched = form.watch();
   const autoLabel = generatedLabel(watched);
 
-  async function onSubmit(values: HiveValues) {
+  async function onSubmit(values: HiveValues, resetAfter = false) {
     const label = values.positionLabel || autoLabel;
     if (!label) {
       form.setError("positionLabel", {
@@ -143,7 +144,12 @@ export function HiveFormDialog({
         await createHive.mutateAsync(payload);
         toast.success("Hive created");
       }
-      onOpenChange(false);
+      if (resetAfter && !isEdit) {
+        form.reset(toValues(null, defaultApiaryId));
+        requestAnimationFrame(() => form.setFocus("positionLabel"));
+      } else {
+        onOpenChange(false);
+      }
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not save the hive",
@@ -162,8 +168,10 @@ export function HiveFormDialog({
               : "Add a hive to one of your apiaries."}
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit(onSubmit)}
+        <ShortcutForm
+          onSubmit={form.handleSubmit((values) => onSubmit(values))}
+          onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
+          onEscape={() => onOpenChange(false)}
           className="grid gap-4"
           noValidate
         >
@@ -328,7 +336,7 @@ export function HiveFormDialog({
                   : "Create hive"}
             </Button>
           </DialogFooter>
-        </form>
+        </ShortcutForm>
       </DialogContent>
     </Dialog>
   );

@@ -19,6 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -122,7 +123,7 @@ function LoginForm() {
         ) : (
           <>
             {showPassword && (
-              <form
+              <ShortcutForm
                 onSubmit={form.handleSubmit(onSubmit)}
                 className="grid gap-4"
                 noValidate
@@ -161,7 +162,7 @@ function LoginForm() {
                   <LogIn />
                   {form.formState.isSubmitting ? "Signing in…" : "Sign in"}
                 </Button>
-              </form>
+              </ShortcutForm>
             )}
             {!showPassword && !showSso && (
               <p className="text-sm text-muted-foreground">

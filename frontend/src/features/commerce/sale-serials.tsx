@@ -19,6 +19,7 @@ import { Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccessProfile } from "@/features/access/api";
@@ -103,7 +104,7 @@ export function SaleSerials({ saleId }: { saleId: string }) {
           </ul>
         )}
 
-        <form onSubmit={add} className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+        <ShortcutForm onSubmit={add} className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
           <div className="grid gap-1.5">
             <Label htmlFor="link-serials">Add serials</Label>
             <Input
@@ -119,7 +120,7 @@ export function SaleSerials({ saleId }: { saleId: string }) {
             {link.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
             Link {parsed.length > 1 ? `${parsed.length} jars` : "jar"}
           </Button>
-        </form>
+        </ShortcutForm>
       </CardContent>
     </Card>
   );

@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -246,7 +247,13 @@ export function AISection() {
   }
 
   return (
-    <div className="grid gap-5">
+    <ShortcutForm
+      className="grid gap-5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void handleSave();
+      }}
+    >
       <div className="grid gap-4">
         <div className="grid gap-2">
           <Label htmlFor="ai-anthropic-key">Anthropic API key</Label>
@@ -453,10 +460,10 @@ export function AISection() {
       </div>
 
       <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={updateSettings.isPending}>
+        <Button type="submit" disabled={updateSettings.isPending}>
           {updateSettings.isPending ? "Saving…" : "Save AI settings"}
         </Button>
       </div>
-    </div>
+    </ShortcutForm>
   );
 }

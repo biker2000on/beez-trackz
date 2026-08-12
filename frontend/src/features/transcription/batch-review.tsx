@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import {
   Select,
   SelectContent,
@@ -136,7 +137,13 @@ export function BatchReviewPanel({
   const detected = items.length;
 
   return (
-    <div className="grid items-start gap-6 lg:grid-cols-[2fr_3fr]">
+    <ShortcutForm
+      className="grid items-start gap-6 lg:grid-cols-[2fr_3fr]"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (included.length > 0 && unmatchedCount === 0) confirm.mutate();
+      }}
+    >
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
@@ -262,14 +269,13 @@ export function BatchReviewPanel({
               </p>
             )}
             <Button
-              type="button"
+              type="submit"
               disabled={
                 confirm.isPending ||
                 reparse.isPending ||
                 included.length === 0 ||
                 unmatchedCount > 0
               }
-              onClick={() => confirm.mutate()}
             >
               {confirm.isPending ? (
                 <Loader2 className="animate-spin" />
@@ -283,6 +289,6 @@ export function BatchReviewPanel({
           </div>
         )}
       </div>
-    </div>
+    </ShortcutForm>
   );
 }
