@@ -408,12 +408,17 @@ must not fork a parallel sales system.
 
 Requirements:
 
-- **Generalize the sale line, preserving history.** Either make
-  `jar_size_id` nullable behind a discriminator with a CHECK that exactly
-  one target (jar size, hive, equipment stock) is set, or introduce a
-  successor `sale_items` table. Every existing row must survive the
-  migration unchanged, and the unified bulk/revenue formulas must keep
-  reading one source.
+- **Restructure the sale tables properly rather than bolting on.** This is a
+  single self-hosted instance with no external install base, so the
+  migration is free to be breaking: rename `honey_sales` → `sales` and
+  `honey_sale_items` → `sale_items`, and give the line a real `kind`
+  discriminator (`jar` / `colony` / `equipment`) with nullable per-kind
+  targets and a CHECK that exactly one is set. No compatibility shim, no
+  view pretending the old names still exist — update the call sites.
+  Breaking the *schema* is not the same as discarding the *ledger*: the
+  instance holds real sales, harvests, and serial links, so the migration
+  still carries every existing row across as a `jar` line and keeps the
+  unified revenue formulas reading one source.
 - **The physical side moves with the money, in one transaction.** Selling a
   colony sets the hive to `sold` and links the sale, so the hive timeline
   and location history say where it went. Selling equipment decrements
@@ -474,13 +479,19 @@ Consequences for the sync contract:
   colony's status and the equipment count, gnucash-web for the posted
   entries. A posting must never be the thing that marks a hive sold.
 
-Two open questions to settle before building. First, naming: the tables and
-the module are called Honey, but sales of bees and equipment do not belong
-under a Honey nav item — either Sales moves up a level or the section is
-renamed, and the `honey_sales` table name becomes a misnomer worth
-addressing with a view or a documented exception rather than a risky rename.
-Second, whether a colony sale should also close out the hive's open feeders
-and deployments automatically or leave them for the operator to resolve.
+Naming follows the restructure rather than being an open question: with the
+tables renamed to `sales`/`sale_items`, Sales stops being a Honey subsection
+and moves up to a top-level destination, since a colony sale has nothing to
+do with honey. That costs a nav slot — Honey drops to Overview and
+Production — and the mobile bar already resolves overflow through More, so
+the existing `SectionNav` groups absorb it.
+
+One question genuinely left open: whether selling a colony should
+automatically close the hive's open feeders and return its remaining
+deployments, or leave both for the operator. Automatic is tidier but
+silently edits records the operator did not name in the sale; leaving them
+means a sold hive can keep an open feeder forever, which the feeding status
+row would then report against a hive that is gone.
 
 ### Production and repeat-customer planning
 **Shipped 2026-07-26.**
