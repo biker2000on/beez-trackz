@@ -486,12 +486,30 @@ do with honey. That costs a nav slot — Honey drops to Overview and
 Production — and the mobile bar already resolves overflow through More, so
 the existing `SectionNav` groups absorb it.
 
-One question genuinely left open: whether selling a colony should
-automatically close the hive's open feeders and return its remaining
-deployments, or leave both for the operator. Automatic is tidier but
-silently edits records the operator did not name in the sale; leaving them
-means a sold hive can keep an open feeder forever, which the feeding status
-row would then report against a hive that is gone.
+**Selling a colony closes out the hive's open state automatically**
+(decided 2026-08-12), because the alternative leaves a sold hive holding an
+open feeder forever and the feeding status row reporting against a colony
+that is gone. Automatic must not mean silent, so:
+
+- **Feeders close with a reason that names the sale.** None of the existing
+  close reasons fit — `removed` claims the beekeeper took the feeder off,
+  `verified_closed` claims a field check happened. Add a `sold_with_hive`
+  reason so the audit trail says what actually ended the feeding rather
+  than borrowing a reason that is untrue.
+- **Deployments split on whether they were sold.** Equipment named as a
+  sale line left with the bees: it leaves the ledger as `sold` and must not
+  be returned to storage. Everything else on that hive is equipment the
+  operator kept, and returns to available stock. Getting this backwards
+  either invents inventory that was sold or loses boxes that are sitting in
+  the barn.
+- **The sale dialog states the side effects before committing**, in the
+  same confirmation that already lists the lines — "closes 1 open feeder,
+  returns 3 deep boxes to storage" — so the operator can name a deployment
+  as sold instead if the default guessed wrong.
+- **Cancelling the sale reverses the close-out too**, reopening the feeders
+  it closed and re-deploying what it returned. This is why the closures
+  carry the sale link rather than a bare reason: without it, a cancel can
+  restore the colony but not the state that came with it.
 
 ### Production and repeat-customer planning
 **Shipped 2026-07-26.**
