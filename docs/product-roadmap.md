@@ -236,6 +236,14 @@ idempotency. Historical blockers, in recommended order of attack:
    equipment mutations.
    Keep categories, channels, and tax data mappable for external accounting,
    with COGS and inventory values traceable to the linked physical ledger.
+7. **Coupled — colony and equipment sales** (see "Colony and equipment
+   sales" under *From harvest to sale*). Those sales introduce line kinds
+   that do not map to honey's revenue-with-COGS shape: colony proceeds have
+   no per-unit cost basis, and equipment resale is an asset disposal with a
+   gain or loss against stored unit cost. One mixed sale must post as one
+   split transaction. Because selling equipment is itself an equipment
+   mutation, the entity mappings and mutation idempotency listed above
+   should be built once to cover both rather than twice.
 
 ### P1 — PWA prompt behavior
 **Shipped 2026-08-04.** The prompt waits for a completed task or repeat
@@ -373,6 +381,106 @@ history; support receipts/invoices, unpaid balances, wholesale price lists and
 minimums, low-stock alerts, and end-of-day reconciliation. A phone-first
 market-day screen should use large product buttons, capture payment method and
 discounts, and decrement inventory immediately.
+
+### P1 — Colony and equipment sales
+**Planned (requested 2026-08-12).** Two hives with bees were sold in spring
+2026, along with the boxes and frames that went with them. None of that
+transaction can be recorded today.
+
+The sale model is structurally honey-only: `honey_sale_items.jar_size_id` is
+`NOT NULL`, so a sale line can only ever be a jar size. `hives.status`
+already has a `sold` value, but marking a hive sold records no buyer, no
+price, and no link to a transaction — the colony simply stops counting as
+active. Equipment leaves storage only through `discarded`/`gifted`/`other`
+adjustments, which carry no proceeds and no `sold` disposition, even though
+stock rows already store a unit cost that would serve as cost basis. And
+because every revenue figure reads `honey_sales`, a colony sale is invisible
+in profitability, apiary economics, and break-even — while the expense side
+already has a `bees_queens` category. The operation can record buying bees
+but not selling them, so margins are understated by exactly the amount sold.
+
+Record one sale that mixes what was actually sold: colonies (specific
+hives), equipment (from stock rows), and honey, as a single transaction with
+one customer, one payment, and one receipt. This extends the existing
+commerce spine — customers, channels, payment method, order status,
+receipts, unpaid balances, wholesale price lists, offline idempotency — and
+must not fork a parallel sales system.
+
+Requirements:
+
+- **Generalize the sale line, preserving history.** Either make
+  `jar_size_id` nullable behind a discriminator with a CHECK that exactly
+  one target (jar size, hive, equipment stock) is set, or introduce a
+  successor `sale_items` table. Every existing row must survive the
+  migration unchanged, and the unified bulk/revenue formulas must keep
+  reading one source.
+- **The physical side moves with the money, in one transaction.** Selling a
+  colony sets the hive to `sold` and links the sale, so the hive timeline
+  and location history say where it went. Selling equipment decrements
+  stock through the ledger with a new `sold` disposition carrying the sale
+  link — never an opaque quantity edit.
+- **Equipment already on a sold hive is the common case.** Boxes and frames
+  usually leave with the bees. Offer the hive's active deployments as
+  default sale lines rather than making the operator return them to storage
+  first and re-find them in inventory.
+- **Guardrails matching the rest of the ledger.** A hive that is already
+  sold, dead, or combined cannot be sold again; equipment lines cannot
+  exceed available stock; and cancelling a sale restores the colony and the
+  equipment, the way cancelling a honey sale already restores jars and
+  unlinks serials.
+- **Past-dated entry.** These sales have already happened. Recording one
+  must not require pretending it happened today, and back-dating must land
+  in the correct season for reporting.
+- **Reporting that answers "did the bees pay for themselves?"** Split
+  revenue by what was sold (honey / colonies / equipment), keep the
+  collected-vs-invoiced distinction, pair colony revenue against the
+  `bees_queens` expense category, and use stored unit cost as the cost
+  basis for equipment lines.
+
+**This must be designed against the gnucash-web sync from the start**, not
+retrofitted — the three line kinds are not the same kind of accounting event,
+so a single revenue mapping cannot serve them:
+
+- **Honey** is inventory sold at retail or wholesale: revenue with COGS
+  traceable to the physical ledger, which the existing design already covers.
+- **Colonies** have no per-unit cost basis in this system. A hive was bought
+  (a `bees_queens` expense), raised, or split off another colony; nothing
+  capitalizes it. Colony proceeds are revenue against period expenses, and
+  the mapping must say so rather than inventing a COGS figure the physical
+  ledger cannot support.
+- **Equipment** is an asset disposal, not merchandise. Boxes and frames sold
+  used may have been expensed or capitalized on purchase, so the posting is
+  potentially a gain or loss on disposal against the stored unit cost — a
+  different account from sales revenue, and the one most likely to be
+  mapped wrong if line kinds share a single account.
+
+Consequences for the sync contract:
+
+- One mixed sale is **one split transaction** on the accounting side, with a
+  posting per line kind — not one lump sum, and not three unrelated
+  transactions that no longer reconcile to the receipt.
+- `external_sync` needs entity types and per-kind account/category/tax
+  mappings for colony and equipment sale lines. This overlaps the already-
+  planned equipment entity mappings and equipment mutation idempotency in
+  the GnuCash item below; selling equipment *is* an equipment mutation, so
+  the two should land together rather than twice.
+- Cancelling a sale posts a reversing entry, never a delete — matching the
+  existing rule that neither side silently overwrites the other.
+- Back-dated entry meets a closed accounting period. Recording this spring's
+  sale must either post to the correct period or surface the conflict for
+  review; it must not silently re-date the transaction to today to make the
+  posting succeed.
+- The authority split holds: Beez Trackz stays authoritative for the
+  colony's status and the equipment count, gnucash-web for the posted
+  entries. A posting must never be the thing that marks a hive sold.
+
+Two open questions to settle before building. First, naming: the tables and
+the module are called Honey, but sales of bees and equipment do not belong
+under a Honey nav item — either Sales moves up a level or the section is
+renamed, and the `honey_sales` table name becomes a misnomer worth
+addressing with a view or a documented exception rather than a risky rename.
+Second, whether a colony sale should also close out the hive's open feeders
+and deployments automatically or leave them for the operator to resolve.
 
 ### Production and repeat-customer planning
 **Shipped 2026-07-26.**
