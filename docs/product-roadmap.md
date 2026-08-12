@@ -745,6 +745,234 @@ stale-serve (ASI-6-003), `reorderUrl` scheme validation (ASI-3-011), and the
 frontend minor cluster (ASI-8-002). The legacy-stack cleanup (ASI-8-001) is
 already tracked under Housekeeping above.
 
+## Adversarial review backlog (2026-08-12)
+
+Three independent read-only reviewers (navigation/layout, Go backend internals,
+and the frontend↔backend seam) against HEAD `b234d82`, scoped by the standing
+complaint that navigation and layout still feel clunky. Full evidence, file:line
+citations, and recommended fixes are in
+`docs/plans/2026-08-12-adversarial-ui-backend-review.md`; IDs below reference it.
+
+Seven Critical findings, none of which overlap the ASI backlog above. Items are
+ordered by recommended attack order.
+
+**The pattern behind them:** the documented contract and the implementation have
+drifted, and nothing tests the seam. `DESIGN.md:27,34` promises safe-area handling
+that exists in exactly one component; `DESIGN.md:33` promises scrollable mobile
+tabs that were deliberately replaced with a `<Select>`; `README.md:55` promises
+cached offline reads while every offline navigation lands on `/offline`;
+`README.md:57` promises conflicts are reviewable "instead of being overwritten"
+while the Retry button guarantees the overwrite; and `middleware_offline.go:72-87`
+hardens honey/commerce for offline replay — calling market day "the most
+offline-prone surface in the product" — against a service-worker queue list that
+contains none of those paths. The recurring fix is to make each pair of lists one
+artifact with a test asserting they agree, rather than repairing each drift alone.
+
+**Caveat:** `npx tsc --noEmit` and `npm run lint` could not run — `frontend/node_modules`
+has no local `typescript` or `eslint`. All frontend findings are source-read with
+file:line evidence, not from a type-checked build (UX-024).
+
+### P0 — Silent data loss and silent data mutation
+
+These four are the "the app lied to me" cluster: each one loses or changes a
+record while telling the user nothing, or telling them the opposite.
+
+- **SEAM-001 (Critical)** Market-day POS swallows every sale failure — `useRecordSale`
+  is `silentError: true` (correct for the dialog, which renders the error inline)
+  and market day never reads `sale.error`. A failed sale at a market shows nothing:
+  the button re-enables, the cart stays full, and the beekeeper hands over honey
+  believing it recorded — or taps again and double-books. Smallest fix on this list;
+  the correct pattern is twenty lines away in `record-sale-dialog.tsx:187-210`.
+- **SEAM-002 (Critical)** A 401/403 during replay wedges the entire offline queue —
+  `replayQueue` breaks on 401/403 leaving the item `pending`, which the review dialog
+  hides, so the banner spins "Syncing N queued changes…" forever with no sign-in
+  prompt. An expired overnight session strands a day of inspections; one editor-only
+  403 jams every write behind it. Directly parallel to the shipped ASI-5-003 (5xx
+  wedge) — the auth arm was not covered.
+- **SEAM-003 (Critical)** Logging out silently destroys the unsent queue —
+  `clearPrivateOfflineState()` wipes IndexedDB on a single unguarded click. The login
+  path deliberately preserves the queue for exactly this reason (ASI-5-002, shipped),
+  and logout throws it away anyway.
+- **UX-001 (Critical)** `g d`, `g s`, `g r` silently mutate records — the dashboard
+  installs a second `window` keydown listener, so the documented navigation prefixes
+  also **dismiss the top colony alert**, **snooze it seven days**, and **refill a
+  feeder**. `focusedIndex` starts at 0 with no user interaction, there is no confirm
+  and no undo, and because the keys bypass `useShortcut` they never appear in `?`.
+
+### P0 — The bottom of the screen is unusable in the field
+
+One shared root cause: nothing derives from the bottom nav's real height, which is
+~51px **plus `env(safe-area-inset-bottom)`** (34px on Face-ID iPhones, with
+`viewportFit: "cover"` active). A single `--bottom-nav-h` variable in `globals.css`
+fixes all of these together.
+
+- **UX-002 (Critical)** The offline/sync banner and install prompt (`bottom-3`,
+  z-90/z-100) paint directly over the bottom nav (`bottom-0`, z-40). The banner
+  renders whenever offline or holding queued writes — the entire time the beekeeper
+  is out of cell range, the scenario the PWA exists for — and cannot be dismissed.
+- **UX-003 (High)** Five sticky bulk toolbars hardcoded to `bottom-20` (80px) clip
+  under an 85px nav that also outranks them in z-order. The clipped region holds
+  "Exit bulk select" and Archive/Delete.
+- **UX-004 (High)** Market day hides all navigation by design but has no
+  `pt-[env(safe-area-inset-top)]`, so the **Exit** button — the only way out —
+  renders under the notch, and checkout sits under the home indicator.
+- **UX-005 (Medium)** Safe-area handling is claimed in `DESIGN.md:27,34` and
+  implemented in exactly one component; the base dialog's `max-h-[calc(100dvh-2rem)]`
+  also puts submit buttons out of reach, and landscape insets are absent everywhere.
+
+### P1 — The "clunky" cluster
+
+The direct answer to the standing complaint. Tap depth is fine; these are the causes.
+
+- **UX-006 (High)** 768px tablet cliff — content drops from 735px to **464px** as the
+  viewport grows by one pixel, so a hive card goes 359px → 224px (38% smaller on a
+  wider screen) and stays cramped until 1024px, with every `whitespace-nowrap` table
+  scrolling horizontally through the whole band. Most likely single contributor to
+  the layout complaint. Move the sidebar from `md:` to `lg:`.
+- **UX-007 (High)** Single-key shortcuts fire while typing in Radix comboboxes and
+  menus — the guard only knows `<input>`/`<textarea>`, but `SelectTrigger` is a
+  `<button role="combobox">` with typeahead that does not `preventDefault`. Filtering
+  hives by typing "b" toggles bulk mode, "n" opens New hive behind the popup, "x"
+  opens Split hive. `dashboard-view.tsx:40-53` duplicates the same flawed check.
+- **UX-008 (High)** "All N inspections" lands on the wrong tab — `setTab` and
+  `setFilter` each rebuild from the same stale snapshot and issue their own
+  `router.replace`, so the second drops `tab` and the user is dumped on Overview.
+- **UX-009 (Medium)** Sidebar expansion pins on first click and never re-syncs to the
+  route (`expanded[href] ?? active` — the fallback dies after any manual toggle), and
+  the active row is never scrolled into view. Nothing looks broken, which is exactly
+  why it reads as clunky rather than buggy.
+- **UX-010 (Medium)** Tapping "Yards" sometimes doesn't go to Yards — a once-per-session
+  `sessionStorage`-gated `router.replace` to the apiary detail when there is exactly
+  one apiary, which also makes Back skip to the Dashboard. Single-apiary is the most
+  common hobbyist setup, so this is the default experience.
+- **UX-011 (Medium)** Mobile section nav contradicts `DESIGN.md:33` and can only reach
+  interstitials — the same seven reports are presented three different ways depending
+  on the surface, and there is no report-to-report jump on a phone.
+- **UX-012 (Medium)** The 9-chip timeline filter strip scrolls with zero offscreen
+  affordance; "Splits" and "Moves" are invisible on a 390px phone.
+- **UX-013 (Medium)** Five of nine destinations sit behind "More", whose nested links
+  are 36px — a direct `DESIGN.md:27` violation on the deepest targets, since the
+  coarse-pointer rule does not cover plain anchors.
+
+### P1 — Offline/PWA is structurally incomplete
+
+The ASI P0 work made the queue trustworthy once a write reaches it. These findings
+are about writes that never reach it, and reads that never come back.
+
+- **SEAM-004 (High)** The backend's `offlineMutationSupported` list and the service
+  worker's `supportedFieldPaths` share **zero** entries on honey/commerce — the
+  market-day protection was built server-side and left unreachable.
+- **SEAM-005 (High)** The conflict Retry button restamps `queuedAt` to now, which is
+  by construction after the server's `updated_at`, so the conflict check returns false
+  and the retry clobbers the collaborator's edit — inverting `README.md:57` in one line.
+- **SEAM-006 (High)** Offline writes return `202 {queued:true}`, which the API client
+  hands back as the created entity: success toast fires, dialog closes, list refetches
+  from cache without the record. The user is told it saved and cannot find it.
+- **SEAM-007 (High)** Offline navigation always lands on `/offline` — `SHELL` precaches
+  only `/offline` and icons, and RSC payload requests fall through unhandled. The
+  banner and `/offline` tell the user opposite things.
+- **SEAM-008 (High)** Every body-less POST is excluded from the queue by the
+  content-type gate, so "mark feeder empty", "mark deadout", and "end bloom" — the
+  archetypal one-handed field actions — are exactly the ones that fail offline.
+- **SEAM-009 (High)** Stale cache is served as fresh past a 5s network timeout with no
+  marker, while the indicator keys off `navigator.onLine` (true on a slow rural link).
+  Extends the deliberately-deferred ASI-6-003.
+- **SEAM-010 (Medium)** The queue is unbounded and re-broadcasts its entire contents to
+  every client on every write.
+- **SEAM-011 (Low)** Receipt retention (30 days, ASI-4-002) is shorter than the queue's
+  TTL (none), so a long-stuck item can replay past its receipt and duplicate.
+
+### P1 — Errors have nowhere to surface
+
+- **SEAM-012 (High)** The Honey hub has zero `isError` branches: on any failure,
+  including a 403, it renders skeletons forever beside a confident "0 unpaid orders,
+  $0.00 invoiced".
+- **UX-015 (High)** Escape or a stray outside tap discards a half-finished inspection —
+  the app's longest form has no dirty guard, though market day already implements the
+  correct pattern.
+- **SEAM-013 (Medium)** No error boundary exists anywhere in the app, so a customer
+  scanning a jar QR during a deploy gets Next.js's raw crash screen on the product's
+  public traceability surface.
+- **UX-014 (Medium)** Two competing offline indicators render simultaneously saying
+  different things; merging them into the top banner also resolves UX-002.
+- **UX-016 (Medium)** Ten empty states and four error states with no next step, against
+  `DESIGN.md:37`; two of the error states are whole pages with no retry and no way back.
+- **UX-017 (Medium)** Validation errors inconsistently placed, some fields red with no
+  message, and no scroll-to-error on a twelve-section form.
+- **SEAM-014 (Medium)** Multipart uploads bypass the 401 → `/login` redirect and discard
+  the captured photo or recording.
+- **SEAM-015 (Medium)** Transcription polls every 3s forever and never surfaces a polling
+  failure — the headline voice-first feature spins indefinitely when the worker is down.
+
+### P1 — Backend robustness
+
+- **API-001 (Critical)** Concurrent `/auth/setup` lets two anonymous callers claim the
+  instance — no lock, no singleton constraint, and login takes `LIMIT 1`.
+- **API-002 (Critical)** Idempotency is still not atomic with the domain write. ASI-5-001
+  fixed the cancelled-context half; the crash window between the domain commit and the
+  receipt write remains, and a replay after it re-executes the mutation.
+- **API-003 (High)** Unauthenticated `/auth/setup` runs bcrypt cost 12 *before* checking
+  whether setup is complete, unrated-limited — a cheap CPU-exhaustion DoS.
+- **API-004 (High)** No global request-body limit and no `ReadTimeout`/`IdleTimeout`/
+  `WriteTimeout`/`MaxHeaderBytes`.
+- **API-005 (High)** Admin bottling with an unbounded `quantity` and `serialize:true`
+  loops per jar, accumulates every serial in the response, and holds the transaction open.
+- **API-006 (High)** Honey timeline accepts `limit=999999999` and merges/sorts in memory.
+- **API-007 (High)** Chi `RealIP` has no trusted-proxy allowlist, so `X-Forwarded-For`
+  rotation bypasses the login and public-subscription throttles shipped for ASI-3-001/003.
+- **API-008 (Medium)** Token verification amplifies DB load (a write per valid call) with
+  no limiter and a fast unsalted SHA-256 lookup.
+- **API-009 (Medium)** Cross-apiary queen lineage — an editor on apiary A can point
+  `originHiveId`/`parentQueenId` at apiary B; only `hiveId` is authorized.
+- **API-010 (Medium)** Money parser can overflow signed cents before validation.
+- **API-011 (Medium)** Transcription jobs are not idempotent under asynq at-least-once
+  delivery — duplicate AI cost, and a good transcript can be overwritten.
+- **SEAM-016 (Medium)** Admin-only pages have no route guard, and the Reports tree is not
+  marked `adminOnly` despite its Finance and Sales-&-planning children requiring admin.
+- **SEAM-017 (Medium)** `/hives/{id}/inspections` is unbounded and ships a full weather
+  snapshot per row — to render three cards.
+- **SEAM-018 (Medium)** `DATA_CACHE` is unbounded and caches authenticated photo binaries;
+  `cache.put` failures are discarded via `void`, so quota exhaustion is unobservable.
+  Extends ASI-6-003.
+
+### P2 — Accessibility and correctness papercuts
+
+- **UX-018 (High)** Bulk-selecting hives in table view is impossible with a keyboard or
+  screen reader — selection sits on a `<tr>` with no `tabIndex`, and the checkbox is
+  controlled with no `onCheckedChange` plus `pointer-events-none`. The card branch is correct.
+- **UX-019 (Medium)** Color-only status against `DESIGN.md:26` — a 6px `aria-hidden`
+  red-vs-amber urgency dot with no paired text, and queen marking year only in a `title`.
+- **UX-020 (Medium)** Delete-expense and revoke-API-token fire with no confirmation, unlike
+  the nine comparable actions that all confirm.
+- **UX-021 (Medium)** Base dialog `max-h-[calc(100dvh-2rem)]` puts submit buttons under the
+  home indicator; the longest form is accidentally safe because it overrides to `90dvh`.
+- **UX-022 (Medium)** Long forms have no sticky submit, so the most frequent write in the
+  app requires scrolling the full form one-handed.
+- **UX-023 (Medium)** Exiting bulk mode clears the selection, so "archive the deadouts but
+  let me check that one" means starting over.
+- **UX-024 (Medium)** `frontend/node_modules` has no local `typescript`/`eslint`, so the
+  lint and typecheck gates cannot be run locally — several findings here (SEAM-019,
+  SEAM-020) are the class a typecheck catches.
+- **UX-025 / SEAM-019…024 / API-012 (Low)** `x` collides with the documented global
+  select-all; shortcut registry overwrites silently; `?` advertises shortcuts viewers
+  cannot use; Radix dialogs push no history entry so Android Back closes the route;
+  duplicate `aria-label="Main navigation"`; command-palette results lack listbox roles;
+  unsized `<img>` CLS risk; skeletons omit the action row; the apiary canvas has no
+  keyboard path; `AuthStatus` omits `isAdmin` (costing a round trip per load); `HoneySale`
+  omits `tax`/`updatedAt`/`cancelledAt`; CSRF rests entirely on `SameSite=Lax` with no
+  Origin check outside MCP (holds today only because no mutation is a GET — worth a test
+  pinning that invariant); `NEXT_PUBLIC_API_URL` inlines an internal hostname into the
+  public bundle; the public honey story renders dates a day early east of UTC; anonymous
+  visitors can create customer records (5/min/IP); migrations run uncancelable at startup.
+
+Verified clean during this review and worth not re-litigating: `isNavRouteActive` is
+correct (the one case where the indicator lies is UX-008's bad URL); tab and filter state
+*are* URL-backed and refresh-safe; Radix focus trapping and restore are sound; reduced
+motion is handled correctly; icon-only buttons have accessible names; the public honey
+story is a curated projection that leaks no hive/apiary ids, coordinates, inspection,
+expense, or customer data, and photo access re-checks `is_public`; no secret is in
+`localStorage` and there is no `dangerouslySetInnerHTML` anywhere.
+
 ## Longer arc
 
 ### Bloom calendar intelligence
