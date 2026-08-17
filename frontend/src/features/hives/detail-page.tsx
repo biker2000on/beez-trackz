@@ -33,7 +33,7 @@ import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useSearchParamState } from "@/lib/url-state";
+import { useSearchParamState, useSetSearchParams } from "@/lib/url-state";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import {
   AlertDialog,
@@ -137,6 +137,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
 
   const [tab, setTab] = useSearchParamState("tab", "overview", HIVE_TABS);
   const [filter, setFilter] = useSearchParamState("view", "all", FILTER_VALUES);
+  const setSearchParams = useSetSearchParams();
 
   const [editOpen, setEditOpen] = React.useState(false);
   const [inspectionOpen, setInspectionOpen] = React.useState(false);
@@ -316,28 +317,34 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
           <HiveOverviewTab hiveId={data.id} />
         </TabsContent>
         <TabsContent value="timeline" className="grid gap-4 pt-4">
-          <div
-            className="-mx-4 flex gap-1.5 overflow-x-auto px-4 md:mx-0 md:flex-wrap md:px-0"
-            role="group"
-            aria-label="Filter the timeline"
-          >
-            {TIMELINE_FILTERS.map((entry) => (
-              <button
-                key={entry.value}
-                type="button"
-                aria-pressed={entry.value === activeFilter.value}
-                onClick={() => setFilter(entry.value)}
-                className={cn(
-                  "shrink-0 rounded-full border px-3 py-1 text-sm font-medium transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  entry.value === activeFilter.value
-                    ? "border-primary bg-primary/12 text-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {entry.label}
-              </button>
-            ))}
+          <div className="relative -mx-4 md:mx-0">
+            <div
+              className="flex gap-1.5 overflow-x-auto px-4 md:flex-wrap md:px-0"
+              role="group"
+              aria-label="Filter the timeline"
+            >
+              {TIMELINE_FILTERS.map((entry) => (
+                <button
+                  key={entry.value}
+                  type="button"
+                  aria-pressed={entry.value === activeFilter.value}
+                  onClick={() => setFilter(entry.value)}
+                  className={cn(
+                    "shrink-0 rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    entry.value === activeFilter.value
+                      ? "border-primary bg-primary/12 text-primary"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent md:hidden"
+            />
           </div>
           {activeFilter.value === "inspections" ? (
             <InspectionsList hiveId={data.id} canEdit={canEdit} />
@@ -361,8 +368,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
             hiveId={data.id}
             canEdit={canEdit}
             onSeeAll={() => {
-              setTab("timeline");
-              setFilter("inspections");
+              setSearchParams({ tab: "timeline", view: "inspections" });
             }}
           />
         </TabsContent>

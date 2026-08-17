@@ -62,6 +62,8 @@ export function SectionNav({
   rootHref,
   pathname,
   hrefSuffix = "",
+  mobileSections,
+  mobileRootHref,
 }: {
   /** Accessible name for the nav, e.g. "Honey sections". */
   label: string;
@@ -71,22 +73,30 @@ export function SectionNav({
   pathname: string;
   /** Query string carried on every link (e.g. "?year=2026"). */
   hrefSuffix?: string;
+  /** Flattened destinations for the small-screen select (report-to-report). */
+  mobileSections?: readonly SectionLink[];
+  mobileRootHref?: string;
 }) {
   const router = useRouter();
   const active = activeSection(sections, rootHref, pathname);
+  const selectSections = mobileSections ?? sections;
+  const selectRoot = mobileRootHref ?? rootHref;
+  const selectActive = mobileSections
+    ? activeSection(selectSections, selectRoot, pathname)
+    : active;
 
   return (
     <nav aria-label={label} className="min-w-0">
       <div className="md:hidden">
         <Select
-          value={active?.href ?? rootHref}
+          value={selectActive?.href ?? selectRoot}
           onValueChange={(href) => router.push(`${href}${hrefSuffix}`)}
         >
           <SelectTrigger aria-label={label} className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {sections.map((section) => (
+            {selectSections.map((section) => (
               <SelectItem key={section.href} value={section.href}>
                 {section.label}
               </SelectItem>

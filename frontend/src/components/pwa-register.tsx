@@ -15,6 +15,7 @@ type QueueStatus = {
   pending: number;
   conflicts: number;
   failed: number;
+  needsAuth: boolean;
   items: Array<{
     id: string;
     method: string;
@@ -29,6 +30,7 @@ const emptyStatus: QueueStatus = {
   pending: 0,
   conflicts: 0,
   failed: 0,
+  needsAuth: false,
   items: [],
 };
 
@@ -64,6 +66,7 @@ export function PwaRegister() {
           pending: event.data.pending ?? 0,
           conflicts: event.data.conflicts ?? 0,
           failed: event.data.failed ?? 0,
+          needsAuth: Boolean(event.data.needsAuth),
           items: event.data.items ?? [],
         });
       }
@@ -91,7 +94,10 @@ export function PwaRegister() {
   }, []);
 
   const issues = queue.conflicts + queue.failed;
-  if (online && queue.pending === 0 && issues === 0) return null;
+  const queued = queue.pending + issues;
+  // Connectivity-only offline is the top OfflineBanner. This slot is the
+  // queue: pending replay, conflicts, or failed writes.
+  if (queued === 0) return null;
 
   const sendMutationAction = (type: string, id: string) =>
     navigator.serviceWorker.controller?.postMessage({ type, id });
@@ -102,7 +108,7 @@ export function PwaRegister() {
           install prompt stands down while sync work is reported here. */}
       <div
       data-offline-banner=""
-      className="fixed inset-x-3 bottom-3 z-[100] mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-lg dark:border-amber-800 dark:bg-amber-950 dark:text-amber-50"
+      className="fixed inset-x-3 bottom-[calc(var(--bottom-nav-h)+0.75rem)] z-[100] mx-auto flex max-w-lg items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-lg lg:bottom-3 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-50"
       role="status"
     >
       {issues > 0 ? (
@@ -111,13 +117,22 @@ export function PwaRegister() {
         <CloudOff className="size-5 shrink-0" />
       )}
       <span className="flex-1">
-        {!online
-          ? `Offline${queue.pending ? ` · ${queue.pending} change${queue.pending === 1 ? "" : "s"} queued` : ""}`
-          : issues
-            ? `${issues} offline change${issues === 1 ? "" : "s"} need review`
-            : `Syncing ${queue.pending} queued change${queue.pending === 1 ? "" : "s"}…`}
+        {queue.needsAuth
+          ? `Sign in to sync ${queue.pending} queued change${queue.pending === 1 ? "" : "s"}`
+          : !online
+            ? `Offline${queue.pending ? ` · ${queue.pending} change${queue.pending === 1 ? "" : "s"} queued` : ""}`
+            : issues
+              ? `${issues} offline change${issues === 1 ? "" : "s"} need review`
+              : `Syncing ${queue.pending} queued change${queue.pending === 1 ? "" : "s"}…`}
       </span>
-      {issues > 0 ? (
+      {queue.needsAuth ? (
+        <a
+          href="/login"
+          className="rounded-md px-2 py-1 font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+        >
+          Sign in
+        </a>
+      ) : issues > 0 ? (
         <button
           className="rounded-md px-2 py-1 font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
           onClick={() => setReviewOpen(true)}

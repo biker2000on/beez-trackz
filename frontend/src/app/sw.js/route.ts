@@ -21,10 +21,18 @@ const QUEUE_DB = "beez-trackz-offline";
 const QUEUE_STORE = "mutations";
 const SHELL = [
   "/offline",
+  "/login",
+  "/dashboard",
+  "/harvest",
+  "/harvest/market-day",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/apple-touch-icon.png",
 ];
+const MAX_QUEUE_ITEMS = 200;
+const DATA_CACHE_LIMIT = 200;
+const RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const QUEUE_FULL_ERROR = "offline queue is full";
 
 function openQueue() {
   return new Promise((resolve, reject) => {
@@ -59,67 +67,121 @@ async function queueRequest(request) {
     state: "pending",
     error: null,
   };
-  await new Promise((resolve, reject) => {
-    const transaction = database.transaction(QUEUE_STORE, "readwrite");
-    transaction.objectStore(QUEUE_STORE).put(item);
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-  });
-  database.close();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(QUEUE_STORE, "readwrite");
+      const store = transaction.objectStore(QUEUE_STORE);
+      let refused = false;
+      const allReq = store.getAll();
+      allReq.onsuccess = () => {
+        const existing = allReq.result || [];
+        if (existing.length >= MAX_QUEUE_ITEMS) {
+          const failed = existing
+            .filter((entry) => entry.state === "failed")
+            .sort((a, b) => String(a.queuedAt).localeCompare(String(b.queuedAt)));
+          const need = existing.length - MAX_QUEUE_ITEMS + 1;
+          const dropped = failed.slice(0, need);
+          for (const drop of dropped) store.delete(drop.id);
+          if (existing.length - dropped.length >= MAX_QUEUE_ITEMS) {
+            refused = true;
+            transaction.abort();
+            return;
+          }
+        }
+        store.put(item);
+      };
+      allReq.onerror = () => reject(allReq.error);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () =>
+        reject(refused ? new Error(QUEUE_FULL_ERROR) : transaction.error);
+      transaction.onabort = () =>
+        reject(refused ? new Error(QUEUE_FULL_ERROR) : transaction.error);
+    });
+  } finally {
+    database.close();
+  }
   await broadcastQueueStatus();
   return item;
 }
 
 async function queueItems() {
   const database = await openQueue();
-  const items = await new Promise((resolve, reject) => {
-    const request = database
-      .transaction(QUEUE_STORE, "readonly")
-      .objectStore(QUEUE_STORE)
-      .getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  database.close();
-  return items.sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+  try {
+    const items = await new Promise((resolve, reject) => {
+      const request = database
+        .transaction(QUEUE_STORE, "readonly")
+        .objectStore(QUEUE_STORE)
+        .getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return items.sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+  } finally {
+    database.close();
+  }
 }
 
 async function saveQueueItem(item) {
   const database = await openQueue();
-  await new Promise((resolve, reject) => {
-    const transaction = database.transaction(QUEUE_STORE, "readwrite");
-    transaction.objectStore(QUEUE_STORE).put(item);
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-  });
-  database.close();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(QUEUE_STORE, "readwrite");
+      transaction.objectStore(QUEUE_STORE).put(item);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } finally {
+    database.close();
+  }
 }
 
 async function deleteQueueItem(id) {
   const database = await openQueue();
-  await new Promise((resolve, reject) => {
-    const transaction = database.transaction(QUEUE_STORE, "readwrite");
-    transaction.objectStore(QUEUE_STORE).delete(id);
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-  });
-  database.close();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(QUEUE_STORE, "readwrite");
+      transaction.objectStore(QUEUE_STORE).delete(id);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } finally {
+    database.close();
+  }
 }
 
 async function clearQueue() {
   const database = await openQueue();
-  await new Promise((resolve, reject) => {
-    const transaction = database.transaction(QUEUE_STORE, "readwrite");
-    transaction.objectStore(QUEUE_STORE).clear();
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-  });
-  database.close();
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(QUEUE_STORE, "readwrite");
+      transaction.objectStore(QUEUE_STORE).clear();
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } finally {
+    database.close();
+  }
 }
 
 async function clearPrivateOfflineState() {
-  await Promise.all([caches.delete(DATA_CACHE), clearQueue()]);
+  // Drop cached API/private reads only. The mutation queue must survive
+  // logout the same way it survives login — a day of field work is still
+  // sitting in IndexedDB and must replay after the next sign-in.
+  await caches.delete(DATA_CACHE);
   await broadcastQueueStatus();
+}
+
+function summarizeQueueItem(item) {
+  return {
+    id: item.id,
+    method: item.method,
+    path: new URL(item.url).pathname,
+    queuedAt: item.queuedAt,
+    retriedAt: item.retriedAt || null,
+    state: item.state,
+    error: item.error,
+    needsAuth: Boolean(item.needsAuth),
+  };
 }
 
 async function broadcastQueueStatus() {
@@ -128,18 +190,19 @@ async function broadcastQueueStatus() {
     type: "window",
     includeUncontrolled: true,
   });
+  const pendingItems = items.filter((item) => item.state === "pending");
+  const conflictItems = items.filter((item) => item.state === "conflict");
+  const failedItems = items.filter((item) => item.state === "failed");
+  // Review dialog only lists non-pending rows; send those plus counts
+  // rather than every queued body.
   const detail = {
-    pending: items.filter((item) => item.state === "pending").length,
-    conflicts: items.filter((item) => item.state === "conflict").length,
-    failed: items.filter((item) => item.state === "failed").length,
-    items: items.map((item) => ({
-      id: item.id,
-      method: item.method,
-      path: new URL(item.url).pathname,
-      queuedAt: item.queuedAt,
-      state: item.state,
-      error: item.error,
-    })),
+    pending: pendingItems.length,
+    conflicts: conflictItems.length,
+    failed: failedItems.length,
+    needsAuth: items.some((item) => item.needsAuth),
+    queueSize: items.length,
+    queueLimit: MAX_QUEUE_ITEMS,
+    items: conflictItems.concat(failedItems).map(summarizeQueueItem),
   };
   clients.forEach((client) =>
     client.postMessage({ type: "OFFLINE_QUEUE_STATUS", ...detail }),
@@ -151,10 +214,22 @@ async function broadcastQueueStatus() {
 // "failed", which surfaces it in the review dialog for retry or discard.
 const MAX_REPLAY_ATTEMPTS = 5;
 
+function receiptExpired(item) {
+  const queuedAt = Date.parse(item.queuedAt);
+  return Number.isFinite(queuedAt) && Date.now() - queuedAt > RECEIPT_TTL_MS;
+}
+
 async function replayQueue() {
   const items = await queueItems();
   for (const item of items) {
     if (item.state !== "pending") continue;
+    if (receiptExpired(item)) {
+      item.state = "failed";
+      item.error =
+        "This offline change is older than 30 days and can no longer be replayed. Server receipts expire after 30 days, so replaying now could duplicate the write.";
+      await saveQueueItem(item);
+      continue;
+    }
     const headers = new Headers(item.headers);
     headers.set("X-Offline-Mutation-ID", item.id);
     headers.set("X-Offline-Queued-At", item.queuedAt);
@@ -185,9 +260,22 @@ async function replayQueue() {
         response.status === 409 &&
         errorBody?.error?.includes("already processing")
       ) {
+        // Another replay holds the receipt. Leave pending and keep going so
+        // one in-flight item cannot wedge the rest of the queue.
+        continue;
+      }
+      if (response.status === 401 || response.status === 403) {
+        // Stay pending and keep the saved queue. Broadcast needsAuth so the
+        // UI can prompt sign-in; do not drop state or skip the persist.
+        item.needsAuth = true;
+        item.error =
+          errorBody?.error ||
+          (response.status === 401
+            ? "Sign in to sync queued changes."
+            : "You do not have permission to sync this queued change.");
+        await saveQueueItem(item);
         break;
       }
-      if (response.status === 401 || response.status === 403) break;
       if (response.status >= 400 && response.status < 500) {
         item.state = "failed";
         item.error =
@@ -216,14 +304,20 @@ async function replayQueue() {
   await broadcastQueueStatus();
 }
 
+function queueableBody(request) {
+  if (request.method === "DELETE") return true;
+  const contentType = (request.headers.get("content-type") || "").trim();
+  // Body-less field actions (mark feeder empty, mark deadout, end bloom)
+  // omit Content-Type. JSON bodies still queue; multipart does not.
+  if (!contentType) return true;
+  return contentType.includes("application/json");
+}
+
 function queueableMutation(request, url) {
   if (
     !["POST", "PUT", "PATCH", "DELETE"].includes(request.method) ||
     !url.pathname.startsWith("/api/v1/") ||
-    !(
-      request.method === "DELETE" ||
-      (request.headers.get("content-type") || "").includes("application/json")
-    )
+    !queueableBody(request)
   ) {
     return false;
   }
@@ -242,6 +336,18 @@ function queueableMutation(request, url) {
     "/api/v1/harvest-sessions/",
     "/api/v1/harvest-entries/",
     "/api/v1/recommendations/",
+    "/api/v1/harvests",
+    "/api/v1/honey/jarring",
+    "/api/v1/honey/bulk-movements",
+    "/api/v1/honey/give-away",
+    "/api/v1/honey/jar-adjustments",
+    "/api/v1/honey/movements/",
+    "/api/v1/honey/sales",
+    "/api/v1/jar-sizes",
+    "/api/v1/expenses",
+    "/api/v1/customers",
+    "/api/v1/harvest-lots",
+    "/api/v1/wholesale-price-lists",
   ];
   const supportedHiveMutation =
     path === "/api/v1/hives/bulk" ||
@@ -281,15 +387,29 @@ function cacheableAPI(url) {
   );
 }
 
+async function putDataCache(cache, request, response) {
+  try {
+    await cache.delete(request);
+    await cache.put(request, response);
+    const keys = await cache.keys();
+    const extra = keys.length - DATA_CACHE_LIMIT;
+    for (let i = 0; i < extra; i++) {
+      await cache.delete(keys[i]);
+    }
+  } catch {
+    // QuotaExceeded or other cache write failure must not reject the fetch.
+  }
+}
+
 async function networkFirstAPI(request) {
   const cache = await caches.open(DATA_CACHE);
   // The network response refreshes the cache whenever it arrives — even
   // after the timeout below already served the cached copy, the late fresh
   // response is stored for next time instead of being discarded (rural
   // links routinely exceed the soft timeout).
-  const network = fetch(request).then((response) => {
+  const network = fetch(request).then(async (response) => {
     if (response.ok) {
-      void cache.put(request, response.clone());
+      await putDataCache(cache, request, response.clone());
     }
     return response;
   });
@@ -302,14 +422,39 @@ async function networkFirstAPI(request) {
     ]);
   } catch {
     const cached = await cache.match(request);
-    if (cached) return cached;
+    if (cached) {
+      const copy = cached.clone();
+      const headers = new Headers(cached.headers);
+      headers.set("X-Beez-Cache", "stale");
+      const stale = new Response(cached.body, {
+        status: cached.status,
+        statusText: cached.statusText,
+        headers,
+      });
+      void putDataCache(cache, request, copy);
+      return stale;
+    }
     // Nothing cached: better to keep waiting on the slow network than fail.
     return network;
   }
 }
 
+async function precacheShell() {
+  const cache = await caches.open(SHELL_CACHE);
+  // Per-URL so one missing app route cannot fail the whole install.
+  await Promise.all(SHELL.map((url) => cache.add(url).catch(() => undefined)));
+}
+
+async function navigateFallback(request, url) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  const byPath = await caches.match(url.pathname);
+  if (byPath) return byPath;
+  return (await caches.match("/offline")) || Response.error();
+}
+
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil(precacheShell());
   self.skipWaiting();
 });
 
@@ -366,7 +511,7 @@ self.addEventListener("fetch", (event) => {
           // Clear cached API data from the previous session, but keep the
           // mutation queue: the common case is the same beekeeper signing
           // back in after a session expiry with a day of queued field work
-          // that must replay, not be destroyed. (Logout still clears both.)
+          // that must replay, not be destroyed. Logout keeps the queue too.
           event.waitUntil(
             caches
               .delete(DATA_CACHE)
@@ -394,21 +539,39 @@ self.addEventListener("fetch", (event) => {
     });
     event.respondWith(
       fetch(mutationRequest.clone()).catch(async () => {
-        const item = await queueRequest(mutationRequest);
-        if ("sync" in self.registration) {
-          void self.registration.sync.register("beez-trackz-replay");
+        try {
+          const item = await queueRequest(mutationRequest);
+          if ("sync" in self.registration) {
+            void self.registration.sync.register("beez-trackz-replay");
+          }
+          return new Response(
+            JSON.stringify({
+              queued: true,
+              offline: true,
+              mutationId: item.id,
+            }),
+            {
+              status: 202,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        } catch (error) {
+          const full =
+            error &&
+            typeof error.message === "string" &&
+            error.message === QUEUE_FULL_ERROR;
+          return new Response(
+            JSON.stringify({
+              error: full
+                ? "Offline queue is full. Reconnect to sync, or discard failed changes."
+                : "Could not queue this offline change.",
+            }),
+            {
+              status: full ? 507 : 500,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
         }
-        return new Response(
-          JSON.stringify({
-            queued: true,
-            offline: true,
-            mutationId: item.id,
-          }),
-          {
-            status: 202,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
       }),
     );
     return;
@@ -416,7 +579,9 @@ self.addEventListener("fetch", (event) => {
 
   if (request.method !== "GET") return;
   if (request.mode === "navigate") {
-    event.respondWith(fetch(request).catch(() => caches.match("/offline")));
+    event.respondWith(
+      fetch(request).catch(() => navigateFallback(request, url)),
+    );
     return;
   }
   if (
@@ -459,7 +624,8 @@ self.addEventListener("message", (event) => {
           item.state = "pending";
           item.error = null;
           item.retryCount = 0;
-          item.queuedAt = new Date().toISOString();
+          item.needsAuth = false;
+          item.retriedAt = new Date().toISOString();
           await saveQueueItem(item);
           await replayQueue();
         }

@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLowStock } from "@/features/commerce/api";
+import { ApiError } from "@/lib/api";
 
 import { formatDate, formatLbs, formatMoney } from "./format";
 import {
@@ -34,6 +35,12 @@ import {
   useHoneyTimeline,
 } from "./hooks";
 import { HoneyQuickActions } from "./quick-actions";
+
+function honeyErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError && error.status === 403
+    ? "Administrator access required"
+    : fallback;
+}
 
 export function HoneyOverview() {
   const overview = useHoneyOverview();
@@ -47,13 +54,17 @@ export function HoneyOverview() {
 
   // "Unpaid" is derived from fields the sales API already returns; no new
   // formula and no server change. Amount owed = invoiced minus collected.
+  // Never treat a failed sales fetch as an empty list — that printed 0 / $0.00.
   const openOrders = (sales.data ?? []).filter(
     (sale) => sale.orderStatus !== "cancelled" && sale.amountPaid < sale.totalAmount,
   );
-  const amountOwed = openOrders.reduce(
-    (sum, sale) => sum + (sale.totalAmount - sale.amountPaid),
-    0,
-  );
+  const amountOwed = sales.isSuccess
+    ? openOrders.reduce(
+        (sum, sale) => sum + (sale.totalAmount - sale.amountPaid),
+        0,
+      )
+    : 0;
+  const unpaidCount = sales.isSuccess ? openOrders.length : 0;
 
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-6">
@@ -74,6 +85,12 @@ export function HoneyOverview() {
           value={data ? formatLbs(data.bulkOnHandLbs) : undefined}
           sub={data ? `${formatLbs(data.totalHarvestedLbs)} harvested to date` : undefined}
           loading={overview.isPending}
+          error={
+            overview.isError
+              ? honeyErrorMessage(overview.error, "Could not load bulk stock.")
+              : undefined
+          }
+          onRetry={overview.isError ? () => void overview.refetch() : undefined}
         />
         <StatCard
           icon={Package}
@@ -88,25 +105,38 @@ export function HoneyOverview() {
               : undefined
           }
           loading={overview.isPending}
+          error={
+            overview.isError
+              ? honeyErrorMessage(overview.error, "Could not load packaged stock.")
+              : undefined
+          }
+          onRetry={overview.isError ? () => void overview.refetch() : undefined}
         />
         <StatCard
           icon={DollarSign}
           label="Unpaid orders"
-          value={sales.isPending ? undefined : String(openOrders.length)}
+          value={sales.isSuccess ? String(unpaidCount) : undefined}
           sub={
-            sales.isPending
-              ? undefined
-              : `${formatMoney(amountOwed)} invoiced, not collected`
+            sales.isSuccess
+              ? `${formatMoney(amountOwed)} invoiced, not collected`
+              : undefined
           }
           loading={sales.isPending}
+          error={
+            sales.isError
+              ? honeyErrorMessage(sales.error, "Could not load unpaid orders.")
+              : undefined
+          }
+          onRetry={sales.isError ? () => void sales.refetch() : undefined}
         />
       </div>
 
       <NextActions
         bulkOnHandLbs={data?.bulkOnHandLbs ?? 0}
         lowStock={lowStock.data ?? []}
-        openOrderCount={openOrders.length}
+        openOrderCount={unpaidCount}
         amountOwed={amountOwed}
+        degraded={overview.isError || sales.isError}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -123,6 +153,14 @@ export function HoneyOverview() {
           <CardContent>
             {harvests.isPending ? (
               <Skeleton className="h-32 w-full" />
+            ) : harvests.isError ? (
+              <InlineError
+                message={honeyErrorMessage(
+                  harvests.error,
+                  "Could not load harvests.",
+                )}
+                onRetry={() => void harvests.refetch()}
+              />
             ) : (harvests.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No harvests recorded yet.
@@ -165,6 +203,14 @@ export function HoneyOverview() {
           <CardContent>
             {timeline.isPending ? (
               <Skeleton className="h-32 w-full" />
+            ) : timeline.isError ? (
+              <InlineError
+                message={honeyErrorMessage(
+                  timeline.error,
+                  "Could not load recent activity.",
+                )}
+                onRetry={() => void timeline.refetch()}
+              />
             ) : (timeline.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Nothing recorded in the honey ledger yet.
@@ -219,11 +265,13 @@ function NextActions({
   lowStock,
   openOrderCount,
   amountOwed,
+  degraded,
 }: {
   bulkOnHandLbs: number;
   lowStock: { jarSizeId: string; label: string; onHand: number; threshold: number }[];
   openOrderCount: number;
   amountOwed: number;
+  degraded: boolean;
 }) {
   const prompts: { key: string; title: string; detail: string; href: string; cta: string }[] = [];
 
@@ -258,6 +306,8 @@ function NextActions({
   }
 
   if (prompts.length === 0) {
+    // A failed overview/sales fetch must not be reported as "nothing to do".
+    if (degraded) return null;
     return (
       <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
         Nothing needs attention: no bulk awaiting bottling, no low stock, no
@@ -300,12 +350,16 @@ function StatCard({
   value,
   sub,
   loading,
+  error,
+  onRetry,
 }: {
   icon: LucideIcon;
   label: string;
   value?: string;
   sub?: string;
   loading: boolean;
+  error?: string;
+  onRetry?: () => void;
 }) {
   return (
     <Card>
@@ -316,17 +370,43 @@ function StatCard({
             {label}
           </span>
         </div>
-        {loading || value == null ? (
+        {error ? (
+          <div className="mt-2 grid gap-2">
+            <p className="text-sm text-muted-foreground">{error}</p>
+            {onRetry ? (
+              <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
+          </div>
+        ) : loading || value == null ? (
           <Skeleton className="mt-2 h-7 w-24" />
         ) : (
           <p className="mt-1 truncate text-2xl font-bold tabular-nums">
             {value}
           </p>
         )}
-        {sub != null && !loading && (
+        {sub != null && !loading && !error && (
           <p className="mt-0.5 truncate text-xs text-muted-foreground">{sub}</p>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function InlineError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm text-muted-foreground">{message}</p>
+      <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
   );
 }

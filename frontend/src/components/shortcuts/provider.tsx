@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { isTypingTarget } from "@/lib/keyboard";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import { useApiaries } from "@/features/apiaries/hooks";
 import { useHarvestLots } from "@/features/commerce/api";
@@ -50,18 +51,6 @@ interface ShortcutsContextValue {
 const ShortcutsContext = React.createContext<ShortcutsContextValue | null>(
   null,
 );
-
-/** True when the event originates from a place where typing is expected. */
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    target.isContentEditable
-  );
-}
 
 /** True when a Radix dialog/sheet/alert-dialog is currently open. */
 function isDialogOpen(): boolean {
@@ -234,12 +223,12 @@ export function ShortcutsProvider({
       }
 
       if (gotoPendingRef.current) {
+        event.preventDefault();
         clearGoto();
         const item = navigation.find(
           (nav) => nav.shortcutKey === key.toLowerCase(),
         );
         if (item) {
-          event.preventDefault();
           router.push(item.href);
         }
         return;
@@ -259,9 +248,10 @@ export function ShortcutsProvider({
       }
     }
 
-    window.addEventListener("keydown", onKeyDown);
+    // Capture so `g` chords preventDefault before page listeners (dashboard d/s/r).
+    window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
       clearGoto();
     };
   }, [navigation, router]);

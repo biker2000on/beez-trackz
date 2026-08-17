@@ -151,24 +151,26 @@ export const NAV_ITEMS: NavItem[] = [
       {
         label: "Finance",
         href: "/reports/finance",
+        adminOnly: true,
         matches: [
           "/reports/economics",
           "/reports/profitability",
           "/reports/expenses",
         ],
         children: [
-          { label: "Apiary economics", href: "/reports/economics" },
-          { label: "Profitability", href: "/reports/profitability" },
-          { label: "Expenses", href: "/reports/expenses" },
+          { label: "Apiary economics", href: "/reports/economics", adminOnly: true },
+          { label: "Profitability", href: "/reports/profitability", adminOnly: true },
+          { label: "Expenses", href: "/reports/expenses", adminOnly: true },
         ],
       },
       {
         label: "Sales & planning",
         href: "/reports/sales-planning",
+        adminOnly: true,
         matches: ["/reports/bottling", "/reports/customers"],
         children: [
-          { label: "Bottle next", href: "/reports/bottling" },
-          { label: "Customers & wholesale", href: "/reports/customers" },
+          { label: "Bottle next", href: "/reports/bottling", adminOnly: true },
+          { label: "Customers & wholesale", href: "/reports/customers", adminOnly: true },
         ],
       },
     ],

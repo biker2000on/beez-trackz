@@ -35,6 +35,11 @@ const METHOD_LABELS: Record<string, string> = {
   visual: "Visual count",
 };
 
+/** Washes have a sample size and a mites-per-100 rate. Board/visual do not. */
+function isRateMethod(method: string): boolean {
+  return method === "alcohol_wash" || method === "sugar_roll";
+}
+
 export function VarroaPanel({
   hiveId,
   canEdit = true,
@@ -85,10 +90,21 @@ export function VarroaPanel({
 
   if (report.isPending) return <Skeleton className="h-48 w-full" />;
   if (report.isError) {
-    return <p className="text-sm text-muted-foreground">Could not load Varroa data.</p>;
+    return (
+      <div className="grid gap-2">
+        <p className="text-sm text-muted-foreground">Could not load Varroa data.</p>
+        <Button type="button" variant="outline" size="sm" className="w-fit" onClick={() => void report.refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
   }
   const counts = report.data.counts;
-  const max = Math.max(1, ...counts.map((row) => row.mitesPer100 ?? row.mitesCount));
+  const rateCounts = counts.filter(
+    (row) => isRateMethod(row.method) && row.mitesPer100 != null,
+  );
+  const rawCounts = counts.filter((row) => !isRateMethod(row.method));
+  const max = Math.max(1, ...rateCounts.map((row) => row.mitesPer100 ?? 0));
 
   return (
     <div className="grid gap-4">
@@ -104,19 +120,23 @@ export function VarroaPanel({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {counts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No structured mite counts yet.</p>
+          {rateCounts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {counts.length === 0
+                ? "No structured mite counts yet."
+                : "No alcohol wash or sugar roll counts yet. Board and visual counts are listed separately — they are not a rate per 100 bees."}
+            </p>
           ) : (
             <div className="flex h-44 items-end gap-2 border-b border-l p-3">
-              {counts.map((row) => {
-                const value = row.mitesPer100 ?? row.mitesCount;
+              {rateCounts.map((row) => {
+                const value = row.mitesPer100 ?? 0;
                 return (
                   <div key={row.id} className="group flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
                     <span className="text-[10px] font-medium tabular-nums">{value.toFixed(1)}</span>
                     <div
                       className="w-full max-w-12 rounded-t bg-primary/80"
                       style={{ height: `${Math.max(4, (value / max) * 112)}px` }}
-                      title={`${METHOD_LABELS[row.method] ?? row.method}: ${value.toFixed(1)}`}
+                      title={`${METHOD_LABELS[row.method] ?? row.method}: ${value.toFixed(1)} per 100 bees`}
                     />
                     <span className="truncate text-[9px] text-muted-foreground">
                       {new Date(row.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
@@ -128,6 +148,42 @@ export function VarroaPanel({
           )}
         </CardContent>
       </Card>
+      {rawCounts.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Board drop and visual counts</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <p className="text-xs text-muted-foreground">
+              Sticky board and visual counts are raw mite numbers, not mites per
+              100 bees, so they are not plotted on the rate chart.
+            </p>
+            <ul className="grid gap-2">
+              {rawCounts.map((row) => (
+                <li
+                  key={row.id}
+                  className="flex items-center justify-between gap-3 text-sm"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">
+                      {row.method === "sticky_board"
+                        ? `${row.mitesCount} mites (board drop)`
+                        : `${row.mitesCount} mites (visual)`}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatDate(row.date)}
+                      {row.notes ? ` · ${row.notes}` : ""}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {METHOD_LABELS[row.method] ?? row.method}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      ) : null}
       <div className="grid gap-3">
         {report.data.treatments.map((treatment) => (
           <Card key={treatment.id}>

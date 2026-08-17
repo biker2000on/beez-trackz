@@ -8,6 +8,16 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { ApiError } from "@/lib/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -176,12 +186,46 @@ export function InspectionFormDialog({
     control: form.control,
     name: "treatments",
   });
+  const [discardOpen, setDiscardOpen] = React.useState(false);
 
   React.useEffect(() => {
-    if (open) form.reset(toValues(inspection));
+    if (open) {
+      form.reset(toValues(inspection));
+      setDiscardOpen(false);
+    }
   }, [open, inspection, form]);
 
   const watched = form.watch();
+  const isDirty = form.formState.isDirty;
+
+  function requestClose() {
+    if (isDirty) setDiscardOpen(true);
+    else onOpenChange(false);
+  }
+
+  function discardAndClose() {
+    setDiscardOpen(false);
+    onOpenChange(false);
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (next) onOpenChange(true);
+    else requestClose();
+  }
+
+  function scrollFirstError() {
+    requestAnimationFrame(() => {
+      const root = document.querySelector<HTMLElement>(
+        '[data-slot="dialog-content"]',
+      );
+      const invalid =
+        root?.querySelector<HTMLElement>('[aria-invalid="true"]') ??
+        root?.querySelector<HTMLElement>('[role="alert"]');
+      if (!invalid) return;
+      invalid.scrollIntoView({ block: "center", behavior: "smooth" });
+      invalid.focus({ preventScroll: true });
+    });
+  }
 
   function rating(value: string): number | null {
     return value === NOT_RATED ? null : Number(value);
@@ -190,14 +234,29 @@ export function InspectionFormDialog({
   async function onSubmit(values: InspectionValues, resetAfter = false) {
     const miteCount = values.miteCount.trim() === "" ? null : Number(values.miteCount);
     const miteSample = values.miteSampleSize.trim() === "" ? undefined : Number(values.miteSampleSize);
-    if (
-      !isEdit &&
-      values.miteMethod !== "none" &&
-      (miteCount == null || !Number.isInteger(miteCount) || miteCount < 0 ||
-        (miteSample != null && (!Number.isInteger(miteSample) || miteSample <= 0)))
-    ) {
-      toast.error("Enter a non-negative mite count and positive sample size.");
-      return;
+    if (!isEdit && values.miteMethod !== "none") {
+      let miteInvalid = false;
+      if (miteCount == null || !Number.isInteger(miteCount) || miteCount < 0) {
+        form.setError("miteCount", {
+          message: "Enter a non-negative mite count",
+        });
+        miteInvalid = true;
+      }
+      const needsSample =
+        values.miteMethod !== "sticky_board" && values.miteMethod !== "visual";
+      if (
+        needsSample &&
+        (miteSample == null || !Number.isInteger(miteSample) || miteSample <= 0)
+      ) {
+        form.setError("miteSampleSize", {
+          message: "Enter a positive sample size",
+        });
+        miteInvalid = true;
+      }
+      if (miteInvalid) {
+        scrollFirstError();
+        return;
+      }
     }
     const payload = {
       date: values.date,
@@ -256,7 +315,8 @@ export function InspectionFormDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-h-[90dvh] max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
@@ -269,9 +329,15 @@ export function InspectionFormDialog({
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm
-          onSubmit={form.handleSubmit((values) => onSubmit(values))}
-          onSubmitAndReset={form.handleSubmit((values) => onSubmit(values, true))}
-          onEscape={() => onOpenChange(false)}
+          onSubmit={form.handleSubmit(
+            (values) => onSubmit(values),
+            () => scrollFirstError(),
+          )}
+          onSubmitAndReset={form.handleSubmit(
+            (values) => onSubmit(values, true),
+            () => scrollFirstError(),
+          )}
+          onEscape={requestClose}
           className="grid gap-5"
           noValidate
         >
@@ -314,7 +380,9 @@ export function InspectionFormDialog({
                     <Label>Method</Label>
                     <Select
                       value={watched.miteMethod}
-                      onValueChange={(value) => form.setValue("miteMethod", value)}
+                      onValueChange={(value) =>
+                        form.setValue("miteMethod", value, { shouldDirty: true })
+                      }
                     >
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -334,8 +402,16 @@ export function InspectionFormDialog({
                       min="0"
                       step="1"
                       disabled={watched.miteMethod === "none"}
+                      aria-invalid={
+                        form.formState.errors.miteCount ? true : undefined
+                      }
                       {...form.register("miteCount")}
                     />
+                    {form.formState.errors.miteCount && (
+                      <p className="text-sm text-destructive" role="alert">
+                        {form.formState.errors.miteCount.message}
+                      </p>
+                    )}
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="inspection-mite-sample">Bees sampled</Label>
@@ -345,8 +421,16 @@ export function InspectionFormDialog({
                       min="1"
                       step="1"
                       disabled={watched.miteMethod === "none" || watched.miteMethod === "sticky_board" || watched.miteMethod === "visual"}
+                      aria-invalid={
+                        form.formState.errors.miteSampleSize ? true : undefined
+                      }
                       {...form.register("miteSampleSize")}
                     />
+                    {form.formState.errors.miteSampleSize && (
+                      <p className="text-sm text-destructive" role="alert">
+                        {form.formState.errors.miteSampleSize.message}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <Input
@@ -365,7 +449,9 @@ export function InspectionFormDialog({
               <Checkbox
                 checked={watched.queenSeen}
                 onCheckedChange={(checked) =>
-                  form.setValue("queenSeen", checked === true)
+                  form.setValue("queenSeen", checked === true, {
+                    shouldDirty: true,
+                  })
                 }
               />
               Queen seen
@@ -396,17 +482,23 @@ export function InspectionFormDialog({
               <RatingSelect
                 label="Honey stores"
                 value={watched.storesHoney}
-                onChange={(value) => form.setValue("storesHoney", value)}
+                onChange={(value) =>
+                  form.setValue("storesHoney", value, { shouldDirty: true })
+                }
               />
               <RatingSelect
                 label="Pollen stores"
                 value={watched.storesPollen}
-                onChange={(value) => form.setValue("storesPollen", value)}
+                onChange={(value) =>
+                  form.setValue("storesPollen", value, { shouldDirty: true })
+                }
               />
               <RatingSelect
                 label="Temperament"
                 value={watched.temperament}
-                onChange={(value) => form.setValue("temperament", value)}
+                onChange={(value) =>
+                  form.setValue("temperament", value, { shouldDirty: true })
+                }
               />
             </div>
           </section>
@@ -462,6 +554,11 @@ export function InspectionFormDialog({
                     }
                     {...form.register(`pests.${index}.count`)}
                   />
+                  {form.formState.errors.pests?.[index]?.count && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {form.formState.errors.pests[index]?.count?.message}
+                    </p>
+                  )}
                 </div>
                 <Button
                   type="button"
@@ -549,11 +646,7 @@ export function InspectionFormDialog({
           </section>
 
           <DialogFooter>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="ghost" onClick={requestClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={form.formState.isSubmitting}>
@@ -566,6 +659,27 @@ export function InspectionFormDialog({
           </DialogFooter>
         </ShortcutForm>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+      <AlertDialog open={discardOpen} onOpenChange={setDiscardOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard this inspection?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have unsaved changes. Closing discards them — nothing is
+              recorded until you save.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={discardAndClose}
+            >
+              Discard
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

@@ -309,7 +309,7 @@ export function InstallPrompt() {
 
   return (
     <div
-      className="fixed inset-x-3 bottom-3 z-[90] mx-auto flex max-w-lg flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 shadow-lg md:bottom-4"
+      className="fixed inset-x-3 bottom-[calc(var(--bottom-nav-h)+0.75rem)] z-[90] mx-auto flex max-w-lg flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 shadow-lg lg:bottom-4"
       role="complementary"
       aria-label="Install Beez Trackz"
     >

@@ -1,7 +1,27 @@
+"use client";
+
 import { Suspense } from "react";
+import { usePathname } from "next/navigation";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReportsSectionNav } from "@/features/operations/reports-nav";
+import { useAccessProfile } from "@/features/access/api";
+
+const ADMIN_REPORT_PREFIXES = [
+  "/reports/finance",
+  "/reports/sales-planning",
+  "/reports/economics",
+  "/reports/profitability",
+  "/reports/expenses",
+  "/reports/bottling",
+  "/reports/customers",
+];
+
+function isAdminReportPath(pathname: string) {
+  return ADMIN_REPORT_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
 
 /** Reports chrome: the section menu that replaced two nested tab strips. */
 export default function ReportsLayout({
@@ -9,12 +29,26 @@ export default function ReportsLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const profile = useAccessProfile();
+  const needsAdmin = isAdminReportPath(pathname);
+  const blocked =
+    needsAdmin && profile.isSuccess && profile.data?.isAdmin !== true;
+
   return (
     <div className="mx-auto grid w-full max-w-6xl gap-6">
       <Suspense fallback={<Skeleton className="h-11 w-full max-w-2xl" />}>
         <ReportsSectionNav />
       </Suspense>
-      {children}
+      {needsAdmin && profile.isPending ? (
+        <Skeleton className="h-72 w-full" />
+      ) : blocked ? (
+        <p className="text-sm text-muted-foreground">
+          Administrator access required
+        </p>
+      ) : (
+        children
+      )}
     </div>
   );
 }

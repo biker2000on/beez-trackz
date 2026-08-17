@@ -7,6 +7,18 @@
 
 import { api, ApiError } from "@/lib/api";
 
+// Multipart upload uses raw fetch; copy the 401 redirect from api.ts so a
+// stale session still lands on /login instead of a generic upload toast.
+let redirectingToLogin = false;
+
+function handleUnauthorized(path: string) {
+  if (typeof window === "undefined" || redirectingToLogin) return;
+  if (path.startsWith("/auth/") || path.startsWith("auth/")) return;
+  if (window.location.pathname.startsWith("/login")) return;
+  redirectingToLogin = true;
+  window.location.assign("/login");
+}
+
 export type TranscriptionMode = "single" | "batch";
 
 export type TranscriptionStatus =
@@ -159,6 +171,7 @@ export async function uploadTranscription({
     data = await res.json().catch(() => null);
   }
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized("/transcriptions");
     const message =
       (data as { error?: string } | null)?.error ??
       `Upload failed (${res.status})`;

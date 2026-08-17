@@ -14,11 +14,14 @@ import type { TranscriptionFlow } from "./use-transcription-flow";
  */
 export function TranscriptionStatusCard({ flow }: { flow: TranscriptionFlow }) {
   const failed =
-    flow.uploadError !== null || flow.transcription?.status === "failed";
+    flow.uploadError !== null ||
+    flow.pollError !== null ||
+    flow.transcription?.status === "failed";
 
   if (failed) {
     const message =
       flow.uploadError ??
+      flow.pollError ??
       flow.transcription?.error ??
       "Transcription failed for an unknown reason.";
     return (

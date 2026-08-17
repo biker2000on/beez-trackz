@@ -8,6 +8,7 @@
  */
 
 import * as React from "react";
+import Link from "next/link";
 import {
   DollarSign,
   Gift,
@@ -34,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ApiError } from "@/lib/api";
 import { useBulkSelect } from "@/lib/use-bulk-select";
 import { cn } from "@/lib/utils";
 
@@ -135,9 +137,21 @@ export function ActivityTab() {
   }
   if (timeline.isError) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        Could not load the activity timeline.
-      </p>
+      <div className="grid justify-items-center gap-3 py-8 text-center">
+        <p className="text-sm text-muted-foreground">
+          {timeline.error instanceof ApiError && timeline.error.status === 403
+            ? "Administrator access required"
+            : "Could not load the activity timeline."}
+        </p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/harvest">Back to Honey</Link>
+          </Button>
+          <Button type="button" size="sm" onClick={() => void timeline.refetch()}>
+            Retry
+          </Button>
+        </div>
+      </div>
     );
   }
   if (entries.length === 0) {

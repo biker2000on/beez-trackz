@@ -8,6 +8,18 @@ import {
 
 import { ApiError, api } from "@/lib/api";
 
+// Same-origin multipart posts skip the JSON api wrapper, so they must
+// redirect on 401 themselves (api.ts handleUnauthorized is not used here).
+let redirectingToLogin = false;
+
+function handleUnauthorized(path: string) {
+  if (typeof window === "undefined" || redirectingToLogin) return;
+  if (path.startsWith("/auth/") || path.startsWith("auth/")) return;
+  if (window.location.pathname.startsWith("/login")) return;
+  redirectingToLogin = true;
+  window.location.assign("/login");
+}
+
 // --- types (mirror backend/internal/httpapi/routes_photos.go) ---
 
 export type PhotoOwnerType = "hive" | "apiary" | "inspection";
@@ -59,6 +71,7 @@ async function uploadPhoto(input: {
     data = await res.json().catch(() => null);
   }
   if (!res.ok) {
+    if (res.status === 401) handleUnauthorized("/photos");
     const message =
       (data as { error?: string } | null)?.error ??
       `Upload failed (${res.status})`;

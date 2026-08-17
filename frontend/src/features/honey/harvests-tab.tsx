@@ -44,6 +44,8 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
+import { ApiError } from "@/lib/api";
+
 import { formatDate, formatLbs, parseNum, todayISO } from "./format";
 import {
   useApiaryOptions,
@@ -58,6 +60,28 @@ import { sessionFinalized } from "./session-detail";
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return <p className="text-xs text-destructive">{message}</p>;
+}
+
+function HarvestLoadError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="grid justify-items-center gap-3 py-4 text-center">
+      <p className="text-sm text-muted-foreground">{message}</p>
+      <div className="flex flex-wrap justify-center gap-2">
+        <Button asChild variant="outline" size="sm">
+          <Link href="/harvest">Back to Honey</Link>
+        </Button>
+        <Button type="button" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export function HarvestsTab() {
@@ -90,9 +114,14 @@ export function HarvestsTab() {
         {sessions.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : sessions.isError ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">
-            Could not load sessions.
-          </p>
+          <HarvestLoadError
+            message={
+              sessions.error instanceof ApiError && sessions.error.status === 403
+                ? "Administrator access required"
+                : "Could not load sessions."
+            }
+            onRetry={() => void sessions.refetch()}
+          />
         ) : sessions.data.length === 0 ? (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">
             No sessions yet. A session tracks one extraction day at an apiary.
@@ -171,9 +200,14 @@ export function HarvestsTab() {
         {harvests.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : harvests.isError ? (
-          <p className="py-4 text-center text-sm text-muted-foreground">
-            Could not load harvests.
-          </p>
+          <HarvestLoadError
+            message={
+              harvests.error instanceof ApiError && harvests.error.status === 403
+                ? "Administrator access required"
+                : "Could not load harvests."
+            }
+            onRetry={() => void harvests.refetch()}
+          />
         ) : standalone.length === 0 ? (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">
             No standalone harvests. Harvests recorded inside a session appear

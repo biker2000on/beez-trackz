@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { formatMoney, todayISO } from "@/features/honey/format";
 import { useJarInventory, useRecordSale } from "@/features/honey/hooks";
+import { OfflineQueuedError } from "@/lib/api";
 import { useHarvestLots, useLowStock, useReconciliation } from "./api";
 
 export function MarketDayTab({
@@ -98,8 +99,27 @@ export function MarketDayTab({
         setCustomer("");
         toast.success("Sale complete; inventory updated");
       },
+      onError: (error) => {
+        if (error instanceof OfflineQueuedError) {
+          // Accepted into the offline queue — do not claim inventory updated.
+          // Clearing avoids a second tap queueing a duplicate sale.
+          setCart({});
+          setDiscount("0");
+          setCustomer("");
+          return;
+        }
+        toast.error(error instanceof Error ? error.message : "Sale failed");
+      },
     });
   }
+
+  const saleQueued = sale.error instanceof OfflineQueuedError;
+  const saleError =
+    saleQueued
+      ? null
+      : sale.error instanceof Error
+        ? sale.error.message
+        : null;
 
   return (
     <div className="grid gap-5">
@@ -141,6 +161,18 @@ export function MarketDayTab({
               }}
               onSubmitAndReset={checkout}
             >
+            {saleError && (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                <span>{saleError}</span>
+              </div>
+            )}
+            {saleQueued && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                <span>Sale accepted offline — will sync when you reconnect. Inventory is not updated yet.</span>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
               <div className="grid gap-1"><Label>Channel</Label><Select value={channel} onValueChange={(value) => setChannel(value as typeof channel)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="farmers_market">Farmers market</SelectItem><SelectItem value="farm_stand">Farm stand</SelectItem><SelectItem value="pickup">Pickup</SelectItem><SelectItem value="direct">Direct</SelectItem></SelectContent></Select></div>

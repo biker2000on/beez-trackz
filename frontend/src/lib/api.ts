@@ -20,6 +20,34 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The service worker returns 202 `{queued, offline, mutationId}` when a write
+ * is stored for later replay. That body is not the created entity.
+ */
+export class OfflineQueuedError extends ApiError {
+  readonly mutationId: string | undefined;
+
+  constructor(body?: unknown) {
+    const mutationId =
+      typeof body === "object" &&
+      body !== null &&
+      typeof (body as { mutationId?: unknown }).mutationId === "string"
+        ? (body as { mutationId: string }).mutationId
+        : undefined;
+    super(202, "Saved offline — will sync when you reconnect", body);
+    this.name = "OfflineQueuedError";
+    this.mutationId = mutationId;
+  }
+}
+
+function isOfflineQueuedBody(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as { queued?: unknown }).queued === true
+  );
+}
+
 type QueryParams = Record<
   string,
   string | number | boolean | null | undefined
@@ -80,6 +108,10 @@ async function request<T>(
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     data = await res.json().catch(() => null);
+  }
+
+  if (res.status === 202 && isOfflineQueuedBody(data)) {
+    throw new OfflineQueuedError(data);
   }
 
   if (!res.ok) {

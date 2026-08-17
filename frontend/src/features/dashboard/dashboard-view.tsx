@@ -7,6 +7,7 @@ import { ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { isTypingTarget } from "@/lib/keyboard";
 import { useAccessProfile } from "@/features/access/api";
 import { useSetRecommendationState } from "@/features/recommendations/api";
 import {
@@ -38,18 +39,21 @@ const REPORTS = [
 
 /** True while typing or while a dialog is open — keyboard triage stands down. */
 function keyboardBusy(target: EventTarget | null): boolean {
-  if (
-    target instanceof HTMLElement &&
-    (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
-      target.isContentEditable)
-  ) {
-    return true;
-  }
+  if (isTypingTarget(target)) return true;
   return Boolean(
     document.querySelector(
       '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]',
     ),
   );
+}
+
+/** Mutations only fire after the user has arrow-focused a row this visit. */
+function isArmedRow(focusedId: string, target: EventTarget | null): boolean {
+  const node =
+    (document.activeElement instanceof HTMLElement && document.activeElement) ||
+    (target instanceof HTMLElement ? target : null);
+  if (!node) return false;
+  return node.closest(`[data-field-id="${CSS.escape(focusedId)}"]`) != null;
 }
 
 /**
@@ -70,7 +74,7 @@ export function DashboardView() {
   const setRecState = useSetRecommendationState();
   const closeFeeding = useCloseFeeding();
   const refillFeeding = useRefillFeeding();
-  const [focusedIndex, setFocusedIndex] = React.useState(0);
+  const [focusedIndex, setFocusedIndex] = React.useState(-1);
   const revealFocused = React.useRef(false);
 
   // The keyboard order is exactly what is visible: the first five of each
@@ -82,11 +86,12 @@ export function DashboardView() {
     ],
     [work.attention, work.today],
   );
-  const focusIndex = Math.max(
-    0,
-    Math.min(focusedIndex, visibleItems.length - 1),
-  );
-  const focusedId = visibleItems[focusIndex]?.id ?? null;
+  const focusIndex =
+    focusedIndex < 0 || visibleItems.length === 0
+      ? -1
+      : Math.min(focusedIndex, visibleItems.length - 1);
+  const focusedId =
+    focusIndex >= 0 ? (visibleItems[focusIndex]?.id ?? null) : null;
 
   const mutating =
     setRecState.isPending || closeFeeding.isPending || refillFeeding.isPending;
@@ -135,21 +140,33 @@ export function DashboardView() {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (keyboardBusy(event.target)) return;
       if (visibleItems.length === 0) return;
-      const focused = visibleItems[focusIndex];
 
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
+        const current =
+          focusIndex < 0
+            ? direction > 0
+              ? -1
+              : visibleItems.length
+            : focusIndex;
         const next = Math.max(
           0,
-          Math.min(visibleItems.length - 1, focusIndex + direction),
+          Math.min(visibleItems.length - 1, current + direction),
         );
         if (next !== focusIndex) revealFocused.current = true;
         setFocusedIndex(next);
-      } else if ((event.key === "Enter" || event.key === "o") && focused) {
+        return;
+      }
+
+      const focused = focusIndex >= 0 ? visibleItems[focusIndex] : undefined;
+      if (!focused) return;
+
+      if (event.key === "Enter" || event.key === "o") {
         if (
           event.target instanceof Element &&
           event.target.closest("a, button")
@@ -162,8 +179,8 @@ export function DashboardView() {
         }
       } else if (
         (event.key === "d" || event.key === "s" || event.key === "r") &&
-        focused &&
-        !mutating
+        !mutating &&
+        isArmedRow(focused.id, event.target)
       ) {
         event.preventDefault();
         void resolveItem(focused, event.key);

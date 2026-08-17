@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ApiError } from "@/lib/api";
 
 import { formatDate, formatMoney } from "./format";
 import { useDeleteSale, useHoneySales, useUpdateSale } from "./hooks";
@@ -43,9 +44,21 @@ export function SalesTab() {
   }
   if (sales.isError) {
     return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        Could not load sales.
-      </p>
+      <div className="grid justify-items-center gap-3 py-8 text-center">
+        <p className="text-sm text-muted-foreground">
+          {sales.error instanceof ApiError && sales.error.status === 403
+            ? "Administrator access required"
+            : "Could not load sales."}
+        </p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/harvest">Back to Honey</Link>
+          </Button>
+          <Button type="button" size="sm" onClick={() => void sales.refetch()}>
+            Retry
+          </Button>
+        </div>
+      </div>
     );
   }
   if (sales.data.length === 0) {

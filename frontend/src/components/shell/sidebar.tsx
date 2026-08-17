@@ -33,7 +33,15 @@ export function Sidebar() {
   const hives = useHives({ includeArchived: true }, Boolean(currentHiveId));
   const isAdmin = profile.data?.isAdmin === true;
   const items = visibleNavItems(NAV_ITEMS, isAdmin);
-  const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
+  const [expansion, setExpansion] = React.useState<{
+    path: string;
+    map: Record<string, boolean>;
+  }>({ path: pathname, map: {} });
+  const expanded = React.useMemo(
+    () => (expansion.path === pathname ? expansion.map : {}),
+    [expansion, pathname],
+  );
+  const navRef = React.useRef<HTMLElement>(null);
 
   const currentApiaryId = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
   const currentHive = hives.data?.find((hive) => hive.id === currentHiveId);
@@ -49,19 +57,27 @@ export function Sidebar() {
         ) === true
       : canEditAny);
 
+  React.useEffect(() => {
+    const links = navRef.current?.querySelectorAll('[aria-current="page"]');
+    links?.[links.length - 1]?.scrollIntoView({ block: "nearest" });
+  }, [pathname, currentHref, expanded, items, canEditContext, hives.data]);
+
   function itemChildren(item: NavRoute) {
     return navRouteChildren(item, pathname, isAdmin, canEditContext);
   }
 
   function toggle(href: string, defaultOpen: boolean) {
-    setExpanded((current) => ({
-      ...current,
-      [href]: !(current[href] ?? defaultOpen),
-    }));
+    setExpansion((current) => {
+      const map = current.path === pathname ? current.map : {};
+      return {
+        path: pathname,
+        map: { ...map, [href]: !(map[href] ?? defaultOpen) },
+      };
+    });
   }
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r bg-sidebar text-sidebar-foreground md:flex">
+    <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r bg-sidebar pt-[var(--safe-top)] text-sidebar-foreground lg:flex">
       <div className="flex items-center justify-between px-4 py-5">
         <Link
           href="/dashboard"
@@ -71,7 +87,11 @@ export function Sidebar() {
         </Link>
         <ThemeToggle />
       </div>
-      <nav className="flex-1 overflow-y-auto px-3" aria-label="Main navigation">
+      <nav
+        ref={navRef}
+        className="flex-1 overflow-y-auto px-3"
+        aria-label="Main navigation"
+      >
         <ul className="grid gap-1">
           {items.map((item) => {
             const children = itemChildren(item);

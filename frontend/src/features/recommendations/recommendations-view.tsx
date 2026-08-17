@@ -525,7 +525,7 @@ export function RecommendationsView() {
       )}
 
       {visibleSelected.size > 0 && (
-        <div className="sticky bottom-20 z-20 flex flex-wrap items-center gap-2 rounded-xl border bg-card p-3 shadow-lg md:bottom-4">
+        <div className="sticky bottom-[calc(var(--bottom-nav-h)+0.75rem)] z-20 flex flex-wrap items-center gap-2 rounded-xl border bg-card p-3 shadow-lg lg:bottom-4">
           <span className="text-sm font-medium">{visibleSelected.size} selected</span>
           <Button
             variant="outline"

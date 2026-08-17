@@ -10,7 +10,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { api } from "@/lib/api";
+import { api, OfflineQueuedError } from "@/lib/api";
 import type {
   ApiaryOption,
   HarvestRow,
@@ -123,6 +123,10 @@ function useHoneyMutation<TVars, TData = unknown>(
       }
     },
     onError: (error) => {
+      if (error instanceof OfflineQueuedError) {
+        toast.info("Saved offline — will sync when you reconnect");
+        return;
+      }
       if (!options.silentError) {
         toast.error(error instanceof Error ? error.message : "Request failed");
       }

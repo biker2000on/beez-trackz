@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { CheckSquare, Hexagon, MapPin, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -32,25 +31,10 @@ import { useAccessProfile } from "@/features/access/api";
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { useApiaries, useBulkDeleteApiaries } from "./hooks";
 
-/**
- * With a single apiary the list page is a pointless stop — open the yard
- * directly. Once per session only, so the list (and "New apiary") stays
- * reachable by navigating back to Apiaries afterwards.
- */
-const AUTO_OPEN_FLAG = "beez.apiaries.auto-opened";
-
 export function ApiariesListPage() {
-  const router = useRouter();
   const apiaries = useApiaries();
   const access = useAccessProfile();
   const isAdmin = access.data?.isAdmin === true;
-
-  React.useEffect(() => {
-    if (apiaries.data?.length !== 1) return;
-    if (window.sessionStorage.getItem(AUTO_OPEN_FLAG)) return;
-    window.sessionStorage.setItem(AUTO_OPEN_FLAG, "1");
-    router.replace(`/apiaries/${apiaries.data[0].id}`);
-  }, [apiaries.data, router]);
   const bulkDelete = useBulkDeleteApiaries();
   const [createOpen, setCreateOpen] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
@@ -205,7 +189,7 @@ export function ApiariesListPage() {
       )}
 
       {isAdmin && bulkMode && (
-        <div className="sticky bottom-20 z-20 flex items-center gap-2 rounded-xl border bg-card p-3 shadow-lg md:bottom-4">
+        <div className="sticky bottom-[calc(var(--bottom-nav-h)+0.75rem)] z-20 flex items-center gap-2 rounded-xl border bg-card p-3 shadow-lg lg:bottom-4">
           <span className="text-sm font-medium">
             {selected.size} selected
           </span>

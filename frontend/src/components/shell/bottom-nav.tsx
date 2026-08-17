@@ -70,7 +70,7 @@ export function BottomNav() {
     <>
       <nav
         aria-label="Main navigation"
-        className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur pb-safe md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur pb-safe pl-[var(--safe-left)] pr-[var(--safe-right)] lg:hidden"
       >
         <ul className="grid grid-cols-5">
           {items.map((item) => {
@@ -115,7 +115,7 @@ export function BottomNav() {
       </nav>
 
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
-        <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto md:hidden">
+        <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto lg:hidden">
           <SheetHeader>
             <SheetTitle>All sections</SheetTitle>
             <SheetDescription>
@@ -218,7 +218,7 @@ function MobileRoute({
           aria-current={active ? "page" : undefined}
           style={{ paddingLeft: `${0.75 + depth * 0.75}rem` }}
           className={cn(
-            "min-w-0 flex-1 rounded-md py-2 pr-2 text-sm transition-colors",
+            "flex min-h-11 min-w-0 flex-1 items-center rounded-md py-2.5 pr-2 text-sm transition-colors",
             active
               ? "font-medium text-primary"
               : "text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -232,7 +232,7 @@ function MobileRoute({
             aria-label={`${open ? "Collapse" : "Expand"} ${route.label}`}
             aria-expanded={open}
             onClick={() => onToggle(route.href, active)}
-            className="grid size-9 shrink-0 place-items-center rounded-md"
+            className="grid size-10 min-h-11 min-w-11 shrink-0 place-items-center rounded-md"
           >
             <ChevronDown
               className={cn(
