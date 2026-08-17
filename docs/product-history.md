@@ -14,6 +14,47 @@ reported — the sibling path was never covered. Treat a completion note here as
 "the reported case was fixed and tested", not "the class of bug is gone". The
 specific carve-outs are noted inline below.
 
+## Delivered 2026-08-17 — review P0/P1 product fixes
+
+The 2026-08-12 adversarial review backlog (UX / API / SEAM) plus the varroa
+sticky-board chart bug. Go tests: `httpapi`, `config`, `auth`, `jobs` against
+an isolated Postgres. Frontend eslint clean on the touched files.
+
+- **Market day** reports sale failures inline and by toast (SEAM-001). Safe-area
+  padding on the full-screen POS (UX-004). Offline 202 `{queued:true}` is no
+  longer treated as a created sale (SEAM-006).
+- **Service worker:** 401/403/409 no longer wedge the queue (SEAM-002); logout
+  keeps the mutation queue (SEAM-003); honey/commerce paths queue (SEAM-004);
+  retry keeps original `queuedAt` (SEAM-005); shell precache + navigate fallback
+  (SEAM-007); body-less POSTs queue (SEAM-008); stale cache is marked
+  (SEAM-009); queue capped at 200 (SEAM-010); 30-day items are not replayed
+  (SEAM-011); DATA_CACHE LRU + caught `put` (SEAM-018). Banner prompts sign-in
+  when `needsAuth`.
+- **Layout:** `--bottom-nav-h` lifts banners and bulk toolbars (UX-002/003/005);
+  sidebar at `lg:` (UX-006); expansion re-syncs on route change (UX-009); single
+  apiary no longer hijacks Yards (UX-010); reports mobile select is
+  report-to-report (UX-011); More nested targets 44 px (UX-013); one offline
+  banner for connectivity, bottom banner only for queue work (UX-014); finance
+  reports gated (SEAM-016).
+- **Keyboard/forms:** dashboard `d/s/r` unarmed until arrow focus; `g` chords
+  preventDefault (UX-001); combobox/menu typing ignored (UX-007); tab+filter
+  in one replace (UX-008); chip-strip fade (UX-012); dirty inspection confirm
+  (UX-015); first invalid field scrolls into view (UX-017).
+- **Errors:** honey overview no longer skeletons/`$0.00` on failure (SEAM-012);
+  App Router + public story error boundaries (SEAM-013); multipart 401 → login
+  (SEAM-014); transcription poll surfaces failure (SEAM-015).
+- **Backend:** singleton `user_settings` + advisory lock (API-001); setup
+  checks complete before bcrypt and is rate-limited (API-003); offline receipts
+  complete before the client sees the body (API-002); server timeouts + 1 MiB
+  JSON cap (API-004); trusted-proxy RealIP (API-007); token `last_used_at`
+  throttled (API-008); serialized bottling cap 500 (API-005); timeline/inspection
+  limits clamped (API-006, SEAM-017); queen lineage authorized (API-009); money
+  overflow rejected (API-010); transcribe TaskID + no overwrite of a complete
+  transcript (API-011).
+- **Varroa:** wash/roll rate chart is separate from board/visual mite counts.
+
+Migration **00012** (`user_settings_singleton`) runs on API boot.
+
 ## Delivered 2026-07-26 — first roadmap wave
 
 ### Voice-first everything
