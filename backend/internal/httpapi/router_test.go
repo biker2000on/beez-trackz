@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
@@ -48,5 +49,34 @@ func TestOperationsRoutesRequireAuthentication(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("operations response status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAPIJSONBodyLimit(t *testing.T) {
+	cfg := &config.Config{SessionSecret: "test", AppURL: "http://localhost:3000"}
+	handler := NewRouter(cfg, nil, nil, nil)
+
+	body := `{"password":"` + strings.Repeat("a", apiJSONBodyLimit+1) + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("oversize JSON = %d %s, want 400", response.Code, response.Body.String())
+	}
+}
+
+func TestAPIUploadPathsAreExemptFromJSONBodyLimit(t *testing.T) {
+	t.Parallel()
+	photo := httptest.NewRequest(http.MethodPost, "/api/v1/photos", nil)
+	if !apiUploadExempt(photo) {
+		t.Error("POST /api/v1/photos should be exempt")
+	}
+	transcription := httptest.NewRequest(http.MethodPost, "/api/v1/transcriptions/", nil)
+	if !apiUploadExempt(transcription) {
+		t.Error("POST /api/v1/transcriptions/ should be exempt")
+	}
+	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	if apiUploadExempt(login) {
+		t.Error("POST /api/v1/auth/login should not be exempt")
 	}
 }

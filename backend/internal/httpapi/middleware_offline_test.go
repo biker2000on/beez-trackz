@@ -1,8 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestOfflineMutationSupported(t *testing.T) {
@@ -54,5 +58,77 @@ func TestOfflineMutationSupported(t *testing.T) {
 					test.method, test.path, got, test.want)
 			}
 		})
+	}
+}
+
+func TestOfflineCaptureWriterDoesNotWriteThrough(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	capture := &offlineCaptureWriter{ResponseWriter: rec}
+	capture.Header().Set("Content-Type", "application/json")
+	capture.WriteHeader(http.StatusCreated)
+	if _, err := capture.Write([]byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("capture wrote through before flush: %q", rec.Body.String())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("WriteHeader wrote through, recorder code = %d", rec.Code)
+	}
+	flushOfflineResponse(rec, capture)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("flushed status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if rec.Body.String() != `{"ok":true}` {
+		t.Fatalf("flushed body = %q", rec.Body.String())
+	}
+}
+
+func TestOffline5xxDeletesReceiptAndFlushesStatus(t *testing.T) {
+	server := honeyTestServer(t)
+	mutationID := uuid.New()
+	handler := server.offlineMutations(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusInternalServerError, "boom")
+	}))
+	request := adminRequest(http.MethodPost, "/api/v1/expenses", map[string]any{})
+	request.Header.Set("X-Offline-Mutation-ID", mutationID.String())
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d %s, want 500", response.Code, response.Body.String())
+	}
+	var n int
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM offline_mutation_receipts WHERE mutation_id=$1`,
+		mutationID).Scan(&n); err != nil {
+		t.Fatalf("count receipts: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("5xx left %d receipt(s)", n)
+	}
+}
+
+func TestOfflineSuccessFlushesAfterReceiptCompletes(t *testing.T) {
+	server := honeyTestServer(t)
+	mutationID := uuid.New()
+	handler := server.offlineMutations(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+	}))
+	request := adminRequest(http.MethodPost, "/api/v1/expenses", map[string]any{})
+	request.Header.Set("X-Offline-Mutation-ID", mutationID.String())
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d %s", response.Code, response.Body.String())
+	}
+	var state string
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT state FROM offline_mutation_receipts WHERE mutation_id=$1`,
+		mutationID).Scan(&state); err != nil {
+		t.Fatalf("read receipt: %v", err)
+	}
+	if state != "complete" {
+		t.Fatalf("receipt state = %q after 201, want complete", state)
 	}
 }

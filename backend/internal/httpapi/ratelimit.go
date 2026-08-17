@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,17 +21,79 @@ var (
 	// publicPostThrottle bounds unauthenticated /public/* writes per IP
 	// (ASI-3-001).
 	publicPostThrottle = newIPThrottle(5, time.Minute)
+	// setupThrottle bounds unauthenticated /auth/setup per IP (API-003).
+	setupThrottle = newIPThrottle(5, time.Minute)
 )
 
-// clientIP returns the request's client address without the port. The router
-// applies chi middleware.RealIP, so behind traefik this is the forwarded
-// client address rather than the proxy's.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+func stripHostPort(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return remoteAddr
 	}
 	return host
+}
+
+func ipInNets(ip net.IP, nets []*net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, network := range nets {
+		if network != nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveClientIP returns the connecting peer unless that peer is in the
+// trusted-proxy allowlist, in which case X-Forwarded-For is walked from the
+// right (skipping trusted hops) and X-Real-IP is the fallback.
+func resolveClientIP(remoteAddr, xff, xRealIP string, trusted []*net.IPNet) string {
+	host := stripHostPort(remoteAddr)
+	peer := net.ParseIP(host)
+	if peer == nil || !ipInNets(peer, trusted) {
+		return host
+	}
+	if xff != "" {
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := net.ParseIP(strings.TrimSpace(parts[i]))
+			if candidate == nil {
+				continue
+			}
+			if !ipInNets(candidate, trusted) || i == 0 {
+				return candidate.String()
+			}
+		}
+	}
+	if realIP := net.ParseIP(strings.TrimSpace(xRealIP)); realIP != nil {
+		return realIP.String()
+	}
+	return host
+}
+
+// trustedRealIP rewrites RemoteAddr from forwarding headers only when the
+// connecting peer is a trusted proxy. Replaces chi middleware.RealIP, which
+// honored X-Forwarded-For from any client (API-007).
+func (s *Server) trustedRealIP(next http.Handler) http.Handler {
+	var nets []*net.IPNet
+	if s.cfg != nil {
+		nets = s.cfg.TrustedProxies
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ip := resolveClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"),
+			r.Header.Get("X-Real-IP"), nets); ip != "" {
+			r.RemoteAddr = ip
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIP returns the request's client address without the port. The router
+// applies trustedRealIP first, so behind a trusted proxy this is the
+// forwarded client address rather than the proxy's.
+func clientIP(r *http.Request) string {
+	return stripHostPort(r.RemoteAddr)
 }
 
 // ipThrottle allows limit requests per window per key (fixed window).

@@ -149,6 +149,51 @@ func queenResolvePayload(req *queenPayload) (hiveID, originHiveID, parentQueenID
 	return hiveID, originHiveID, parentQueenID, status, introduced, nil
 }
 
+// authorizeQueenLineageRefs checks originHiveId / parentQueenId with the same
+// editor-on-apiary rule as hiveId. Cross-apiary pedigree links are rejected.
+func (s *Server) authorizeQueenLineageRefs(
+	w http.ResponseWriter, r *http.Request, originHiveID, parentQueenID *string,
+) bool {
+	if originHiveID != nil {
+		value, err := uuid.Parse(*originHiveID)
+		if err != nil || !s.requireHiveRole(w, r, value, true) {
+			return false
+		}
+	}
+	if parentQueenID == nil {
+		return true
+	}
+	queenID, err := uuid.Parse(*parentQueenID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid parentQueenId")
+		return false
+	}
+	var hiveID, originID *uuid.UUID
+	err = s.pool.QueryRow(r.Context(),
+		`SELECT hive_id, origin_hive_id FROM queens WHERE id=$1`, queenID).
+		Scan(&hiveID, &originID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusBadRequest, "invalid parentQueenId")
+		return false
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return false
+	}
+	ref := hiveID
+	if ref == nil {
+		ref = originID
+	}
+	if ref == nil {
+		if !principalFrom(r).IsAdmin {
+			writeError(w, http.StatusForbidden, "parent queen is not in an editable apiary")
+			return false
+		}
+		return true
+	}
+	return s.requireHiveRole(w, r, *ref, true)
+}
+
 // GET /queens — all queens for the genealogy tree.
 func (s *Server) handleQueenList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(),
@@ -191,6 +236,9 @@ func (s *Server) handleQueenCreate(w http.ResponseWriter, r *http.Request) {
 		if parseErr != nil || !s.requireHiveRole(w, r, value, true) {
 			return
 		}
+	}
+	if !s.authorizeQueenLineageRefs(w, r, originHiveID, parentQueenID) {
+		return
 	}
 	var id string
 	if err := s.pool.QueryRow(r.Context(), `
@@ -257,6 +305,9 @@ func (s *Server) handleQueenUpdate(w http.ResponseWriter, r *http.Request) {
 		if parseErr != nil || !s.requireHiveRole(w, r, value, true) {
 			return
 		}
+	}
+	if !s.authorizeQueenLineageRefs(w, r, originHiveID, parentQueenID) {
+		return
 	}
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE queens SET hive_id = $1, origin = $2, origin_hive_id = $3,

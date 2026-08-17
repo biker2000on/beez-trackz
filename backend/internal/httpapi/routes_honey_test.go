@@ -61,6 +61,27 @@ func TestHoneyBulkShortfall(t *testing.T) {
 	}
 }
 
+func TestParseBoundedLimitClampsAndDefaults(t *testing.T) {
+	if got := parseBoundedLimit("", 50, 200); got != 50 {
+		t.Errorf("empty = %d, want default 50", got)
+	}
+	if got := parseBoundedLimit("10", 50, 200); got != 10 {
+		t.Errorf("10 = %d, want 10", got)
+	}
+	if got := parseBoundedLimit("999999999", 50, 200); got != 200 {
+		t.Errorf("huge limit = %d, want max 200", got)
+	}
+	if got := parseBoundedLimit("0", 50, 200); got != 50 {
+		t.Errorf("zero = %d, want default 50", got)
+	}
+	if got := parseBoundedLimit("-4", 50, 200); got != 50 {
+		t.Errorf("negative = %d, want default 50", got)
+	}
+	if got := parseBoundedLimit("nope", 50, 200); got != 50 {
+		t.Errorf("garbage = %d, want default 50", got)
+	}
+}
+
 func TestNormalizeHoneySaleLinesRejectsConflictingOrNegativePrices(t *testing.T) {
 	jarSizeID := uuid.New().String()
 	tests := []struct {

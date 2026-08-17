@@ -47,6 +47,10 @@ func (s *Server) mountCommerce(r chi.Router) {
 	s.mountSerials(admin)
 }
 
+// maxSerializedBottlingQuantity is the per-request cap on serialize:true
+// quantity. Each unit is a DB insert plus a serial in the response.
+const maxSerializedBottlingQuantity = 500
+
 func (s *Server) mountPublicCommerce(r chi.Router) {
 	r.Get("/public/honey-stories/{slug}", s.publicHoneyStory)
 	r.Get("/public/honey-stories/{slug}/qr", s.publicHoneyStoryQR)
@@ -451,6 +455,13 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	date, err := parseDate(req.BottledDate)
 	if err != nil || req.Quantity <= 0 || (req.HoneyLbs != nil && *req.HoneyLbs < 0) {
 		writeError(w, http.StatusBadRequest, "bottledDate and a positive quantity are required")
+		return
+	}
+	// Serialized runs insert one jar_serials row per unit and accumulate every
+	// serial in the response, all inside one transaction. Bound that loop.
+	if req.Serialize && req.Quantity > maxSerializedBottlingQuantity {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"serialized quantity cannot exceed %d", maxSerializedBottlingQuantity))
 		return
 	}
 	// A run with no jar size used to create no inventory movement at all: the

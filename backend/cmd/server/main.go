@@ -53,6 +53,10 @@ func main() {
 		Addr:              cfg.ListenAddr,
 		Handler:           httpapi.NewRouter(cfg, pool, store, queue),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	go func() {

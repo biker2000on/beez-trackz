@@ -29,21 +29,29 @@ func (writer *offlineCaptureWriter) WriteHeader(status int) {
 	if writer.status == 0 {
 		writer.status = status
 	}
-	writer.ResponseWriter.WriteHeader(status)
 }
 
 func (writer *offlineCaptureWriter) Write(value []byte) (int, error) {
 	if writer.status == 0 {
 		writer.status = http.StatusOK
 	}
-	if writer.body.Len() < offlineResponseLimit {
-		remaining := offlineResponseLimit - writer.body.Len()
-		if len(value) < remaining {
-			remaining = len(value)
-		}
-		_, _ = writer.body.Write(value[:remaining])
+	_, _ = writer.body.Write(value)
+	return len(value), nil
+}
+
+// Flush is a no-op so handlers that type-assert http.Flusher cannot send
+// the response before the receipt is durable.
+func (writer *offlineCaptureWriter) Flush() {}
+
+func flushOfflineResponse(w http.ResponseWriter, capture *offlineCaptureWriter) {
+	status := capture.status
+	if status == 0 {
+		status = http.StatusOK
 	}
-	return writer.ResponseWriter.Write(value)
+	w.WriteHeader(status)
+	if capture.body.Len() > 0 {
+		_, _ = w.Write(capture.body.Bytes())
+	}
 }
 
 func mutationMethod(method string) bool {
@@ -173,14 +181,16 @@ func (s *Server) offlineMutationConflicts(
 // the client disconnects right after the handler commits, r.Context() is
 // canceled and a bookkeeping write on it would silently fail — leaving the
 // receipt in 'processing' so a later replay re-executes the mutation.
-func (s *Server) receiptExec(r *http.Request, query string, args ...any) {
+func (s *Server) receiptExec(r *http.Request, query string, args ...any) error {
 	ctx, cancel := context.WithTimeout(
 		context.WithoutCancel(r.Context()), 10*time.Second)
 	defer cancel()
 	if _, err := s.pool.Exec(ctx, query, args...); err != nil {
 		slog.Error("offline receipt bookkeeping failed",
 			"err", err, "method", r.Method, "path", r.URL.Path)
+		return err
 	}
+	return nil
 }
 
 // offlineMutations makes queued PWA writes safe to replay. A UUID identifies
@@ -328,24 +338,29 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 		if status >= http.StatusInternalServerError {
-			s.receiptExec(r, `
+			_ = s.receiptExec(r, `
 				DELETE FROM offline_mutation_receipts
 				WHERE user_id=$1 AND mutation_id=$2`,
 				user.ID, mutationID)
+			flushOfflineResponse(w, capture)
 			return
 		}
 		var responseBody any
-		// A body at the capture limit was truncated to invalid JSON; storing
-		// it would fail the jsonb insert and strand the receipt in
+		// A body at the capture limit would be truncated to invalid JSON;
+		// storing it would fail the jsonb insert and strand the receipt in
 		// 'processing'. Replays then get the status with an empty body.
 		if capture.body.Len() > 0 && capture.body.Len() < offlineResponseLimit &&
 			strings.Contains(capture.Header().Get("Content-Type"), "application/json") {
 			responseBody = json.RawMessage(capture.body.Bytes())
 		}
-		s.receiptExec(r, `
+		if err := s.receiptExec(r, `
 			UPDATE offline_mutation_receipts
 			SET state='complete',response_status=$3,response_body=$4
 			WHERE user_id=$1 AND mutation_id=$2`,
-			user.ID, mutationID, status, responseBody)
+			user.ID, mutationID, status, responseBody); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		flushOfflineResponse(w, capture)
 	})
 }

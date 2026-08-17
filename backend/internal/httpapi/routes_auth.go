@@ -15,11 +15,21 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/auth"
 )
+
+// Serializes first-run /auth/setup so two anonymous POSTs cannot both insert.
+const userSettingsLockKey int64 = 0xBEE50001
+
+const userSettingsSelect = `
+	SELECT id, password_hash, display_name
+	FROM user_settings
+	ORDER BY created_at ASC, id ASC
+	LIMIT 1`
 
 const oidcTxnCookie = "beez_oidc_txn"
 
@@ -47,18 +57,20 @@ type settingsRow struct {
 	DisplayName  *string
 }
 
-func (s *Server) loadSettings(ctx context.Context) (*settingsRow, error) {
-	var row settingsRow
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, password_hash, display_name FROM user_settings LIMIT 1`).
-		Scan(&row.ID, &row.PasswordHash, &row.DisplayName)
+func scanSettings(row pgx.Row) (*settingsRow, error) {
+	var value settingsRow
+	err := row.Scan(&value.ID, &value.PasswordHash, &value.DisplayName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &row, nil
+	return &value, nil
+}
+
+func (s *Server) loadSettings(ctx context.Context) (*settingsRow, error) {
+	return scanSettings(s.pool.QueryRow(ctx, userSettingsSelect))
 }
 
 // GET /auth/status — the login/setup pages probe this.
@@ -111,22 +123,48 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "hashing failed")
+	ip := clientIP(r)
+	if allowed, wait := setupThrottle.take(ip); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests,
+			"too many requests; try again later")
 		return
 	}
 
-	row, err := s.loadSettings(r.Context())
+	// Cheap pre-check so a completed instance 409s without bcrypt (API-003).
+	existing, err := s.loadSettings(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	switch {
-	case row != nil && row.PasswordHash != nil:
+	if existing != nil && existing.PasswordHash != nil {
 		writeError(w, http.StatusConflict, "Setup already completed")
 		return
-	case row != nil:
+	}
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, userSettingsLockKey); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	row, err := scanSettings(tx.QueryRow(ctx, userSettingsSelect))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if row != nil && row.PasswordHash != nil {
+		writeError(w, http.StatusConflict, "Setup already completed")
+		return
+	}
+	if row != nil {
 		// OIDC-bootstrapped instance gaining a password. The instance already
 		// has an owner, so this MUST NOT be reachable anonymously — otherwise
 		// anyone could claim a password on a public SSO-only deployment.
@@ -140,24 +178,42 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "administrator access required")
 			return
 		}
-		_, err = s.pool.Exec(r.Context(),
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "hashing failed")
+		return
+	}
+
+	if row != nil {
+		_, err = tx.Exec(ctx,
 			`UPDATE user_settings SET password_hash = $1, display_name = $2 WHERE id = $3`,
 			string(hash), req.DisplayName, row.ID)
-	default:
-		_, err = s.pool.Exec(r.Context(),
+	} else {
+		_, err = tx.Exec(ctx,
 			`INSERT INTO user_settings (password_hash, display_name) VALUES ($1, $2)`,
 			string(hash), req.DisplayName)
 	}
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeError(w, http.StatusConflict, "Setup already completed")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if _, err := s.pool.Exec(r.Context(), `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO app_users (auth_subject, display_name, is_admin)
 		VALUES ('password', $1, true)
 		ON CONFLICT (auth_subject) DO UPDATE SET
 			display_name=EXCLUDED.display_name, is_active=true`,
 		req.DisplayName); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -423,7 +479,8 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if row == nil {
 		if _, err := s.pool.Exec(ctx,
-			`INSERT INTO user_settings (password_hash, display_name) VALUES (NULL, $1)`,
+			`INSERT INTO user_settings (password_hash, display_name) VALUES (NULL, $1)
+			 ON CONFLICT ((true)) DO NOTHING`,
 			nullIfEmpty(displayName)); err != nil {
 			s.loginRedirect(w, r, "oidc_failed")
 			return

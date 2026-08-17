@@ -215,9 +215,20 @@ func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	payload, _ := json.Marshal(jobs.TranscribeAudioPayload{RecordingID: id.String()})
-	if _, err := s.queue.Enqueue(asynq.NewTask(jobs.TypeTranscribeAudio, payload),
-		asynq.MaxRetry(3)); err != nil {
+	task, err := jobs.NewTranscribeAudioTask(id.String())
+	if err != nil {
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE media_files SET transcription_status = 'failed', transcription_error = $2
+			WHERE id = $1`, id, "failed to enqueue transcription job")
+		writeError(w, http.StatusInternalServerError, "failed to enqueue transcription job")
+		return
+	}
+	if _, err := s.queue.Enqueue(task, asynq.MaxRetry(3)); err != nil {
+		if errors.Is(err, asynq.ErrTaskIDConflict) {
+			// Same recording is already queued; treat as success.
+			writeJSON(w, http.StatusCreated, map[string]any{"mediaFileId": id})
+			return
+		}
 		_, _ = s.pool.Exec(ctx, `
 			UPDATE media_files SET transcription_status = 'failed', transcription_error = $2
 			WHERE id = $1`, id, "failed to enqueue transcription job")

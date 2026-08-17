@@ -62,6 +62,10 @@ func (m *money) UnmarshalJSON(data []byte) error {
 
 var errInvalidMoney = errors.New("invalid monetary amount")
 
+// maxMoneyDollars is far beyond any real honey or equipment price and keeps
+// dollars*centsPerDollar inside int64.
+const maxMoneyDollars int64 = 1_000_000_000_000 // 1e12
+
 // parseDollarsToCents converts a decimal dollar string to cents, rounding half
 // away from zero. It works on the decimal text rather than a float so that
 // "1.005" becomes 101 cents instead of the 100 a binary float would produce.
@@ -73,7 +77,8 @@ func parseDollarsToCents(raw string) (int64, error) {
 	if strings.ContainsAny(raw, "eE") {
 		// Exponent notation is rare enough that the float path is acceptable.
 		value, err := strconv.ParseFloat(raw, 64)
-		if err != nil {
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) ||
+			math.Abs(value) > float64(maxMoneyDollars) {
 			return 0, errInvalidMoney
 		}
 		return dollarsToCents(value), nil
@@ -94,7 +99,7 @@ func parseDollarsToCents(raw string) (int64, error) {
 		return 0, errInvalidMoney
 	}
 	dollars, err := strconv.ParseInt(whole, 10, 64)
-	if err != nil {
+	if err != nil || dollars > maxMoneyDollars {
 		return 0, errInvalidMoney
 	}
 	// Pad/truncate the fraction to three digits: two for cents plus one to

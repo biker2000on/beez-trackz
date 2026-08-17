@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/hibiken/asynq"
@@ -20,6 +21,21 @@ type ProcessImagePayload struct {
 
 type TranscribeAudioPayload struct {
 	RecordingID string `json:"recordingId"`
+}
+
+// TranscribeTaskID is the asynq TaskID for a recording so duplicate enqueues
+// of the same media file collapse instead of running twice.
+func TranscribeTaskID(recordingID string) string {
+	return "transcribe:" + recordingID
+}
+
+// NewTranscribeAudioTask builds the transcription job with a stable TaskID.
+func NewTranscribeAudioTask(recordingID string) (*asynq.Task, error) {
+	payload, err := json.Marshal(TranscribeAudioPayload{RecordingID: recordingID})
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeTranscribeAudio, payload, asynq.TaskID(TranscribeTaskID(recordingID))), nil
 }
 
 type GenerateRecsPayload struct {

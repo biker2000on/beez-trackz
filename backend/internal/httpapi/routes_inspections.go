@@ -482,16 +482,23 @@ func (s *Server) handleInspectionDelete(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
-// GET /hives/{id}/inspections — full rows, date desc.
+const (
+	hiveInspectionsDefaultLimit = 50
+	hiveInspectionsMaxLimit     = 200
+)
+
+// GET /hives/{id}/inspections?limit= — recent rows, date desc. Default 50,
+// hard max 200; the hive page only renders a handful of cards.
 func (s *Server) handleInspectionsForHive(w http.ResponseWriter, r *http.Request) {
 	hiveID, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	limit := parseBoundedLimit(r.URL.Query().Get("limit"), hiveInspectionsDefaultLimit, hiveInspectionsMaxLimit)
 	rows, err := s.pool.Query(r.Context(),
-		`SELECT `+inspectionSelectCols+` FROM inspections WHERE hive_id = $1 ORDER BY date DESC`,
-		hiveID)
+		`SELECT `+inspectionSelectCols+` FROM inspections WHERE hive_id = $1 ORDER BY date DESC LIMIT $2`,
+		hiveID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 )
@@ -35,7 +36,13 @@ type Config struct {
 	OIDCIssuer       string
 	OIDCClientID     string
 	OIDCClientSecret string
+
+	// TrustedProxies is the CIDR allowlist of reverse proxies whose
+	// X-Forwarded-For / X-Real-IP headers may be used as the client address.
+	TrustedProxies []*net.IPNet
 }
+
+const defaultTrustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 func Load() (*Config, error) {
 	cfg := &Config{
@@ -74,7 +81,49 @@ func Load() (*Config, error) {
 		slog.Warn("APP_URL is not https; session cookies will be issued without the Secure flag",
 			"appUrl", cfg.AppURL)
 	}
+	proxies, err := parseTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.TrustedProxies = proxies
 	return cfg, nil
+}
+
+// parseTrustedProxies reads a comma-separated CIDR list. A bare IP is treated
+// as /32 or /128. Empty input uses the RFC1918 defaults so the TrueNAS /
+// traefik docker network is trusted out of the box.
+func parseTrustedProxies(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = defaultTrustedProxies
+	}
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !strings.Contains(part, "/") {
+			ip := net.ParseIP(part)
+			if ip == nil {
+				return nil, fmt.Errorf("TRUSTED_PROXIES: invalid address %q", part)
+			}
+			if ip.To4() != nil {
+				part += "/32"
+			} else {
+				part += "/128"
+			}
+		}
+		_, network, err := net.ParseCIDR(part)
+		if err != nil {
+			return nil, fmt.Errorf("TRUSTED_PROXIES: invalid CIDR %q: %w", part, err)
+		}
+		nets = append(nets, network)
+	}
+	if len(nets) == 0 {
+		return nil, fmt.Errorf("TRUSTED_PROXIES: no networks provided")
+	}
+	return nets, nil
 }
 
 func getenv(key, fallback string) string {

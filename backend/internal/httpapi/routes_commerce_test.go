@@ -1,9 +1,33 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
+
+func callBottlingCreate(t *testing.T, server *Server, lotID uuid.UUID, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v1/harvest-lots/"+lotID.String()+"/bottling-runs", bytes.NewReader(encoded))
+	request.Header.Set("Content-Type", "application/json")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", lotID.String())
+	request = request.WithContext(context.WithValue(request.Context(), chi.RouteCtxKey, routeCtx))
+	response := httptest.NewRecorder()
+	server.bottlingRunCreate(response, request)
+	return response
+}
 
 func TestCommerceOptionalHTTPURL(t *testing.T) {
 	valid := "https://example.com/honey?lot=summer"
@@ -58,5 +82,40 @@ func TestCommerceMoneyFieldsDecodeDollarsIntoCents(t *testing.T) {
 	}
 	if string(encoded) != `{"amount":249.99}` {
 		t.Errorf("re-encoded as %s, want {\"amount\":249.99}", encoded)
+	}
+}
+
+func TestBottlingRunRejectsNonPositiveQuantity(t *testing.T) {
+	server := &Server{}
+	lotID := uuid.New()
+	for _, quantity := range []int{0, -3} {
+		response := callBottlingCreate(t, server, lotID, map[string]any{
+			"bottledDate": "2026-08-01",
+			"jarSizeId":   uuid.New().String(),
+			"quantity":    quantity,
+			"serialize":   true,
+		})
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("quantity %d = %d, want %d: %s",
+				quantity, response.Code, http.StatusBadRequest, response.Body.String())
+		}
+	}
+}
+
+func TestBottlingRunRejectsUnboundedSerializedQuantity(t *testing.T) {
+	server := &Server{}
+	lotID := uuid.New()
+	response := callBottlingCreate(t, server, lotID, map[string]any{
+		"bottledDate": "2026-08-01",
+		"jarSizeId":   uuid.New().String(),
+		"quantity":    maxSerializedBottlingQuantity + 1,
+		"serialize":   true,
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("serialized quantity %d = %d, want %d: %s",
+			maxSerializedBottlingQuantity+1, response.Code, http.StatusBadRequest, response.Body.String())
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte("serialized quantity")) {
+		t.Fatalf("error %q should mention the serialized-quantity cap", response.Body.String())
 	}
 }

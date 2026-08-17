@@ -67,7 +67,9 @@ func (s *Server) principalFromAPIToken(r *http.Request, token string) (*principa
 		return nil, err
 	}
 	_, _ = s.pool.Exec(r.Context(),
-		`UPDATE api_tokens SET last_used_at=now() WHERE token_hash=$1`,
+		`UPDATE api_tokens SET last_used_at=now()
+		 WHERE token_hash=$1
+		   AND (last_used_at IS NULL OR last_used_at < now() - interval '5 minutes')`,
 		apiTokenHash(token))
 	return &value, nil
 }

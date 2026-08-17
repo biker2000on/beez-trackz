@@ -1463,14 +1463,30 @@ type honeyTimelineEntry struct {
 	Cancelled   bool       `json:"cancelled"`
 }
 
+const (
+	honeyTimelineDefaultLimit = 50
+	honeyTimelineMaxLimit     = 200
+)
+
+// parseBoundedLimit reads ?limit= with a default and a hard max. Invalid or
+// non-positive values keep the default; values above max are clamped.
+func parseBoundedLimit(raw string, defaultLimit, maxLimit int) int {
+	if raw == "" {
+		return defaultLimit
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultLimit
+	}
+	if n > maxLimit {
+		return maxLimit
+	}
+	return n
+}
+
 // GET /honey/timeline?limit= — movements + sales merged, newest first.
 func (s *Server) honeyTimelineHandler(w http.ResponseWriter, r *http.Request) {
-	limit := 50
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
+	limit := parseBoundedLimit(r.URL.Query().Get("limit"), honeyTimelineDefaultLimit, honeyTimelineMaxLimit)
 	ctx := r.Context()
 
 	rows, err := s.pool.Query(ctx, `
