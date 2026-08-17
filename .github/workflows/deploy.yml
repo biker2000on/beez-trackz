@@ -1,10 +1,9 @@
 name: Build and publish images
 
+# Manual only. Push/PR used to run Go tests, Playwright, and two image
+# publishes on every main commit — including docs-only ones — and burned
+# through Actions minutes. Run from the Actions tab when you want new images.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

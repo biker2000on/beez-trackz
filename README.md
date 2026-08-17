@@ -95,10 +95,13 @@ repair is safe: existing photo IDs and object keys are skipped.
 ## Deploy
 
 GitHub Actions builds `ghcr.io/biker2000on/beez-trackz-api` and
-`beez-trackz-web`; `docker-compose.prod.yml` runs the full stack behind
-traefik (dockhand stack on TrueNAS). Before publishing either image, CI runs
-the Go suite against PostgreSQL 16 (including all goose migrations), lints the
-frontend, and produces a Next.js production build.
+`beez-trackz-web` **only when you run "Build and publish images" from the
+Actions tab** (`workflow_dispatch`). Push and PR no longer trigger it —
+automatic builds were burning minutes on docs-only commits.
+`docker-compose.prod.yml` runs the full stack behind traefik (dockhand stack
+on TrueNAS). Before publishing either image, CI runs the Go suite against
+PostgreSQL 16 (including all goose migrations), lints the frontend, and
+produces a Next.js production build.
 
 **CI only publishes images — deployment is a manual SSH step.** The stack is
 a Dockhand *internal* stack, so no webhook redeploys it. The API runs goose
