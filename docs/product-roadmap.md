@@ -13,6 +13,8 @@ Sources for the open items below:
 - `asi-review.md` (commit e9fd757) — full-stack review, mostly delivered. IDs
   prefixed `ASI-`.
 - `docs/plans/2026-08-03-ux-and-inventory-adversarial-review.md` — delivered.
+- Requested 2026-08-17 — source-retained media, modeled on cairn. Originals
+  stay the restoration boundary; transcripts and photos can be reprocessed.
 
 ## Order of work
 
@@ -289,6 +291,92 @@ writes that never reach it, and reads that never come back.
 - **SEAM-018 (Medium)** `DATA_CACHE` is unbounded and caches authenticated photo
   binaries; `cache.put` failures are discarded via `void`, so quota exhaustion is
   unobservable. Extends ASI-6-003.
+
+## P1 — Source-retained media (cairn model)
+
+**Planned (requested 2026-08-17).** Voice and photos are how field notes enter
+this system. Treat them the way cairn treats FIT/JSON archives: the original
+bytes are the source of truth, derived rows are a projection, and a better
+algorithm later must be able to rebuild the projection without the walkthrough
+having to be recorded again.
+
+Cairn's rule, quoted because it is the whole item: *raw files are the source of
+truth; everything in Postgres can be reprocessed from the object store.*
+Immutable source objects are the restoration boundary. Beez Trackz already
+stores the bytes (`photos.original_key`, `media_files.audio_key`) and already
+stores the transcript text next to the audio, then writes inspections with a
+`source_media` blob (`mediaFileId`, `hiveReference`, `rawText`). That is the
+right shape of the first two layers. What is missing is treating those layers
+as a pipeline that can be rerun, rather than a one-shot ingest that happens
+to leave files on disk.
+
+The pipeline is three layers. None of them is disposable:
+
+1. **Source.** The original recording and the original photo in MinIO. Never
+   overwritten, never regenerated, never deleted as a side effect of
+   transcribing, parsing, confirming, or generating thumbnails. Delete of a
+   source is an explicit operator action, and it must refuse while derived
+   domain rows still point at it — or soft-delete and keep the object until
+   those rows are gone.
+2. **Derived artifact.** The transcript text (and, later, image-analysis
+   output and any new photo variants). Versioned: provider, model, prompt
+   revision, and produced-at, so a re-run is a new version, not an in-place
+   overwrite. API-011 already notes that a good transcript can be clobbered
+   by an asynq retry; that is the opposite of this rule.
+3. **Domain rows.** Inspections, feedings, treatments, queen events, mite
+   counts — whatever the parser (or a future photo classifier) projects. Each
+   row keeps a durable pointer back to the source *and* the artifact version
+   that produced it. Reprocessing produces a reviewable diff against the
+   current rows; it does not silently rewrite a season of confirmed records.
+
+What "reprocess" means, concretely:
+
+- **Re-transcribe** the same `audio_key` with a new STT model or provider.
+  The previous transcript stays; the new one is another version. The
+  operator picks which version to parse.
+- **Re-parse** a stored transcript (any version) through a new extraction
+  prompt or schema. This is the path that gets cheaper and better as the
+  parser learns feedings, treatments, mite counts, and queen events more
+  reliably. Confirm already writes `source_media`; a re-parse must be able
+  to find every row that came from this recording and propose updates
+  instead of inserting a second walkthrough.
+- **Re-process photos** from `original_key`: new thumbnail/medium sizes,
+  better EXIF orientation, and — when image analysis is actually wired to
+  a job, which today it is not, despite being a configured AI task —
+  disease/stores/queen-cell suggestions that can be regenerated the same
+  way a transcript can.
+
+What this is not:
+
+- Not a second media store. MinIO stays the object archive; Postgres stays
+  the index and the derived state. Same split as cairn (MinIO raw objects,
+  Postgres canonical data + job queues).
+- Not automatic overwrite of confirmed inspections. A better parser is
+  offered as a review, the way transcription review already sits in front
+  of confirm. The source plus the current rows are enough to show the
+  diff; the operator accepts, rejects, or edits.
+- Not a retention policy that "cleans up" originals after confirm. Confirm
+  is a projection, not a handoff. The recording and its transcript remain
+  after the inspection exists, which is already true today — lock that in
+  as a rule, with a test, so a later cleanup job cannot "helpfully" delete
+  the restoration boundary the way receipt cleanup already deletes
+  `offline_mutation_receipts` after 30 days.
+
+Prerequisites that already exist and must be kept: `original_key` /
+`audio_key` as NOT NULL, `transcription_text` on the same row as the
+audio, `source_media` on inspections. Work this item must add: artifact
+versioning so a retry or a better model cannot overwrite a good
+transcript (closes the data-loss half of API-011), a re-transcribe and
+re-parse action in the existing review UI, a re-process-image job that
+reads `original_key` rather than a derivative, lineage from every
+parser-created feeding/treatment/mite-count back to the media file (today
+only the inspection carries `source_media`), and an explicit "source is
+not garbage" invariant so deletes and cleanup cannot take the original
+out from under a live row.
+
+Do not wait on colony sales, GnuCash, or labels. This is independent of
+the review-finding order of work and can land any time after the P0 silent-
+loss items, or in parallel with them where the files do not overlap.
 
 ## P1 — Varroa program
 
