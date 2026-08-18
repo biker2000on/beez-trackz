@@ -28,6 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
 import { useBulkSelect } from "@/lib/use-bulk-select";
 import { useAccessProfile } from "@/features/access/api";
+import { formatElevationM } from "@/features/map/elevation";
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { useApiaries, useBulkDeleteApiaries } from "./hooks";
 
@@ -154,6 +155,9 @@ export function ApiariesListPage() {
                       <CardDescription className="font-mono text-xs">
                         {apiary.latitude.toFixed(4)},{" "}
                         {apiary.longitude.toFixed(4)}
+                        {formatElevationM(apiary.elevationM, apiary.elevationSource)
+                          ? ` · ${formatElevationM(apiary.elevationM, apiary.elevationSource)}`
+                          : ""}
                       </CardDescription>
                     )}
                   </CardHeader>
@@ -176,6 +180,9 @@ export function ApiariesListPage() {
                     <CardDescription className="font-mono text-xs">
                       {apiary.latitude.toFixed(4)},{" "}
                       {apiary.longitude.toFixed(4)}
+                      {formatElevationM(apiary.elevationM, apiary.elevationSource)
+                        ? ` · ${formatElevationM(apiary.elevationM, apiary.elevationSource)}`
+                        : ""}
                     </CardDescription>
                   )}
                 </CardHeader>

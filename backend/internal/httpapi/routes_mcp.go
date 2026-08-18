@@ -339,7 +339,7 @@ func (s *Server) mcpListApiaries(r *http.Request) (mcpToolResult, error) {
 	user := principalFrom(r)
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT apiary.id,apiary.name,apiary.latitude,apiary.longitude,
-			count(hive.id)::integer
+			apiary.elevation_m,apiary.elevation_source,count(hive.id)::integer
 		FROM apiaries apiary
 		LEFT JOIN hives hive ON hive.apiary_id=apiary.id AND NOT hive.is_archived
 		WHERE ($1::boolean OR EXISTS (
@@ -355,14 +355,17 @@ func (s *Server) mcpListApiaries(r *http.Request) (mcpToolResult, error) {
 	for rows.Next() {
 		var id uuid.UUID
 		var name string
-		var latitude, longitude *float64
+		var latitude, longitude, elevationM *float64
+		var elevationSource *string
 		var hives int
-		if err := rows.Scan(&id, &name, &latitude, &longitude, &hives); err != nil {
+		if err := rows.Scan(&id, &name, &latitude, &longitude,
+			&elevationM, &elevationSource, &hives); err != nil {
 			return mcpToolResult{}, err
 		}
 		items = append(items, map[string]any{
 			"id": id, "name": name, "latitude": latitude,
-			"longitude": longitude, "hiveCount": hives,
+			"longitude": longitude, "elevationM": elevationM,
+			"elevationSource": elevationSource, "hiveCount": hives,
 		})
 	}
 	return mcpToolSuccess(items), rows.Err()

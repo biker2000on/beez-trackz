@@ -46,7 +46,7 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
         <CardHeader>
           <CardTitle>Location needed</CardTitle>
           <CardDescription>
-            Add latitude and longitude to this apiary to calculate local
+            Set this apiary's location (map pin) to calculate local
             weather and bloom windows.
           </CardDescription>
         </CardHeader>

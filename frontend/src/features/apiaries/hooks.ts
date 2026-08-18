@@ -15,6 +15,8 @@ export interface ApiaryListItem {
   name: string;
   latitude: number | null;
   longitude: number | null;
+  elevationM: number | null;
+  elevationSource: string | null;
   notes: string | null;
   createdAt: string;
   hiveCount: number;
@@ -25,6 +27,8 @@ export interface Apiary {
   name: string;
   latitude: number | null;
   longitude: number | null;
+  elevationM: number | null;
+  elevationSource: string | null;
   notes: string | null;
   canvasLayout: unknown;
   satelliteImageKey: string | null;
@@ -36,6 +40,8 @@ export interface ApiaryPayload {
   name: string;
   latitude?: number | null;
   longitude?: number | null;
+  elevationM?: number | null;
+  elevationSource?: string | null;
   notes?: string | null;
 }
 

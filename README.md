@@ -62,10 +62,15 @@ Copy `.env.example` values into your environment (`SESSION_SECRET` and
 - Hive tag sheets are available from an apiary's **Print tags** action. The
   print profiles target common MUNBYN 2x1 and 3x2 inch label stock; Web NFC
   writing requires compatible Android Chrome hardware.
-- Privacy note: the apiary canvas's optional satellite layer loads imagery
-  from `arcgisonline.com`, which necessarily sends the map tile coordinates
-  (and therefore the approximate apiary location) to that third party. Skip
-  the satellite layer if that is a concern.
+- Privacy note: the yard map is Leaflet. Whoever serves the active tile
+  layer sees the requested tile coordinates (and therefore the approximate
+  apiary location). **Imagery** (default, used when registering stands)
+  and **Streets** both come from Esri / ArcGIS Online
+  (`server.arcgisonline.com`). Looking up terrain elevation for the pin
+  sends lat/lng to Open-Meteo (`api.open-meteo.com`). Device geolocation
+  stays in the browser. No pin means no map, no tiles, and no sun model
+  — coordinates are never invented. Skip the map (leave location empty)
+  if that is a concern.
 
 ## Migrating data from the legacy app
 

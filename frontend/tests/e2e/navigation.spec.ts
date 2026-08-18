@@ -76,6 +76,8 @@ async function mockApp(page: Page) {
           name: "Test Yard",
           latitude: null,
           longitude: null,
+          elevationM: null,
+          elevationSource: null,
           notes: null,
           canvasLayout: null,
           satelliteImageKey: null,
