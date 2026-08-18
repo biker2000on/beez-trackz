@@ -143,12 +143,14 @@ export function overlayTransform(
   const metersToScreen = Math.hypot(eastPt.x - pinPt.x, eastPt.y - pinPt.y);
   const canvasToScreen = (metersToScreen / PX_PER_METER) * reg.scale;
 
-  const rad = (reg.rotation * Math.PI) / 180;
   const offX = reg.offsetX * (metersToScreen / PX_PER_METER);
   const offY = reg.offsetY * (metersToScreen / PX_PER_METER);
+  // Place the registration origin at pin + unrotated offset, then let
+  // Konva rotate about that point. Rotating the offset around the pin
+  // made the stands orbit whatever was off-screen after a nudge/pan.
   return {
-    x: pinPt.x + offX * Math.cos(rad) - offY * Math.sin(rad),
-    y: pinPt.y + offX * Math.sin(rad) + offY * Math.cos(rad),
+    x: pinPt.x + offX,
+    y: pinPt.y + offY,
     scaleX: canvasToScreen,
     scaleY: canvasToScreen,
     rotation: reg.rotation,

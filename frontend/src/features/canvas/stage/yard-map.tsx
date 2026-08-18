@@ -7,6 +7,7 @@ import "leaflet/dist/leaflet.css";
 import {
   DEFAULT_TILE_LAYER,
   TILE_LAYERS,
+  YARD_MAX_ZOOM,
   type TileLayerId,
 } from "@/features/map/tile-layers";
 
@@ -30,7 +31,8 @@ interface YardMapProps {
 }
 
 /**
- * Leaflet substrate under the Konva yard. Owns pan/zoom, including zoom < 19.
+ * Leaflet substrate under the Konva yard. Owns pan/zoom, including
+ * overzoom past the last imagery tile so stands stay large enough to edit.
  * The Konva overlay is georeferenced via `onTransform`.
  */
 export function YardMap({
@@ -79,7 +81,7 @@ export function YardMap({
         zoomSnap: 0.25,
         zoomDelta: 0.5,
         minZoom: 4,
-        maxZoom: 20,
+        maxZoom: YARD_MAX_ZOOM,
         zoomControl: false,
         attributionControl: true,
       });
@@ -194,6 +196,6 @@ export function fitMapToStands(
   void import("leaflet").then((mod) => {
     const L = mod.default;
     const bounds = L.latLngBounds(corners.map((c) => [c.lat, c.lng] as [number, number]));
-    map.fitBounds(bounds.pad(0.35), { animate: false, maxZoom: 19 });
+    map.fitBounds(bounds.pad(0.35), { animate: false, maxZoom: YARD_MAX_ZOOM });
   });
 }

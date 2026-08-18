@@ -19,6 +19,13 @@ export interface TileLayerDef {
   maxZoom: number;
 }
 
+/**
+ * Leaflet overzoom past the last real tile. At native z19 a 0.75 m hive
+ * cell is ~2–3 px; the Konva overlay needs z24 (~80 px/cell) to be usable.
+ * Tiles scale up (blurry) after maxNativeZoom.
+ */
+export const YARD_MAX_ZOOM = 24;
+
 export const TILE_LAYERS: Record<TileLayerId, TileLayerDef> = {
   imagery: {
     id: "imagery",
@@ -28,7 +35,7 @@ export const TILE_LAYERS: Record<TileLayerId, TileLayerDef> = {
     attribution:
       "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
     maxNativeZoom: 19,
-    maxZoom: 20,
+    maxZoom: YARD_MAX_ZOOM,
   },
   streets: {
     id: "streets",
@@ -38,7 +45,7 @@ export const TILE_LAYERS: Record<TileLayerId, TileLayerDef> = {
     attribution:
       "Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom",
     maxNativeZoom: 19,
-    maxZoom: 20,
+    maxZoom: YARD_MAX_ZOOM,
   },
 };
 
