@@ -139,6 +139,50 @@ func TestNormalizeHoneySaleLinesRejectsDoubleHiveAndBadColonyQty(t *testing.T) {
 	}
 }
 
+func TestNormalizeHoneySaleLinesAcceptsCatalogKinds(t *testing.T) {
+	productID := uuid.New()
+	jarID := uuid.New()
+	lines, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{JarSizeID: jarID.String(), Quantity: 1, UnitPrice: 1200},
+		{Kind: "creamed_honey", ProductID: productID.String(), Quantity: 2, UnitPrice: 1400},
+		{Kind: "hot_honey", ProductID: uuid.New().String(), Quantity: 1, UnitPrice: 1600},
+		{Kind: "mead", ProductID: uuid.New().String(), Quantity: 1, UnitPrice: 1800},
+		{Kind: "propolis", ProductID: uuid.New().String(), Quantity: 1, UnitPrice: 800},
+		{Kind: "tincture", ProductID: uuid.New().String(), Quantity: 1, UnitPrice: 2200},
+	})
+	if err != nil {
+		t.Fatalf("normalize catalog kinds: %v", err)
+	}
+	if len(lines) != 6 {
+		t.Fatalf("got %d lines, want 6", len(lines))
+	}
+	if lines[1].Kind != saleKindCreamedHoney || lines[1].ProductID != productID || lines[1].Quantity != 2 {
+		t.Errorf("creamed line = %#v", lines[1])
+	}
+}
+
+func TestNormalizeHoneySaleLinesAggregatesDuplicateProducts(t *testing.T) {
+	productID := uuid.New()
+	lines, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{Kind: "mead", ProductID: productID.String(), Quantity: 2, UnitPrice: 1800},
+		{ProductID: productID.String(), Quantity: 3, UnitPrice: 1800},
+	})
+	if err != nil {
+		t.Fatalf("normalize duplicate products: %v", err)
+	}
+	if len(lines) != 1 || lines[0].Quantity != 5 || lines[0].Kind != saleKindMead {
+		t.Fatalf("merged line = %#v", lines)
+	}
+}
+
+func TestNormalizeHoneySaleLinesRejectsUnknownKind(t *testing.T) {
+	if _, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{Kind: "soap", ProductID: uuid.New().String(), Quantity: 1, UnitPrice: 500},
+	}); err == nil {
+		t.Fatal("unknown kind was accepted")
+	}
+}
+
 func TestNormalizeHoneySaleLinesRejectsConflictingOrNegativePrices(t *testing.T) {
 	jarSizeID := uuid.New().String()
 	tests := []struct {

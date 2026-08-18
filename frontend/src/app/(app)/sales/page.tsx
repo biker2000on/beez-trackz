@@ -10,8 +10,9 @@ export default function SalesPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Sales</h1>
         <p className="text-sm text-muted-foreground">
-          Jars, colonies, and equipment on one receipt. Totals are amounts
-          invoiced; the paid column is what has actually been collected.
+          Jars, hive products, colonies, and equipment on one receipt.
+          Totals are amounts invoiced; the paid column is what has actually
+          been collected.
         </p>
       </div>
       <SalesTab />

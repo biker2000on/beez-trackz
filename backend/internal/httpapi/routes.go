@@ -32,6 +32,7 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountTranscriptions(r)
 	s.mountOperations(r)
 	s.mountCommerce(r)
+	s.mountProducts(r)
 	s.mountFieldIntelligence(r)
 	s.mountMCP(r)
 }

@@ -67,7 +67,7 @@ export function ReceiptView({ saleId }: { saleId: string }) {
           <div className="grid gap-2">
             {sale.lineItems.map((item) => (
               <div
-                key={`${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId}`}
+                key={`${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}`}
                 className="grid grid-cols-[1fr_auto_auto] gap-4 border-b py-2 text-sm"
               >
                 <span>

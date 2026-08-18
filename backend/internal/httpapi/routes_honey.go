@@ -606,20 +606,21 @@ func (s *Server) honeyReverseMovement(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	var (
-		kind          string
-		amountLbs     *float64
-		quantity      *int
-		jarSizeID     *uuid.UUID
-		bottlingRunID *uuid.UUID
-		originReason  *string
-		notes         *string
-		reversesID    *uuid.UUID
+		kind           string
+		amountLbs      *float64
+		quantity       *int
+		jarSizeID      *uuid.UUID
+		bottlingRunID  *uuid.UUID
+		productBatchID *uuid.UUID
+		originReason   *string
+		notes          *string
+		reversesID     *uuid.UUID
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT kind, amount_lbs, quantity, jar_size_id, bottling_run_id, reason, notes,
-			reverses_movement_id
+		SELECT kind, amount_lbs, quantity, jar_size_id, bottling_run_id, product_batch_id,
+			reason, notes, reverses_movement_id
 		FROM honey_movements WHERE id = $1 FOR UPDATE`, id).
-		Scan(&kind, &amountLbs, &quantity, &jarSizeID, &bottlingRunID,
+		Scan(&kind, &amountLbs, &quantity, &jarSizeID, &bottlingRunID, &productBatchID,
 			&originReason, &notes, &reversesID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "movement not found")
@@ -652,6 +653,11 @@ func (s *Server) honeyReverseMovement(w http.ResponseWriter, r *http.Request) {
 	if bottlingRunID != nil {
 		writeError(w, http.StatusConflict,
 			"this movement belongs to a bottling run and cannot be reversed on its own")
+		return
+	}
+	if productBatchID != nil {
+		writeError(w, http.StatusConflict,
+			"this movement belongs to a product batch and cannot be reversed on its own")
 		return
 	}
 
@@ -727,6 +733,7 @@ type honeySaleItemRow struct {
 	JarSizeID        *uuid.UUID `json:"jarSizeId"`
 	HiveID           *uuid.UUID `json:"hiveId"`
 	EquipmentStockID *uuid.UUID `json:"equipmentStockId"`
+	ProductID        *uuid.UUID `json:"productId"`
 	Quantity         int        `json:"quantity"`
 	UnitPrice        money      `json:"unitPrice"`
 	Label            string     `json:"label"`
@@ -793,16 +800,19 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 
 	itemRows, err := s.pool.Query(ctx, `
 		SELECT si.sale_id, si.kind, si.jar_size_id, si.hive_id, si.equipment_stock_id,
-		       si.quantity, si.unit_price_cents,
+		       si.product_id, si.quantity, si.unit_price_cents,
 		       COALESCE(js.label,
 		         CASE WHEN si.kind='colony' THEN h.position_label || ' · ' || a.name END,
-		         et.name, si.kind)
+		         et.name,
+		         NULLIF(CONCAT_WS(' · ', pc.name, pc.size_label), ''),
+		         si.kind)
 		FROM sale_items si
 		LEFT JOIN jar_sizes js ON js.id = si.jar_size_id
 		LEFT JOIN hives h ON h.id = si.hive_id
 		LEFT JOIN apiaries a ON a.id = h.apiary_id
 		LEFT JOIN equipment_stock es ON es.id = si.equipment_stock_id
-		LEFT JOIN equipment_types et ON et.id = es.type_id`)
+		LEFT JOIN equipment_types et ON et.id = es.type_id
+		LEFT JOIN product_catalog pc ON pc.id = si.product_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -811,7 +821,7 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 	for itemRows.Next() {
 		var item honeySaleItemRow
 		if err := itemRows.Scan(&item.SaleID, &item.Kind, &item.JarSizeID, &item.HiveID,
-			&item.EquipmentStockID, &item.Quantity, &item.UnitPrice, &item.Label); err != nil {
+			&item.EquipmentStockID, &item.ProductID, &item.Quantity, &item.UnitPrice, &item.Label); err != nil {
 			return nil, err
 		}
 		itemsBySale[item.SaleID] = append(itemsBySale[item.SaleID], item)
@@ -858,6 +868,7 @@ type honeySaleLineInput struct {
 	JarSizeID        string `json:"jarSizeId"`
 	HiveID           string `json:"hiveId"`
 	EquipmentStockID string `json:"equipmentStockId"`
+	ProductID        string `json:"productId"`
 	Quantity         int    `json:"quantity"`
 	UnitPrice        money  `json:"unitPrice"`
 }
@@ -867,6 +878,7 @@ type honeySaleLine struct {
 	JarSizeID        uuid.UUID
 	HiveID           uuid.UUID
 	EquipmentStockID uuid.UUID
+	ProductID        uuid.UUID
 	Quantity         int
 	UnitPrice        money
 }
@@ -891,6 +903,7 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 	byJarSize := make(map[uuid.UUID]int, len(inputs))
 	byHive := make(map[uuid.UUID]int, len(inputs))
 	byStock := make(map[uuid.UUID]int, len(inputs))
+	byProduct := make(map[uuid.UUID]int, len(inputs))
 	for _, input := range inputs {
 		kind := strings.TrimSpace(input.Kind)
 		if kind == "" {
@@ -900,12 +913,17 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 				kind = saleKindColony
 			} else if input.EquipmentStockID != "" {
 				kind = saleKindEquipment
+			} else if input.ProductID != "" {
+				// Catalog kind is stored on the SKU; recordSale fills it
+				// after locking the product row.
+				kind = "product"
 			} else {
 				continue
 			}
 		}
-		if kind != saleKindJar && kind != saleKindColony && kind != saleKindEquipment {
-			return nil, errors.New("kind must be jar, colony, or equipment")
+		if kind != saleKindJar && kind != saleKindColony && kind != saleKindEquipment &&
+			!saleKindIsProduct(kind) && kind != "product" {
+			return nil, errors.New("kind must be jar, colony, equipment, or a catalog product")
 		}
 		if input.Quantity <= 0 {
 			continue
@@ -964,6 +982,31 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 			byStock[id] = len(lines)
 			lines = append(lines, honeySaleLine{
 				Kind: saleKindEquipment, EquipmentStockID: id, Quantity: input.Quantity, UnitPrice: input.UnitPrice,
+			})
+		default:
+			if input.ProductID == "" {
+				return nil, errors.New("catalog lines require productId")
+			}
+			id, err := uuid.Parse(input.ProductID)
+			if err != nil {
+				return nil, errors.New("invalid productId")
+			}
+			if index, ok := byProduct[id]; ok {
+				if lines[index].UnitPrice != input.UnitPrice {
+					return nil, errors.New("duplicate productId entries must use the same unitPrice")
+				}
+				if kind != "product" && lines[index].Kind != "product" && lines[index].Kind != kind {
+					return nil, errors.New("duplicate productId entries must use the same kind")
+				}
+				if kind != "product" {
+					lines[index].Kind = kind
+				}
+				lines[index].Quantity += input.Quantity
+				continue
+			}
+			byProduct[id] = len(lines)
+			lines = append(lines, honeySaleLine{
+				Kind: kind, ProductID: id, Quantity: input.Quantity, UnitPrice: input.UnitPrice,
 			})
 		}
 	}
@@ -1068,6 +1111,43 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if message := honeyCheckJarAvailability(onHand, labels, needed); message != "" {
+			writeError(w, http.StatusBadRequest, message)
+			return
+		}
+	}
+
+	productIDs := make([]uuid.UUID, 0, len(lines))
+	neededProducts := make(map[uuid.UUID]int, len(lines))
+	for _, line := range lines {
+		if !saleKindIsProduct(line.Kind) && line.Kind != "product" {
+			continue
+		}
+		productIDs = append(productIDs, line.ProductID)
+		neededProducts[line.ProductID] += line.Quantity
+	}
+	if len(productIDs) > 0 {
+		onHand, labels, kinds, unknown, err := productLockCatalog(ctx, tx, productIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if unknown {
+			writeError(w, http.StatusBadRequest, "invalid productId")
+			return
+		}
+		for i := range lines {
+			if !saleKindIsProduct(lines[i].Kind) && lines[i].Kind != "product" {
+				continue
+			}
+			catalogKind := kinds[lines[i].ProductID]
+			if lines[i].Kind == "product" {
+				lines[i].Kind = catalogKind
+			} else if lines[i].Kind != catalogKind {
+				writeError(w, http.StatusBadRequest, "line kind must match the catalog product")
+				return
+			}
+		}
+		if message := productCheckAvailability(onHand, labels, kinds, neededProducts); message != "" {
 			writeError(w, http.StatusBadRequest, message)
 			return
 		}
@@ -1186,27 +1266,30 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, line := range lines {
-		var jarSizeID, hiveID, stockID *uuid.UUID
-		switch line.Kind {
-		case saleKindJar:
+		var jarSizeID, hiveID, stockID, productID *uuid.UUID
+		switch {
+		case line.Kind == saleKindJar:
 			id := line.JarSizeID
 			jarSizeID = &id
-		case saleKindColony:
+		case line.Kind == saleKindColony:
 			id := line.HiveID
 			hiveID = &id
-		case saleKindEquipment:
+		case line.Kind == saleKindEquipment:
 			id := line.EquipmentStockID
 			stockID = &id
+		case saleKindIsProduct(line.Kind):
+			id := line.ProductID
+			productID = &id
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO sale_items
-				(sale_id, kind, jar_size_id, hive_id, equipment_stock_id,
+				(sale_id, kind, jar_size_id, hive_id, equipment_stock_id, product_id,
 				 quantity, unit_price_cents, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			saleID, line.Kind, jarSizeID, hiveID, stockID,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			saleID, line.Kind, jarSizeID, hiveID, stockID, productID,
 			line.Quantity, line.UnitPrice, actor); err != nil {
 			if honeyIsFKViolation(err) {
-				writeError(w, http.StatusBadRequest, "invalid jar, hive, or equipment target")
+				writeError(w, http.StatusBadRequest, "invalid jar, hive, equipment, or product target")
 				return
 			}
 			writeError(w, http.StatusInternalServerError, "database error")

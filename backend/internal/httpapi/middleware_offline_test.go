@@ -48,6 +48,9 @@ func TestOfflineMutationSupported(t *testing.T) {
 		{"customer", http.MethodPost, "/api/v1/customers", true},
 		{"harvest lot", http.MethodPost, "/api/v1/harvest-lots", true},
 		{"bottling run", http.MethodPost, "/api/v1/harvest-lots/a/bottling-runs", true},
+		{"product catalog", http.MethodPost, "/api/v1/products", true},
+		{"propolis harvest", http.MethodPost, "/api/v1/propolis-harvests", true},
+		{"product batch", http.MethodPost, "/api/v1/product-batches", true},
 		// Read-only honey routes are still out of scope.
 		{"honey overview", http.MethodGet, "/api/v1/honey/overview", false},
 	}

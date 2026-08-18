@@ -27,9 +27,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatMoney, todayISO } from "@/features/honey/format";
-import { useJarInventory, useRecordSale } from "@/features/honey/hooks";
+import { useJarInventory, useProductCatalog, useRecordSale } from "@/features/honey/hooks";
+import type { CatalogProduct, SaleLineKind } from "@/features/honey/types";
 import { OfflineQueuedError } from "@/lib/api";
 import { useHarvestLots, useLowStock, useReconciliation } from "./api";
+
+function jarKey(id: string) {
+  return `jar:${id}`;
+}
+function productKey(id: string) {
+  return `product:${id}`;
+}
 
 export function MarketDayTab({
   onCartCountChange,
@@ -41,6 +49,7 @@ export function MarketDayTab({
   onCartCountChange?: (count: number) => void;
 } = {}) {
   const inventory = useJarInventory();
+  const catalog = useProductCatalog(true);
   const sale = useRecordSale();
   const lowStock = useLowStock();
   const lots = useHarvestLots();
@@ -61,14 +70,26 @@ export function MarketDayTab({
   if (inventory.isPending) return <Skeleton className="h-72" />;
   if (inventory.isError) return <p className="py-8 text-center text-sm text-muted-foreground">Could not load market inventory.</p>;
 
-  const lines = inventory.data
+  const products = catalog.data?.items ?? [];
+  const jarLines = inventory.data
     .map((row) => ({
       kind: "jar" as const,
       jarSizeId: row.jarSizeId,
-      quantity: cart[row.jarSizeId] ?? 0,
+      label: row.label,
+      quantity: cart[jarKey(row.jarSizeId)] ?? 0,
       unitPrice: row.defaultPrice ?? 0,
     }))
     .filter((line) => line.quantity > 0);
+  const productLines = products
+    .map((row) => ({
+      kind: row.kind as SaleLineKind,
+      productId: row.id,
+      label: row.sizeLabel ? `${row.name} · ${row.sizeLabel}` : row.name,
+      quantity: cart[productKey(row.id)] ?? 0,
+      unitPrice: row.defaultPrice ?? 0,
+    }))
+    .filter((line) => line.quantity > 0);
+  const lines = [...jarLines, ...productLines];
   const unpriced = lines.filter((line) => line.unitPrice <= 0);
   const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
   const discountAmount = Math.min(subtotal, Math.max(0, Number(discount) || 0));
@@ -93,7 +114,11 @@ export function MarketDayTab({
       amountPaid: total,
       orderStatus: "paid",
       location: channel === "farmers_market" ? "Farmers market" : undefined,
-      lines,
+      lines: lines.map((line) =>
+        "jarSizeId" in line && line.jarSizeId
+          ? { kind: "jar" as const, jarSizeId: line.jarSizeId, quantity: line.quantity, unitPrice: line.unitPrice }
+          : { kind: line.kind, productId: "productId" in line ? line.productId : "", quantity: line.quantity, unitPrice: line.unitPrice },
+      ),
     }, {
       onSuccess: () => {
         setCart({});
@@ -135,22 +160,31 @@ export function MarketDayTab({
       <div className="grid items-start gap-5 lg:grid-cols-[2fr_1fr]">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {inventory.data.map((row) => {
-            const quantity = cart[row.jarSizeId] ?? 0;
+            const key = jarKey(row.jarSizeId);
+            const quantity = cart[key] ?? 0;
             return (
-              <Card key={row.jarSizeId} className={quantity > 0 ? "border-primary" : ""}>
+              <Card key={key} className={quantity > 0 ? "border-primary" : ""}>
                 <CardContent className="grid gap-3 p-4">
-                  <button type="button" className="grid min-h-20 place-items-center rounded-md bg-amber-500/10 p-3 text-center hover:bg-amber-500/20" onClick={() => adjust(row.jarSizeId, 1, row.onHand)} disabled={row.onHand <= quantity}>
+                  <button type="button" className="grid min-h-20 place-items-center rounded-md bg-amber-500/10 p-3 text-center hover:bg-amber-500/20" onClick={() => adjust(key, 1, row.onHand)} disabled={row.onHand <= quantity}>
                     <span><span className="block text-lg font-bold">{row.label}</span><span className="text-sm text-muted-foreground">{row.defaultPrice && row.defaultPrice > 0 ? formatMoney(row.defaultPrice) : "No price"} · {row.onHand} left</span></span>
                   </button>
                   <div className="flex items-center justify-between">
-                    <Button size="icon-sm" variant="outline" onClick={() => adjust(row.jarSizeId, -1, row.onHand)} disabled={quantity === 0}><Minus /></Button>
+                    <Button size="icon-sm" variant="outline" onClick={() => adjust(key, -1, row.onHand)} disabled={quantity === 0}><Minus /></Button>
                     <span className="text-xl font-bold tabular-nums">{quantity}</span>
-                    <Button size="icon-sm" variant="outline" onClick={() => adjust(row.jarSizeId, 1, row.onHand)} disabled={quantity >= row.onHand}><Plus /></Button>
+                    <Button size="icon-sm" variant="outline" onClick={() => adjust(key, 1, row.onHand)} disabled={quantity >= row.onHand}><Plus /></Button>
                   </div>
                 </CardContent>
               </Card>
             );
           })}
+          {products.map((row) => (
+            <ProductButton
+              key={productKey(row.id)}
+              product={row}
+              quantity={cart[productKey(row.id)] ?? 0}
+              onAdjust={adjust}
+            />
+          ))}
         </div>
         <Card className="lg:sticky lg:top-6">
           <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ShoppingBasket className="size-4" /> Current sale</CardTitle></CardHeader>
@@ -168,14 +202,8 @@ export function MarketDayTab({
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
                 <span>
                   Set a default price on{" "}
-                  {unpriced
-                    .map((line) =>
-                      inventory.data.find((row) => row.jarSizeId === line.jarSizeId)
-                        ?.label,
-                    )
-                    .filter(Boolean)
-                    .join(", ")}{" "}
-                  in Settings before recording a paid sale.
+                  {unpriced.map((line) => line.label).filter(Boolean).join(", ")}{" "}
+                  in Settings or Products before recording a paid sale.
                 </span>
               </div>
             )}
@@ -211,8 +239,10 @@ export function MarketDayTab({
             <div className="grid grid-cols-2 gap-3"><div className="grid gap-1"><Label>Discount</Label><Input type="number" min="0" step="0.01" value={discount} onChange={(e) => setDiscount(e.target.value)} /></div><div className="grid gap-1"><Label>Customer</Label><Input value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="Optional" /></div></div>
             <div className="grid gap-1 border-y py-3 text-sm">
               {lines.map((line) => {
-                const row = inventory.data.find((item) => item.jarSizeId === line.jarSizeId);
-                return <div key={line.jarSizeId} className="flex justify-between"><span>{line.quantity} × {row?.label}</span><span>{formatMoney(line.quantity * line.unitPrice)}</span></div>;
+                const key = "jarSizeId" in line && line.jarSizeId
+                  ? jarKey(line.jarSizeId)
+                  : productKey("productId" in line ? line.productId : "");
+                return <div key={key} className="flex justify-between"><span>{line.quantity} × {line.label}</span><span>{formatMoney(line.quantity * line.unitPrice)}</span></div>;
               })}
               {discountAmount > 0 && <div className="flex justify-between text-muted-foreground"><span>Discount</span><span>−{formatMoney(discountAmount)}</span></div>}
             </div>
@@ -224,6 +254,46 @@ export function MarketDayTab({
       </div>
       <ReconciliationCard date={date} loading={reconciliation.isPending} data={reconciliation.data} />
     </div>
+  );
+}
+
+function ProductButton({
+  product,
+  quantity,
+  onAdjust,
+}: {
+  product: CatalogProduct;
+  quantity: number;
+  onAdjust: (id: string, delta: number, onHand: number) => void;
+}) {
+  const key = productKey(product.id);
+  const cap = product.onHand > 0 ? product.onHand : 99;
+  const label = product.sizeLabel ? `${product.name} · ${product.sizeLabel}` : product.name;
+  return (
+    <Card className={quantity > 0 ? "border-primary" : ""}>
+      <CardContent className="grid gap-3 p-4">
+        <button
+          type="button"
+          className="grid min-h-20 place-items-center rounded-md bg-primary/10 p-3 text-center hover:bg-primary/15"
+          onClick={() => onAdjust(key, 1, cap)}
+          disabled={quantity >= cap}
+        >
+          <span>
+            <span className="block text-lg font-bold">{label}</span>
+            <span className="text-sm text-muted-foreground">
+              {product.defaultPrice > 0 ? formatMoney(product.defaultPrice) : "No price"}
+              {" · "}
+              {product.onHand > 0 ? `${product.onHand} left` : product.kind.replaceAll("_", " ")}
+            </span>
+          </span>
+        </button>
+        <div className="flex items-center justify-between">
+          <Button size="icon-sm" variant="outline" onClick={() => onAdjust(key, -1, cap)} disabled={quantity === 0}><Minus /></Button>
+          <span className="text-xl font-bold tabular-nums">{quantity}</span>
+          <Button size="icon-sm" variant="outline" onClick={() => onAdjust(key, 1, cap)} disabled={quantity >= cap}><Plus /></Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

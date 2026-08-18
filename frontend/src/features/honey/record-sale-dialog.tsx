@@ -45,11 +45,13 @@ import { formatMoney, parseNum, todayISO } from "./format";
 import {
   useHiveOptions,
   useHiveSaleOffer,
+  useProductCatalog,
   useRecordSale,
   useSaleLocations,
   type HiveSaleOffer,
   type SaleLineBody,
 } from "./hooks";
+import type { CatalogProduct } from "./types";
 import {
   JarLinesEditor,
   makeJarLines,
@@ -116,6 +118,7 @@ export function RecordSaleDialog({
   const priceLists = useWholesalePriceLists();
   const hives = useHiveOptions();
   const stock = useEquipmentStock();
+  const catalog = useProductCatalog();
   const form = useForm<SaleValues>({
     resolver: zodResolver(saleSchema),
     defaultValues: saleDefaults(),
@@ -128,6 +131,10 @@ export function RecordSaleDialog({
     { stockId: string; quantity: string; unitPrice: string }[]
   >([]);
   const [pickingStock, setPickingStock] = React.useState("none");
+  const [productLines, setProductLines] = React.useState<
+    { productId: string; quantity: string; unitPrice: string }[]
+  >([]);
+  const [pickingProduct, setPickingProduct] = React.useState("none");
   const [confirming, setConfirming] = React.useState(false);
   const [lineError, setLineError] = React.useState<string | null>(null);
 
@@ -139,8 +146,10 @@ export function RecordSaleDialog({
     setColonies([]);
     setOffers({});
     setStockLines([]);
+    setProductLines([]);
     setPickingHive("none");
     setPickingStock("none");
+    setPickingProduct("none");
     setConfirming(false);
     setLineError(null);
     mutation.reset();
@@ -169,7 +178,12 @@ export function RecordSaleDialog({
     const price = parseNum(line.unitPrice) ?? 0;
     return sum + (qty > 0 ? qty * price : 0);
   }, 0);
-  const subtotal = jarSubtotal + colonySubtotal + hiveEquipmentSubtotal + stockSubtotal;
+  const productSubtotal = productLines.reduce((sum, line) => {
+    const qty = parseNum(line.quantity) ?? 0;
+    const price = parseNum(line.unitPrice) ?? 0;
+    return sum + (qty > 0 ? qty * price : 0);
+  }, 0);
+  const subtotal = jarSubtotal + colonySubtotal + hiveEquipmentSubtotal + stockSubtotal + productSubtotal;
   const discountAmount = Math.min(subtotal, Math.max(0, parseNum(form.watch("discountAmount")) ?? 0));
   const total = subtotal - discountAmount;
 
@@ -179,6 +193,7 @@ export function RecordSaleDialog({
     setColonies([]);
     setOffers({});
     setStockLines([]);
+    setProductLines([]);
     setConfirming(false);
     setLineError(null);
     mutation.reset();
@@ -271,11 +286,29 @@ export function RecordSaleDialog({
         unitPrice: price,
       });
     }
+    for (const line of productLines) {
+      const qty = parseNum(line.quantity) ?? 0;
+      if (qty <= 0) continue;
+      const price = parseNum(line.unitPrice);
+      if (price === null || price < 0) {
+        return "Every hive-product line needs a price — enter 0 for a gift.";
+      }
+      const product = (catalog.data?.items ?? []).find((item) => item.id === line.productId);
+      if (!product) {
+        return "Unknown catalog product.";
+      }
+      saleLines.push({
+        kind: product.kind,
+        productId: line.productId,
+        quantity: qty,
+        unitPrice: price,
+      });
+    }
     if (channel !== "gift" && saleLines.some((line) => line.unitPrice === 0)) {
       return "Paid sales need a price on every line. Use the gift channel to give items away.";
     }
     if (saleLines.length === 0) {
-      return "Add at least one jar, colony, or equipment line.";
+      return "Add at least one jar, hive product, colony, or equipment line.";
     }
     return saleLines;
   }
@@ -331,8 +364,8 @@ export function RecordSaleDialog({
         <DialogHeader>
           <DialogTitle>Record a sale</DialogTitle>
           <DialogDescription>
-            One customer, one payment, one receipt. Mix jars, colonies, and
-            equipment. Past dates are allowed.
+            One customer, one payment, one receipt. Mix jars, hive products,
+            colonies, and equipment. Past dates are allowed.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm
@@ -430,6 +463,13 @@ export function RecordSaleDialog({
             setPickingStock={setPickingStock}
             hiveOptions={hives.data ?? []}
             stockRows={stock.data ?? []}
+          />
+          <CatalogProductFields
+            products={catalog.data?.items ?? []}
+            productLines={productLines}
+            setProductLines={setProductLines}
+            pickingProduct={pickingProduct}
+            setPickingProduct={setPickingProduct}
           />
           {confirming && sideEffects.hiveCount > 0 && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
@@ -819,6 +859,118 @@ function ColonyEquipmentFields({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function CatalogProductFields({
+  products,
+  productLines,
+  setProductLines,
+  pickingProduct,
+  setPickingProduct,
+}: {
+  products: CatalogProduct[];
+  productLines: { productId: string; quantity: string; unitPrice: string }[];
+  setProductLines: React.Dispatch<
+    React.SetStateAction<{ productId: string; quantity: string; unitPrice: string }[]>
+  >;
+  pickingProduct: string;
+  setPickingProduct: (value: string) => void;
+}) {
+  const used = new Set(productLines.map((line) => line.productId));
+  const sellable = products.filter(
+    (product) =>
+      !used.has(product.id) &&
+      (product.isActive || product.onHand > 0 || product.inStock),
+  );
+  return (
+    <div className="grid gap-1.5">
+      <Label>Hive products</Label>
+      <Select
+        value={pickingProduct}
+        onValueChange={(value) => {
+          setPickingProduct("none");
+          if (value === "none") return;
+          const product = products.find((item) => item.id === value);
+          if (!product) return;
+          setProductLines((current) => [
+            ...current,
+            {
+              productId: product.id,
+              quantity: "1",
+              unitPrice: product.defaultPrice > 0 ? String(product.defaultPrice) : "",
+            },
+          ]);
+        }}
+      >
+        <SelectTrigger><SelectValue placeholder="Add a product" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">Add a product…</SelectItem>
+          {sellable.map((product) => (
+            <SelectItem key={product.id} value={product.id}>
+              {product.sizeLabel ? `${product.name} · ${product.sizeLabel}` : product.name}
+              {product.onHand > 0 ? ` · ${product.onHand} on hand` : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {productLines.map((line) => {
+        const product = products.find((item) => item.id === line.productId);
+        return (
+          <div key={line.productId} className="grid grid-cols-[1fr_5rem_6rem_auto] items-end gap-2">
+            <p className="text-sm">
+              {product
+                ? product.sizeLabel
+                  ? `${product.name} · ${product.sizeLabel}`
+                  : product.name
+                : "Product"}
+            </p>
+            <Input
+              type="number"
+              min="1"
+              value={line.quantity}
+              onChange={(event) =>
+                setProductLines((current) =>
+                  current.map((item) =>
+                    item.productId === line.productId
+                      ? { ...item, quantity: event.target.value }
+                      : item,
+                  ),
+                )
+              }
+            />
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Price"
+              value={line.unitPrice}
+              onChange={(event) =>
+                setProductLines((current) =>
+                  current.map((item) =>
+                    item.productId === line.productId
+                      ? { ...item, unitPrice: event.target.value }
+                      : item,
+                  ),
+                )
+              }
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setProductLines((current) =>
+                  current.filter((item) => item.productId !== line.productId),
+                )
+              }
+            >
+              Remove
+            </Button>
+          </div>
+        );
+      })}
     </div>
   );
 }

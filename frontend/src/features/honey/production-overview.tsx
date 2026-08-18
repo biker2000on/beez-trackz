@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Boxes, Package, QrCode } from "lucide-react";
+import { ArrowRight, Boxes, FlaskConical, Package, QrCode } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -24,6 +24,12 @@ const PRODUCTION_AREAS = [
     description: "Manage traceable lots, jar serials, labels, and lookup.",
     icon: QrCode,
   },
+  {
+    href: "/harvest/products",
+    title: "Hive products",
+    description: "Catalog, propolis harvests, and creamed / hot / mead / tincture batches.",
+    icon: FlaskConical,
+  },
 ] as const;
 
 export function ProductionOverview() {
@@ -32,12 +38,12 @@ export function ProductionOverview() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Production</h1>
         <p className="text-sm text-muted-foreground">
-          Move honey from the hive through extraction, bottling, and a
-          traceable finished lot.
+          Move honey from the hive through extraction, bottling, other hive
+          products, and a traceable finished lot.
         </p>
       </div>
 
-      <ul className="grid gap-3 md:grid-cols-3">
+      <ul className="grid gap-3 md:grid-cols-2">
         {PRODUCTION_AREAS.map((area) => {
           const Icon = area.icon;
           return (

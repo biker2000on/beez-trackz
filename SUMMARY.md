@@ -1,34 +1,33 @@
-# PR 1 — Colony and equipment sales
+# PR 6 — Other hive products
 
-Branch: `feat/1f80f067-pr-1-colony-equipment-sales`
+Branch: `feat/1f80f067-pr-6-hive-products`
 
 ## Files changed
 
 ### Schema
-- `backend/internal/db/migrations/00015_sales_kinds.sql` — rename `honey_sales`/`honey_sale_items` → `sales`/`sale_items`; add `kind` + nullable targets; hive/feeder/equipment `sale_id`; `sold` adjustment reason; `sold_with_hive` return/close reason.
+- `backend/internal/db/migrations/00020_hive_products.sql` — `product_catalog`, `propolis_harvests`, `product_batches`, `product_batch_expenses`; `sale_items.product_id`; kind CHECK extended with creamed_honey / hot_honey / mead / propolis / tincture; `honey_movements.product_batch_id`; expense category `grocery`.
 
 ### Backend
-- `backend/internal/httpapi/routes_sales.go` — physical side effects (sell hive, close feeders, sell/return equipment, cancel restore) and `GET /hives/{id}/sale-offer`.
-- `backend/internal/httpapi/routes_honey.go` — mixed line normalize/record/cancel; `/sales` + `/honey/sales` aliases; jar aggregates only count `kind=jar`.
-- `backend/internal/httpapi/routes_commerce.go`, `routes_serials.go`, `routes_equipment.go`, `routes_feedings.go`, `routes_hives.go`, `middleware_offline.go` — table names, `/sales` aliases, `sold`/`sold_with_hive`, hive `saleId`.
-- `backend/cmd/migrate-legacy/main.go` — dest table rename via `destTable`.
-- Tests: `routes_honey_test.go`, `honey_integration_test.go`, `sales_kinds_migration_test.go`, `db_integration_test.go`, `money_migration_test.go`, `middleware_offline_test.go`.
+- `backend/internal/httpapi/routes_products.go` — catalog CRUD, propolis harvests (hive or yard, grams/ounces), conversion batches. Honey-consuming batches write `bulk_use` movements. Tincture consumes propolis only.
+- `backend/internal/httpapi/routes_honey.go` — mixed lines accept catalog SKUs; availability lock; list labels join the catalog; batch-linked movements cannot be reversed alone.
+- `backend/internal/httpapi/routes.go`, `routes_commerce.go`, `middleware_offline.go` — mount + grocery + offline prefixes.
+- Tests: `routes_honey_test.go`, `honey_integration_test.go`, `hive_products_migration_test.go`, `db_integration_test.go`, `middleware_offline_test.go`.
 
 ### Frontend
-- Top-level `/sales` (orders, receipt, market day). `/harvest/sales` and `/harvest/market-day` redirect.
-- Nav: Sales is top-level; Honey keeps Overview/Production.
-- Record-sale dialog: colonies with default-checked hive deployments, stock equipment, confirm copy for feeder/return side effects.
-- Types/hooks/API paths, SW offline prefixes, e2e nav/offline updates.
+- `/harvest/products` — catalog, propolis harvests, batches.
+- Market day and record-sale grow catalog SKU buttons/lines on the same checkout.
+- Nav, production overview, receipt, offline SW prefixes, grocery expense category.
 
 ## Decisions
-- `kind` is `text` with `CHECK (kind IN ('jar','colony','equipment'))` and a comment that 00020 will extend it. Exactly one target per kind.
-- Existing rows migrate as `kind=jar` (column default + UPDATE).
-- Hive deployments consume matching equipment lines first (`sold_with_hive` + sold adjustment). Unchecked deployments return to storage (`hive_removed`). Remainder comes from available stock.
-- Cancel restores only on the first transition to cancelled (idempotent replay does not double-restore).
-- `/honey/sales` remains as an alias so queued offline mutations still replay.
+- Same sale spine. New kinds use `product_id`; jar / colony / equipment targets stay exclusive.
+- Finished SKUs live in `product_catalog` (name, kind, unit, default_price_cents, optional size_label). No second `jar_sizes`.
+- Propolis harvests never touch `honey_harvests` or `honey_movements`.
+- Creamed / hot / mead batches consume bulk honey lbs (`bulk_use` + lot on the batch). Tincture consumes a named propolis harvest.
+- Catalog stock is `SUM(quantity_out) − sold`. Raw propolis SKUs are sellable off remaining harvest without a packaging batch.
+- Market day lists in-stock catalog items next to jars. One customer, one payment, one receipt.
 
 ## Leftover risks
 - Integration/migration tests need `TEST_DATABASE_URL` (skipped in this worktree). Unit tests pass.
-- Manual `sold` adjustments are allowed by the enum but are not the sale path; cancel only reverses sale-linked negative `sold` rows.
-- GnuCash mappings, extra product kinds, and Zebra labels are out of scope.
 - Frontend was not typechecked here (`node_modules` absent).
+- GnuCash per-kind account mappings remain out of scope.
+- Batches are append-only; reversing a batch-linked honey movement is rejected.

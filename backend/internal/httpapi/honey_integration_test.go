@@ -69,6 +69,7 @@ func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 		TRUNCATE harvest_session_true_ups, jar_serials, sale_items, sales,
+			product_batch_expenses, product_batches, propolis_harvests, product_catalog,
 			honey_movements, bottling_runs, harvest_lot_photos, harvest_lot_harvests,
 			harvest_lots, wholesale_price_list_items, wholesale_price_lists,
 			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
@@ -1443,5 +1444,175 @@ func TestRejectDoubleSellHive(t *testing.T) {
 		}))
 	if second.Code != http.StatusBadRequest {
 		t.Fatalf("second hive sale = %d %v, want 400", second.Code, body)
+	}
+}
+
+func TestPropolisHarvestDoesNotChangeBulkHoney(t *testing.T) {
+	server := honeyTestServer(t)
+	seedHarvest(t, server, 40)
+	ctx := context.Background()
+
+	before, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk before: %v", err)
+	}
+
+	var hiveID, apiaryID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		SELECT h.id, h.apiary_id FROM hives h ORDER BY h.created_at LIMIT 1`).
+		Scan(&hiveID, &apiaryID); err != nil {
+		t.Fatalf("read seeded hive: %v", err)
+	}
+
+	response, body := call(t, server.propolisHarvestCreate, adminRequest(
+		http.MethodPost, "/api/v1/propolis-harvests", map[string]any{
+			"hiveId": hiveID.String(),
+			"date":   time.Now().Format("2006-01-02"),
+			"amount": 85,
+			"unit":   "grams",
+			"notes":  "scraped for tincture",
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("propolis harvest = %d %v", response.Code, body)
+	}
+
+	after, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk after: %v", err)
+	}
+	if after != before {
+		t.Errorf("bulk honey changed after propolis harvest: before %#v after %#v", before, after)
+	}
+
+	grams, err := propolisOnHandGrams(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("propolis on hand: %v", err)
+	}
+	if grams < 84.9 || grams > 85.1 {
+		t.Errorf("propolis on hand = %v g, want 85", grams)
+	}
+
+	var honeyMovements int
+	if err := server.pool.QueryRow(ctx, `SELECT COUNT(*) FROM honey_movements`).
+		Scan(&honeyMovements); err != nil {
+		t.Fatalf("count honey movements: %v", err)
+	}
+	if honeyMovements != 0 {
+		t.Errorf("propolis harvest wrote %d honey movements, want 0", honeyMovements)
+	}
+}
+
+func TestMixedSaleWithCatalogSKU(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedMixedSaleWorld(t, server)
+	ctx := context.Background()
+
+	var lotID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs)
+		VALUES ('LOT-CREAM','lot-cream',CURRENT_DATE, 40) RETURNING id`).Scan(&lotID); err != nil {
+		t.Fatalf("seed lot: %v", err)
+	}
+
+	createProduct, productBody := call(t, server.productCreate, adminRequest(
+		http.MethodPost, "/api/v1/products", map[string]any{
+			"name":         "Creamed clover",
+			"kind":         "creamed_honey",
+			"unit":         "jar",
+			"defaultPrice": 14,
+			"sizeLabel":    "8 oz",
+		}))
+	if createProduct.Code != http.StatusCreated {
+		t.Fatalf("create product = %d %v", createProduct.Code, productBody)
+	}
+	productID, _ := productBody["id"].(string)
+
+	bulkBefore, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk before batch: %v", err)
+	}
+
+	createBatch, batchBody := call(t, server.productBatchCreate, adminRequest(
+		http.MethodPost, "/api/v1/product-batches", map[string]any{
+			"kind":         "creamed_honey",
+			"productId":    productID,
+			"harvestLotId": lotID.String(),
+			"startedAt":    time.Now().Format("2006-01-02"),
+			"honeyLbs":     5,
+			"quantityOut":  8,
+		}))
+	if createBatch.Code != http.StatusCreated {
+		t.Fatalf("create batch = %d %v", createBatch.Code, batchBody)
+	}
+
+	bulkAfterBatch, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk after batch: %v", err)
+	}
+	used := bulkBefore.BulkOnHandLbs - bulkAfterBatch.BulkOnHandLbs
+	if used < 4.9 || used > 5.1 {
+		t.Errorf("batch consumed %.2f lbs, want 5", used)
+	}
+
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"kind": "jar", "jarSizeId": w.jarSizeID.String(), "quantity": 1, "unitPrice": 12},
+				{"kind": "creamed_honey", "productId": productID, "quantity": 2, "unitPrice": 14},
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("mixed catalog sale = %d %v", response.Code, body)
+	}
+	saleID, _ := body["id"].(string)
+
+	var kinds []string
+	rows, err := server.pool.Query(ctx, `
+		SELECT kind FROM sale_items WHERE sale_id=$1 ORDER BY kind`, saleID)
+	if err != nil {
+		t.Fatalf("list kinds: %v", err)
+	}
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			rows.Close()
+			t.Fatalf("scan kind: %v", err)
+		}
+		kinds = append(kinds, kind)
+	}
+	rows.Close()
+	if strings.Join(kinds, ",") != "colony,creamed_honey,jar" {
+		t.Errorf("sale kinds = %v, want colony,creamed_honey,jar", kinds)
+	}
+
+	inventory, err := productInventoryQuery(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("product inventory: %v", err)
+	}
+	found := false
+	for _, row := range inventory {
+		if row.ID.String() == productID {
+			found = true
+			if row.Made != 8 || row.Sold != 2 || row.OnHand != 6 {
+				t.Errorf("catalog stock made/sold/onHand = %d/%d/%d, want 8/2/6",
+					row.Made, row.Sold, row.OnHand)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("catalog product missing from inventory")
+	}
+
+	over, overBody := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"kind": "creamed_honey", "productId": productID, "quantity": 7, "unitPrice": 14},
+			},
+		}))
+	if over.Code != http.StatusBadRequest {
+		t.Fatalf("oversell catalog SKU = %d %v, want 400", over.Code, overBody)
 	}
 }
