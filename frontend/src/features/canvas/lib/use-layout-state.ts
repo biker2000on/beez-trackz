@@ -7,6 +7,8 @@ import {
   getNextStandLabel,
   STAND_MAX_DIM,
   STAND_MIN_DIM,
+  type CanvasMapView,
+  type CanvasRegistration,
   type NorthArrowState,
   type StandGeometry,
 } from "./types";
@@ -14,6 +16,8 @@ import {
 interface LayoutState {
   stands: StandGeometry[];
   northArrow: NorthArrowState;
+  registration: CanvasRegistration | undefined;
+  mapView: CanvasMapView | undefined;
   dirty: boolean;
   /** Increments on every edit; lets a completing save detect newer edits. */
   generation: number;
@@ -27,6 +31,8 @@ export type LayoutAction =
   | { type: "deleteStand"; standId: string }
   | { type: "moveNorthArrow"; x: number; y: number }
   | { type: "rotateNorthArrow"; rotation: number }
+  | { type: "setRegistration"; registration: CanvasRegistration }
+  | { type: "setMapView"; mapView: CanvasMapView }
   | { type: "markViewportDirty" }
   | { type: "markSaved"; generation: number };
 
@@ -103,6 +109,20 @@ function reducer(state: LayoutState, action: LayoutAction): LayoutState {
         dirty: true,
         generation: state.generation + 1,
       };
+    case "setRegistration":
+      return {
+        ...state,
+        registration: action.registration,
+        dirty: true,
+        generation: state.generation + 1,
+      };
+    case "setMapView":
+      return {
+        ...state,
+        mapView: action.mapView,
+        dirty: true,
+        generation: state.generation + 1,
+      };
     case "markViewportDirty":
       // Zoom/pan is part of the saved blob; persist it via the same
       // dirty/autosave path as geometry edits.
@@ -123,10 +143,14 @@ function reducer(state: LayoutState, action: LayoutAction): LayoutState {
 export function useLayoutState(initial: {
   stands: StandGeometry[];
   northArrow?: NorthArrowState;
+  registration?: CanvasRegistration;
+  mapView?: CanvasMapView;
 }) {
   const [state, dispatch] = useReducer(reducer, {
     stands: initial.stands,
     northArrow: initial.northArrow ?? { x: 40, y: 40, rotation: 0 },
+    registration: initial.registration,
+    mapView: initial.mapView,
     dirty: false,
     generation: 0,
   });

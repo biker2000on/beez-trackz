@@ -9,8 +9,12 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import type Konva from "konva";
+import type { Map as LeafletMap } from "leaflet";
 import { Layer, Stage, Text as KonvaText } from "react-konva";
 import { toast } from "sonner";
+
+import { Slider } from "@/components/ui/slider";
+import { DEFAULT_TILE_LAYER, type TileLayerId } from "@/features/map/tile-layers";
 
 import {
   angleFromPivot,
@@ -18,8 +22,19 @@ import {
   GRID_SIZE,
   slotAtPoint,
   standCenter,
+  standsBoundingBox,
   ZOOM_STEP,
 } from "./lib/geometry";
+import {
+  canvasToLatLng,
+  defaultOrigin,
+  resolveRegistration,
+  screenDeltaToRegistrationOffset,
+  slotLatLng,
+  slotWorldCenter,
+  type GeoOverlayTransform,
+} from "./lib/geo";
+import { formatClock, solarPosition } from "./lib/solar";
 import {
   buildSlotOccupancy,
   getSlotLabel,
@@ -35,8 +50,9 @@ import { measureCanvasSurface } from "./lib/sizing";
 import { useViewport } from "./lib/use-viewport";
 import { NorthArrow } from "./stage/north-arrow";
 import { RotationGizmo } from "./stage/rotation-gizmo";
-import { SatelliteLayer } from "./stage/satellite-layer";
 import { StandGroup, type DragOverSlot } from "./stage/stand-group";
+import { SunLayer, type SunHiveMark } from "./stage/sun-layer";
+import { YardMap, fitMapToStands } from "./stage/yard-map";
 import {
   MenuHeading,
   MenuItem,
@@ -52,6 +68,7 @@ import {
   StackChoiceDialog,
   StandSettingsDialog,
 } from "./ui/dialogs";
+import { SetLocationDialog } from "./ui/set-location-dialog";
 import { CanvasToolbar, type SaveState } from "./ui/toolbar";
 
 const NORTH_PRESETS = [0, 45, 90, 135, 180, 225, 270, 315];
@@ -77,6 +94,7 @@ type DialogState =
   | { type: "assignHive"; target: SlotTarget }
   | { type: "stack"; hiveId: string; target: SlotTarget }
   | { type: "editHive"; hiveId: string }
+  | { type: "setLocation" }
   | null;
 
 type RotationTarget = { kind: "stand"; standId: string } | { kind: "north" };
@@ -111,6 +129,18 @@ function drawGrid(
   }
 }
 
+function todayInput(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function dateFromScrubber(day: string, minutes: number): Date {
+  const [y, m, d] = day.split("-").map(Number);
+  const date = new Date(y, (m ?? 1) - 1, d ?? 1, 0, 0, 0, 0);
+  date.setMinutes(minutes);
+  return date;
+}
+
 interface CanvasInnerProps {
   apiary: ApiaryDetail;
   hives: CanvasHive[];
@@ -126,26 +156,41 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   const containerRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const gridCanvasRef = useRef<HTMLCanvasElement>(null);
+  const mapRef = useRef<LeafletMap | null>(null);
 
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
   const [editMode, setEditMode] = useState(false);
+  const [registerMode, setRegisterMode] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [tileLayer, setTileLayer] = useState<TileLayerId>(DEFAULT_TILE_LAYER);
+  const [imageryOpacity, setImageryOpacity] = useState(1);
+  const [sunEnabled, setSunEnabled] = useState(false);
+  const [sunDay, setSunDay] = useState(todayInput);
+  const [sunMinutes, setSunMinutes] = useState(
+    () => new Date().getHours() * 60 + new Date().getMinutes(),
+  );
+  const [geo, setGeo] = useState<GeoOverlayTransform | null>(null);
+  const [overlayActive, setOverlayActive] = useState(false);
 
-  // Satellite overlay
-  const [satelliteEnabled, setSatelliteEnabled] = useState(false);
-  const [satelliteOpacity, setSatelliteOpacity] = useState(0.7);
-  const satelliteAvailable =
-    apiary.latitude != null && apiary.longitude != null;
+  const hasLocation = apiary.latitude != null && apiary.longitude != null;
+  const pin = useMemo(() => {
+    if (apiary.latitude == null || apiary.longitude == null) return null;
+    return { lat: apiary.latitude, lng: apiary.longitude };
+  }, [apiary.latitude, apiary.longitude]);
 
-  // Geometry — local reducer state, persisted via Save / autosave
-  const { stands, northArrow, dirty, generation, dispatch, markSaved } =
+  const { stands, northArrow, registration, mapView, dirty, generation, dispatch, markSaved } =
     useLayoutState({
       stands: initialLayout.stands ?? [],
       northArrow: initialLayout.northArrow,
+      registration: initialLayout.registration,
+      mapView: initialLayout.mapView,
     });
 
-  // Viewport — user zoom/pan is part of the saved layout blob, so viewport
-  // changes flow through the same dirty/autosave path as geometry edits.
+  const resolvedReg = useMemo(
+    () => resolveRegistration(registration, stands),
+    [registration, stands],
+  );
+
   const markViewportDirty = useCallback(
     () => dispatch({ type: "markViewportDirty" }),
     [dispatch],
@@ -157,7 +202,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     markViewportDirty,
   );
 
-  // Derived occupancy — the hives table is the source of truth
   const { slotsByStand, unassigned } = useMemo(
     () => buildSlotOccupancy(stands, hives),
     [stands, hives],
@@ -181,29 +225,16 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     return map;
   }, [hives]);
 
-  // Satellite anchor: the world point for the apiary lat/lng, fixed at
-  // mount so imagery doesn't shift underneath while stands are edited.
-  const [satelliteAnchor] = useState(() => {
-    const initialStands = initialLayout.stands ?? [];
-    if (initialStands.length === 0) return { x: 300, y: 200 };
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const stand of initialStands) {
-      minX = Math.min(minX, stand.x);
-      minY = Math.min(minY, stand.y);
-      maxX = Math.max(maxX, stand.x + stand.cols * CELL_SIZE);
-      maxY = Math.max(maxY, stand.y + stand.rows * CELL_SIZE);
-    }
-    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-  });
-
-  // Interaction state
   const [draggingHiveId, setDraggingHiveId] = useState<string | null>(null);
   const [dragOverSlot, setDragOverSlot] = useState<DragOverSlot | null>(null);
   const [rotatingStandId, setRotatingStandId] = useState<string | null>(null);
   const rotationDrag = useRef<RotationTarget | null>(null);
+  const registerDrag = useRef<{
+    x: number;
+    y: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -215,15 +246,12 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     ? (stands.find((s) => s.id === rotatingStandId) ?? null)
     : null;
 
-  // ------------------------------------------------------------------
-  // Sizing + background grid
-  // ------------------------------------------------------------------
-
   useEffect(() => {
     const surface = surfaceRef.current;
     if (!surface) return;
     const updateSize = () => {
       setDimensions(measureCanvasSurface(surface, window.innerHeight));
+      mapRef.current?.invalidateSize();
     };
     updateSize();
     const observer = new ResizeObserver(updateSize);
@@ -240,6 +268,11 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     if (!canvas) return;
     canvas.width = dimensions.width;
     canvas.height = dimensions.height;
+    if (hasLocation) {
+      const ctx = canvas.getContext("2d");
+      ctx?.clearRect(0, 0, dimensions.width, dimensions.height);
+      return;
+    }
     drawGrid(
       canvas,
       dimensions.width,
@@ -248,15 +281,9 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       viewport.offset.x,
       viewport.offset.y,
     );
-  }, [dimensions, viewport.zoom, viewport.offset]);
-
-  // ------------------------------------------------------------------
-  // Layout persistence: explicit Save + 1s debounced autosave
-  // ------------------------------------------------------------------
+  }, [dimensions, viewport.zoom, viewport.offset, hasLocation]);
 
   const handleSave = useCallback(async () => {
-    // Capture the edit generation up front: if more edits land while the PUT
-    // is in flight, markSaved leaves dirty set and the autosave reruns.
     const savedGeneration = generation;
     setSaving(true);
     try {
@@ -266,6 +293,8 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         zoom: viewport.zoom,
         offsetX: viewport.offset.x,
         offsetY: viewport.offset.y,
+        registration: resolvedReg,
+        mapView,
       });
       markSaved(savedGeneration);
     } catch {
@@ -280,6 +309,8 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     northArrow,
     viewport.zoom,
     viewport.offset,
+    resolvedReg,
+    mapView,
     markSaved,
   ]);
 
@@ -296,9 +327,34 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
   const saveState: SaveState = saving ? "saving" : dirty ? "dirty" : "saved";
 
-  // ------------------------------------------------------------------
-  // Slot helpers
-  // ------------------------------------------------------------------
+  const pointerToWorld = useCallback((): { x: number; y: number } | null => {
+    const stage = stageRef.current;
+    const pointer = stage?.getPointerPosition();
+    if (!stage || !pointer) return null;
+    const layer = stage.getLayers()[0];
+    if (hasLocation && layer) {
+      return layer.getAbsoluteTransform().copy().invert().point(pointer);
+    }
+    return {
+      x: (pointer.x - stage.x()) / stage.scaleX(),
+      y: (pointer.y - stage.y()) / stage.scaleY(),
+    };
+  }, [hasLocation]);
+
+  const handleGeoTransform = useCallback(
+    (transform: GeoOverlayTransform, map: LeafletMap) => {
+      mapRef.current = map;
+      setGeo(transform);
+    },
+    [],
+  );
+
+  const handleMapViewChange = useCallback(
+    (view: NonNullable<CanvasLayout["mapView"]>) => {
+      dispatch({ type: "setMapView", mapView: view });
+    },
+    [dispatch],
+  );
 
   const slotTargetFor = useCallback(
     (stand: StandGeometry, row: number, col: number): SlotTarget => ({
@@ -324,10 +380,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     }
     return targets;
   }, [stands, slotsByStand, slotTargetFor]);
-
-  // ------------------------------------------------------------------
-  // Occupancy operations — write through immediately
-  // ------------------------------------------------------------------
 
   const moveHive = useCallback(
     (hiveId: string, target: SlotTarget, placement: HivePlacement = "full") =>
@@ -378,22 +430,18 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     [dialog, slotsByStand, canvasApi, moveHive],
   );
 
-  // ------------------------------------------------------------------
-  // Hive drag and drop
-  // ------------------------------------------------------------------
-
   const handleHiveDragStart = useCallback(
     (hiveId: string) => {
-      if (!editMode) return;
+      if (!editMode || registerMode) return;
       setDraggingHiveId(hiveId);
       closeContextMenu();
     },
-    [editMode, closeContextMenu],
+    [editMode, registerMode, closeContextMenu],
   );
 
   const handleHiveDragMove = useCallback(
     (hiveId: string, worldX: number, worldY: number) => {
-      if (!editMode) return;
+      if (!editMode || registerMode) return;
       for (const stand of stands) {
         const hit = slotAtPoint(stand, worldX, worldY);
         if (!hit) continue;
@@ -423,7 +471,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       }
       setDragOverSlot((prev) => (prev === null ? prev : null));
     },
-    [editMode, stands, slotsByStand],
+    [editMode, registerMode, stands, slotsByStand],
   );
 
   const handleHiveDragEnd = useCallback(
@@ -431,12 +479,11 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       const target = dragOverSlot;
       setDraggingHiveId(null);
       setDragOverSlot(null);
-      if (!editMode || !target || !target.canDrop) return;
+      if (!editMode || registerMode || !target || !target.canDrop) return;
 
       const stand = stands.find((s) => s.id === target.standId);
       if (!stand) return;
 
-      // Dropping back on the current slot is a no-op.
       const hive = hiveById.get(hiveId);
       if (
         hive &&
@@ -454,24 +501,15 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         void moveHive(hiveId, slotTarget);
       }
     },
-    [editMode, dragOverSlot, stands, hiveById, slotTargetFor, moveHive],
+    [editMode, registerMode, dragOverSlot, stands, hiveById, slotTargetFor, moveHive],
   );
-
-  // ------------------------------------------------------------------
-  // Rotation (stands + north arrow)
-  // ------------------------------------------------------------------
 
   const applyRotationFromPointer = useCallback(
     (snap: boolean) => {
       const target = rotationDrag.current;
       if (!target) return;
-      const stage = stageRef.current;
-      const pointer = stage?.getPointerPosition();
-      if (!stage || !pointer) return;
-      const world = {
-        x: (pointer.x - stage.x()) / stage.scaleX(),
-        y: (pointer.y - stage.y()) / stage.scaleY(),
-      };
+      const world = pointerToWorld();
+      if (!world) return;
 
       if (target.kind === "stand") {
         const stand = stands.find((s) => s.id === target.standId);
@@ -489,27 +527,23 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         dispatch({ type: "rotateNorthArrow", rotation: Math.round(angle) % 360 });
       }
     },
-    [stands, northArrow.x, northArrow.y, dispatch],
+    [stands, northArrow.x, northArrow.y, dispatch, pointerToWorld],
   );
 
   const endRotationDrag = useCallback(() => {
     rotationDrag.current = null;
   }, []);
 
-  // Escape leaves rotate mode / closes the context menu.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       setRotatingStandId(null);
       rotationDrag.current = null;
+      setRegisterMode(false);
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
-
-  // ------------------------------------------------------------------
-  // Context menu plumbing (screen → container-local coordinates)
-  // ------------------------------------------------------------------
 
   const screenToLocal = useCallback((screenX: number, screenY: number) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -518,15 +552,15 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
   const handleStandRightClick = useCallback(
     (standId: string, sx: number, sy: number) => {
-      if (!editMode) return;
+      if (!editMode || registerMode) return;
       setContextMenu({ type: "stand", position: screenToLocal(sx, sy), standId });
     },
-    [editMode, screenToLocal],
+    [editMode, registerMode, screenToLocal],
   );
 
   const handleSlotRightClick = useCallback(
     (standId: string, row: number, col: number, sx: number, sy: number) => {
-      if (!editMode) return;
+      if (!editMode || registerMode) return;
       setContextMenu({
         type: "slot",
         position: screenToLocal(sx, sy),
@@ -535,7 +569,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         col,
       });
     },
-    [editMode, screenToLocal],
+    [editMode, registerMode, screenToLocal],
   );
 
   const handleHiveRightClick = useCallback(
@@ -557,28 +591,114 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     [router],
   );
 
-  // ------------------------------------------------------------------
-  // Toolbar actions
-  // ------------------------------------------------------------------
-
   const handleAddStand = useCallback(
     (rows: number, cols: number) => {
-      const centerX = (dimensions.width / 2 - viewport.offset.x) / viewport.zoom;
-      const centerY = (dimensions.height / 2 - viewport.offset.y) / viewport.zoom;
-      dispatch({
-        type: "addStand",
-        rows,
-        cols,
-        x: centerX - (cols * CELL_SIZE) / 2,
-        y: centerY - (rows * CELL_SIZE) / 2,
-      });
+      let x: number;
+      let y: number;
+      if (hasLocation) {
+        x = resolvedReg.originX - (cols * CELL_SIZE) / 2;
+        y = resolvedReg.originY - (rows * CELL_SIZE) / 2;
+      } else {
+        x = (dimensions.width / 2 - viewport.offset.x) / viewport.zoom - (cols * CELL_SIZE) / 2;
+        y = (dimensions.height / 2 - viewport.offset.y) / viewport.zoom - (rows * CELL_SIZE) / 2;
+      }
+      dispatch({ type: "addStand", rows, cols, x, y });
     },
-    [dimensions, viewport.offset, viewport.zoom, dispatch],
+    [hasLocation, resolvedReg, dimensions, viewport.offset, viewport.zoom, dispatch],
   );
 
-  // ------------------------------------------------------------------
-  // Context menus
-  // ------------------------------------------------------------------
+  const handleZoomIn = useCallback(() => {
+    if (hasLocation && mapRef.current) mapRef.current.zoomIn();
+    else viewport.zoomBy(ZOOM_STEP * 2);
+  }, [hasLocation, viewport]);
+
+  const handleZoomOut = useCallback(() => {
+    if (hasLocation && mapRef.current) mapRef.current.zoomOut();
+    else viewport.zoomBy(-ZOOM_STEP * 2);
+  }, [hasLocation, viewport]);
+
+  const handleFitAll = useCallback(() => {
+    if (hasLocation && pin && mapRef.current) {
+      const box = standsBoundingBox(stands);
+      const corners = box
+        ? [
+            canvasToLatLng(box.minX, box.minY, pin, resolvedReg),
+            canvasToLatLng(box.maxX, box.minY, pin, resolvedReg),
+            canvasToLatLng(box.maxX, box.maxY, pin, resolvedReg),
+            canvasToLatLng(box.minX, box.maxY, pin, resolvedReg),
+          ]
+        : [pin];
+      fitMapToStands(mapRef.current, corners);
+      return;
+    }
+    viewport.fitToContent(stands);
+  }, [hasLocation, pin, stands, resolvedReg, viewport]);
+
+  const handleToggleRegister = useCallback(() => {
+    setRegisterMode((prev) => {
+      const next = !prev;
+      if (next) {
+        dispatch({ type: "setRegistration", registration: resolvedReg });
+        setEditMode(false);
+        setRotatingStandId(null);
+      }
+      return next;
+    });
+    closeContextMenu();
+  }, [dispatch, resolvedReg, closeContextMenu]);
+
+  const handleResetRegistration = useCallback(() => {
+    const origin = defaultOrigin(stands);
+    dispatch({
+      type: "setRegistration",
+      registration: {
+        originX: origin.x,
+        originY: origin.y,
+        offsetX: 0,
+        offsetY: 0,
+        rotation: 0,
+        scale: 1,
+      },
+    });
+  }, [dispatch, stands]);
+
+  const sunWhen = useMemo(
+    () => dateFromScrubber(sunDay, sunMinutes),
+    [sunDay, sunMinutes],
+  );
+  const solar = useMemo(() => {
+    if (!pin || !sunEnabled) return null;
+    return solarPosition(pin.lat, pin.lng, sunWhen);
+  }, [pin, sunEnabled, sunWhen]);
+
+  const sunHives = useMemo((): { marks: SunHiveMark[]; usingPin: boolean } => {
+    if (!pin) return { marks: [], usingPin: true };
+    const marks: SunHiveMark[] = [];
+    for (const stand of stands) {
+      const slots = slotsByStand.get(stand.id) ?? [];
+      for (const slot of slots) {
+        if (slot.hives.length === 0) continue;
+        const world = slotWorldCenter(stand, slot.row, slot.col);
+        marks.push({
+          x: world.x,
+          y: world.y,
+          w: CELL_SIZE * 0.7,
+          h: CELL_SIZE * 0.7,
+          rotation: stand.rotation,
+        });
+      }
+    }
+    return { marks, usingPin: marks.length === 0 };
+  }, [pin, stands, slotsByStand]);
+
+  function derivedHiveLatLng(hive: CanvasHive): { lat: number; lng: number } | null {
+    if (!pin || hive.standId == null || hive.slotRow == null || hive.slotCol == null) {
+      return null;
+    }
+    const stand = stands.find((s) => s.id === hive.standId);
+    if (!stand) return null;
+    return slotLatLng(stand, hive.slotRow, hive.slotCol, pin, resolvedReg);
+  }
 
   function renderStandMenuItems(stand: StandGeometry) {
     return (
@@ -646,9 +766,15 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     if (contextMenu.type === "hive") {
       const hive = hiveById.get(contextMenu.hiveId);
       if (!hive) return null;
+      const derived = derivedHiveLatLng(hive);
       return (
         <MenuSurface position={contextMenu.position} onClose={closeContextMenu}>
           <MenuHeading>{hive.positionLabel}</MenuHeading>
+          {derived && (
+            <p className="px-2 pb-1 font-mono text-[11px] text-muted-foreground">
+              {derived.lat.toFixed(6)}, {derived.lng.toFixed(6)}
+            </p>
+          )}
           <MenuSeparator />
           <MenuItem
             onClick={() => {
@@ -738,12 +864,19 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         ?.find((s) => s.row === row && s.col === col);
       const slotLabel = getSlotLabel(stand.label, row, col, stand.cols);
       const occupants = slot?.hives ?? [];
+      const derived =
+        pin != null ? slotLatLng(stand, row, col, pin, resolvedReg) : null;
 
       return (
         <MenuSurface position={contextMenu.position} onClose={closeContextMenu}>
           <MenuHeading>
             Slot {slotLabel} · Stand {stand.label}
           </MenuHeading>
+          {derived && (
+            <p className="px-2 pb-1 font-mono text-[11px] text-muted-foreground">
+              {derived.lat.toFixed(6)}, {derived.lng.toFixed(6)}
+            </p>
+          )}
           <MenuSeparator />
           {occupants.length === 0 ? (
             <>
@@ -796,12 +929,30 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     );
   }
 
-  // ------------------------------------------------------------------
-  // Dialogs
-  // ------------------------------------------------------------------
-
   function renderDialog() {
     if (!dialog) return null;
+
+    if (dialog.type === "setLocation") {
+      return (
+        <SetLocationDialog
+          apiaryId={apiary.id}
+          name={apiary.name}
+          notes={apiary.notes}
+          value={{
+            latitude: apiary.latitude,
+            longitude: apiary.longitude,
+            elevationM: apiary.elevationM,
+            elevationSource:
+              apiary.elevationSource === "geolocation" ||
+              apiary.elevationSource === "terrain" ||
+              apiary.elevationSource === "override"
+                ? apiary.elevationSource
+                : null,
+          }}
+          onOpenChange={(open) => !open && closeDialog()}
+        />
+      );
+    }
 
     if (dialog.type === "standSettings" || dialog.type === "deleteStand") {
       const stand = stands.find((s) => s.id === dialog.standId);
@@ -914,62 +1065,130 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     }
   }
 
-  // ------------------------------------------------------------------
-  // Render
-  // ------------------------------------------------------------------
-
   const mode = draggingHiveId
     ? "dragging"
-    : rotatingStandId
-      ? "rotating"
-      : editMode
-        ? "edit"
-        : "view";
+    : registerMode
+      ? "register"
+      : rotatingStandId
+        ? "rotating"
+        : editMode
+          ? "edit"
+          : "view";
 
   const modeText = {
-    view: "View mode — double-click a hive to open it, right-click for actions",
+    view: hasLocation
+      ? "View mode — map pans and zooms; double-click a hive to open it"
+      : "View mode — double-click a hive to open it, right-click for actions",
     edit: "Edit mode — hive moves save instantly; stand layout saves with Save",
     rotating: "Rotate mode — drag the handle (Ctrl/Shift snaps 45°), click the background to finish",
     dragging: "Drop the hive on a highlighted slot",
+    register: "Register mode — map locked; drag the stands onto the ground",
   }[mode];
 
+  const stageListening = !hasLocation || registerMode || overlayActive || Boolean(draggingHiveId);
+
   return (
-    <div
-      ref={containerRef}
-      className="relative w-full min-w-0 max-w-full"
-    >
-      <div className="absolute left-2 top-2 z-10">
+    <div ref={containerRef} className="relative w-full min-w-0 max-w-full">
+      <div className="absolute left-2 top-2 z-20">
         <CanvasToolbar
           editMode={editMode}
+          registerMode={registerMode}
           saveState={saveState}
-          satelliteAvailable={satelliteAvailable}
-          satelliteEnabled={satelliteEnabled}
-          satelliteOpacity={satelliteOpacity}
+          hasLocation={hasLocation}
+          tileLayer={tileLayer}
+          imageryOpacity={imageryOpacity}
+          sunEnabled={sunEnabled}
           addHiveEnabled={emptySlotTargets.length > 0}
+          registrationScale={resolvedReg.scale}
+          registrationRotation={resolvedReg.rotation}
           onToggleEditMode={() => {
             setEditMode((prev) => !prev);
+            setRegisterMode(false);
             setRotatingStandId(null);
             rotationDrag.current = null;
             closeContextMenu();
           }}
+          onToggleRegisterMode={handleToggleRegister}
           onAddStand={handleAddStand}
           onAddHive={handleAddHive}
-          onZoomIn={() => viewport.zoomBy(ZOOM_STEP * 2)}
-          onZoomOut={() => viewport.zoomBy(-ZOOM_STEP * 2)}
-          onFitAll={() => viewport.fitToContent(stands)}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onFitAll={handleFitAll}
           onSave={() => void handleSave()}
-          onToggleSatellite={() => setSatelliteEnabled((prev) => !prev)}
-          onSatelliteOpacityChange={setSatelliteOpacity}
+          onTileLayerChange={setTileLayer}
+          onImageryOpacityChange={setImageryOpacity}
+          onToggleSun={() => setSunEnabled((prev) => !prev)}
+          onSetLocation={() => setDialog({ type: "setLocation" })}
+          onRegistrationScale={(scale) =>
+            dispatch({ type: "setRegistration", registration: { ...resolvedReg, scale } })
+          }
+          onRegistrationRotation={(rotation) =>
+            dispatch({ type: "setRegistration", registration: { ...resolvedReg, rotation } })
+          }
+          onResetRegistration={handleResetRegistration}
         />
       </div>
+
+      {sunEnabled && solar && (
+        <div className="absolute right-2 top-2 z-20 flex max-w-sm flex-col gap-2 rounded-lg border bg-background p-2 shadow-sm">
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={sunDay}
+              onChange={(e) => setSunDay(e.target.value)}
+              className="h-8 rounded-md border bg-background px-2 text-xs"
+            />
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {formatClock(sunMinutes)}
+            </span>
+          </div>
+          <Slider
+            value={[sunMinutes]}
+            onValueChange={(values) => setSunMinutes(values[0])}
+            min={0}
+            max={1439}
+            step={5}
+            className="w-56"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Azimuth {Math.round(solar.azimuth)}° · solar alt {solar.altitude.toFixed(1)}°
+            · rise {formatClock(solar.sunriseMinutes)}
+            {solar.sunriseAzimuth != null ? ` @ ${Math.round(solar.sunriseAzimuth)}°` : ""}
+            · set {formatClock(solar.sunsetMinutes)}
+            {solar.sunsetAzimuth != null ? ` @ ${Math.round(solar.sunsetAzimuth)}°` : ""}
+          </p>
+        </div>
+      )}
 
       <div
         ref={surfaceRef}
         className="relative w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-muted/30"
+        onPointerMove={(e) => {
+          if (!hasLocation || registerMode || draggingHiveId) return;
+          const stage = stageRef.current;
+          if (!stage) return;
+          const rect = stage.container().getBoundingClientRect();
+          const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+          setOverlayActive(Boolean(stage.getIntersection(pos)));
+        }}
       >
+        {hasLocation && pin && (
+          <YardMap
+            latitude={pin.lat}
+            longitude={pin.lng}
+            registration={resolvedReg}
+            layerId={tileLayer}
+            imageryOpacity={imageryOpacity}
+            locked={registerMode}
+            initialView={mapView}
+            onViewChange={handleMapViewChange}
+            onTransform={handleGeoTransform}
+          />
+        )}
+
         <canvas
           ref={gridCanvasRef}
-          className="pointer-events-none absolute inset-0"
+          className="pointer-events-none absolute inset-0 z-[1]"
           style={{ width: dimensions.width, height: dimensions.height }}
         />
 
@@ -977,13 +1196,40 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           ref={stageRef}
           width={dimensions.width}
           height={dimensions.height}
-          scaleX={viewport.zoom}
-          scaleY={viewport.zoom}
-          x={viewport.offset.x}
-          y={viewport.offset.y}
-          draggable
-          onWheel={viewport.handleWheel}
-          onDragEnd={viewport.handleStageDragEnd}
+          scaleX={hasLocation ? 1 : viewport.zoom}
+          scaleY={hasLocation ? 1 : viewport.zoom}
+          x={hasLocation ? 0 : viewport.offset.x}
+          y={hasLocation ? 0 : viewport.offset.y}
+          draggable={!hasLocation}
+          style={{
+            position: "relative",
+            zIndex: 2,
+            pointerEvents: stageListening ? "auto" : "none",
+          }}
+          onWheel={(e) => {
+            if (hasLocation && mapRef.current) {
+              e.evt.preventDefault();
+              const map = mapRef.current;
+              const dir = e.evt.deltaY < 0 ? 0.5 : -0.5;
+              const pt = map.mouseEventToContainerPoint(e.evt);
+              map.setZoomAround(pt, map.getZoom() + dir);
+              return;
+            }
+            viewport.handleWheel(e);
+          }}
+          onDragEnd={hasLocation ? undefined : viewport.handleStageDragEnd}
+          onMouseDown={(e) => {
+            if (!registerMode || !hasLocation || !mapRef.current) return;
+            if (rotationDrag.current) return;
+            const pointer = e.target.getStage()?.getPointerPosition();
+            if (!pointer) return;
+            registerDrag.current = {
+              x: pointer.x,
+              y: pointer.y,
+              offsetX: resolvedReg.offsetX,
+              offsetY: resolvedReg.offsetY,
+            };
+          }}
           onClick={(e) => {
             closeContextMenu();
             if (e.target === stageRef.current) setRotatingStandId(null);
@@ -995,41 +1241,62 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
             endRotationDrag();
           }}
           onContextMenu={(e) => {
-            // Swallow right-clicks on the empty background.
             if (e.target === stageRef.current) e.evt.preventDefault();
           }}
-          onMouseMove={(e) => applyRotationFromPointer(e.evt.ctrlKey || e.evt.shiftKey)}
-          onMouseUp={endRotationDrag}
+          onMouseMove={(e) => {
+            applyRotationFromPointer(e.evt.ctrlKey || e.evt.shiftKey);
+            if (registerMode && registerDrag.current && mapRef.current && pin) {
+              const pointer = e.target.getStage()?.getPointerPosition();
+              if (!pointer) return;
+              const next = screenDeltaToRegistrationOffset(
+                mapRef.current,
+                pin,
+                {
+                  ...resolvedReg,
+                  offsetX: registerDrag.current.offsetX,
+                  offsetY: registerDrag.current.offsetY,
+                },
+                pointer.x - registerDrag.current.x,
+                pointer.y - registerDrag.current.y,
+              );
+              dispatch({
+                type: "setRegistration",
+                registration: { ...resolvedReg, ...next },
+              });
+            }
+          }}
+          onMouseUp={() => {
+            endRotationDrag();
+            registerDrag.current = null;
+          }}
           onTouchMove={(e) => {
             if (rotationDrag.current) {
               applyRotationFromPointer(false);
               return;
             }
-            viewport.handlePinchMove(e);
+            if (!hasLocation) viewport.handlePinchMove(e);
           }}
           onTouchEnd={() => {
             endRotationDrag();
-            viewport.endPinch();
+            registerDrag.current = null;
+            if (!hasLocation) viewport.endPinch();
           }}
         >
-          <Layer>
-            {satelliteEnabled &&
-              satelliteAvailable &&
-              apiary.latitude != null &&
-              apiary.longitude != null && (
-                <SatelliteLayer
-                  latitude={apiary.latitude}
-                  longitude={apiary.longitude}
-                  anchor={satelliteAnchor}
-                  opacity={satelliteOpacity}
-                />
-              )}
-
+          <Layer
+            visible={!hasLocation || geo != null}
+            x={hasLocation && geo ? geo.x : 0}
+            y={hasLocation && geo ? geo.y : 0}
+            offsetX={hasLocation && geo ? geo.offsetX : 0}
+            offsetY={hasLocation && geo ? geo.offsetY : 0}
+            scaleX={hasLocation && geo ? geo.scaleX : 1}
+            scaleY={hasLocation && geo ? geo.scaleY : 1}
+            rotation={hasLocation && geo ? geo.rotation : 0}
+          >
             <NorthArrow
               x={northArrow.x}
               y={northArrow.y}
               rotation={northArrow.rotation}
-              draggable={editMode}
+              draggable={editMode && !registerMode}
               onDragEnd={(x, y) => dispatch({ type: "moveNorthArrow", x, y })}
               onRightClick={handleNorthRightClick}
               onRotateHandleDown={() => {
@@ -1044,7 +1311,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
                 slots={slotsByStand.get(stand.id) ?? []}
                 hiveStatusById={hiveStatusById}
                 hiveLabelById={hiveLabelById}
-                editMode={editMode}
+                editMode={editMode && !registerMode}
                 isRotating={rotatingStandId === stand.id}
                 draggingHiveId={draggingHiveId}
                 dragOverSlot={dragOverSlot}
@@ -1073,16 +1340,36 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
               />
             )}
 
-            {/* Empty-state hint */}
+            {sunEnabled && solar && (
+              <SunLayer
+                origin={{ x: resolvedReg.originX, y: resolvedReg.originY }}
+                solar={solar}
+                hives={sunHives.marks}
+                usingPin={sunHives.usingPin}
+              />
+            )}
+
             {stands.length === 0 && (
               <KonvaText
-                x={(0 - viewport.offset.x) / viewport.zoom}
-                y={(dimensions.height / 2 - viewport.offset.y) / viewport.zoom}
-                width={dimensions.width / viewport.zoom}
+                x={
+                  hasLocation
+                    ? resolvedReg.originX - 200
+                    : (0 - viewport.offset.x) / viewport.zoom
+                }
+                y={
+                  hasLocation
+                    ? resolvedReg.originY
+                    : (dimensions.height / 2 - viewport.offset.y) / viewport.zoom
+                }
+                width={hasLocation ? 400 : dimensions.width / viewport.zoom}
                 text={
-                  editMode
-                    ? "Use “Add Stand” to lay out your first hive stand"
-                    : "No stands yet — switch to Edit mode to lay out the yard"
+                  !hasLocation
+                    ? editMode
+                      ? "Use “Add Stand” to lay out your first hive stand — Set location to put the yard on a map"
+                      : "No stands yet — switch to Edit mode, or Set location for the map"
+                    : editMode
+                      ? "Use “Add Stand” then Register to slide the layout onto the ground"
+                      : "No stands yet — switch to Edit mode to lay out the yard"
                 }
                 fontSize={14}
                 fill="#a1a1aa"
@@ -1095,7 +1382,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
         {renderContextMenu()}
 
-        {/* Mode indicator pill */}
         <div className="pointer-events-none absolute bottom-2 right-2 z-10">
           <span
             className={`rounded-full px-2 py-1 text-xs ${
@@ -1109,7 +1395,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         </div>
       </div>
 
-      {/* Unassigned hives tray */}
       {unassigned.length > 0 && (
         <div className="mt-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 dark:border-amber-700/60 dark:bg-amber-950/40">
           <p className="mb-1 text-xs font-medium text-amber-800 dark:text-amber-300">

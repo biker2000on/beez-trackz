@@ -26,13 +26,17 @@ function pointerScreenPosition(
   return { x: rect.left + pointer.x, y: rect.top + pointer.y };
 }
 
-/** World-coordinate pointer position (undoes stage pan/zoom). */
+/** World-coordinate pointer (inverts the layer, including the geo overlay). */
 function pointerWorldPosition(
   e: Konva.KonvaEventObject<Event>,
 ): { x: number; y: number } | null {
   const stage = e.target.getStage();
   const pointer = stage?.getPointerPosition();
   if (!stage || !pointer) return null;
+  const layer = e.target.getLayer();
+  if (layer) {
+    return layer.getAbsoluteTransform().copy().invert().point(pointer);
+  }
   return {
     x: (pointer.x - stage.x()) / stage.scaleX(),
     y: (pointer.y - stage.y()) / stage.scaleY(),

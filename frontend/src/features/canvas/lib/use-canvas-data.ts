@@ -19,6 +19,8 @@ export interface ApiaryDetail {
   name: string;
   latitude: number | null;
   longitude: number | null;
+  elevationM: number | null;
+  elevationSource: string | null;
   notes: string | null;
   canvasLayout: unknown;
 }

@@ -27,6 +27,7 @@ import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { DeleteApiaryDialog } from "./delete-apiary-dialog";
 import { OverviewTab } from "./overview-tab";
 import { useApiary } from "./hooks";
+import { formatElevationM } from "@/features/map/elevation";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
 // Overview and Layout are the only peer views. Flora, Photos, and bulk
@@ -108,6 +109,9 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
                 <span className="inline-flex items-center gap-1.5 font-mono text-xs">
                   <MapPin className="size-4" />
                   {detail.latitude.toFixed(4)}, {detail.longitude.toFixed(4)}
+                  {formatElevationM(detail.elevationM, detail.elevationSource)
+                    ? ` · ${formatElevationM(detail.elevationM, detail.elevationSource)}`
+                    : ""}
                 </span>
               )}
             </div>

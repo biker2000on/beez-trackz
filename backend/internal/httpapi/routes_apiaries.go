@@ -21,12 +21,20 @@ func (s *Server) mountApiaries(r chi.Router) {
 	r.With(s.requireAdmin).Delete("/apiaries/{id}", s.handleApiaryDelete)
 }
 
+const (
+	elevationSourceGeolocation = "geolocation"
+	elevationSourceTerrain     = "terrain"
+	elevationSourceOverride    = "override"
+)
+
 // apiaryJSON is the detail response shape for a single apiary.
 type apiaryJSON struct {
 	ID                string          `json:"id"`
 	Name              string          `json:"name"`
 	Latitude          *float64        `json:"latitude"`
 	Longitude         *float64        `json:"longitude"`
+	ElevationM        *float64        `json:"elevationM"`
+	ElevationSource   *string         `json:"elevationSource"`
 	Notes             *string         `json:"notes"`
 	CanvasLayout      json.RawMessage `json:"canvasLayout"`
 	SatelliteImageKey *string         `json:"satelliteImageKey"`
@@ -36,21 +44,25 @@ type apiaryJSON struct {
 
 // apiaryListJSON is the list response shape (legacy getApiaries fields).
 type apiaryListJSON struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Latitude  *float64  `json:"latitude"`
-	Longitude *float64  `json:"longitude"`
-	Notes     *string   `json:"notes"`
-	CreatedAt time.Time `json:"createdAt"`
-	HiveCount int64     `json:"hiveCount"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Latitude        *float64  `json:"latitude"`
+	Longitude       *float64  `json:"longitude"`
+	ElevationM      *float64  `json:"elevationM"`
+	ElevationSource *string   `json:"elevationSource"`
+	Notes           *string   `json:"notes"`
+	CreatedAt       time.Time `json:"createdAt"`
+	HiveCount       int64     `json:"hiveCount"`
 }
 
 // apiaryPayload is the create/update request body.
 type apiaryPayload struct {
-	Name      string   `json:"name"`
-	Latitude  *float64 `json:"latitude"`
-	Longitude *float64 `json:"longitude"`
-	Notes     *string  `json:"notes"`
+	Name            string   `json:"name"`
+	Latitude        *float64 `json:"latitude"`
+	Longitude       *float64 `json:"longitude"`
+	ElevationM      *float64 `json:"elevationM"`
+	ElevationSource *string  `json:"elevationSource"`
+	Notes           *string  `json:"notes"`
 }
 
 // apiaryRoundCoord rounds a nullable coordinate to 6 decimals (~0.1 m).
@@ -62,15 +74,40 @@ func apiaryRoundCoord(v *float64) *float64 {
 	return &r
 }
 
+// apiaryNormalizeElevation validates a ground-elevation pair. Null elevation
+// is allowed (never invent 0). Sea-level 0 is kept when the operator or a
+// lookup actually supplied it. Source is required whenever a value is set.
+func apiaryNormalizeElevation(m *float64, source *string) (*float64, *string, error) {
+	if m == nil || math.IsNaN(*m) || math.IsInf(*m, 0) {
+		return nil, nil, nil
+	}
+	rounded := math.Round(*m*10) / 10
+	if rounded < -500 || rounded > 9000 {
+		return nil, nil, errors.New("elevation must be between -500 and 9000 meters")
+	}
+	src := elevationSourceOverride
+	if source != nil {
+		switch strings.TrimSpace(*source) {
+		case elevationSourceGeolocation, elevationSourceTerrain, elevationSourceOverride:
+			src = strings.TrimSpace(*source)
+		case "":
+			// omitted source on a typed value is an operator override
+		default:
+			return nil, nil, errors.New("elevation source must be geolocation, terrain, or override")
+		}
+	}
+	return &rounded, &src, nil
+}
+
 func (s *Server) apiaryFetch(ctx context.Context, id any) (*apiaryJSON, error) {
 	var a apiaryJSON
 	var layout []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, name, latitude, longitude, notes, canvas_layout, satellite_image_key,
-		       created_at, updated_at
+		SELECT id, name, latitude, longitude, elevation_m, elevation_source,
+		       notes, canvas_layout, satellite_image_key, created_at, updated_at
 		FROM apiaries WHERE id = $1`, id).
-		Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude, &a.Notes, &layout,
-			&a.SatelliteImageKey, &a.CreatedAt, &a.UpdatedAt)
+		Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude, &a.ElevationM, &a.ElevationSource,
+			&a.Notes, &layout, &a.SatelliteImageKey, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +119,8 @@ func (s *Server) apiaryFetch(ctx context.Context, id any) (*apiaryJSON, error) {
 func (s *Server) handleApiaryList(w http.ResponseWriter, r *http.Request) {
 	user := principalFrom(r)
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT a.id, a.name, a.latitude, a.longitude, a.notes, a.created_at, count(h.id)
+		SELECT a.id, a.name, a.latitude, a.longitude, a.elevation_m, a.elevation_source,
+		       a.notes, a.created_at, count(h.id)
 		FROM apiaries a
 		LEFT JOIN hives h ON h.apiary_id = a.id
 			AND h.is_archived = false AND h.deadout_date IS NULL
@@ -101,7 +139,8 @@ func (s *Server) handleApiaryList(w http.ResponseWriter, r *http.Request) {
 	items := []apiaryListJSON{}
 	for rows.Next() {
 		var a apiaryListJSON
-		if err := rows.Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude, &a.Notes,
+		if err := rows.Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude,
+			&a.ElevationM, &a.ElevationSource, &a.Notes,
 			&a.CreatedAt, &a.HiveCount); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -127,12 +166,17 @@ func (s *Server) handleApiaryCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Apiary name is required")
 		return
 	}
+	elev, elevSrc, err := apiaryNormalizeElevation(req.ElevationM, req.ElevationSource)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var id string
-	err := s.pool.QueryRow(r.Context(), `
-		INSERT INTO apiaries (name, latitude, longitude, notes)
-		VALUES ($1, $2, $3, $4) RETURNING id`,
+	err = s.pool.QueryRow(r.Context(), `
+		INSERT INTO apiaries (name, latitude, longitude, elevation_m, elevation_source, notes)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		name, apiaryRoundCoord(req.Latitude), apiaryRoundCoord(req.Longitude),
-		hiveTextOrNil(req.Notes)).Scan(&id)
+		elev, elevSrc, hiveTextOrNil(req.Notes)).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -181,11 +225,17 @@ func (s *Server) handleApiaryUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Apiary name is required")
 		return
 	}
+	elev, elevSrc, elevErr := apiaryNormalizeElevation(req.ElevationM, req.ElevationSource)
+	if elevErr != nil {
+		writeError(w, http.StatusBadRequest, elevErr.Error())
+		return
+	}
 	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE apiaries SET name = $1, latitude = $2, longitude = $3, notes = $4
-		WHERE id = $5`,
+		UPDATE apiaries SET name = $1, latitude = $2, longitude = $3,
+		                    elevation_m = $4, elevation_source = $5, notes = $6
+		WHERE id = $7`,
 		name, apiaryRoundCoord(req.Latitude), apiaryRoundCoord(req.Longitude),
-		hiveTextOrNil(req.Notes), id)
+		elev, elevSrc, hiveTextOrNil(req.Notes), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

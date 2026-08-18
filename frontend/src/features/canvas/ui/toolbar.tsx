@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import {
+  Compass,
   Grid3x3,
   Hexagon,
   Lock,
-  Map as MapIcon,
+  MapPin,
   Maximize,
   Save,
+  Sun,
   Unlock,
   ZoomIn,
   ZoomOut,
@@ -22,6 +24,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
+import { TILE_LAYERS, type TileLayerId } from "@/features/map/tile-layers";
 
 import { STAND_MAX_DIM, STAND_MIN_DIM } from "../lib/types";
 
@@ -29,20 +32,30 @@ export type SaveState = "saved" | "dirty" | "saving";
 
 interface CanvasToolbarProps {
   editMode: boolean;
+  registerMode: boolean;
   saveState: SaveState;
-  satelliteAvailable: boolean;
-  satelliteEnabled: boolean;
-  satelliteOpacity: number;
+  hasLocation: boolean;
+  tileLayer: TileLayerId;
+  imageryOpacity: number;
+  sunEnabled: boolean;
   addHiveEnabled: boolean;
+  registrationScale: number;
+  registrationRotation: number;
   onToggleEditMode: () => void;
+  onToggleRegisterMode: () => void;
   onAddStand: (rows: number, cols: number) => void;
   onAddHive: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitAll: () => void;
   onSave: () => void;
-  onToggleSatellite: () => void;
-  onSatelliteOpacityChange: (opacity: number) => void;
+  onTileLayerChange: (id: TileLayerId) => void;
+  onImageryOpacityChange: (opacity: number) => void;
+  onToggleSun: () => void;
+  onSetLocation: () => void;
+  onRegistrationScale: (scale: number) => void;
+  onRegistrationRotation: (rotation: number) => void;
+  onResetRegistration: () => void;
 }
 
 const clampDim = (raw: string) =>
@@ -50,20 +63,30 @@ const clampDim = (raw: string) =>
 
 export function CanvasToolbar({
   editMode,
+  registerMode,
   saveState,
-  satelliteAvailable,
-  satelliteEnabled,
-  satelliteOpacity,
+  hasLocation,
+  tileLayer,
+  imageryOpacity,
+  sunEnabled,
   addHiveEnabled,
+  registrationScale,
+  registrationRotation,
   onToggleEditMode,
+  onToggleRegisterMode,
   onAddStand,
   onAddHive,
   onZoomIn,
   onZoomOut,
   onFitAll,
   onSave,
-  onToggleSatellite,
-  onSatelliteOpacityChange,
+  onTileLayerChange,
+  onImageryOpacityChange,
+  onToggleSun,
+  onSetLocation,
+  onRegistrationScale,
+  onRegistrationRotation,
+  onResetRegistration,
 }: CanvasToolbarProps) {
   const [standRows, setStandRows] = useState(2);
   const [standCols, setStandCols] = useState(2);
@@ -191,38 +214,113 @@ export function CanvasToolbar({
               : "Saved"}
         </Button>
 
-        {satelliteAvailable && (
+        <div className="h-6 w-px bg-border" />
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onSetLocation}
+          title="Set yard location"
+        >
+          <MapPin />
+          {hasLocation ? "Location" : "Set location"}
+        </Button>
+
+        {hasLocation && (
           <>
-            <div className="h-6 w-px bg-border" />
             <Button
-              variant={satelliteEnabled ? "default" : "outline"}
+              variant={registerMode ? "default" : "outline"}
               size="sm"
-              onClick={onToggleSatellite}
-              title="Toggle satellite imagery"
+              onClick={onToggleRegisterMode}
+              title="Register stands to the ground"
             >
-              <MapIcon />
-              Satellite
+              <Compass />
+              Register
+            </Button>
+            <Button
+              variant={sunEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={onToggleSun}
+              title="Sunrise and sunset overlay"
+            >
+              <Sun />
+              Sun
             </Button>
           </>
         )}
       </div>
 
-      {satelliteAvailable && satelliteEnabled && (
-        <div className="flex items-center gap-2 rounded-lg border bg-background p-2 shadow-sm">
-          <span className="whitespace-nowrap text-xs text-muted-foreground">
-            Opacity:
+      {hasLocation && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-background p-2 shadow-sm">
+          {(Object.keys(TILE_LAYERS) as TileLayerId[]).map((id) => (
+            <Button
+              key={id}
+              type="button"
+              size="sm"
+              variant={tileLayer === id ? "default" : "outline"}
+              onClick={() => onTileLayerChange(id)}
+            >
+              {TILE_LAYERS[id].label}
+            </Button>
+          ))}
+          {tileLayer === "imagery" && (
+            <>
+              <span className="whitespace-nowrap text-xs text-muted-foreground">
+                Opacity:
+              </span>
+              <Slider
+                value={[Math.round(imageryOpacity * 100)]}
+                onValueChange={(values) => onImageryOpacityChange(values[0] / 100)}
+                min={20}
+                max={100}
+                step={5}
+                className="w-28"
+              />
+              <span className="w-8 text-xs text-muted-foreground">
+                {Math.round(imageryOpacity * 100)}%
+              </span>
+            </>
+          )}
+          <span className="text-[11px] text-muted-foreground">
+            Coords sent to {TILE_LAYERS[tileLayer].seenBy}
           </span>
-          <Slider
-            value={[Math.round(satelliteOpacity * 100)]}
-            onValueChange={(values) => onSatelliteOpacityChange(values[0] / 100)}
-            min={0}
-            max={100}
-            step={5}
-            className="w-32"
-          />
-          <span className="w-8 text-xs text-muted-foreground">
-            {Math.round(satelliteOpacity * 100)}%
-          </span>
+        </div>
+      )}
+
+      {registerMode && hasLocation && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-background p-2 shadow-sm">
+          <span className="text-xs font-medium">Map locked — nudge the stand layer</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Scale</span>
+            <Slider
+              value={[Math.round(registrationScale * 100)]}
+              onValueChange={(values) => onRegistrationScale(values[0] / 100)}
+              min={40}
+              max={250}
+              step={5}
+              className="w-28"
+            />
+            <span className="w-10 text-xs tabular-nums text-muted-foreground">
+              {registrationScale.toFixed(2)}×
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Rotate</span>
+            <Slider
+              value={[Math.round(((registrationRotation % 360) + 360) % 360)]}
+              onValueChange={(values) => onRegistrationRotation(values[0])}
+              min={0}
+              max={359}
+              step={1}
+              className="w-28"
+            />
+            <span className="w-10 text-xs tabular-nums text-muted-foreground">
+              {Math.round(((registrationRotation % 360) + 360) % 360)}°
+            </span>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={onResetRegistration}>
+            Reset
+          </Button>
         </div>
       )}
     </div>

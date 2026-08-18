@@ -44,6 +44,22 @@ export interface NorthArrowState {
   rotation: number;
 }
 
+/** Stand-layer transform relative to the apiary pin. */
+export interface CanvasRegistration {
+  originX: number;
+  originY: number;
+  offsetX: number;
+  offsetY: number;
+  rotation: number;
+  scale: number;
+}
+
+export interface CanvasMapView {
+  centerLat: number;
+  centerLng: number;
+  zoom: number;
+}
+
 /** The geometry-only blob persisted to apiaries.canvasLayout. */
 export interface CanvasLayout {
   stands?: StandGeometry[];
@@ -51,6 +67,8 @@ export interface CanvasLayout {
   zoom?: number;
   offsetX?: number;
   offsetY?: number;
+  registration?: CanvasRegistration;
+  mapView?: CanvasMapView;
 }
 
 /** A hive occupying a slot (derived, never persisted). */
@@ -168,6 +186,33 @@ export function parseCanvasLayout(raw: unknown): Required<
   if (typeof blob.zoom === "number") layout.zoom = blob.zoom;
   if (typeof blob.offsetX === "number") layout.offsetX = blob.offsetX;
   if (typeof blob.offsetY === "number") layout.offsetY = blob.offsetY;
+
+  const reg = blob.registration as Record<string, unknown> | undefined;
+  if (reg && typeof reg.originX === "number" && typeof reg.originY === "number") {
+    const scale = typeof reg.scale === "number" && reg.scale > 0 ? reg.scale : 1;
+    layout.registration = {
+      originX: reg.originX,
+      originY: reg.originY,
+      offsetX: typeof reg.offsetX === "number" ? reg.offsetX : 0,
+      offsetY: typeof reg.offsetY === "number" ? reg.offsetY : 0,
+      rotation: typeof reg.rotation === "number" ? reg.rotation : 0,
+      scale,
+    };
+  }
+
+  const view = blob.mapView as Record<string, unknown> | undefined;
+  if (
+    view &&
+    typeof view.centerLat === "number" &&
+    typeof view.centerLng === "number" &&
+    typeof view.zoom === "number"
+  ) {
+    layout.mapView = {
+      centerLat: view.centerLat,
+      centerLng: view.centerLng,
+      zoom: view.zoom,
+    };
+  }
   return layout;
 }
 
