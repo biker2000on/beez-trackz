@@ -65,12 +65,12 @@ type apiaryPayload struct {
 	Notes           *string  `json:"notes"`
 }
 
-// apiaryRoundCoord rounds a nullable coordinate to 6 decimals (~0.1 m).
+// apiaryRoundCoord rounds a nullable coordinate to 8 decimals (~1 mm).
 func apiaryRoundCoord(v *float64) *float64 {
 	if v == nil {
 		return nil
 	}
-	r := math.Round(*v*1e6) / 1e6
+	r := math.Round(*v*1e8) / 1e8
 	return &r
 }
 

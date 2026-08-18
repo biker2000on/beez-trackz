@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { api, ApiError } from "@/lib/api";
 
+import { yardCentroid } from "./geo";
 import type {
   CanvasHive,
   CanvasLayout,
@@ -70,9 +71,16 @@ export function useCanvasApi(apiaryId: string) {
       // staleTime restores the stale blob and the next autosave overwrites
       // the geometry we just saved. (The apiaries feature caches the same
       // resource under a second key.)
+      const centroid = yardCentroid(layout.stands ?? []);
       const patch = (old: unknown) =>
         old && typeof old === "object"
-          ? { ...(old as ApiaryDetail), canvasLayout: layout }
+          ? {
+              ...(old as ApiaryDetail),
+              canvasLayout: layout,
+              ...(centroid
+                ? { latitude: centroid.lat, longitude: centroid.lng }
+                : {}),
+            }
           : old;
       queryClient.setQueryData(apiaryQueryKey(apiaryId), patch);
       queryClient.setQueryData(["apiaries", "detail", apiaryId], patch);

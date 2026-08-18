@@ -25,6 +25,8 @@ export interface CanvasHive {
   facingDegrees: number | null;
   status: string;
   notes: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 /** Persisted stand geometry — occupancy is derived at render time. */
@@ -36,6 +38,9 @@ export interface StandGeometry {
   rotation: number;
   rows: number;
   cols: number;
+  /** Center of the stand. Set once the yard has a map location. */
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface NorthArrowState {
@@ -125,8 +130,19 @@ export function createStandGeometry(
   cols: number,
   x: number,
   y: number,
+  gps?: { latitude: number; longitude: number },
 ): StandGeometry {
-  return { id: crypto.randomUUID(), label, x, y, rotation: 0, rows, cols };
+  return {
+    id: crypto.randomUUID(),
+    label,
+    x,
+    y,
+    rotation: 0,
+    rows,
+    cols,
+    latitude: gps?.latitude,
+    longitude: gps?.longitude,
+  };
 }
 
 const PLACEMENTS: HivePlacement[] = ["full", "top", "bottom", "left", "right"];
@@ -158,6 +174,8 @@ export function parseCanvasLayout(raw: unknown): Required<
       const rows = typeof s.rows === "number" ? s.rows : NaN;
       const cols = typeof s.cols === "number" ? s.cols : NaN;
       if (!Number.isFinite(rows) || !Number.isFinite(cols)) continue;
+      const latitude = typeof s.latitude === "number" ? s.latitude : undefined;
+      const longitude = typeof s.longitude === "number" ? s.longitude : undefined;
       layout.stands.push({
         id: s.id,
         label: s.label,
@@ -166,6 +184,7 @@ export function parseCanvasLayout(raw: unknown): Required<
         rotation: typeof s.rotation === "number" ? s.rotation : 0,
         rows: Math.min(STAND_MAX_DIM, Math.max(STAND_MIN_DIM, Math.round(rows))),
         cols: Math.min(STAND_MAX_DIM, Math.max(STAND_MIN_DIM, Math.round(cols))),
+        ...(latitude != null && longitude != null ? { latitude, longitude } : {}),
       });
     }
   }

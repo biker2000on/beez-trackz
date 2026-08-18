@@ -45,6 +45,8 @@ type hiveJSON struct {
 	IsArchived    bool             `json:"isArchived"`
 	DeadoutDate   *time.Time       `json:"deadoutDate"`
 	Notes         *string          `json:"notes"`
+	Latitude      *float64         `json:"latitude"`
+	Longitude     *float64         `json:"longitude"`
 	SaleID        *uuid.UUID       `json:"saleId"`
 	CreatedAt     time.Time        `json:"createdAt"`
 	UpdatedAt     time.Time        `json:"updatedAt"`
@@ -54,7 +56,7 @@ type hiveJSON struct {
 const hiveSelectSQL = `
 	SELECT h.id, h.apiary_id, a.name, h.position_label, h.stand_id, h.slot_row, h.slot_col,
 	       h.placement, h.facing_degrees, h.status, h.installed_date, h.is_archived,
-	       h.deadout_date, h.notes, h.sale_id, h.created_at, h.updated_at
+	       h.deadout_date, h.notes, h.latitude, h.longitude, h.sale_id, h.created_at, h.updated_at
 	FROM hives h
 	JOIN apiaries a ON a.id = h.apiary_id`
 
@@ -62,7 +64,8 @@ func hiveScanRow(row pgx.Row) (*hiveJSON, error) {
 	var h hiveJSON
 	if err := row.Scan(&h.ID, &h.ApiaryID, &h.ApiaryName, &h.PositionLabel, &h.StandID,
 		&h.SlotRow, &h.SlotCol, &h.Placement, &h.FacingDegrees, &h.Status, &h.InstalledDate,
-		&h.IsArchived, &h.DeadoutDate, &h.Notes, &h.SaleID, &h.CreatedAt, &h.UpdatedAt); err != nil {
+		&h.IsArchived, &h.DeadoutDate, &h.Notes, &h.Latitude, &h.Longitude, &h.SaleID,
+		&h.CreatedAt, &h.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &h, nil

@@ -107,6 +107,80 @@ export function slotWorldCenter(
   };
 }
 
+export const IDENTITY_REGISTRATION: CanvasRegistration = {
+  originX: 0,
+  originY: 0,
+  offsetX: 0,
+  offsetY: 0,
+  rotation: 0,
+  scale: 1,
+};
+
+export function standHasGps(stand: StandGeometry): boolean {
+  return (
+    typeof stand.latitude === "number" &&
+    Number.isFinite(stand.latitude) &&
+    typeof stand.longitude === "number" &&
+    Number.isFinite(stand.longitude)
+  );
+}
+
+export function bakeStandsToGps(
+  stands: StandGeometry[],
+  pin: { lat: number; lng: number },
+  reg: CanvasRegistration,
+): StandGeometry[] {
+  return stands.map((stand) => {
+    if (standHasGps(stand)) return stand;
+    const center = standCenter(stand);
+    const ll = canvasToLatLng(center.x, center.y, pin, reg);
+    return { ...stand, latitude: ll.lat, longitude: ll.lng };
+  });
+}
+
+/** Place a GPS stand so its center sits at the right canvas point for `pin`. */
+export function alignStandToPin(
+  stand: StandGeometry,
+  pin: { lat: number; lng: number },
+): StandGeometry {
+  if (!standHasGps(stand)) return stand;
+  const southM = (pin.lat - stand.latitude!) * METERS_PER_DEG_LAT;
+  const eastM = (stand.longitude! - pin.lng) * metersPerDegLng(pin.lat);
+  const { w, h } = standSize(stand);
+  return {
+    ...stand,
+    x: eastM * PX_PER_METER - w / 2,
+    y: southM * PX_PER_METER - h / 2,
+  };
+}
+
+export function yardCentroid(
+  stands: StandGeometry[],
+): { lat: number; lng: number } | null {
+  const located = stands.filter(standHasGps);
+  if (located.length === 0) return null;
+  let lat = 0;
+  let lng = 0;
+  for (const stand of located) {
+    lat += stand.latitude!;
+    lng += stand.longitude!;
+  }
+  return { lat: lat / located.length, lng: lng / located.length };
+}
+
+export function translateStandGps(
+  stand: StandGeometry,
+  dLat: number,
+  dLng: number,
+): StandGeometry {
+  if (!standHasGps(stand)) return stand;
+  return {
+    ...stand,
+    latitude: stand.latitude! + dLat,
+    longitude: stand.longitude! + dLng,
+  };
+}
+
 export function slotLatLng(
   stand: StandGeometry,
   row: number,
@@ -114,6 +188,18 @@ export function slotLatLng(
   pin: { lat: number; lng: number },
   reg: CanvasRegistration,
 ): { lat: number; lng: number } {
+  if (standHasGps(stand)) {
+    const { w, h } = standSize(stand);
+    const localX = col * CELL_SIZE + CELL_SIZE / 2 - w / 2;
+    const localY = row * CELL_SIZE + CELL_SIZE / 2 - h / 2;
+    const rad = (stand.rotation * Math.PI) / 180;
+    return offsetLatLng(
+      stand.latitude!,
+      stand.longitude!,
+      (localX * Math.cos(rad) - localY * Math.sin(rad)) / PX_PER_METER,
+      (localX * Math.sin(rad) + localY * Math.cos(rad)) / PX_PER_METER,
+    );
+  }
   const world = slotWorldCenter(stand, row, col);
   return canvasToLatLng(world.x, world.y, pin, reg);
 }

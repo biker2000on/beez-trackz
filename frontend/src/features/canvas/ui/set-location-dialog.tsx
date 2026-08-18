@@ -26,6 +26,8 @@ interface SetLocationDialogProps {
   notes: string | null;
   value: LocationValue;
   onOpenChange: (open: boolean) => void;
+  /** Bake or translate stand GPS before the apiary pin is written. */
+  onRelocateStands?: (next: LocationValue) => Promise<void> | void;
 }
 
 export function SetLocationDialog({
@@ -34,6 +36,7 @@ export function SetLocationDialog({
   notes,
   value,
   onOpenChange,
+  onRelocateStands,
 }: SetLocationDialogProps) {
   const update = useUpdateApiary(apiaryId);
   const [draft, setDraft] = useState<LocationValue>(value);
@@ -48,10 +51,11 @@ export function SetLocationDialog({
       notes,
     };
     try {
+      await onRelocateStands?.(draft);
       await update.mutateAsync(payload);
       toast.success(
         draft.latitude != null
-          ? "Yard location saved"
+          ? "Yard location saved — stands keep their GPS relative to the pin"
           : "Location cleared — map and sun stay off until you set a pin",
       );
       onOpenChange(false);
@@ -68,8 +72,8 @@ export function SetLocationDialog({
         <DialogHeader>
           <DialogTitle>Set yard location</DialogTitle>
           <DialogDescription>
-            Drop a pin so the canvas can sit on real imagery and the sun model
-            has a place to work from. No pin means no map and no sun.
+            The pin is the yard. Stands and hives store their own GPS around
+            it — moving the pin moves the whole yard. No pin means no map.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -31,13 +32,15 @@ func (s *Server) mountCanvas(r chi.Router) {
 
 // canvasStand is the persisted stand geometry (see src/lib/canvas/types.ts).
 type canvasStand struct {
-	ID       string  `json:"id"`
-	Label    string  `json:"label"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	Rotation float64 `json:"rotation"`
-	Rows     int     `json:"rows"`
-	Cols     int     `json:"cols"`
+	ID        string   `json:"id"`
+	Label     string   `json:"label"`
+	X         float64  `json:"x"`
+	Y         float64  `json:"y"`
+	Rotation  float64  `json:"rotation"`
+	Rows      int      `json:"rows"`
+	Cols      int      `json:"cols"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
 }
 
 type canvasNorthArrow struct {
@@ -115,7 +118,112 @@ func (s *Server) handleCanvasSaveLayout(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "apiary not found")
 		return
 	}
+	if err := s.syncYardGps(r.Context(), id, layout.Stands); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+const (
+	canvasCellSize     = 60.0
+	canvasPxPerMeter   = canvasCellSize / 0.75
+	canvasMetersPerLat = 111320.0
+)
+
+func canvasStandHasGPS(stand canvasStand) bool {
+	return stand.Latitude != nil && stand.Longitude != nil
+}
+
+func canvasOffsetLatLng(lat, lng, eastM, southM float64) (float64, float64) {
+	return lat - southM/canvasMetersPerLat,
+		lng + eastM/(canvasMetersPerLat*math.Cos(lat*math.Pi/180))
+}
+
+func canvasSlotGPS(stand canvasStand, row, col int) (lat, lng float64, ok bool) {
+	if !canvasStandHasGPS(stand) {
+		return 0, 0, false
+	}
+	w := float64(stand.Cols) * canvasCellSize
+	h := float64(stand.Rows) * canvasCellSize
+	localX := float64(col)*canvasCellSize + canvasCellSize/2 - w/2
+	localY := float64(row)*canvasCellSize + canvasCellSize/2 - h/2
+	rad := stand.Rotation * math.Pi / 180
+	east := (localX*math.Cos(rad) - localY*math.Sin(rad)) / canvasPxPerMeter
+	south := (localX*math.Sin(rad) + localY*math.Cos(rad)) / canvasPxPerMeter
+	lat, lng = canvasOffsetLatLng(*stand.Latitude, *stand.Longitude, east, south)
+	return lat, lng, true
+}
+
+func canvasYardCentroid(stands []canvasStand) (lat, lng float64, ok bool) {
+	n := 0
+	for _, stand := range stands {
+		if !canvasStandHasGPS(stand) {
+			continue
+		}
+		lat += *stand.Latitude
+		lng += *stand.Longitude
+		n++
+	}
+	if n == 0 {
+		return 0, 0, false
+	}
+	return lat / float64(n), lng / float64(n), true
+}
+
+func (s *Server) syncYardGps(ctx context.Context, apiaryID uuid.UUID, stands []canvasStand) error {
+	byID := make(map[string]canvasStand, len(stands))
+	for _, stand := range stands {
+		byID[stand.ID] = stand
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE hives SET latitude = NULL, longitude = NULL
+		WHERE apiary_id = $1`, apiaryID); err != nil {
+		return err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, stand_id, slot_row, slot_col
+		FROM hives
+		WHERE apiary_id = $1 AND stand_id IS NOT NULL
+		  AND slot_row IS NOT NULL AND slot_col IS NOT NULL`, apiaryID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			hiveID           uuid.UUID
+			standID          string
+			slotRow, slotCol int
+		)
+		if err := rows.Scan(&hiveID, &standID, &slotRow, &slotCol); err != nil {
+			return err
+		}
+		stand, ok := byID[standID]
+		if !ok {
+			continue
+		}
+		lat, lng, ok := canvasSlotGPS(stand, slotRow, slotCol)
+		if !ok {
+			continue
+		}
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`,
+			lat, lng, hiveID); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if lat, lng, ok := canvasYardCentroid(stands); ok {
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE apiaries SET latitude = $1, longitude = $2 WHERE id = $3`,
+			lat, lng, apiaryID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // POST /canvas/hives — create a hive directly in a stand slot.

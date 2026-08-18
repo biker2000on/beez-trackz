@@ -24,8 +24,24 @@ interface LayoutState {
 }
 
 export type LayoutAction =
-  | { type: "addStand"; rows: number; cols: number; x: number; y: number }
-  | { type: "moveStand"; standId: string; x: number; y: number }
+  | {
+      type: "addStand";
+      rows: number;
+      cols: number;
+      x: number;
+      y: number;
+      latitude?: number;
+      longitude?: number;
+    }
+  | {
+      type: "moveStand";
+      standId: string;
+      x: number;
+      y: number;
+      latitude?: number;
+      longitude?: number;
+    }
+  | { type: "hydrateStands"; stands: StandGeometry[]; dirty?: boolean }
   | { type: "rotateStand"; standId: string; rotation: number }
   | { type: "configureStand"; standId: string; label: string; rows: number; cols: number }
   | { type: "deleteStand"; standId: string }
@@ -62,6 +78,9 @@ function reducer(state: LayoutState, action: LayoutAction): LayoutState {
         clampDim(action.cols),
         action.x,
         action.y,
+        action.latitude != null && action.longitude != null
+          ? { latitude: action.latitude, longitude: action.longitude }
+          : undefined,
       );
       return {
         ...state,
@@ -75,7 +94,16 @@ function reducer(state: LayoutState, action: LayoutAction): LayoutState {
         ...s,
         x: action.x,
         y: action.y,
+        latitude: action.latitude ?? s.latitude,
+        longitude: action.longitude ?? s.longitude,
       }));
+    case "hydrateStands":
+      return {
+        ...state,
+        stands: action.stands,
+        dirty: action.dirty ?? true,
+        generation: action.dirty === false ? state.generation : state.generation + 1,
+      };
     case "rotateStand":
       return updateStand(state, action.standId, (s) => ({
         ...s,
