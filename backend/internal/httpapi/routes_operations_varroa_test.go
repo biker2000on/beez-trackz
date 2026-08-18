@@ -381,5 +381,3 @@ func TestVarroaEfficacyIgnoresAfterAfterNextTreatmentAndMismatchedUnits(t *testi
 		t.Fatal("wash-then-board pairing must not invent a percent reduction")
 	}
 }
-
-func strPtr(v string) *string { return &v }
