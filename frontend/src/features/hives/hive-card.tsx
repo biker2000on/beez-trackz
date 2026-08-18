@@ -5,7 +5,6 @@ import { Archive, Hexagon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import type { Hive } from "./hooks";
 import {
@@ -55,11 +54,12 @@ export function HiveCard({
       <CardHeader className="flex-row items-start justify-between space-y-0 pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           {selectable && (
-            <Checkbox
-              checked={selected}
-              tabIndex={-1}
+            <span
               aria-hidden
-              className="pointer-events-none"
+              className={cn(
+                "grid size-4 shrink-0 place-items-center rounded-[4px] border border-input shadow-sm",
+                selected && "border-primary bg-primary",
+              )}
             />
           )}
           <Hexagon className="size-4 text-primary" />

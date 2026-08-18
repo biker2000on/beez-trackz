@@ -139,11 +139,13 @@ export function ApiariesListPage() {
                 >
                   <CardHeader className="pb-2">
                     <CardTitle className="flex items-center gap-2">
-                      <Checkbox
-                        checked={selected.has(apiary.id)}
-                        tabIndex={-1}
-                        aria-hidden="true"
-                        className="pointer-events-none"
+                      <span
+                        aria-hidden
+                        className={`grid size-4 shrink-0 place-items-center rounded-[4px] border border-input shadow-sm ${
+                          selected.has(apiary.id)
+                            ? "border-primary bg-primary"
+                            : ""
+                        }`}
                       />
                       <MapPin className="size-4 text-primary" />
                       {apiary.name}
