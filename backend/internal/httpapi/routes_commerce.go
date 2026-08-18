@@ -44,6 +44,7 @@ func (s *Server) mountCommerce(r chi.Router) {
 	admin.Get("/honey/low-stock", s.lowStockAlerts)
 	admin.Get("/market-day/reconciliation", s.marketDayReconciliation)
 	admin.Get("/honey/sales/{id}/receipt", s.saleReceipt)
+	admin.Get("/sales/{id}/receipt", s.saleReceipt)
 	s.mountSerials(admin)
 }
 
@@ -889,7 +890,7 @@ func (s *Server) customerList(w http.ResponseWriter, r *http.Request) {
 			c.referral_code, c.referred_by, c.created_at,
 			COUNT(s.id), COALESCE(SUM(s.total_amount_cents), 0), MAX(s.date)
 		FROM customers c
-		LEFT JOIN honey_sales s ON s.customer_id=c.id AND s.order_status <> 'cancelled'
+		LEFT JOIN sales s ON s.customer_id=c.id AND s.order_status <> 'cancelled'
 		GROUP BY c.id ORDER BY c.name`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -1076,17 +1077,18 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	var jarsSold int
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT
-			COALESCE((SELECT SUM(total_amount_cents) FROM honey_sales
+			COALESCE((SELECT SUM(total_amount_cents) FROM sales
 				WHERE EXTRACT(YEAR FROM date)::integer=$1 AND order_status <> 'cancelled'),0),
-			COALESCE((SELECT SUM(amount_paid_cents) FROM honey_sales
+			COALESCE((SELECT SUM(amount_paid_cents) FROM sales
 				WHERE EXTRACT(YEAR FROM date)::integer=$1 AND order_status <> 'cancelled'),0),
 			COALESCE((SELECT SUM(amount_cents) FROM expenses
 				WHERE EXTRACT(YEAR FROM expense_date)::integer=$1 AND deleted_at IS NULL),0),
 			COALESCE((SELECT SUM(calculated_honey_weight) FROM honey_harvests
 				WHERE EXTRACT(YEAR FROM date)::integer=$1 AND deleted_at IS NULL),0),
-			COALESCE((SELECT SUM(si.quantity) FROM honey_sale_items si
-				JOIN honey_sales s ON s.id=si.sale_id
-				WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'),0)`,
+			COALESCE((SELECT SUM(si.quantity) FROM sale_items si
+				JOIN sales s ON s.id=si.sale_id
+				WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
+					AND si.kind='jar'),0)`,
 		year).Scan(&revenue, &collected, &expenses, &harvested, &jarsSold)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -1119,7 +1121,7 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	}
 	channelRows, err := s.pool.Query(r.Context(), `
 		SELECT channel, SUM(total_amount_cents), COUNT(*)
-		FROM honey_sales WHERE EXTRACT(YEAR FROM date)::integer=$1
+		FROM sales WHERE EXTRACT(YEAR FROM date)::integer=$1
 			AND order_status <> 'cancelled'
 		GROUP BY channel ORDER BY SUM(total_amount_cents) DESC`, year)
 	if err != nil {
@@ -1146,8 +1148,8 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 				si.quantity * si.unit_price_cents AS gross_cents,
 				s.discount_amount_cents,
 				SUM(si.quantity * si.unit_price_cents) OVER (PARTITION BY s.id) AS subtotal_cents
-			FROM honey_sale_items si
-			JOIN honey_sales s ON s.id=si.sale_id
+			FROM sale_items si
+			JOIN sales s ON s.id=si.sale_id
 			JOIN jar_sizes js ON js.id=si.jar_size_id
 			WHERE EXTRACT(YEAR FROM s.date)::integer=$1
 				AND s.order_status <> 'cancelled'
@@ -1189,7 +1191,7 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	lotRows, err := s.pool.Query(r.Context(), `
 		WITH lot_revenue AS (
 			SELECT harvest_lot_id, SUM(total_amount_cents) revenue
-			FROM honey_sales
+			FROM sales
 			WHERE EXTRACT(YEAR FROM date)::integer=$1
 				AND order_status <> 'cancelled' AND harvest_lot_id IS NOT NULL
 			GROUP BY harvest_lot_id
@@ -1235,7 +1237,7 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	seasonRows, err := s.pool.Query(r.Context(), `
 		WITH revenue AS (
 			SELECT COALESCE(lot.season,'Unassigned') season, SUM(s.total_amount_cents) revenue
-			FROM honey_sales s
+			FROM sales s
 			LEFT JOIN harvest_lots lot ON lot.id=s.harvest_lot_id
 			WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
 			GROUP BY 1
@@ -1281,6 +1283,33 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	}
 	seasonRows.Close()
 
+	kindRows, err := s.pool.Query(r.Context(), `
+		SELECT si.kind, COALESCE(SUM(si.quantity * si.unit_price_cents),0)
+		FROM sale_items si
+		JOIN sales s ON s.id=si.sale_id
+		WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
+		GROUP BY si.kind ORDER BY si.kind`, year)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	byKind := make([]map[string]any, 0)
+	for kindRows.Next() {
+		var kind string
+		var kindRevenue money
+		if err := kindRows.Scan(&kind, &kindRevenue); err != nil {
+			kindRows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		byKind = append(byKind, map[string]any{"kind": kind, "revenue": kindRevenue})
+	}
+	kindRows.Close()
+	if kindRows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
 	margin := revenue - expenses
 	writeJSON(w, http.StatusOK, map[string]any{
 		// revenue keeps its previous meaning (invoiced, incl. unpaid orders);
@@ -1294,6 +1323,7 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		"inventoryValue": inventoryValue, "jarsSold": jarsSold,
 		"breakEvenByJarSize": breakEven, "byChannel": channels,
 		"byJarSize": byJarSize, "byHarvestLot": byLot, "bySeason": bySeason,
+		"byKind": byKind,
 	})
 }
 
@@ -1327,7 +1357,7 @@ func (s *Server) economicsAnalytics(w http.ResponseWriter, r *http.Request) {
 				AND COALESCE(e.apiary_id,h.apiary_id) IS NULL
 		), totals AS (
 			SELECT COALESCE(SUM(total_amount_cents),0) revenue
-			FROM honey_sales WHERE EXTRACT(YEAR FROM date)::integer=$1
+			FROM sales WHERE EXTRACT(YEAR FROM date)::integer=$1
 				AND order_status <> 'cancelled'
 		), yield_total AS (
 			SELECT COALESCE(SUM(pounds),0) pounds FROM yields
@@ -1475,8 +1505,9 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	salesRows, err := s.pool.Query(r.Context(), `
 		SELECT si.jar_size_id, COALESCE(SUM(si.quantity),0)
-		FROM honey_sale_items si JOIN honey_sales s ON s.id=si.sale_id
+		FROM sale_items si JOIN sales s ON s.id=si.sale_id
 		WHERE s.date >= CURRENT_DATE - $1::integer AND s.order_status <> 'cancelled'
+			AND si.kind='jar'
 		GROUP BY si.jar_size_id`, lookbackDays)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -1526,10 +1557,11 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 	var wholesaleReserved float64
 	_ = s.pool.QueryRow(r.Context(), `
 		SELECT COALESCE(SUM(si.quantity * COALESCE(js.honey_oz,0) / 16.0),0)
-		FROM honey_sale_items si
-		JOIN honey_sales s ON s.id=si.sale_id
+		FROM sale_items si
+		JOIN sales s ON s.id=si.sale_id
 		JOIN jar_sizes js ON js.id=si.jar_size_id
-		WHERE s.channel='wholesale' AND s.order_status IN ('draft','pending')`).Scan(&wholesaleReserved)
+		WHERE s.channel='wholesale' AND s.order_status IN ('draft','pending')
+			AND si.kind='jar'`).Scan(&wholesaleReserved)
 	// The SAME formula /honey/overview reports. This endpoint used to recompute
 	// pounds jarred from quantity * honey_oz / 16, so the two disagreed
 	// whenever a jar size had been edited or had no honey_oz at jarring time.
@@ -1605,7 +1637,7 @@ func (s *Server) marketDayReconciliation(w http.ResponseWriter, r *http.Request)
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT payment_method, channel, COUNT(*), SUM(total_amount_cents), SUM(amount_paid_cents),
 			SUM(total_amount_cents-amount_paid_cents)
-		FROM honey_sales
+		FROM sales
 		WHERE date >= $1 AND date < $2 AND order_status <> 'cancelled'
 		GROUP BY payment_method, channel ORDER BY payment_method, channel`, dayStart, dayEnd)
 	if err != nil {

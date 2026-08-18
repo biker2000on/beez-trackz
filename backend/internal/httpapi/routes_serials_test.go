@@ -76,7 +76,7 @@ func newSerialFixture(t *testing.T) *serialFixture {
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM honey_movements WHERE bottling_run_id=$1`, fixture.runID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM bottling_runs WHERE id=$1`, fixture.runID)
 		_, _ = pool.Exec(cleanupCtx,
-			`DELETE FROM honey_sales WHERE customer_name=$1`, "Serial test "+suffix)
+			`DELETE FROM sales WHERE customer_name=$1`, "Serial test "+suffix)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM harvest_lots WHERE id=$1`, fixture.lotID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM app_users WHERE id=$1`, userID)
 	})
@@ -100,7 +100,7 @@ func (f *serialFixture) insertSale(t *testing.T, status string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	if err := f.pool().QueryRow(f.ctx, `
-		INSERT INTO honey_sales (date, customer_name, total_amount_cents, order_status)
+		INSERT INTO sales (date, customer_name, total_amount_cents, order_status)
 		VALUES (now(), $1, 1200, $2) RETURNING id`,
 		f.customerName, status).Scan(&id); err != nil {
 		t.Fatalf("insert sale: %v", err)

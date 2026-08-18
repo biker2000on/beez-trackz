@@ -72,6 +72,8 @@ var feedingCloseReasons = map[string]bool{
 	"verified_closed": true,
 	// The record was ambiguous: no feeder was ever left on the hive.
 	"not_installed": true,
+	// Written by a colony sale, not the close dialog.
+	"sold_with_hive": true,
 }
 
 const feedingCloseReasonRefilled = "refilled"

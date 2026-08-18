@@ -50,7 +50,7 @@ export function MarketDayPage() {
 
   function exit() {
     if (cartCount > 0) setConfirmExit(true);
-    else router.push("/harvest");
+    else router.push("/sales");
   }
 
   return (
@@ -91,7 +91,7 @@ export function MarketDayPage() {
             <AlertDialogCancel>Stay</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => router.push("/harvest")}
+              onClick={() => router.push("/sales")}
             >
               Discard and exit
             </AlertDialogAction>

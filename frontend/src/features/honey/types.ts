@@ -58,9 +58,14 @@ export interface TimelineEntry {
   cancelled?: boolean;
 }
 
+export type SaleLineKind = "jar" | "colony" | "equipment";
+
 export interface SaleLineItem {
   saleId: string;
-  jarSizeId: string;
+  kind?: SaleLineKind;
+  jarSizeId: string | null;
+  hiveId: string | null;
+  equipmentStockId: string | null;
   quantity: number;
   unitPrice: number;
   label: string;

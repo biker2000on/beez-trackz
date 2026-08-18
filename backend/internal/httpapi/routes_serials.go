@@ -24,6 +24,9 @@ func (s *Server) mountSerials(r chi.Router) {
 	r.Get("/honey/sales/{id}/serials", s.saleSerialList)
 	r.Post("/honey/sales/{id}/serials", s.saleSerialLink)
 	r.Delete("/honey/sales/{id}/serials/{serialNumber}", s.saleSerialUnlink)
+	r.Get("/sales/{id}/serials", s.saleSerialList)
+	r.Post("/sales/{id}/serials", s.saleSerialLink)
+	r.Delete("/sales/{id}/serials/{serialNumber}", s.saleSerialUnlink)
 }
 
 type jarSerialRunJSON struct {
@@ -99,7 +102,7 @@ func (s *Server) jarSerialLookup(w http.ResponseWriter, r *http.Request) {
 		JOIN bottling_runs br ON br.id = js.bottling_run_id
 		JOIN harvest_lots lot ON lot.id = br.lot_id
 		LEFT JOIN jar_sizes jz ON jz.id = br.jar_size_id
-		LEFT JOIN honey_sales sale ON sale.id = js.sale_id
+		LEFT JOIN sales sale ON sale.id = js.sale_id
 		LEFT JOIN customers c ON c.id = sale.customer_id
 		LEFT JOIN app_users linker ON linker.id = js.linked_by
 		WHERE lower(js.serial_number) = lower($1)`, serial).
@@ -222,7 +225,7 @@ func (s *Server) saleSerialLink(w http.ResponseWriter, r *http.Request) {
 	// status check and the links.
 	var orderStatus string
 	err = tx.QueryRow(ctx,
-		`SELECT order_status FROM honey_sales WHERE id=$1 FOR UPDATE`, saleID).Scan(&orderStatus)
+		`SELECT order_status FROM sales WHERE id=$1 FOR UPDATE`, saleID).Scan(&orderStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "sale not found")
 		return

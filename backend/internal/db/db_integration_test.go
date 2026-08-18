@@ -41,22 +41,22 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 	if err := pool.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM information_schema.columns
-			WHERE table_schema='public' AND table_name='honey_sales'
+			WHERE table_schema='public' AND table_name='sales'
 				AND column_name='harvest_lot_id'
 		)`).Scan(&lotColumnExists); err != nil {
-		t.Fatalf("inspect honey_sales: %v", err)
+		t.Fatalf("inspect sales: %v", err)
 	}
 	if !lotColumnExists {
-		t.Fatal("honey_sales.harvest_lot_id was not created")
+		t.Fatal("sales.harvest_lot_id was not created")
 	}
 
 	// Money is integer cents and the float columns are gone.
 	for _, column := range []struct{ table, name string }{
-		{"honey_sales", "total_amount_cents"},
-		{"honey_sales", "discount_amount_cents"},
-		{"honey_sales", "amount_paid_cents"},
-		{"honey_sales", "tax_cents"},
-		{"honey_sale_items", "unit_price_cents"},
+		{"sales", "total_amount_cents"},
+		{"sales", "discount_amount_cents"},
+		{"sales", "amount_paid_cents"},
+		{"sales", "tax_cents"},
+		{"sale_items", "unit_price_cents"},
 		{"jar_sizes", "default_price_cents"},
 		{"expenses", "amount_cents"},
 		{"wholesale_price_lists", "minimum_order_amount_cents"},
@@ -65,7 +65,7 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		{"honey_movements", "bottling_run_id"},
 		{"honey_harvests", "deleted_at"},
 		{"expenses", "deleted_at"},
-		{"honey_sales", "cancelled_at"},
+		{"sales", "cancelled_at"},
 	} {
 		var dataType string
 		if err := pool.QueryRow(ctx, `
@@ -76,8 +76,8 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		}
 	}
 	for _, column := range []struct{ table, name string }{
-		{"honey_sales", "total_amount"},
-		{"honey_sale_items", "unit_price"},
+		{"sales", "total_amount"},
+		{"sale_items", "unit_price"},
 		{"jar_sizes", "default_price"},
 		{"expenses", "amount"},
 	} {
@@ -94,7 +94,7 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 	}
 	// updated_at + created_by reached every honey/commerce table.
 	for _, table := range []string{
-		"honey_sales", "honey_sale_items", "honey_movements", "honey_harvests",
+		"sales", "sale_items", "honey_movements", "honey_harvests",
 		"harvest_sessions", "jar_sizes", "expenses", "bottling_runs",
 		"wholesale_price_lists", "wholesale_price_list_items",
 	} {

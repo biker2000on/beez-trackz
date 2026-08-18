@@ -1,9 +1,5 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { MarketDayPage } from "@/features/commerce/market-day-page";
-
-export const metadata: Metadata = { title: "Market day" };
-
-export default function MarketDayRoute() {
-  return <MarketDayPage />;
+export default function HarvestMarketDayRedirect() {
+  redirect("/sales/market-day");
 }

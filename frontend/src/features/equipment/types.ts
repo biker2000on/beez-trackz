@@ -61,6 +61,7 @@ export const RETURN_REASONS = [
   "damaged",
   "hive_removed",
   "other",
+  "sold_with_hive",
 ] as const;
 export type ReturnReason = (typeof RETURN_REASONS)[number];
 
@@ -89,6 +90,7 @@ export const REASON_LABELS: Record<string, string> = {
   no_longer_needed: "No longer needed",
   maintenance: "Maintenance",
   hive_removed: "Hive removed",
+  sold_with_hive: "Sold with hive",
 };
 
 export const CONDITION_LABELS: Record<ReturnCondition, string> = {

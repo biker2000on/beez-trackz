@@ -130,6 +130,7 @@ export interface Profitability {
     expenses: number;
     margin: number;
   }[];
+  byKind?: { kind: string; revenue: number }[];
 }
 
 export interface ProductionPlan {
@@ -424,14 +425,14 @@ export function useJarSerialLookup(serialNumber: string) {
 export function useSaleSerials(saleId: string) {
   return useQuery({
     queryKey: ["commerce", "sale-serials", saleId],
-    queryFn: () => api.get<SaleJarSerial[]>(`/honey/sales/${saleId}/serials`),
+    queryFn: () => api.get<SaleJarSerial[]>(`/sales/${saleId}/serials`),
   });
 }
 
 export function useLinkSaleSerials(saleId: string) {
   return useCommerceMutation(
     (serialNumbers: string[]) =>
-      api.post<SaleJarSerial[]>(`/honey/sales/${saleId}/serials`, { serialNumbers }),
+      api.post<SaleJarSerial[]>(`/sales/${saleId}/serials`, { serialNumbers }),
     "Jar serials linked",
   );
 }
@@ -439,7 +440,7 @@ export function useLinkSaleSerials(saleId: string) {
 export function useUnlinkSaleSerial(saleId: string) {
   return useCommerceMutation(
     (serialNumber: string) =>
-      api.delete(`/honey/sales/${saleId}/serials/${encodeURIComponent(serialNumber)}`),
+      api.delete(`/sales/${saleId}/serials/${encodeURIComponent(serialNumber)}`),
     "Jar serial unlinked",
   );
 }

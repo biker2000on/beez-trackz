@@ -97,6 +97,48 @@ func TestHoneySalePriceRequired(t *testing.T) {
 	}
 }
 
+func TestNormalizeHoneySaleLinesMixedKinds(t *testing.T) {
+	jarID := uuid.New()
+	hiveID := uuid.New()
+	stockID := uuid.New()
+	lines, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{JarSizeID: jarID.String(), Quantity: 2, UnitPrice: 1200},
+		{Kind: "colony", HiveID: hiveID.String(), Quantity: 1, UnitPrice: 25000},
+		{Kind: "equipment", EquipmentStockID: stockID.String(), Quantity: 3, UnitPrice: 4000},
+		{Kind: "equipment", EquipmentStockID: stockID.String(), Quantity: 1, UnitPrice: 4000},
+	})
+	if err != nil {
+		t.Fatalf("normalize mixed lines: %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3", len(lines))
+	}
+	if lines[0].Kind != saleKindJar || lines[0].Quantity != 2 {
+		t.Errorf("jar line = %#v", lines[0])
+	}
+	if lines[1].Kind != saleKindColony || lines[1].HiveID != hiveID {
+		t.Errorf("colony line = %#v", lines[1])
+	}
+	if lines[2].Kind != saleKindEquipment || lines[2].Quantity != 4 {
+		t.Errorf("equipment line = %#v", lines[2])
+	}
+}
+
+func TestNormalizeHoneySaleLinesRejectsDoubleHiveAndBadColonyQty(t *testing.T) {
+	hiveID := uuid.New().String()
+	if _, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{Kind: "colony", HiveID: hiveID, Quantity: 1, UnitPrice: 100},
+		{Kind: "colony", HiveID: hiveID, Quantity: 1, UnitPrice: 100},
+	}); err == nil {
+		t.Fatal("duplicate hive was accepted")
+	}
+	if _, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{Kind: "colony", HiveID: hiveID, Quantity: 2, UnitPrice: 100},
+	}); err == nil {
+		t.Fatal("colony quantity 2 was accepted")
+	}
+}
+
 func TestNormalizeHoneySaleLinesRejectsConflictingOrNegativePrices(t *testing.T) {
 	jarSizeID := uuid.New().String()
 	tests := []struct {

@@ -88,6 +88,7 @@ func offlineMutationSupported(method, path string) bool {
 		"/api/v1/honey/jar-adjustments",
 		"/api/v1/honey/movements/",
 		"/api/v1/honey/sales",
+		"/api/v1/sales",
 		"/api/v1/jar-sizes",
 		"/api/v1/expenses",
 		"/api/v1/customers",
@@ -140,9 +141,9 @@ func (s *Server) offlineResourceUpdatedAt(r *http.Request) (*time.Time, error) {
 	resource, idPart := parts[2], parts[3]
 	// /honey/sales/{id} nests one level deeper than the flat resources.
 	if resource == "honey" && len(parts) >= 5 && parts[3] == "sales" {
-		resource, idPart = "honey_sales", parts[4]
-		tableByResource["honey_sales"] = "honey_sales"
+		resource, idPart = "sales", parts[4]
 	}
+	tableByResource["sales"] = "sales"
 	table, ok := tableByResource[resource]
 	if !ok {
 		return nil, nil

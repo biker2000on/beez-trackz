@@ -30,7 +30,9 @@ import (
 
 type copySpec struct {
 	table string
-	cols  []string
+	// destTable overrides the target table when the rewrite renamed it.
+	destTable string
+	cols      []string
 	// selectCols overrides the legacy column list when names differ.
 	selectCols []string
 	// centsCols marks target columns (by index into cols) that are integer
@@ -58,7 +60,7 @@ var specs = []copySpec{
 		cols: []string{"id", "apiary_id", "date", "total_extracted_weight", "notes", "created_at"}},
 	{table: "honey_harvests",
 		cols: []string{"id", "session_id", "hive_id", "date", "super_weight_before", "super_weight_after", "calculated_honey_weight", "notes", "created_at"}},
-	{table: "honey_sales",
+	{table: "honey_sales", destTable: "sales",
 		cols:       []string{"id", "date", "customer_name", "location", "total_amount_cents", "notes", "created_at"},
 		selectCols: []string{"id", "date", "customer_name", "location", "total_amount", "notes", "created_at"},
 		centsCols:  map[int]bool{4: true}},
@@ -68,7 +70,7 @@ var specs = []copySpec{
 		centsCols:  map[int]bool{3: true}},
 	{table: "honey_movements",
 		cols: []string{"id", "date", "kind", "amount_lbs", "jar_size_id", "quantity", "reason", "notes", "created_at"}},
-	{table: "honey_sale_items",
+	{table: "honey_sale_items", destTable: "sale_items",
 		cols:       []string{"id", "sale_id", "jar_size_id", "quantity", "unit_price_cents"},
 		selectCols: []string{"id", "sale_id", "jar_size_id", "quantity", "unit_price"},
 		centsCols:  map[int]bool{4: true}},
@@ -355,8 +357,12 @@ func copyTable(ctx context.Context, src, dst *pgx.Conn, spec copySpec) (int, err
 			placeholders[i] = fmt.Sprintf("ROUND($%d::numeric * 100)::bigint", i+1)
 		}
 	}
+	dest := spec.destTable
+	if dest == "" {
+		dest = spec.table
+	}
 	insert := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		spec.table, strings.Join(spec.cols, ", "), strings.Join(placeholders, ", "))
+		dest, strings.Join(spec.cols, ", "), strings.Join(placeholders, ", "))
 
 	n := 0
 	for rows.Next() {

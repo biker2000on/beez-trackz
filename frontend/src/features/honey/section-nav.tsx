@@ -5,7 +5,7 @@
  * routes, so this is a link bar rather than a `<Tabs>` — every section is
  * deep-linkable and back-button safe for free.
  *
- * Three stable workflow groups replace the former five-to-seven link strip.
+ * Overview and Production stay here; Sales is a top-level destination.
  * Detail routes resolve to their parent group without changing the visible
  * navigation, so the chrome never jumps when opening Activity or a QR lookup.
  *
@@ -39,15 +39,11 @@ export const HONEY_SECTIONS = [
       "/harvest/sessions",
     ],
   },
-  {
-    href: "/harvest/sales",
-    label: "Sales",
-  },
 ] as const;
 
 export function HoneySectionNav() {
   const pathname = usePathname();
-  if (pathname.startsWith("/harvest/market-day")) return null;
+  if (pathname.startsWith("/harvest/market-day") || pathname.startsWith("/sales/market-day")) return null;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-3">
@@ -62,7 +58,7 @@ export function HoneySectionNav() {
             dialogs (and their shortcuts) live behind this menu. */}
         {pathname !== "/harvest" && <HoneyQuickActions variant="menu" />}
         <Button asChild size="sm" variant="outline">
-          <Link href="/harvest/market-day">
+          <Link href="/sales/market-day">
             <ShoppingBasket />
             Market day
           </Link>

@@ -1,14 +1,10 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { ReceiptView } from "@/features/commerce/receipt-view";
-
-export const metadata: Metadata = { title: "Receipt" };
-
-export default async function ReceiptPage({
+export default async function HarvestReceiptRedirect({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <ReceiptView saleId={id} />;
+  redirect(`/sales/${id}`);
 }

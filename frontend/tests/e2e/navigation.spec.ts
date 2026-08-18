@@ -169,14 +169,12 @@ test("Honey keeps the same three workflow groups on hidden detail routes", async
   await expect(nav.getByRole("link")).toHaveText([
     "Overview",
     "Production",
-    "Sales",
   ]);
 
   await page.goto("/harvest/activity");
   await expect(nav.getByRole("link")).toHaveText([
     "Overview",
     "Production",
-    "Sales",
   ]);
 });
 

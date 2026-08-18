@@ -69,10 +69,10 @@ func TestMoneyMigrationConvertsExistingRows(t *testing.T) {
 		query string
 		want  int64
 	}{
-		{"sale total", `SELECT total_amount_cents FROM honey_sales`, 6170},
-		{"sale discount (half-up)", `SELECT discount_amount_cents FROM honey_sales`, 101},
-		{"sale amount paid", `SELECT amount_paid_cents FROM honey_sales`, 6070},
-		{"sale item unit price", `SELECT unit_price_cents FROM honey_sale_items`, 1234},
+		{"sale total", `SELECT total_amount_cents FROM sales`, 6170},
+		{"sale discount (half-up)", `SELECT discount_amount_cents FROM sales`, 101},
+		{"sale amount paid", `SELECT amount_paid_cents FROM sales`, 6070},
+		{"sale item unit price", `SELECT unit_price_cents FROM sale_items`, 1234},
 		{"jar default price", `SELECT default_price_cents FROM jar_sizes`, 1234},
 		{"expense amount", `SELECT amount_cents FROM expenses`, 24999},
 		{"price list minimum", `SELECT minimum_order_amount_cents FROM wholesale_price_lists`, 15000},
@@ -90,7 +90,7 @@ func TestMoneyMigrationConvertsExistingRows(t *testing.T) {
 
 	// No row was lost.
 	for table, want := range map[string]int{
-		"honey_sales": 1, "honey_sale_items": 1, "expenses": 1,
+		"sales": 1, "sale_items": 1, "expenses": 1,
 		"jar_sizes": 1, "wholesale_price_lists": 1, "wholesale_price_list_items": 1,
 	} {
 		var count int
@@ -104,7 +104,7 @@ func TestMoneyMigrationConvertsExistingRows(t *testing.T) {
 
 	// tax_cents is added but never invented.
 	var taxIsNull bool
-	if err := pool.QueryRow(ctx, `SELECT tax_cents IS NULL FROM honey_sales`).Scan(&taxIsNull); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT tax_cents IS NULL FROM sales`).Scan(&taxIsNull); err != nil {
 		t.Fatalf("read tax_cents: %v", err)
 	}
 	if !taxIsNull {

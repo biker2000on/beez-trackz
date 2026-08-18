@@ -38,14 +38,32 @@ import {
   useWholesalePriceLists,
 } from "@/features/commerce/api";
 
+import { Checkbox } from "@/components/ui/checkbox";
+import { useEquipmentStock } from "@/features/equipment/hooks";
+
 import { formatMoney, parseNum, todayISO } from "./format";
-import { useRecordSale, useSaleLocations } from "./hooks";
+import {
+  useHiveOptions,
+  useHiveSaleOffer,
+  useRecordSale,
+  useSaleLocations,
+  type HiveSaleOffer,
+  type SaleLineBody,
+} from "./hooks";
 import {
   JarLinesEditor,
   makeJarLines,
   type JarLineValue,
 } from "./jar-lines-editor";
 import type { HoneyInventoryRow } from "./types";
+
+interface ColonyDraft {
+  hiveId: string;
+  label: string;
+  unitPrice: string;
+  include: Record<string, boolean>;
+  equipmentPrice: Record<string, string>;
+}
 
 const saleSchema = z.object({
   date: z.string().min(1, "Date is required"),
@@ -96,11 +114,21 @@ export function RecordSaleDialog({
   const customers = useCustomers();
   const lots = useHarvestLots();
   const priceLists = useWholesalePriceLists();
+  const hives = useHiveOptions();
+  const stock = useEquipmentStock();
   const form = useForm<SaleValues>({
     resolver: zodResolver(saleSchema),
     defaultValues: saleDefaults(),
   });
   const [lines, setLines] = React.useState<JarLineValue[]>([]);
+  const [colonies, setColonies] = React.useState<ColonyDraft[]>([]);
+  const [offers, setOffers] = React.useState<Record<string, HiveSaleOffer>>({});
+  const [pickingHive, setPickingHive] = React.useState("none");
+  const [stockLines, setStockLines] = React.useState<
+    { stockId: string; quantity: string; unitPrice: string }[]
+  >([]);
+  const [pickingStock, setPickingStock] = React.useState("none");
+  const [confirming, setConfirming] = React.useState(false);
   const [lineError, setLineError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -108,62 +136,160 @@ export function RecordSaleDialog({
     form.reset(saleDefaults());
     // Each opening is a new sale draft.
     setLines(makeJarLines(inventory, { withPrice: true }));
+    setColonies([]);
+    setOffers({});
+    setStockLines([]);
+    setPickingHive("none");
+    setPickingStock("none");
+    setConfirming(false);
     setLineError(null);
     mutation.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
 
-  const subtotal = lines.reduce((sum, line) => {
+  const jarSubtotal = lines.reduce((sum, line) => {
     const qty = parseNum(line.quantity) ?? 0;
     const price = parseNum(line.unitPrice ?? "") ?? 0;
     return sum + (qty > 0 ? qty * price : 0);
   }, 0);
+  const colonySubtotal = colonies.reduce((sum, colony) => {
+    return sum + (parseNum(colony.unitPrice) ?? 0);
+  }, 0);
+  const hiveEquipmentSubtotal = colonies.reduce((sum, colony) => {
+    const offer = offers[colony.hiveId];
+    if (!offer) return sum;
+    return sum + offer.deployments.reduce((inner, dep) => {
+      if (!colony.include[dep.id]) return inner;
+      const price = parseNum(colony.equipmentPrice[dep.id] ?? "") ?? 0;
+      return inner + dep.outstanding * price;
+    }, 0);
+  }, 0);
+  const stockSubtotal = stockLines.reduce((sum, line) => {
+    const qty = parseNum(line.quantity) ?? 0;
+    const price = parseNum(line.unitPrice) ?? 0;
+    return sum + (qty > 0 ? qty * price : 0);
+  }, 0);
+  const subtotal = jarSubtotal + colonySubtotal + hiveEquipmentSubtotal + stockSubtotal;
   const discountAmount = Math.min(subtotal, Math.max(0, parseNum(form.watch("discountAmount")) ?? 0));
   const total = subtotal - discountAmount;
 
   function resetSaleDraft() {
     form.reset(saleDefaults());
     setLines(makeJarLines(inventory, { withPrice: true }));
+    setColonies([]);
+    setOffers({});
+    setStockLines([]);
+    setConfirming(false);
     setLineError(null);
     mutation.reset();
     requestAnimationFrame(() => form.setFocus("location"));
   }
 
-  const submitSale = (resetAfter: boolean) => form.handleSubmit((values) => {
-    // A blank or unparseable price on a line being sold must be an error,
-    // not a silent $0 sale understating revenue. Explicit "0" still works
-    // for a deliberate giveaway.
+  const sideEffects = React.useMemo(() => {
+    let feeders = 0;
+    let soldBoxes = 0;
+    let returnedBoxes = 0;
+    for (const colony of colonies) {
+      const offer = offers[colony.hiveId];
+      if (!offer) continue;
+      feeders += offer.openFeeders;
+      for (const dep of offer.deployments) {
+        if (colony.include[dep.id]) soldBoxes += dep.outstanding;
+        else returnedBoxes += dep.outstanding;
+      }
+    }
+    return { feeders, soldBoxes, returnedBoxes, hiveCount: colonies.length };
+  }, [colonies, offers]);
+
+  function buildSaleLines(channel: string): SaleLineBody[] | string {
     const missingPrice = lines.some((line) => {
       const qty = parseNum(line.quantity) ?? 0;
       const price = parseNum(line.unitPrice ?? "");
       return qty > 0 && (price === null || price < 0);
     });
     if (missingPrice) {
-      setLineError(
-        "Every jar line with a quantity needs a price — enter 0 for a gift.",
-      );
-      return;
+      return "Every jar line with a quantity needs a price — enter 0 for a gift.";
     }
-    const zeroPricedPaid = lines.some((line) => {
-      const qty = parseNum(line.quantity) ?? 0;
-      const price = parseNum(line.unitPrice ?? "");
-      return qty > 0 && price === 0 && values.channel !== "gift";
-    });
-    if (zeroPricedPaid) {
-      setLineError(
-        "Paid sales need a price on every line. Use the gift channel to give jars away.",
-      );
-      return;
-    }
-    const saleLines = lines
+    const saleLines: SaleLineBody[] = lines
       .map((line) => ({
+        kind: "jar" as const,
         jarSizeId: line.jarSizeId,
         quantity: parseNum(line.quantity) ?? 0,
         unitPrice: parseNum(line.unitPrice ?? "") ?? 0,
       }))
       .filter((line) => line.quantity > 0);
+    for (const colony of colonies) {
+      const price = parseNum(colony.unitPrice);
+      if (price === null || price < 0) {
+        return "Every colony needs a price — enter 0 for a gift.";
+      }
+      saleLines.push({
+        kind: "colony",
+        hiveId: colony.hiveId,
+        quantity: 1,
+        unitPrice: price,
+      });
+      const offer = offers[colony.hiveId];
+      if (!offer) continue;
+      const byStock = new Map<string, { qty: number; unitPrice: number }>();
+      for (const dep of offer.deployments) {
+        if (!colony.include[dep.id]) continue;
+        const unitPrice = parseNum(colony.equipmentPrice[dep.id] ?? "");
+        if (unitPrice === null || unitPrice < 0) {
+          return "Every sold equipment line needs a price — enter 0 for a gift.";
+        }
+        const current = byStock.get(dep.stockId);
+        if (current) {
+          if (current.unitPrice !== unitPrice) {
+            return "Same equipment sold from one hive must share a unit price.";
+          }
+          current.qty += dep.outstanding;
+        } else {
+          byStock.set(dep.stockId, { qty: dep.outstanding, unitPrice });
+        }
+      }
+      for (const [stockId, row] of byStock) {
+        saleLines.push({
+          kind: "equipment",
+          equipmentStockId: stockId,
+          quantity: row.qty,
+          unitPrice: row.unitPrice,
+        });
+      }
+    }
+    for (const line of stockLines) {
+      const qty = parseNum(line.quantity) ?? 0;
+      if (qty <= 0) continue;
+      const price = parseNum(line.unitPrice);
+      if (price === null || price < 0) {
+        return "Every stock equipment line needs a price — enter 0 for a gift.";
+      }
+      saleLines.push({
+        kind: "equipment",
+        equipmentStockId: line.stockId,
+        quantity: qty,
+        unitPrice: price,
+      });
+    }
+    if (channel !== "gift" && saleLines.some((line) => line.unitPrice === 0)) {
+      return "Paid sales need a price on every line. Use the gift channel to give items away.";
+    }
     if (saleLines.length === 0) {
-      setLineError("Add at least one jar.");
+      return "Add at least one jar, colony, or equipment line.";
+    }
+    return saleLines;
+  }
+
+  const submitSale = (resetAfter: boolean) => form.handleSubmit((values) => {
+    const saleLines = buildSaleLines(values.channel);
+    if (typeof saleLines === "string") {
+      setLineError(saleLines);
+      setConfirming(false);
+      return;
+    }
+    if (!confirming && (sideEffects.hiveCount > 0 || sideEffects.feeders > 0)) {
+      setLineError(null);
+      setConfirming(true);
       return;
     }
     setLineError(null);
@@ -205,8 +331,8 @@ export function RecordSaleDialog({
         <DialogHeader>
           <DialogTitle>Record a sale</DialogTitle>
           <DialogDescription>
-            Jars sold, priced per size. Prices prefill from your jar-size
-            defaults.
+            One customer, one payment, one receipt. Mix jars, colonies, and
+            equipment. Past dates are allowed.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm
@@ -291,6 +417,36 @@ export function RecordSaleDialog({
             />
             <FieldError message={lineError ?? undefined} />
           </div>
+          <ColonyEquipmentFields
+            colonies={colonies}
+            setColonies={setColonies}
+            offers={offers}
+            setOffers={setOffers}
+            pickingHive={pickingHive}
+            setPickingHive={setPickingHive}
+            stockLines={stockLines}
+            setStockLines={setStockLines}
+            pickingStock={pickingStock}
+            setPickingStock={setPickingStock}
+            hiveOptions={hives.data ?? []}
+            stockRows={stock.data ?? []}
+          />
+          {confirming && sideEffects.hiveCount > 0 && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              This sale marks {sideEffects.hiveCount}{" "}
+              {sideEffects.hiveCount === 1 ? "hive" : "hives"} sold
+              {sideEffects.feeders > 0
+                ? `, closes ${sideEffects.feeders} open ${sideEffects.feeders === 1 ? "feeder" : "feeders"}`
+                : ""}
+              {sideEffects.soldBoxes > 0
+                ? `, sells ${sideEffects.soldBoxes} pieces with the hive`
+                : ""}
+              {sideEffects.returnedBoxes > 0
+                ? `, and returns ${sideEffects.returnedBoxes} pieces to storage`
+                : ""}
+              . Confirm to record.
+            </div>
+          )}
           <div className="grid gap-1.5">
             <Label htmlFor="sale-customer">Customer</Label>
             <Select value={form.watch("customerId")} onValueChange={(value) => form.setValue("customerId", value)}>
@@ -373,7 +529,11 @@ export function RecordSaleDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Saving…" : "Record sale"}
+              {mutation.isPending
+                ? "Saving…"
+                : confirming
+                  ? "Confirm sale"
+                  : "Record sale"}
             </Button>
           </DialogFooter>
         </ShortcutForm>
@@ -385,4 +545,306 @@ export function RecordSaleDialog({
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return <p className="text-xs text-destructive">{message}</p>;
+}
+
+function ColonyEquipmentFields({
+  colonies,
+  setColonies,
+  offers,
+  setOffers,
+  pickingHive,
+  setPickingHive,
+  stockLines,
+  setStockLines,
+  pickingStock,
+  setPickingStock,
+  hiveOptions,
+  stockRows,
+}: {
+  colonies: ColonyDraft[];
+  setColonies: React.Dispatch<React.SetStateAction<ColonyDraft[]>>;
+  offers: Record<string, HiveSaleOffer>;
+  setOffers: React.Dispatch<React.SetStateAction<Record<string, HiveSaleOffer>>>;
+  pickingHive: string;
+  setPickingHive: (value: string) => void;
+  stockLines: { stockId: string; quantity: string; unitPrice: string }[];
+  setStockLines: React.Dispatch<
+    React.SetStateAction<{ stockId: string; quantity: string; unitPrice: string }[]>
+  >;
+  pickingStock: string;
+  setPickingStock: (value: string) => void;
+  hiveOptions: { id: string; positionLabel: string; apiaryName: string; status: string }[];
+  stockRows: { id: string; typeName: string; available: number; unitCostCents: number | null }[];
+}) {
+  const selected = new Set(colonies.map((colony) => colony.hiveId));
+  const sellableHives = hiveOptions.filter(
+    (hive) => hive.status === "active" && !selected.has(hive.id),
+  );
+  const usedStock = new Set(stockLines.map((line) => line.stockId));
+
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-1.5">
+        <Label>Colonies</Label>
+        <Select
+          value={pickingHive}
+          onValueChange={(value) => {
+            setPickingHive("none");
+            if (value === "none") return;
+            const hive = hiveOptions.find((item) => item.id === value);
+            if (!hive) return;
+            setColonies((current) => [
+              ...current,
+              {
+                hiveId: hive.id,
+                label: `${hive.positionLabel} · ${hive.apiaryName}`,
+                unitPrice: "",
+                include: {},
+                equipmentPrice: {},
+              },
+            ]);
+          }}
+        >
+          <SelectTrigger><SelectValue placeholder="Add a hive" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Add a hive…</SelectItem>
+            {sellableHives.map((hive) => (
+              <SelectItem key={hive.id} value={hive.id}>
+                {hive.positionLabel} · {hive.apiaryName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {colonies.map((colony) => (
+          <div key={colony.hiveId} className="grid gap-2 rounded-md border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-medium">{colony.label}</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setColonies((current) =>
+                    current.filter((item) => item.hiveId !== colony.hiveId),
+                  )
+                }
+              >
+                Remove
+              </Button>
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Colony price</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={colony.unitPrice}
+                onChange={(event) =>
+                  setColonies((current) =>
+                    current.map((item) =>
+                      item.hiveId === colony.hiveId
+                        ? { ...item, unitPrice: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+              />
+            </div>
+            <HiveOfferLoader
+              hiveId={colony.hiveId}
+              onOffer={(offer) => {
+                setOffers((current) =>
+                  current[offer.hiveId] ? current : { ...current, [offer.hiveId]: offer },
+                );
+                setColonies((current) =>
+                  current.map((item) => {
+                    if (item.hiveId !== offer.hiveId || Object.keys(item.include).length > 0) {
+                      return item;
+                    }
+                    const include: Record<string, boolean> = {};
+                    const equipmentPrice: Record<string, string> = {};
+                    for (const dep of offer.deployments) {
+                      include[dep.id] = true;
+                      equipmentPrice[dep.id] =
+                        dep.unitCostCents != null
+                          ? String(dep.unitCostCents / 100)
+                          : "";
+                    }
+                    return { ...item, include, equipmentPrice };
+                  }),
+                );
+              }}
+            />
+            {(offers[colony.hiveId]?.deployments ?? []).map((dep) => (
+              <label key={dep.id} className="flex items-start gap-2 text-sm">
+                <Checkbox
+                  checked={colony.include[dep.id] ?? false}
+                  onCheckedChange={(checked) =>
+                    setColonies((current) =>
+                      current.map((item) =>
+                        item.hiveId === colony.hiveId
+                          ? {
+                              ...item,
+                              include: { ...item.include, [dep.id]: checked === true },
+                            }
+                          : item,
+                      ),
+                    )
+                  }
+                />
+                <span className="grid flex-1 gap-1">
+                  <span>
+                    {dep.outstanding} × {dep.typeName}
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      (sold with hive)
+                    </span>
+                  </span>
+                  {colony.include[dep.id] && (
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Unit price"
+                      value={colony.equipmentPrice[dep.id] ?? ""}
+                      onChange={(event) =>
+                        setColonies((current) =>
+                          current.map((item) =>
+                            item.hiveId === colony.hiveId
+                              ? {
+                                  ...item,
+                                  equipmentPrice: {
+                                    ...item.equipmentPrice,
+                                    [dep.id]: event.target.value,
+                                  },
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                  )}
+                </span>
+              </label>
+            ))}
+            {offers[colony.hiveId] && (
+              <p className="text-xs text-muted-foreground">
+                Unchecked gear returns to storage. Closes{" "}
+                {offers[colony.hiveId].openFeeders} open{" "}
+                {offers[colony.hiveId].openFeeders === 1 ? "feeder" : "feeders"}.
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-1.5">
+        <Label>Equipment from stock</Label>
+        <Select
+          value={pickingStock}
+          onValueChange={(value) => {
+            setPickingStock("none");
+            if (value === "none") return;
+            const row = stockRows.find((item) => item.id === value);
+            if (!row) return;
+            setStockLines((current) => [
+              ...current,
+              {
+                stockId: row.id,
+                quantity: "1",
+                unitPrice:
+                  row.unitCostCents != null ? String(row.unitCostCents / 100) : "",
+              },
+            ]);
+          }}
+        >
+          <SelectTrigger><SelectValue placeholder="Add equipment" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Add equipment…</SelectItem>
+            {stockRows
+              .filter((row) => row.available > 0 && !usedStock.has(row.id))
+              .map((row) => (
+                <SelectItem key={row.id} value={row.id}>
+                  {row.typeName} · {row.available} available
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+        {stockLines.map((line) => {
+          const row = stockRows.find((item) => item.id === line.stockId);
+          return (
+            <div key={line.stockId} className="grid grid-cols-[1fr_5rem_6rem_auto] items-end gap-2">
+              <p className="text-sm">{row?.typeName ?? "Equipment"}</p>
+              <Input
+                type="number"
+                min="1"
+                value={line.quantity}
+                onChange={(event) =>
+                  setStockLines((current) =>
+                    current.map((item) =>
+                      item.stockId === line.stockId
+                        ? { ...item, quantity: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+              />
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Price"
+                value={line.unitPrice}
+                onChange={(event) =>
+                  setStockLines((current) =>
+                    current.map((item) =>
+                      item.stockId === line.stockId
+                        ? { ...item, unitPrice: event.target.value }
+                        : item,
+                    ),
+                  )
+                }
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setStockLines((current) =>
+                    current.filter((item) => item.stockId !== line.stockId),
+                  )
+                }
+              >
+                Remove
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function HiveOfferLoader({
+  hiveId,
+  onOffer,
+}: {
+  hiveId: string;
+  onOffer: (offer: HiveSaleOffer) => void;
+}) {
+  const offer = useHiveSaleOffer(hiveId);
+  const onOfferRef = React.useRef(onOffer);
+  onOfferRef.current = onOffer;
+  React.useEffect(() => {
+    if (offer.data) onOfferRef.current(offer.data);
+  }, [offer.data]);
+  if (offer.isPending) {
+    return <p className="text-xs text-muted-foreground">Loading hive gear…</p>;
+  }
+  if (offer.isError) {
+    return (
+      <p className="text-xs text-destructive">
+        {offer.error instanceof Error ? offer.error.message : "Could not load hive gear"}
+      </p>
+    );
+  }
+  return null;
 }
