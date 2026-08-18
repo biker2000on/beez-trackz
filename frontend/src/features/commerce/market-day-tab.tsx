@@ -63,6 +63,7 @@ export function MarketDayTab({
 
   const lines = inventory.data
     .map((row) => ({
+      kind: "jar" as const,
       jarSizeId: row.jarSizeId,
       quantity: cart[row.jarSizeId] ?? 0,
       unitPrice: row.defaultPrice ?? 0,

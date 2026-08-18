@@ -8,6 +8,7 @@ const honeyCommercePaths = [
   "/api/v1/honey/jar-adjustments",
   "/api/v1/honey/movements/",
   "/api/v1/honey/sales",
+  "/api/v1/sales",
   "/api/v1/jar-sizes",
   "/api/v1/expenses",
   "/api/v1/customers",

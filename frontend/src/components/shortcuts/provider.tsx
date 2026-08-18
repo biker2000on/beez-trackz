@@ -324,10 +324,10 @@ export function ShortcutsProvider({
           sale.orderNumber ??
           sale.customerName ??
           `${sale.date} ${sale.channel.replaceAll("_", " ")}`;
-        const href = `/harvest/sales/${sale.id}`;
+        const href = `/sales/${sale.id}`;
         commands.push({
           id: `sale:${sale.id}`,
-          label: `Honey › Sales › ${name}`,
+          label: `Sales › ${name}`,
           description: href,
           hint: "Sale",
           searchText: `${sale.customerName ?? ""} ${sale.location ?? ""} ${sale.orderStatus} ${sale.paymentMethod} ${sale.totalAmount}`,

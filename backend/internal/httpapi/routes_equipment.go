@@ -118,7 +118,7 @@ var equipCategories = map[string]bool{
 // count flow may write it, so that reason always means "a real count happened".
 var equipAdjustmentReasons = map[string]bool{
 	"purchased": true, "built": true, "discarded": true, "broken": true,
-	"gifted": true, "other": true,
+	"gifted": true, "other": true, "sold": true,
 }
 
 var equipReceiveReasons = map[string]bool{"purchased": true, "built": true}
@@ -131,7 +131,7 @@ var equipStateReasons = map[string]bool{
 
 var equipReturnReasons = map[string]bool{
 	"season_end": true, "no_longer_needed": true, "maintenance": true,
-	"damaged": true, "hive_removed": true, "other": true,
+	"damaged": true, "hive_removed": true, "other": true, "sold_with_hive": true,
 }
 
 var equipReturnConditions = map[string]bool{"good": true, "damaged": true, "retired": true}
@@ -814,6 +814,7 @@ type equipReturnInput struct {
 	Notes     *string
 	Date      time.Time
 	CreatedBy *uuid.UUID
+	SaleID    *uuid.UUID
 }
 
 type equipReturnResult struct {
@@ -876,10 +877,10 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO equipment_deployment_returns
-			(deployment_id, quantity, reason, condition, notes, date, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			(deployment_id, quantity, reason, condition, notes, date, created_by, sale_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		in.DeploymentID, quantity, in.Reason, in.Condition, in.Notes,
-		in.Date, in.CreatedBy); err != nil {
+		in.Date, in.CreatedBy, in.SaleID); err != nil {
 		return result, err
 	}
 

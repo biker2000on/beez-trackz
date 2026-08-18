@@ -315,7 +315,7 @@ function NextActions({
       key: "unpaid",
       title: `${openOrderCount} unpaid ${openOrderCount === 1 ? "order" : "orders"}`,
       detail: `${formatMoney(amountOwed)} invoiced and not yet collected.`,
-      href: "/harvest/sales",
+      href: "/sales",
       cta: "Open sales",
     });
   }

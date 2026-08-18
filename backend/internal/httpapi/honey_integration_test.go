@@ -68,7 +68,7 @@ func honeyTestServer(t *testing.T) *Server {
 func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
-		TRUNCATE harvest_session_true_ups, jar_serials, honey_sale_items, honey_sales,
+		TRUNCATE harvest_session_true_ups, jar_serials, sale_items, sales,
 			honey_movements, bottling_runs, harvest_lot_photos, harvest_lot_harvests,
 			harvest_lots, wholesale_price_list_items, wholesale_price_lists,
 			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
@@ -190,7 +190,7 @@ func TestSaleRoundTripsMoneyAsCents(t *testing.T) {
 	var totalCents, discountCents, unitCents int64
 	if err := server.pool.QueryRow(context.Background(), `
 		SELECT s.total_amount_cents, s.discount_amount_cents, i.unit_price_cents
-		FROM honey_sales s JOIN honey_sale_items i ON i.sale_id=s.id`).
+		FROM sales s JOIN sale_items i ON i.sale_id=s.id`).
 		Scan(&totalCents, &discountCents, &unitCents); err != nil {
 		t.Fatalf("read stored cents: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestDeleteSaleCancelsAndRestoresStock(t *testing.T) {
 	var cancelledBy *uuid.UUID
 	var reason *string
 	if err := server.pool.QueryRow(context.Background(),
-		`SELECT order_status, cancelled_by, cancellation_reason FROM honey_sales WHERE id=$1`,
+		`SELECT order_status, cancelled_by, cancellation_reason FROM sales WHERE id=$1`,
 		saleID).Scan(&status, &cancelledBy, &reason); err != nil {
 		t.Fatalf("the sale row was destroyed instead of cancelled: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestPatchSaleReachesCancelled(t *testing.T) {
 	}
 	var status string
 	if err := server.pool.QueryRow(context.Background(),
-		`SELECT order_status FROM honey_sales WHERE id=$1`, saleID).Scan(&status); err != nil {
+		`SELECT order_status FROM sales WHERE id=$1`, saleID).Scan(&status); err != nil {
 		t.Fatalf("read sale: %v", err)
 	}
 	if status != "cancelled" {
@@ -1270,5 +1270,178 @@ func TestOfflineReceiptSkipsTruncatedBody(t *testing.T) {
 		second.Header().Get("X-Offline-Replayed") != "true" {
 		t.Errorf("replay = %d, replayed header %q; want stored 201",
 			second.Code, second.Header().Get("X-Offline-Replayed"))
+	}
+}
+
+type mixedSaleWorld struct {
+	apiaryID, hiveID, typeID, stockID, jarSizeID, feederID, deployID uuid.UUID
+}
+
+func seedMixedSaleWorld(t *testing.T, server *Server) mixedSaleWorld {
+	t.Helper()
+	ctx := context.Background()
+	var w mixedSaleWorld
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO apiaries (name) VALUES ('Mixed sale yard') RETURNING id`).Scan(&w.apiaryID); err != nil {
+		t.Fatalf("seed apiary: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO hives (apiary_id, position_label) VALUES ($1,'A1') RETURNING id`,
+		w.apiaryID).Scan(&w.hiveID); err != nil {
+		t.Fatalf("seed hive: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO equipment_types (name, category) VALUES ($1,'box') RETURNING id`,
+		"Deep "+uuid.NewString()).Scan(&w.typeID); err != nil {
+		t.Fatalf("seed type: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO equipment_stock (type_id, total_owned) VALUES ($1, 0) RETURNING id`,
+		w.typeID).Scan(&w.stockID); err != nil {
+		t.Fatalf("seed stock: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO equipment_stock_adjustments (stock_id, quantity, reason, date)
+		VALUES ($1, 5, 'purchased', now())`, w.stockID); err != nil {
+		t.Fatalf("seed owned: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO equipment_deployments (stock_id, hive_id, quantity, date_deployed)
+		VALUES ($1, $2, 2, now()) RETURNING id`, w.stockID, w.hiveID).Scan(&w.deployID); err != nil {
+		t.Fatalf("seed deploy: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO feedings (hive_id, date_fed, type, quantity, quantity_unit, status)
+		VALUES ($1, now(), 'sugar_syrup_1to1', 1, 'quarts', 'open') RETURNING id`,
+		w.hiveID).Scan(&w.feederID); err != nil {
+		t.Fatalf("seed feeder: %v", err)
+	}
+	w.jarSizeID = seedJarSize(t, server, "Pint mixed", 16, 1200)
+	seedHarvest(t, server, 100)
+	jarStock(t, server, w.jarSizeID, 10)
+	return w
+}
+
+func TestRecordMixedSaleAndCancelRestores(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedMixedSaleWorld(t, server)
+	ctx := context.Background()
+
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"kind": "jar", "jarSizeId": w.jarSizeID.String(), "quantity": 2, "unitPrice": 12},
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+				{"kind": "equipment", "equipmentStockId": w.stockID.String(), "quantity": 2, "unitPrice": 40},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("mixed sale = %d %v", response.Code, body)
+	}
+	saleID, _ := body["id"].(string)
+
+	var hiveStatus, feederStatus, feederReason string
+	var hiveSale *uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`SELECT status::text, sale_id FROM hives WHERE id=$1`, w.hiveID).
+		Scan(&hiveStatus, &hiveSale); err != nil {
+		t.Fatalf("read hive: %v", err)
+	}
+	if hiveStatus != "sold" || hiveSale == nil || hiveSale.String() != saleID {
+		t.Errorf("hive status/sale = %s %v, want sold + sale", hiveStatus, hiveSale)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`SELECT status::text, COALESCE(closed_reason,'') FROM feedings WHERE id=$1`,
+		w.feederID).Scan(&feederStatus, &feederReason); err != nil {
+		t.Fatalf("read feeder: %v", err)
+	}
+	if feederStatus != "closed" || feederReason != "sold_with_hive" {
+		t.Errorf("feeder = %s/%s, want closed/sold_with_hive", feederStatus, feederReason)
+	}
+
+	var owned, deployed, available int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT total_owned, deployed, available FROM equipment_stock_status WHERE stock_id=$1`,
+		w.stockID).Scan(&owned, &deployed, &available); err != nil {
+		t.Fatalf("read stock: %v", err)
+	}
+	if owned != 3 || deployed != 0 || available != 3 {
+		t.Errorf("stock owned/deployed/available = %d/%d/%d, want 3/0/3", owned, deployed, available)
+	}
+
+	var kinds int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT COUNT(DISTINCT kind) FROM sale_items WHERE sale_id=$1`, saleID).Scan(&kinds); err != nil {
+		t.Fatalf("count kinds: %v", err)
+	}
+	if kinds != 3 {
+		t.Errorf("distinct kinds = %d, want 3", kinds)
+	}
+
+	response, body = call(t, server.honeyCancelSale, adminRequest(
+		http.MethodDelete, "/api/v1/sales/"+saleID, nil, "id", saleID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("cancel mixed sale = %d %v", response.Code, body)
+	}
+
+	if err := server.pool.QueryRow(ctx,
+		`SELECT status::text, sale_id FROM hives WHERE id=$1`, w.hiveID).
+		Scan(&hiveStatus, &hiveSale); err != nil {
+		t.Fatalf("read hive after cancel: %v", err)
+	}
+	if hiveStatus != "active" || hiveSale != nil {
+		t.Errorf("hive after cancel = %s %v, want active nil", hiveStatus, hiveSale)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`SELECT status::text FROM feedings WHERE id=$1`, w.feederID).Scan(&feederStatus); err != nil {
+		t.Fatalf("read feeder after cancel: %v", err)
+	}
+	if feederStatus != "open" {
+		t.Errorf("feeder after cancel = %s, want open", feederStatus)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		SELECT total_owned, deployed, available FROM equipment_stock_status WHERE stock_id=$1`,
+		w.stockID).Scan(&owned, &deployed, &available); err != nil {
+		t.Fatalf("read stock after cancel: %v", err)
+	}
+	if owned != 5 || deployed != 2 || available != 3 {
+		t.Errorf("stock after cancel = %d/%d/%d, want 5/2/3", owned, deployed, available)
+	}
+
+	inventory, err := server.honeyJarInventory(ctx)
+	if err != nil {
+		t.Fatalf("inventory: %v", err)
+	}
+	for _, row := range inventory {
+		if row.JarSizeID == w.jarSizeID && row.OnHand != 10 {
+			t.Errorf("jars on hand after cancel = %d, want 10", row.OnHand)
+		}
+	}
+}
+
+func TestRejectDoubleSellHive(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedMixedSaleWorld(t, server)
+
+	first, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+			},
+		}))
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first hive sale = %d %v", first.Code, body)
+	}
+	second, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+			},
+		}))
+	if second.Code != http.StatusBadRequest {
+		t.Fatalf("second hive sale = %d %v, want 400", second.Code, body)
 	}
 }

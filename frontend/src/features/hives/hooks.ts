@@ -25,6 +25,7 @@ export interface Hive {
   isArchived: boolean;
   deadoutDate: string | null;
   notes: string | null;
+  saleId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

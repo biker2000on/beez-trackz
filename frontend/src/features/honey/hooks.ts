@@ -50,7 +50,7 @@ export function useHoneyTimeline(limit = 100) {
 export function useHoneySales(enabled = true) {
   return useQuery({
     queryKey: ["honey", "sales"],
-    queryFn: () => api.get<HoneySale[]>("/honey/sales"),
+    queryFn: () => api.get<HoneySale[]>("/sales"),
     enabled,
   });
 }
@@ -58,7 +58,7 @@ export function useHoneySales(enabled = true) {
 export function useSaleLocations() {
   return useQuery({
     queryKey: ["honey", "sale-locations"],
-    queryFn: () => api.get<string[]>("/honey/sale-locations"),
+    queryFn: () => api.get<string[]>("/sales/locations"),
   });
 }
 
@@ -202,6 +202,15 @@ export function useAdjustJars() {
 
 // --- sales mutations ---
 
+export interface SaleLineBody {
+  kind: "jar" | "colony" | "equipment";
+  jarSizeId?: string;
+  hiveId?: string;
+  equipmentStockId?: string;
+  quantity: number;
+  unitPrice: number;
+}
+
 export interface SaleBody {
   date: string;
   location?: string;
@@ -216,7 +225,7 @@ export interface SaleBody {
   orderNumber?: string;
   dueDate?: string;
   wholesalePriceListId?: string;
-  lines: { jarSizeId: string; quantity: number; unitPrice: number }[];
+  lines: SaleLineBody[];
   notes?: string;
 }
 
@@ -224,18 +233,44 @@ export function useRecordSale() {
   // Errors (e.g. "Not enough Pint: need 4, have 2") surface inline in the
   // dialog instead of a toast.
   return useHoneyMutation({
-    mutationFn: (body: SaleBody) => api.post("/honey/sales", body),
+    mutationFn: (body: SaleBody) => api.post("/sales", body),
     successMessage: "Sale recorded",
     silentError: true,
-    invalidate: [["commerce"]],
+    invalidate: [["commerce"], ["hives"], ["equipment"], ["feedings"]],
+  });
+}
+
+export interface HiveSaleOffer {
+  hiveId: string;
+  hiveLabel: string;
+  apiaryName: string;
+  status: string;
+  sellable: boolean;
+  reason: string;
+  openFeeders: number;
+  deployments: {
+    id: string;
+    stockId: string;
+    typeName: string;
+    typeCategory: string;
+    outstanding: number;
+    unitCostCents: number | null;
+  }[];
+}
+
+export function useHiveSaleOffer(hiveId: string | null) {
+  return useQuery({
+    queryKey: ["hives", hiveId, "sale-offer"],
+    queryFn: () => api.get<HiveSaleOffer>(`/hives/${hiveId}/sale-offer`),
+    enabled: hiveId != null && hiveId !== "",
   });
 }
 
 export function useDeleteSale() {
   return useHoneyMutation({
-    mutationFn: (id: string) => api.delete(`/honey/sales/${id}`),
-    successMessage: "Sale deleted",
-    invalidate: [["commerce"]],
+    mutationFn: (id: string) => api.delete(`/sales/${id}`),
+    successMessage: "Sale cancelled",
+    invalidate: [["commerce"], ["hives"], ["equipment"], ["feedings"]],
   });
 }
 
@@ -250,7 +285,7 @@ export function useUpdateSale() {
       amountPaid?: number;
       paymentMethod?: "cash" | "card" | "check" | "venmo" | "paypal" | "invoice" | "other";
       dueDate?: string;
-    }) => api.patch(`/honey/sales/${id}`, body),
+    }) => api.patch(`/sales/${id}`, body),
     successMessage: "Order updated",
     invalidate: [["commerce"]],
   });
@@ -264,7 +299,7 @@ export function useDeleteTimelineEntries() {
       const results = await Promise.allSettled(
         entries.map((entry) =>
           entry.type === "sale"
-            ? api.delete(`/honey/sales/${entry.id}`)
+            ? api.delete(`/sales/${entry.id}`)
             : api.delete(`/honey/movements/${entry.id}`),
         ),
       );

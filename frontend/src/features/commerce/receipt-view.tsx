@@ -22,7 +22,7 @@ interface Receipt {
 export function ReceiptView({ saleId }: { saleId: string }) {
   const receipt = useQuery({
     queryKey: ["commerce", "receipt", saleId],
-    queryFn: () => api.get<Receipt>(`/honey/sales/${saleId}/receipt`),
+    queryFn: () => api.get<Receipt>(`/sales/${saleId}/receipt`),
   });
   if (receipt.isPending) {
     return <Skeleton className="mx-auto h-96 max-w-2xl" />;
@@ -67,10 +67,13 @@ export function ReceiptView({ saleId }: { saleId: string }) {
           <div className="grid gap-2">
             {sale.lineItems.map((item) => (
               <div
-                key={item.jarSizeId}
+                key={`${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId}`}
                 className="grid grid-cols-[1fr_auto_auto] gap-4 border-b py-2 text-sm"
               >
-                <span>{item.label}</span>
+                <span>
+                  {item.label}
+                  {item.kind && item.kind !== "jar" ? ` (${item.kind})` : ""}
+                </span>
                 <span>{item.quantity} × {formatMoney(item.unitPrice)}</span>
                 <span className="font-medium">
                   {formatMoney(item.quantity * item.unitPrice)}

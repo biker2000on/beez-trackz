@@ -101,10 +101,15 @@ export function SalesTab() {
                   <ul className="grid gap-0.5">
                     {sale.lineItems.map((item) => (
                       <li
-                        key={`${item.saleId}-${item.jarSizeId}`}
+                        key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId}`}
                         className="text-sm"
                       >
                         {item.quantity} × {item.label}
+                        {item.kind && item.kind !== "jar" && (
+                          <span className="ml-1 text-xs capitalize text-muted-foreground">
+                            ({item.kind})
+                          </span>
+                        )}
                         <span className="ml-1 text-xs text-muted-foreground">
                           @ {formatMoney(item.unitPrice)}
                         </span>
@@ -197,7 +202,7 @@ export function SalesTab() {
                 )}
                 <Button type="button" variant="ghost" size="icon-sm" asChild>
                   <Link
-                    href={`/harvest/sales/${sale.id}`}
+                    href={`/sales/${sale.id}`}
                     aria-label="Open receipt or invoice"
                   >
                     <FileText className="size-4" />
@@ -232,7 +237,7 @@ export function SalesTab() {
             <AlertDialogTitle>Cancel this sale?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirmSale
-                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled and its jars returned to inventory. The record is kept for the ledger.`
+                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled. Jars, colonies, feeders, and equipment this sale moved are restored. The record is kept for the ledger.`
                 : ""}{" "}
               A cancelled sale cannot be reopened.
             </AlertDialogDescription>
