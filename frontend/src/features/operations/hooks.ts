@@ -30,22 +30,59 @@ export interface HiveTimelineEntry {
 
 export interface MiteCount {
   id: string;
+  hiveId?: string;
   date: string;
   method: string;
   mitesCount: number;
   sampleSize: number | null;
+  daysOnBoard: number | null;
   mitesPer100: number | null;
+  mitesPerDay: number | null;
   notes: string | null;
 }
 
 export interface TreatmentEffect {
   id: string;
+  hiveId?: string;
   dateApplied: string;
+  dateRemoved?: string | null;
   product: string;
   method: string | null;
+  beforeRate: number | null;
+  afterRate: number | null;
+  beforeRateKind: "per_100" | "per_day" | null;
+  afterRateKind: "per_100" | "per_day" | null;
   beforeMitesPer100: number | null;
   afterMitesPer100: number | null;
   efficacyPercent: number | null;
+}
+
+export interface VarroaHiveReport {
+  counts: MiteCount[];
+  treatments: TreatmentEffect[];
+  thresholdPer100: number;
+  thresholdPerDay: number;
+  checkIntervalDays: number;
+  overThreshold: boolean;
+  latest: MiteCount | null;
+}
+
+export interface VarroaFleetHive {
+  hiveId: string;
+  hiveName: string;
+  apiaryId: string;
+  apiaryName: string;
+  lastCount: MiteCount | null;
+  overThreshold: boolean;
+}
+
+export interface VarroaFleetReport {
+  hives: VarroaFleetHive[];
+  overThresholdCount: number;
+  treatments: TreatmentEffect[];
+  thresholdPer100: number;
+  thresholdPerDay: number;
+  checkIntervalDays: number;
 }
 
 export interface SurvivalGroup {
@@ -115,10 +152,16 @@ export function useVarroaAnalytics(hiveId: string) {
   return useQuery({
     queryKey: ["analytics", "varroa", hiveId],
     queryFn: () =>
-      api.get<{ counts: MiteCount[]; treatments: TreatmentEffect[] }>(
-        "/analytics/varroa",
-        { params: { hiveId } },
-      ),
+      api.get<VarroaHiveReport>("/analytics/varroa", {
+        params: { hiveId },
+      }),
+  });
+}
+
+export function useVarroaFleet() {
+  return useQuery({
+    queryKey: ["analytics", "varroa", "fleet"],
+    queryFn: () => api.get<VarroaFleetReport>("/analytics/varroa"),
   });
 }
 
@@ -148,25 +191,84 @@ export function useEconomicsReport(year: number) {
   });
 }
 
+export type MiteMethod = "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
+
+export function isWashMethod(method: string): boolean {
+  return method === "alcohol_wash" || method === "sugar_roll";
+}
+
+export function isBoardMethod(method: string): boolean {
+  return method === "sticky_board" || method === "visual";
+}
+
+export function miteDisplay(
+  row: Pick<MiteCount, "method" | "mitesCount" | "mitesPer100" | "mitesPerDay">,
+): { value: number; unit: string; label: string } | null {
+  if (isWashMethod(row.method) && row.mitesPer100 != null) {
+    return {
+      value: row.mitesPer100,
+      unit: "mites / 100 bees",
+      label: `${row.mitesPer100.toFixed(1)} / 100`,
+    };
+  }
+  if (isBoardMethod(row.method) && row.mitesPerDay != null) {
+    return {
+      value: row.mitesPerDay,
+      unit: "mites / day",
+      label: `${row.mitesPerDay.toFixed(1)} / day`,
+    };
+  }
+  return null;
+}
+
 export interface MiteCountInput {
   hiveId: string;
   inspectionId?: string;
   date: string;
-  method: "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
+  method: MiteMethod;
   mitesCount: number;
   sampleSize?: number;
+  daysOnBoard?: number;
   notes?: string;
+}
+
+function invalidateMiteQueries(
+  client: ReturnType<typeof useQueryClient>,
+  hiveId?: string,
+) {
+  void client.invalidateQueries({ queryKey: ["analytics", "varroa"] });
+  void client.invalidateQueries({ queryKey: ["hives"] });
+  void client.invalidateQueries({ queryKey: ["inspections"] });
+  if (hiveId) {
+    void client.invalidateQueries({ queryKey: ["hives", "detail", hiveId] });
+  }
 }
 
 export function useCreateMiteCount() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (body: MiteCountInput) => api.post("/mite-counts", body),
-    onSuccess: (_data, input) => {
-      void client.invalidateQueries({
-        queryKey: ["analytics", "varroa", input.hiveId],
-      });
-      void client.invalidateQueries({ queryKey: ["hives", "detail", input.hiveId] });
-    },
+    onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
+  });
+}
+
+export function useUpdateMiteCount() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...body
+    }: Partial<MiteCountInput> & { id: string; hiveId?: string }) =>
+      api.patch(`/mite-counts/${id}`, body),
+    onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
+  });
+}
+
+export function useDeleteMiteCount() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string; hiveId?: string }) =>
+      api.delete(`/mite-counts/${id}`),
+    onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
   });
 }

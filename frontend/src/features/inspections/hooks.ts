@@ -35,6 +35,16 @@ export interface Inspection {
   pests: InspectionPest[] | null;
   treatments: InspectionTreatment[] | null;
   notes: string | null;
+  miteCounts?: {
+    id: string;
+    method: "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
+    mitesCount: number;
+    sampleSize: number | null;
+    daysOnBoard: number | null;
+    mitesPer100: number | null;
+    mitesPerDay: number | null;
+    notes: string | null;
+  }[];
   sourceMedia: unknown;
   weather: {
     source: string;
@@ -78,6 +88,7 @@ export interface InspectionPayload {
     method: "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual";
     mitesCount: number;
     sampleSize?: number;
+    daysOnBoard?: number;
     notes?: string;
   }[];
   notes?: string | null;

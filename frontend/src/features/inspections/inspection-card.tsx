@@ -143,6 +143,24 @@ export function InspectionCard({
             ))}
           </div>
         )}
+        {(inspection.miteCounts ?? []).length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">Mites:</span>
+            {(inspection.miteCounts ?? []).map((count) => {
+              const rate =
+                count.mitesPer100 != null
+                  ? `${count.mitesPer100.toFixed(1)} / 100`
+                  : count.mitesPerDay != null
+                    ? `${count.mitesPerDay.toFixed(1)} / day`
+                    : `${count.mitesCount} mites`;
+              return (
+                <Badge key={count.id} variant="secondary" className="tabular-nums">
+                  {rate}
+                </Badge>
+              );
+            })}
+          </div>
+        )}
         {inspection.notes && (
           <p className="whitespace-pre-wrap text-muted-foreground">
             {inspection.notes}
