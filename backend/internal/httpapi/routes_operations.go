@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -16,6 +17,8 @@ import (
 
 func (s *Server) mountOperations(r chi.Router) {
 	r.Post("/mite-counts", s.miteCountCreate)
+	r.With(s.requireEntityParamRole("mite", true)).
+		Patch("/mite-counts/{id}", s.miteCountUpdate)
 	r.With(s.requireEntityParamRole("mite", true)).
 		Delete("/mite-counts/{id}", s.miteCountDelete)
 	r.Post("/treatment-events", s.treatmentEventCreate)
@@ -45,6 +48,7 @@ type miteCountPayload struct {
 	Method       string     `json:"method"`
 	MitesCount   int        `json:"mitesCount"`
 	SampleSize   *int       `json:"sampleSize"`
+	DaysOnBoard  *int       `json:"daysOnBoard"`
 	Notes        *string    `json:"notes"`
 }
 
@@ -55,27 +59,18 @@ func (s *Server) miteCountCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	date, err := parseDate(req.Date)
-	if err != nil || req.HiveID == uuid.Nil || !miteMethods[req.Method] ||
-		req.MitesCount < 0 || (req.SampleSize != nil && *req.SampleSize <= 0) {
+	if err != nil || req.HiveID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "hiveId, date, method, and a non-negative mite count are required")
+		return
+	}
+	if err := normalizeMiteCount(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "hiveId, date, method, and a non-negative mite count are required")
 		return
 	}
 	if !s.requireHiveRole(w, r, req.HiveID, true) {
 		return
 	}
-	var id uuid.UUID
-	var per100 *float64
-	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO mite_counts
-			(hive_id, inspection_id, date, method, mites_count, sample_size, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (inspection_id, method) DO UPDATE SET
-			hive_id = EXCLUDED.hive_id, date = EXCLUDED.date, method = EXCLUDED.method,
-			mites_count = EXCLUDED.mites_count, sample_size = EXCLUDED.sample_size,
-			notes = EXCLUDED.notes
-		RETURNING id, mites_per_100`,
-		req.HiveID, req.InspectionID, date, req.Method, req.MitesCount,
-		req.SampleSize, honeyTrimPtr(req.Notes)).Scan(&id, &per100)
+	id, per100, perDay, err := upsertMiteCount(r.Context(), s.pool, req, date)
 	if err != nil {
 		if honeyIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid hiveId or inspectionId")
@@ -84,7 +79,88 @@ func (s *Server) miteCountCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "mitesPer100": per100})
+	writeJSON(w, http.StatusCreated, miteCountResponse(id, per100, perDay))
+}
+
+func (s *Server) miteCountUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body struct {
+		Date        *string `json:"date"`
+		Method      *string `json:"method"`
+		MitesCount  *int    `json:"mitesCount"`
+		SampleSize  *int    `json:"sampleSize"`
+		DaysOnBoard *int    `json:"daysOnBoard"`
+		Notes       *string `json:"notes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var current miteCountPayload
+	var currentDate time.Time
+	err = s.pool.QueryRow(r.Context(), `
+		SELECT hive_id, inspection_id, date, method, mites_count, sample_size, days_on_board, notes
+		FROM mite_counts WHERE id = $1`, id).Scan(
+		&current.HiveID, &current.InspectionID, &currentDate, &current.Method,
+		&current.MitesCount, &current.SampleSize, &current.DaysOnBoard, &current.Notes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "mite count not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	date := currentDate
+	if body.Date != nil {
+		parsed, err := parseDate(*body.Date)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid date")
+			return
+		}
+		date = parsed
+	}
+	if body.Method != nil {
+		current.Method = *body.Method
+	}
+	if body.MitesCount != nil {
+		current.MitesCount = *body.MitesCount
+	}
+	if body.SampleSize != nil {
+		current.SampleSize = body.SampleSize
+	}
+	if body.DaysOnBoard != nil {
+		current.DaysOnBoard = body.DaysOnBoard
+	}
+	if body.Notes != nil {
+		current.Notes = body.Notes
+	}
+	if err := normalizeMiteCount(&current); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid mite count")
+		return
+	}
+
+	var per100, perDay *float64
+	err = s.pool.QueryRow(r.Context(), `
+		UPDATE mite_counts
+		SET date = $2, method = $3, mites_count = $4, sample_size = $5,
+			days_on_board = $6, notes = $7
+		WHERE id = $1
+		RETURNING mites_per_100, mites_per_day`,
+		id, date, current.Method, current.MitesCount, current.SampleSize,
+		current.DaysOnBoard, honeyTrimPtr(current.Notes)).Scan(&per100, &perDay)
+	if err != nil {
+		writeDBError(w, err,
+			"a mite count already exists for this hive, date, and method",
+			"invalid mite count")
+		return
+	}
+	writeJSON(w, http.StatusOK, miteCountResponse(id, per100, perDay))
 }
 
 func (s *Server) miteCountDelete(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +347,8 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 				m.mites_count::text || ' mites via ' || replace(m.method, '_', ' '),
 				'[]'::jsonb,
 				jsonb_build_object('method', m.method, 'mitesCount', m.mites_count,
-					'sampleSize', m.sample_size, 'mitesPer100', m.mites_per_100)
+					'sampleSize', m.sample_size, 'daysOnBoard', m.days_on_board,
+					'mitesPer100', m.mites_per_100, 'mitesPerDay', m.mites_per_day)
 			FROM mite_counts m WHERE m.hive_id = $1
 			UNION ALL
 			SELECT q.id, 'queen_event', q.event_date,
@@ -327,39 +404,41 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) varroaAnalytics(w http.ResponseWriter, r *http.Request) {
-	hiveID, err := uuid.Parse(r.URL.Query().Get("hiveId"))
+	rawHive := strings.TrimSpace(r.URL.Query().Get("hiveId"))
+	if rawHive == "" {
+		s.varroaFleetAnalytics(w, r)
+		return
+	}
+	hiveID, err := uuid.Parse(rawHive)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "hiveId is required")
+		writeError(w, http.StatusBadRequest, "invalid hiveId")
 		return
 	}
 	if !s.requireHiveRole(w, r, hiveID, false) {
 		return
 	}
+	settings := s.loadVarroaSettings(r)
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT id, date, method, mites_count, sample_size, mites_per_100, notes
+		SELECT id, hive_id, date, method, mites_count, sample_size, days_on_board,
+			mites_per_100, mites_per_day, notes
 		FROM mite_counts WHERE hive_id = $1 ORDER BY date`, hiveID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	counts := make([]map[string]any, 0)
+	counts := make([]miteCountJSON, 0)
+	var latest *miteCountJSON
 	for rows.Next() {
-		var id uuid.UUID
-		var date time.Time
-		var method string
-		var count int
-		var sample *int
-		var per100 *float64
-		var notes *string
-		if err := rows.Scan(&id, &date, &method, &count, &sample, &per100, &notes); err != nil {
+		var row miteCountJSON
+		if err := rows.Scan(&row.ID, &row.HiveID, &row.Date, &row.Method, &row.MitesCount,
+			&row.SampleSize, &row.DaysOnBoard, &row.MitesPer100, &row.MitesPerDay, &row.Notes); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		counts = append(counts, map[string]any{
-			"id": id, "date": date, "method": method, "mitesCount": count,
-			"sampleSize": sample, "mitesPer100": per100, "notes": notes,
-		})
+		counts = append(counts, row)
+		last := row
+		latest = &last
 	}
 	rows.Close()
 	if rows.Err() != nil {
@@ -367,51 +446,130 @@ func (s *Server) varroaAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	treatmentRows, err := s.pool.Query(r.Context(), `
-		SELECT t.id, t.date_applied, t.product, t.method,
-			before_count.mites_per_100, after_count.mites_per_100
-		FROM treatment_events t
-		LEFT JOIN LATERAL (
-			SELECT mites_per_100 FROM mite_counts
-			WHERE hive_id = t.hive_id AND date <= t.date_applied
-				AND mites_per_100 IS NOT NULL
-			ORDER BY date DESC LIMIT 1
-		) before_count ON true
-		LEFT JOIN LATERAL (
-			SELECT mites_per_100 FROM mite_counts
-			WHERE hive_id = t.hive_id AND date > t.date_applied
-				AND mites_per_100 IS NOT NULL
-			ORDER BY date LIMIT 1
-		) after_count ON true
-		WHERE t.hive_id = $1 ORDER BY t.date_applied`, hiveID)
+	paired, err := queryVarroaEfficacy(r.Context(), s.pool, &hiveID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	defer treatmentRows.Close()
-	treatments := make([]map[string]any, 0)
-	for treatmentRows.Next() {
-		var id uuid.UUID
-		var date time.Time
-		var product string
+	treatments := make([]map[string]any, 0, len(paired))
+	for _, row := range paired {
+		treatments = append(treatments, treatmentJSON(row))
+	}
+
+	over := false
+	if latest != nil {
+		over = countOverThreshold(latest.Method, latest.MitesPer100, latest.MitesPerDay, settings)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"counts":            counts,
+		"treatments":        treatments,
+		"thresholdPer100":   settings.ThresholdPer100,
+		"thresholdPerDay":   settings.ThresholdPerDay,
+		"checkIntervalDays": settings.CheckIntervalDays,
+		"overThreshold":     over,
+		"latest":            latest,
+	})
+}
+
+func (s *Server) varroaFleetAnalytics(w http.ResponseWriter, r *http.Request) {
+	settings := s.loadVarroaSettings(r)
+	user := principalFrom(r)
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT h.id, h.position_label, a.id, a.name,
+			m.id, m.date, m.method, m.mites_count, m.sample_size, m.days_on_board,
+			m.mites_per_100, m.mites_per_day, m.notes
+		FROM hives h
+		JOIN apiaries a ON a.id = h.apiary_id
+		LEFT JOIN LATERAL (
+			SELECT id, date, method, mites_count, sample_size, days_on_board,
+				mites_per_100, mites_per_day, notes
+			FROM mite_counts
+			WHERE hive_id = h.id
+			ORDER BY date DESC
+			LIMIT 1
+		) m ON true
+		WHERE NOT h.is_archived
+		  AND ($1::boolean OR EXISTS (
+			SELECT 1 FROM apiary_memberships membership
+			WHERE membership.user_id=$2 AND membership.apiary_id=a.id
+		  ))
+		ORDER BY a.name, h.position_label`, user.IsAdmin, user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer rows.Close()
+
+	hives := make([]map[string]any, 0)
+	overCount := 0
+	for rows.Next() {
+		var hiveID, apiaryID uuid.UUID
+		var hiveName, apiaryName string
+		var countID *uuid.UUID
+		var date *time.Time
 		var method *string
-		var before, after *float64
-		if err := treatmentRows.Scan(&id, &date, &product, &method, &before, &after); err != nil {
+		var mitesCount *int
+		var sample, daysOnBoard *int
+		var per100, perDay *float64
+		var notes *string
+		if err := rows.Scan(&hiveID, &hiveName, &apiaryID, &apiaryName,
+			&countID, &date, &method, &mitesCount, &sample, &daysOnBoard,
+			&per100, &perDay, &notes); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		var efficacy *float64
-		if before != nil && after != nil && *before > 0 {
-			v := (*before - *after) / *before * 100
-			efficacy = &v
+		over := false
+		var last map[string]any
+		if countID != nil && method != nil && date != nil && mitesCount != nil {
+			over = countOverThreshold(*method, per100, perDay, settings)
+			last = map[string]any{
+				"id": *countID, "date": *date, "method": *method,
+				"mitesCount": *mitesCount, "sampleSize": sample,
+				"daysOnBoard": daysOnBoard, "mitesPer100": per100,
+				"mitesPerDay": perDay, "notes": notes,
+			}
 		}
-		treatments = append(treatments, map[string]any{
-			"id": id, "dateApplied": date, "product": product, "method": method,
-			"beforeMitesPer100": before, "afterMitesPer100": after,
-			"efficacyPercent": efficacy,
+		if over {
+			overCount++
+		}
+		hives = append(hives, map[string]any{
+			"hiveId": hiveID, "hiveName": hiveName,
+			"apiaryId": apiaryID, "apiaryName": apiaryName,
+			"lastCount": last, "overThreshold": over,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"counts": counts, "treatments": treatments})
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	paired, err := queryVarroaEfficacy(r.Context(), s.pool, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	// Fleet efficacy is limited to visible hives; skip treatments the caller
+	// cannot see by intersecting with the hive list already loaded.
+	visible := make(map[uuid.UUID]struct{}, len(hives))
+	for _, hive := range hives {
+		visible[hive["hiveId"].(uuid.UUID)] = struct{}{}
+	}
+	treatments := make([]map[string]any, 0)
+	for _, row := range paired {
+		if _, ok := visible[row.HiveID]; !ok {
+			continue
+		}
+		treatments = append(treatments, treatmentJSON(row))
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"hives":              hives,
+		"overThresholdCount": overCount,
+		"treatments":         treatments,
+		"thresholdPer100":    settings.ThresholdPer100,
+		"thresholdPerDay":    settings.ThresholdPerDay,
+		"checkIntervalDays":  settings.CheckIntervalDays,
+	})
 }
 
 type survivalGroup struct {

@@ -12,6 +12,9 @@ export interface Preferences {
   defaultApiaryId: string | null;
   dateFormat: string;
   weightUnit: string;
+  miteThresholdPer100: number | null;
+  miteThresholdPerDay: number | null;
+  miteCheckIntervalDays: number | null;
 }
 
 export interface PreferencesPayload {
@@ -19,6 +22,9 @@ export interface PreferencesPayload {
   defaultApiaryId: string | null;
   dateFormat: string;
   weightUnit: string;
+  miteThresholdPer100?: number | null;
+  miteThresholdPerDay?: number | null;
+  miteCheckIntervalDays?: number | null;
 }
 
 export interface ApiaryOption {

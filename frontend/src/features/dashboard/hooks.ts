@@ -115,6 +115,9 @@ const RECOMMENDATION_ACTIONS: Record<string, string> = {
   treatment_reminder: "Review treatment",
   equipment_needed: "Add equipment",
   seasonal_prep: "Seasonal prep",
+  feeder_check: "Check feeder",
+  treat_now: "Treat for Varroa",
+  mite_check_due: "Sample for mites",
 };
 
 function feedingItem(row: FeedingStatusRow): FieldItem {

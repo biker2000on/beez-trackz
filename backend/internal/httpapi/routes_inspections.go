@@ -131,23 +131,35 @@ func inspectionUpdate(ctx context.Context, q inspectionQuerier, id uuid.UUID, co
 
 // inspectionJSON mirrors the legacy drizzle row shape (camelCase).
 type inspectionJSON struct {
-	ID            uuid.UUID `json:"id"`
-	HiveID        uuid.UUID `json:"hiveId"`
-	Date          time.Time `json:"date"`
-	InspectorName *string   `json:"inspectorName"`
-	QueenSeen     *bool     `json:"queenSeen"`
-	QueenHealth   *string   `json:"queenHealth"`
-	BroodPattern  *string   `json:"broodPattern"`
-	StoresHoney   *int      `json:"storesHoney"`
-	StoresPollen  *int      `json:"storesPollen"`
-	Temperament   *int      `json:"temperament"`
-	Pests         any       `json:"pests"`
-	Treatments    any       `json:"treatments"`
-	Notes         *string   `json:"notes"`
-	SourceMedia   any       `json:"sourceMedia"`
-	Weather       any       `json:"weather"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID            uuid.UUID                 `json:"id"`
+	HiveID        uuid.UUID                 `json:"hiveId"`
+	Date          time.Time                 `json:"date"`
+	InspectorName *string                   `json:"inspectorName"`
+	QueenSeen     *bool                     `json:"queenSeen"`
+	QueenHealth   *string                   `json:"queenHealth"`
+	BroodPattern  *string                   `json:"broodPattern"`
+	StoresHoney   *int                      `json:"storesHoney"`
+	StoresPollen  *int                      `json:"storesPollen"`
+	Temperament   *int                      `json:"temperament"`
+	Pests         any                       `json:"pests"`
+	Treatments    any                       `json:"treatments"`
+	Notes         *string                   `json:"notes"`
+	SourceMedia   any                       `json:"sourceMedia"`
+	Weather       any                       `json:"weather"`
+	CreatedAt     time.Time                 `json:"createdAt"`
+	UpdatedAt     time.Time                 `json:"updatedAt"`
+	MiteCounts    []inspectionMiteCountJSON `json:"miteCounts"`
+}
+
+type inspectionMiteCountJSON struct {
+	ID          uuid.UUID `json:"id"`
+	Method      string    `json:"method"`
+	MitesCount  int       `json:"mitesCount"`
+	SampleSize  *int      `json:"sampleSize"`
+	DaysOnBoard *int      `json:"daysOnBoard"`
+	MitesPer100 *float64  `json:"mitesPer100"`
+	MitesPerDay *float64  `json:"mitesPerDay"`
+	Notes       *string   `json:"notes"`
 }
 
 const inspectionSelectCols = `id, hive_id, date, inspector_name, queen_seen, queen_health,
@@ -163,8 +175,76 @@ func inspectionScan(row pgx.Row) (inspectionJSON, error) {
 }
 
 func (s *Server) inspectionByID(ctx context.Context, id uuid.UUID) (inspectionJSON, error) {
-	return inspectionScan(s.pool.QueryRow(ctx,
+	v, err := inspectionScan(s.pool.QueryRow(ctx,
 		`SELECT `+inspectionSelectCols+` FROM inspections WHERE id = $1`, id))
+	if err != nil {
+		return v, err
+	}
+	byID, err := loadMiteCountsByInspection(ctx, s.pool, []uuid.UUID{id})
+	if err != nil {
+		return v, err
+	}
+	v.MiteCounts = byID[id]
+	if v.MiteCounts == nil {
+		v.MiteCounts = []inspectionMiteCountJSON{}
+	}
+	return v, nil
+}
+
+func loadMiteCountsByInspection(
+	ctx context.Context,
+	q inspectionQuerier,
+	ids []uuid.UUID,
+) (map[uuid.UUID][]inspectionMiteCountJSON, error) {
+	out := make(map[uuid.UUID][]inspectionMiteCountJSON, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `
+		SELECT id, inspection_id, method, mites_count, sample_size, days_on_board,
+			mites_per_100, mites_per_day, notes
+		FROM mite_counts
+		WHERE inspection_id = ANY($1)
+		ORDER BY method`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var inspectionID uuid.UUID
+		var row inspectionMiteCountJSON
+		if err := rows.Scan(&row.ID, &inspectionID, &row.Method, &row.MitesCount,
+			&row.SampleSize, &row.DaysOnBoard, &row.MitesPer100, &row.MitesPerDay,
+			&row.Notes); err != nil {
+			return nil, err
+		}
+		out[inspectionID] = append(out[inspectionID], row)
+	}
+	return out, rows.Err()
+}
+
+func replaceInspectionMiteCounts(
+	ctx context.Context,
+	q inspectionQuerier,
+	inspectionID, hiveID uuid.UUID,
+	date time.Time,
+	counts []miteCountPayload,
+) error {
+	if _, err := q.Exec(ctx,
+		`DELETE FROM mite_counts WHERE inspection_id = $1`, inspectionID); err != nil {
+		return err
+	}
+	for _, count := range counts {
+		count.HiveID = hiveID
+		count.InspectionID = &inspectionID
+		if err := normalizeMiteCount(&count); err != nil {
+			return err
+		}
+		if _, _, _, err := upsertMiteCount(ctx, q, count, date); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // inspectionMarshal marshals an optional typed slice/object to jsonb bytes; nil in → nil out.
@@ -295,21 +375,9 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	for _, count := range req.MiteCounts {
-		if !miteMethods[count.Method] || count.MitesCount < 0 ||
-			(count.SampleSize != nil && *count.SampleSize <= 0) {
-			writeError(w, http.StatusBadRequest, "invalid mite count")
-			return
-		}
-		if _, err := tx.Exec(r.Context(), `
-			INSERT INTO mite_counts
-				(hive_id, inspection_id, date, method, mites_count, sample_size, notes)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			hiveID, id, date, count.Method, count.MitesCount, count.SampleSize,
-			inspectionTrimPtr(count.Notes)); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid mite count")
-			return
-		}
+	if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, req.MiteCounts); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid mite count")
+		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -372,8 +440,22 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	var miteCounts []miteCountPayload
+	var miteCountsSet bool
+	if raw, ok := body["miteCounts"]; ok {
+		if string(raw) != "null" {
+			if err := json.Unmarshal(raw, &miteCounts); err != nil {
+				writeError(w, http.StatusBadRequest, "miteCounts must be an array")
+				return
+			}
+		}
+		miteCountsSet = true
+		delete(body, "miteCounts")
+	}
+
 	var cols []string
 	var vals []any
+	var updatedDate *time.Time
 	for key, raw := range body {
 		col, ok := inspectionUpdatableCols[key]
 		if !ok {
@@ -397,6 +479,7 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 				writeError(w, http.StatusBadRequest, "Invalid date")
 				return
 			}
+			updatedDate = &t
 			vals = append(vals, t)
 		case "queenSeen":
 			var v *bool
@@ -442,16 +525,55 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 		}
 		cols = append(cols, col)
 	}
-	if len(cols) == 0 {
+	if len(cols) == 0 && !miteCountsSet {
 		writeError(w, http.StatusBadRequest, "No fields to update")
 		return
 	}
-	err = inspectionUpdate(r.Context(), s.pool, id, cols, vals)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "Inspection not found")
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if err != nil {
+	defer tx.Rollback(r.Context())
+	if len(cols) > 0 {
+		err = inspectionUpdate(r.Context(), tx, id, cols, vals)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Inspection not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	}
+	var hiveID uuid.UUID
+	var date time.Time
+	if err := tx.QueryRow(r.Context(),
+		`SELECT hive_id, date FROM inspections WHERE id = $1`, id,
+	).Scan(&hiveID, &date); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "Inspection not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if updatedDate != nil {
+		date = *updatedDate
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE mite_counts SET date = $2 WHERE inspection_id = $1`,
+			id, date); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	}
+	if miteCountsSet {
+		if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, miteCounts); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid mite count")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -505,17 +627,30 @@ func (s *Server) handleInspectionsForHive(w http.ResponseWriter, r *http.Request
 	}
 	defer rows.Close()
 	list := []inspectionJSON{}
+	ids := make([]uuid.UUID, 0)
 	for rows.Next() {
 		v, err := inspectionScan(rows)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+		v.MiteCounts = []inspectionMiteCountJSON{}
 		list = append(list, v)
+		ids = append(ids, v.ID)
 	}
 	if rows.Err() != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
+	}
+	byID, err := loadMiteCountsByInspection(r.Context(), s.pool, ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	for i := range list {
+		if counts := byID[list[i].ID]; counts != nil {
+			list[i].MiteCounts = counts
+		}
 	}
 	writeJSON(w, http.StatusOK, list)
 }

@@ -33,6 +33,8 @@ func allRules() []rule {
 		{Type: "equipment_needed", Check: checkEquipmentNeeded},
 		{Type: "feeder_check", Check: checkFeederCheck},
 		{Type: "seasonal_prep", Check: checkSeasonalPrep},
+		{Type: "treat_now", Check: checkTreatNow},
+		{Type: "mite_check_due", Check: checkMiteCheckDue},
 	}
 }
 
@@ -392,6 +394,131 @@ func checkSeasonalPrep(ctx context.Context, pool *pgxpool.Pool, now time.Time) (
 			Message:  fmt.Sprintf(`%s (Hive: %s)`, seasonalMessage, label),
 			Priority: priority,
 		})
+	}
+	return results, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Rule: treat_now
+// ---------------------------------------------------------------------------
+
+func checkTreatNow(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]Result, error) {
+	settings, err := LoadVarroaSettings(ctx, pool, now)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT DISTINCT ON (m.hive_id)
+			m.hive_id, h.position_label, m.method, m.mites_per_100, m.mites_per_day
+		FROM mite_counts m
+		JOIN hives h ON h.id = m.hive_id
+		WHERE h.status = 'active' AND h.is_archived = false
+		ORDER BY m.hive_id, m.date DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []Result
+	for rows.Next() {
+		var (
+			hiveID, label, method string
+			per100, perDay        *float64
+		)
+		if err := rows.Scan(&hiveID, &label, &method, &per100, &perDay); err != nil {
+			return nil, err
+		}
+		if !OverThreshold(method, per100, perDay, settings) {
+			continue
+		}
+		rate, kind, ok := ComparableRate(method, per100, perDay)
+		if !ok {
+			continue
+		}
+		unit := "mites / 100 bees"
+		threshold := settings.ThresholdPer100
+		if kind == "per_day" {
+			unit = "mites / day"
+			threshold = settings.ThresholdPerDay
+		}
+		priority := "high"
+		if rate >= threshold*2 {
+			priority = "urgent"
+		}
+		id := hiveID
+		results = append(results, Result{
+			HiveID: &id,
+			Message: fmt.Sprintf(
+				`Hive "%s" is at %.1f %s (threshold %.1f). Treat now.`,
+				label, rate, unit, threshold),
+			Priority: priority,
+		})
+	}
+	return results, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Rule: mite_check_due
+// ---------------------------------------------------------------------------
+
+func checkMiteCheckDue(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]Result, error) {
+	settings, err := LoadVarroaSettings(ctx, pool, now)
+	if err != nil {
+		return nil, err
+	}
+	interval := settings.CheckIntervalDays
+
+	rows, err := pool.Query(ctx, `
+		SELECT h.id, h.position_label,
+		       (SELECT max(m.date) FROM mite_counts m WHERE m.hive_id = h.id)
+		FROM hives h
+		WHERE h.status = 'active' AND h.is_archived = false`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []Result
+	for rows.Next() {
+		var (
+			hiveID string
+			label  string
+			last   *time.Time
+		)
+		if err := rows.Scan(&hiveID, &label, &last); err != nil {
+			return nil, err
+		}
+		id := hiveID
+		if last == nil {
+			results = append(results, Result{
+				HiveID:   &id,
+				Message:  fmt.Sprintf(`Hive "%s" has never had a mite count. Sample soon.`, label),
+				Priority: "high",
+			})
+			continue
+		}
+		overdueDays := daysBetween(*last, now) - interval
+		switch {
+		case overdueDays > 14:
+			results = append(results, Result{
+				HiveID:   &id,
+				Message:  fmt.Sprintf(`Hive "%s" is %d days since last mite count. Sample now.`, label, overdueDays+interval),
+				Priority: "urgent",
+			})
+		case overdueDays > 7:
+			results = append(results, Result{
+				HiveID:   &id,
+				Message:  fmt.Sprintf(`Hive "%s" is %d days since last mite count.`, label, overdueDays+interval),
+				Priority: "high",
+			})
+		case overdueDays > 0:
+			results = append(results, Result{
+				HiveID:   &id,
+				Message:  fmt.Sprintf(`Hive "%s" mite check is overdue by %d days.`, label, overdueDays),
+				Priority: "normal",
+			})
+		}
 	}
 	return results, rows.Err()
 }

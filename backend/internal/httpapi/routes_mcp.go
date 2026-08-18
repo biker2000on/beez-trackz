@@ -220,6 +220,19 @@ func mcpTools() []map[string]any {
 				"notes":      map[string]any{"type": "string"},
 			}, "hiveId", "dateFed", "type", "quantity", "quantityUnit"),
 		},
+		{
+			"name":        "record_mite_count",
+			"description": "Record a Varroa mite count. Washes/rolls are mites per 100 bees; sticky boards need daysOnBoard to become mites per day.",
+			"inputSchema": mcpObject(map[string]any{
+				"hiveId":      stringID,
+				"date":        map[string]any{"type": "string", "format": "date"},
+				"method":      map[string]any{"type": "string", "enum": []string{"alcohol_wash", "sugar_roll", "sticky_board", "visual"}},
+				"mitesCount":  map[string]any{"type": "integer", "minimum": 0},
+				"sampleSize":  map[string]any{"type": "integer", "exclusiveMinimum": 0},
+				"daysOnBoard": map[string]any{"type": "integer", "exclusiveMinimum": 0},
+				"notes":       map[string]any{"type": "string"},
+			}, "hiveId", "date", "method", "mitesCount"),
+		},
 	}
 }
 
@@ -315,6 +328,8 @@ func (s *Server) mcpCallTool(r *http.Request, raw json.RawMessage) (mcpToolResul
 		return s.mcpCallJSONHandler(r, call.Arguments, s.handleInspectionCreate)
 	case "record_feeding":
 		return s.mcpCallJSONHandler(r, call.Arguments, s.handleFeedingCreate)
+	case "record_mite_count":
+		return s.mcpCallJSONHandler(r, call.Arguments, s.miteCountCreate)
 	default:
 		return mcpToolResult{}, fmt.Errorf("unknown tool %q", call.Name)
 	}

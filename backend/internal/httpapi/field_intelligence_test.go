@@ -71,6 +71,7 @@ func TestMCPToolCatalog(t *testing.T) {
 		"get_bloom_predictions": false,
 		"record_inspection":     false,
 		"record_feeding":        false,
+		"record_mite_count":     false,
 	}
 	for _, tool := range mcpTools() {
 		name, _ := tool["name"].(string)

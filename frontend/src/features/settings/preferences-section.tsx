@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -84,6 +85,9 @@ export function PreferencesSection() {
       defaultApiaryId: current.defaultApiaryId,
       dateFormat: current.dateFormat,
       weightUnit: current.weightUnit,
+      miteThresholdPer100: current.miteThresholdPer100,
+      miteThresholdPerDay: current.miteThresholdPerDay,
+      miteCheckIntervalDays: current.miteCheckIntervalDays,
       ...patch,
     };
     // Optimistic cache write so the selects don't snap back while saving.
@@ -212,6 +216,78 @@ export function PreferencesSection() {
             ))}
           </SelectContent>
         </Select>
+      </PreferenceField>
+
+      <PreferenceField label="Varroa wash threshold (per 100)" htmlFor="pref-mite-100">
+        <Input
+          id="pref-mite-100"
+          type="number"
+          min="0.1"
+          step="0.1"
+          placeholder="Seasonal default"
+          value={data.miteThresholdPer100 ?? ""}
+          onBlur={(event) => {
+            const raw = event.target.value.trim();
+            save({
+              miteThresholdPer100: raw === "" ? null : Number(raw),
+            });
+          }}
+          onChange={(event) => {
+            const raw = event.target.value.trim();
+            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              ...data,
+              miteThresholdPer100: raw === "" ? null : Number(raw),
+            });
+          }}
+        />
+      </PreferenceField>
+
+      <PreferenceField label="Varroa board threshold (per day)" htmlFor="pref-mite-day">
+        <Input
+          id="pref-mite-day"
+          type="number"
+          min="0.1"
+          step="0.1"
+          placeholder="9"
+          value={data.miteThresholdPerDay ?? ""}
+          onBlur={(event) => {
+            const raw = event.target.value.trim();
+            save({
+              miteThresholdPerDay: raw === "" ? null : Number(raw),
+            });
+          }}
+          onChange={(event) => {
+            const raw = event.target.value.trim();
+            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              ...data,
+              miteThresholdPerDay: raw === "" ? null : Number(raw),
+            });
+          }}
+        />
+      </PreferenceField>
+
+      <PreferenceField label="Mite sample interval (days)" htmlFor="pref-mite-interval">
+        <Input
+          id="pref-mite-interval"
+          type="number"
+          min="1"
+          step="1"
+          placeholder="Seasonal default"
+          value={data.miteCheckIntervalDays ?? ""}
+          onBlur={(event) => {
+            const raw = event.target.value.trim();
+            save({
+              miteCheckIntervalDays: raw === "" ? null : Number(raw),
+            });
+          }}
+          onChange={(event) => {
+            const raw = event.target.value.trim();
+            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              ...data,
+              miteCheckIntervalDays: raw === "" ? null : Number(raw),
+            });
+          }}
+        />
       </PreferenceField>
     </div>
   );

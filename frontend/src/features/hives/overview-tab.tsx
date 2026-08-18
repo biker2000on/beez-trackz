@@ -17,6 +17,7 @@ import { useHiveFeedings } from "@/features/feedings/hooks";
 import { useHiveInspections } from "@/features/inspections/hooks";
 import { usePhotos } from "@/features/photos/hooks";
 import { useHiveDeployments, useHiveQueens } from "./hooks";
+import { miteDisplay, useVarroaAnalytics } from "@/features/operations/hooks";
 import { formatDate } from "./lib";
 
 function SummaryCard({
@@ -56,6 +57,7 @@ function SummaryCard({
 
 export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
   const inspections = useHiveInspections(hiveId);
+  const varroa = useVarroaAnalytics(hiveId);
   const feedings = useHiveFeedings(hiveId);
   const deployments = useHiveDeployments(hiveId);
   const queens = useHiveQueens(hiveId);
@@ -80,6 +82,8 @@ export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
   const currentQueen = (queens.data ?? []).find(
     (queen) => queen.status === "active",
   );
+  const latestMite = varroa.data?.latest ?? null;
+  const mite = latestMite ? miteDisplay(latestMite) : null;
 
   return (
     <div className="grid gap-4">
@@ -87,10 +91,20 @@ export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
         <SummaryCard
           icon={HeartPulse}
           label="Health"
-          value={latestInspection ? `Inspected ${formatDate(latestInspection.date)}` : "No inspection"}
-          detail="Varroa trends and inspection summary"
+          value={
+            mite
+              ? mite.label
+              : latestInspection
+                ? `Inspected ${formatDate(latestInspection.date)}`
+                : "No mite count"
+          }
+          detail={
+            mite && latestMite
+              ? `${mite.unit}${varroa.data?.overThreshold ? " · over action level" : ""} · ${formatDate(latestMite.date)}`
+              : "Varroa load and inspection summary"
+          }
           href={`/hives/${hiveId}?tab=health`}
-          loading={inspections.isPending}
+          loading={inspections.isPending || varroa.isPending}
         />
         <SummaryCard
           icon={Droplets}

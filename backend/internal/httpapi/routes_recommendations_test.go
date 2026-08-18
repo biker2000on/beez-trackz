@@ -81,7 +81,7 @@ func (f *recFixture) pool() *pgxpool.Pool { return f.server.pool }
 // same (type, hive) are now rejected by ai_recommendations_active_unique.
 var recTypes = []string{
 	"inspection_due", "treatment_reminder", "equipment_needed",
-	"seasonal_prep", "feeder_check",
+	"seasonal_prep", "feeder_check", "treat_now", "mite_check_due",
 }
 
 func (f *recFixture) insertRec(t *testing.T, priority string) uuid.UUID {
