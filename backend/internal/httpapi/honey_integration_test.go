@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
@@ -65,19 +67,37 @@ func honeyTestServer(t *testing.T) *Server {
 
 // resetHoneyTables clears the ledger between tests. app_users is preserved
 // because created_by points at it.
+//
+// 00015 added hives/feedings/equipment_*.sale_id → sales. TRUNCATE sales
+// CASCADE follows that graph and would wipe hives (TRUNCATE ignores ON
+// DELETE SET NULL). Null the links first so the honey reset stays local.
 func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(context.Background(), `
+	const reset = `
+		UPDATE hives SET sale_id = NULL WHERE sale_id IS NOT NULL;
+		UPDATE feedings SET sale_id = NULL WHERE sale_id IS NOT NULL;
+		UPDATE equipment_stock_adjustments SET sale_id = NULL WHERE sale_id IS NOT NULL;
+		UPDATE equipment_deployment_returns SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		TRUNCATE harvest_session_true_ups, jar_serials, sale_items, sales,
 			product_batch_expenses, product_batches, propolis_harvests, product_catalog,
 			honey_movements, bottling_runs, harvest_lot_photos, harvest_lot_harvests,
 			harvest_lots, wholesale_price_list_items, wholesale_price_lists,
 			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
 			external_sync, offline_mutation_receipts
-		RESTART IDENTITY CASCADE`)
-	if err != nil {
-		t.Fatalf("reset honey tables: %v", err)
+		RESTART IDENTITY CASCADE`
+	var err error
+	for attempt := 0; attempt < 8; attempt++ {
+		_, err = pool.Exec(context.Background(), reset)
+		if err == nil {
+			return
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || (pgErr.Code != "40P01" && pgErr.Code != "40001") {
+			t.Fatalf("reset honey tables: %v", err)
+		}
+		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
 	}
+	t.Fatalf("reset honey tables: %v", err)
 }
 
 func adminRequest(method, target string, body any, params ...string) *http.Request {

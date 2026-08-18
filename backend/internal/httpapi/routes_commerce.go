@@ -134,6 +134,9 @@ const harvestLotSelect = `
 	FROM harvest_lots`
 
 func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]harvestLotRow, error) {
+	if s.pool == nil {
+		return nil, errors.New("database unavailable")
+	}
 	rows, err := s.pool.Query(r.Context(), harvestLotSelect+" "+where, args...)
 	if err != nil {
 		return nil, err
