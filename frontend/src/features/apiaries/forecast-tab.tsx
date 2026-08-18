@@ -27,6 +27,12 @@ function shortDate(value: string) {
   });
 }
 
+function shortWeekday(value: string) {
+  return new Date(`${value}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+  });
+}
+
 export function ForecastTab({ apiaryId }: { apiaryId: string }) {
   const weather = useApiaryWeather(apiaryId);
   const bloom = useBloomPredictions(apiaryId);
@@ -110,10 +116,11 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
                   </div>
                 </div>
                 <div className="overflow-x-auto">
-                  <div className="grid min-w-[620px] grid-cols-10 gap-1">
+                  <div className="grid min-w-[720px] grid-cols-10 gap-1">
                     {forecast.daily.time.map((date, index) => (
                       <div className="rounded-md border p-2 text-center" key={date}>
-                        <p className="text-xs font-medium">{shortDate(date)}</p>
+                        <p className="text-xs font-semibold">{shortWeekday(date)}</p>
+                        <p className="text-[10px] text-muted-foreground">{shortDate(date)}</p>
                         <p className="mt-2 text-sm font-semibold">
                           {Math.round(forecast.daily.temperature_2m_max[index])}°
                         </p>

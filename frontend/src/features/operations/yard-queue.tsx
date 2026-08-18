@@ -47,7 +47,7 @@ export function YardQueuePage() {
   const queue = useYardQueue();
 
   return (
-    <div className="mx-auto grid w-full max-w-lg gap-5">
+    <div className="mx-auto grid w-full max-w-5xl gap-6">
       <div className="grid gap-1">
         <h1 className="text-2xl font-bold tracking-tight">Yard queue</h1>
         <p className="text-sm text-muted-foreground">
@@ -83,7 +83,7 @@ export function YardQueuePage() {
         queue.data.yards.map((yard) => (
           <section key={yard.apiaryId} className="grid gap-2">
             <h2 className="text-sm font-semibold">{yard.apiaryName}</h2>
-            <div className="grid gap-2">
+            <div className="grid gap-3 sm:grid-cols-2">
               {yard.items.map((item, index) => (
                 <QueueRow key={`${item.kind}:${item.hiveId ?? item.title}:${index}`} item={item} />
               ))}
@@ -102,7 +102,7 @@ function QueueRow({ item }: { item: YardQueueItem }) {
     <Link
       href={item.href}
       className={cn(
-        "flex min-h-16 items-start gap-3 rounded-xl border bg-card p-3 shadow-sm active:bg-muted/60",
+        "flex min-h-20 items-start gap-3 rounded-xl border bg-card p-4 shadow-sm active:bg-muted/60",
         meta.className,
       )}
     >
