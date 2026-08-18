@@ -15,6 +15,27 @@ Sources for the open items below:
 - `docs/plans/2026-08-03-ux-and-inventory-adversarial-review.md` — delivered.
 - Requested 2026-08-17 — source-retained media, modeled on cairn. Originals
   stay the restoration boundary; transcripts and photos can be reprocessed.
+  Refined 2026-08-18: photo originals are pluggable like cairn — Immich
+  library link and direct upload, resolved per photo.
+- Requested 2026-08-18 — map picker for apiary location, canvas registered
+  onto satellite imagery so stands sit on the real ground, and sunrise/sunset
+  modeled over those positions. Refined the same day: Leaflet as the map
+  substrate (zoom out for context), multiple tile layers, canvas on top;
+  store elevation with the pin for sourwood and other flora bands.
+- Requested 2026-08-18 — field, flow, health, queen, honey-product, and
+  operations features (swarm/split readiness, treatment lockout, comb age,
+  catch boxes, colony intake, elevation-banded flora, forage radius, scale
+  hives, frost, photo time-series, strength score, incident log, deadout
+  autopsy, mating-yard map, grafting cycle, lot moisture, floral-source
+  claim, pollination contracts, ntfy, Saturday yard queue, labor minutes,
+  compliance packet). Plus a long-term extractor controller that posts
+  cycle/time/speed telemetry into harvest sessions. Same day: Immich
+  search for flower and beehive photos near the apiary pin, auto-built
+  into a yard timeline.
+- Requested 2026-08-18 — other hive products: creamed honey, hot honey,
+  mead, propolis harvest and tincture (and later propolis for sale).
+  Extends the sale-table restructure; do not design `kind` as only
+  jar/colony/equipment.
 
 ## Order of work
 
@@ -22,19 +43,137 @@ The 2026-08-12 review P0/P1 fix list shipped 2026-08-17 (see
 [`product-history.md`](./product-history.md)). SEAM-001 and SEAM-004 are no
 longer blockers. Remaining product work, in this order:
 
-1. **Colony and equipment sales** — the spring 2026 hive+equipment sale still
-   cannot be recorded. Market-day errors and offline queue now exist, so new
-   line kinds will not fail silently.
+1. **Colony and equipment sales**, designed so **other hive products**
+   (creamed honey, hot honey, mead, propolis/tincture) are more line
+   kinds on the same sale, not a third commerce system. The spring 2026
+   hive+equipment sale still cannot be recorded. Market-day errors and
+   offline queue now exist, so new line kinds will not fail silently.
 2. **Source-retained media** — keep original audio/photos and reprocess when
-   algorithms improve.
-3. **Varroa program** (remaining gaps — the sticky-board rate chart is fixed).
-4. **Live GnuCash sync**, then **Zebra labels**.
-5. P2 structural/a11y items and leftover ASI lows.
+   algorithms improve. Photo originals are pluggable: Immich link and
+   direct upload, same as cairn.
+3. **Yard map and sun model** — Leaflet under the canvas, multiple tile
+   layers, zoom out for context; store elevation with the pin; register
+   stands to the ground; model sunrise/sunset over those positions.
+4. **Varroa program** (remaining gaps — the sticky-board rate chart is fixed).
+5. **High-leverage ops on existing spines** — treatment/harvest lockout,
+   lot moisture, Saturday yard work queue. These refuse bad honey and
+   tell you what to do this weekend; they do not need new maps or hardware.
+6. **Live GnuCash sync**, then **Zebra labels**.
+7. **The rest of the 2026-08-18 wave** — field objects (catch boxes,
+   intake, comb age, swarm readiness), place/flow (elevation-banded
+   flora, forage radius, scale hives, frost), health (photo time-series,
+   strength, incidents, deadout autopsy), queen breeding, floral claim,
+   pollination, ntfy, labor, compliance packet.
+8. **Extractor controller** — long-term; hardware plus an ingest
+   contract onto harvest sessions. Design the session payload when
+   extraction IDs stabilize; do not wait to start the controller.
+9. P2 structural/a11y items and leftover ASI lows.
 
 ## Shipped 2026-08-17 — review P0/P1 fixes
 
 Moved to history: SEAM-001…018, UX-001…017, API-001…011, and the varroa
 sticky-board chart bug. Do not re-open those IDs without a new failing test.
+
+## P1 — Yard map, georeferenced canvas, and sun
+
+**Planned (requested 2026-08-18; Leaflet/layers same day; elevation
+same day).** Set an apiary's location by pointing at a map, then lay the
+yard canvas on real imagery so each stand sits on the ground it occupies.
+Store **elevation** with that pin — sourwood and other flora track
+elevation bands as much as lat/lng. Once the hives have coordinates and
+headings, model sunrise and sunset over them — which colonies get first
+light, which sit in a tree's shadow at 4pm in February.
+
+**The map is Leaflet. The canvas sits on top of it.** Today's satellite
+path cannot zoom out for context: `SATELLITE_ZOOM` is hardcoded to 19 and
+`buildTileMosaic` fetches a 3×3 Esri patch (`radius: 1`) into Konva world
+pixels. Pinching the stage only enlarges those nine tiles; there is no
+lower zoom, no neighboring countryside, no streets for orientation. Do not
+grow that mosaic. Replace it with a real map that already does tiles,
+zoom, and layers, and keep Konva for stands/hives/sun only.
+
+Pieces that stay:
+
+- `apiaries.latitude` / `longitude` for weather and bloom. There is no
+  elevation column. The form is two decimal fields plus "use my device
+  location", which writes lat/lng only and ignores
+  `GeolocationCoordinates.altitude`. There is no map.
+- Hive facing (compass + 0–359°) and the north arrow. That is the heading
+  the sun model needs.
+- The README privacy note: whoever serves tiles sees the coordinates.
+  Leaflet does not change that; each layer's host does. Keep the note, and
+  name the active layer.
+
+What to build:
+
+1. **Leaflet under the yard, and as the location picker.** Same library
+   both places. The apiary form (and a "set location" action on the yard)
+   is a Leaflet pin: click or drag; typed lat/lng stay the values the pin
+   writes; device location is a one-tap seed. No location means no map
+   under the canvas and no sun — do not invent a coordinate.
+2. **Elevation with the pin.** Add `apiaries.elevation_m` (meters above
+   sea level, nullable). This is ground height, not solar altitude.
+   Fill it when the pin is set, in this order:
+   - browser geolocation `coords.altitude` when present (often missing
+     or ± tens of meters on a phone — keep it, label the source)
+   - a terrain lookup from the pin (Open-Meteo elevation or a DEM tile;
+     same "who sees the coordinate" rule as imagery)
+   - operator override, always, because a ridge yard and the valley
+     road 200 m away are not the same flow
+   Show elevation on the apiary and use it anywhere bloom/flora is
+   sliced — sourwood is the example that motivated this; do not build a
+   sourwood-only model. A later "which yards are in the sourwood band"
+   view reads this column. Null elevation is allowed; do not invent 0.
+3. **Multiple tile layers, switchable.** Not a single Esri overlay.
+   Leaflet `L.tileLayer` / layer control. First set:
+   - Esri World Imagery (what the canvas already uses)
+   - a street/labels layer for context when zoomed out (OSM or Esri
+     Streets — pick one, document who sees the coords)
+   - the existing imagery kept as the default when registering stands
+   Adding a layer later is a URL + attribution + toggle, not a new
+   renderer. Opacity still applies to the imagery the stands sit on.
+4. **Zoom out for context.** Leaflet owns pan/zoom, including zoom
+   levels well below 19 so the operator can see the road, the tree line,
+   the neighboring lot. Zooming in still reaches yard scale. The Konva
+   stage is a georeferenced overlay (or a Leaflet layer that hosts the
+   stage) so stands stay nailed to lat/lng as the map zooms — they do
+   not become a 3×3 bitmap that you magnify.
+5. **Register the canvas to the map.** Today's overlay is anchored at
+   mount to the stand bounding-box center. Moving a stand does not move
+   the photo, which is correct, but there is no way to slide, rotate, or
+   scale the *layout relative to the ground* so stand A sits on the
+   actual pallet. Register/calibrate mode: map locked, operator nudges
+   the stand layer (or one ground-control point + north) until the
+   drawing matches. Persist offset/rotation/scale in `canvas_layout`.
+   Delete `satellite-layer.tsx` / the zoom-19 mosaic once Leaflet is
+   underneath; do not leave two tile engines.
+6. **Hives have ground positions, not just slots.** After registration,
+   each occupied slot has a lat/lng (`facingDegrees` already exists).
+   Derive from the registered canvas; do not store a second layout.
+7. **Sunrise / sunset over the yard.** Date-scrubbable solar azimuth and
+   *solar* altitude on the overlay: sun path, sunrise/sunset bearings,
+   simple hive-body shadows (obstacles only if the operator draws them).
+   NOAA / SPA-class math, local, from lat/lng/date. Answers "does A3
+   see sun before 10am in January", not a full insolation sim. Ground
+   elevation is a separate column; do not overload the word.
+
+What this is not:
+
+- Not a second mapping product and not a Google/Mapbox SDK. Leaflet
+  plus tile URLs. Konva stays for the yard drawing.
+- Not automatic photogrammetry. The operator aligns the drawing; the
+  computer does not guess which blob is a hive.
+- Not a weather-sun hybrid. Forecast/bloom already use the apiary pin.
+  The sun model uses hive positions once they exist; until then, fall
+  back to the pin and say so.
+
+Follow-ons that wait on the pin and `elevation_m` are in **Place and
+flow** (elevation-banded flora, forage radius, frost). Mating-yard
+pins wait on this map too.
+
+Do not wait on colony sales or GnuCash. Independent of the commerce
+spine. A yard with no lat/lng still cannot show a map or sun, which is
+why the picker is first.
 
 ## P1 — Source-retained media (cairn model)
 
@@ -56,12 +195,13 @@ to leave files on disk.
 
 The pipeline is three layers. None of them is disposable:
 
-1. **Source.** The original recording and the original photo in MinIO. Never
-   overwritten, never regenerated, never deleted as a side effect of
-   transcribing, parsing, confirming, or generating thumbnails. Delete of a
-   source is an explicit operator action, and it must refuse while derived
-   domain rows still point at it — or soft-delete and keep the object until
-   those rows are gone.
+1. **Source.** The original recording (MinIO) and the original photo
+   (whichever backend holds it — see below). Never overwritten, never
+   regenerated, never deleted as a side effect of transcribing, parsing,
+   confirming, or generating thumbnails. Delete of a source is an explicit
+   operator action, and it must refuse while derived domain rows still
+   point at it — or soft-delete and keep the object until those rows are
+   gone.
 2. **Derived artifact.** The transcript text (and, later, image-analysis
    output and any new photo variants). Versioned: provider, model, prompt
    revision, and produced-at, so a re-run is a new version, not an in-place
@@ -84,17 +224,70 @@ What "reprocess" means, concretely:
   reliably. Confirm already writes `source_media`; a re-parse must be able
   to find every row that came from this recording and propose updates
   instead of inserting a second walkthrough.
-- **Re-process photos** from `original_key`: new thumbnail/medium sizes,
-  better EXIF orientation, and — when image analysis is actually wired to
-  a job, which today it is not, despite being a configured AI task —
-  disease/stores/queen-cell suggestions that can be regenerated the same
-  way a transcript can.
+- **Re-process photos** from the original, whichever backend holds it:
+  new thumbnail/medium sizes, better EXIF orientation, and — when image
+  analysis is actually wired to a job, which today it is not, despite
+  being a configured AI task — disease/stores/queen-cell suggestions
+  that can be regenerated the same way a transcript can.
+
+**Photo originals are pluggable, the way cairn just shipped them.**
+Today every photo is a MinIO `original_key`. That stays a first-class
+path. The other path is the Immich library already running on the same
+NAS: link a library asset onto a hive, apiary, or inspection without
+copying bytes, or upload new bytes that land in Immich by default when
+it is configured.
+
+Copy cairn's constraints, not a new design:
+
+- A `photostore.Backend` (or the same package, if sharing is cheap).
+  Two implementations: `minio` (always present, existing bucket) and
+  `immich` (optional: `IMMICH_BASE_URL` + `IMMICH_API_KEY`).
+  `PHOTO_STORAGE_BACKEND` unset means "decide" — Immich if configured,
+  MinIO otherwise. Explicit always wins. Direct upload is not a
+  legacy path.
+- **Resolved per photo, not globally.** Each `photos` row records
+  which backend holds the original (`storage_backend` + opaque
+  `original_ref`: MinIO key or Immich asset UUID). Existing rows
+  are `minio` forever. Flipping the default must not orphan them.
+- Renditions (thumb/medium) stay Beez-owned in MinIO. An Immich
+  outage leaves galleries and honey-story thumbs working; only
+  "download the original" fails, and only for Immich-held rows.
+- **Upload falls back to MinIO** if the default backend is down.
+  The row records MinIO. Do not refuse the shot and do not invent
+  a durable staging queue.
+- **Link is adopt, not copy.** Picking an Immich asset creates a
+  photo row with `original_external=true`. Deleting that row
+  removes the association and Beez renditions; it never deletes
+  the library original. Assets Beez uploaded into Immich delete
+  normally.
+- Startup never contacts Immich. Malformed config (bad URL, key
+  without URL, etc.) fails loud. Unreachable Immich is not a
+  boot failure.
+- Audio recordings stay MinIO-only. They are not a photo library
+  object and must not appear in Immich.
+
+UI: the existing upload control stays. Next to it, "Link from
+library" when Immich is configured — a picker over Immich images,
+then attach to the current hive/apiary/inspection. Settings
+reports default backend, fallback, a health probe, and how many
+photos each backend holds. Photo time-series (same hive, same
+angle, across months) is in **Colony health**. **Yard flora/hive
+timeline** (Immich search by place + "flower"/"beehive") is in
+**Place and flow**. Both adopt through this store; neither is a
+second gallery.
+
+Public honey-story bytes go through the same serve path as
+authenticated ones: resolve the row's backend, then apply
+`is_public`. Do not hand an Immich URL to the browser.
 
 What this is not:
 
-- Not a second media store. MinIO stays the object archive; Postgres stays
-  the index and the derived state. Same split as cairn (MinIO raw objects,
-  Postgres canonical data + job queues).
+- Not a second index. Postgres still owns the photo row, owner,
+  caption, tags, taken_date, and public flag. The backend only
+  holds original bytes.
+- Not a second media product. Same split as cairn: pluggable
+  original store, Beez-owned renditions, Postgres as the index
+  and the derived state.
 - Not automatic overwrite of confirmed inspections. A better parser is
   offered as a review, the way transcription review already sits in front
   of confirm. The source plus the current rows are enough to show the
@@ -107,14 +300,16 @@ What this is not:
   `offline_mutation_receipts` after 30 days.
 
 Prerequisites that already exist and must be kept: `original_key` /
-`audio_key` as NOT NULL, `transcription_text` on the same row as the
+`audio_key` as NOT NULL (relax `original_key` only when introducing
+`original_ref` + backend), `transcription_text` on the same row as the
 audio, `source_media` on inspections. Work this item must add: artifact
 versioning so a retry or a better model cannot overwrite a good
 transcript (closes the data-loss half of API-011), a re-transcribe and
 re-parse action in the existing review UI, a re-process-image job that
-reads `original_key` rather than a derivative, lineage from every
+reads the original rather than a derivative, lineage from every
 parser-created feeding/treatment/mite-count back to the media file (today
-only the inspection carries `source_media`), and an explicit "source is
+only the inspection carries `source_media`), the per-photo backend
+columns and Immich link/upload paths above, and an explicit "source is
 not garbage" invariant so deletes and cleanup cannot take the original
 out from under a live row.
 
@@ -223,8 +418,12 @@ Requirements:
 - **Restructure the sale tables properly rather than bolting on.** This is a
   single self-hosted instance with no external install base, so the migration is
   free to be breaking: rename `honey_sales` → `sales` and `honey_sale_items` →
-  `sale_items`, and give the line a real `kind` discriminator (`jar` / `colony` /
-  `equipment`) with nullable per-kind targets and a CHECK that exactly one is set.
+  `sale_items`, and give the line a real `kind` discriminator. The first
+  cut is `jar` / `colony` / `equipment`; **do not treat that list as
+  closed** — creamed honey, hot honey, mead, and propolis (see **Other
+  hive products** below) land as further kinds or as catalog products
+  on this same line, not as another sales table. Nullable per-kind
+  targets and a CHECK that exactly one target is set.
   No compatibility shim, no view pretending the old names still exist — update the
   call sites. Breaking the *schema* is not the same as discarding the *ledger*:
   the instance holds real sales, harvests, and serial links, so the migration
@@ -315,6 +514,69 @@ Automatic must not mean silent, so:
   closed and re-deploying what it returned. This is why the closures carry the
   sale link rather than a bare reason: without it, a cancel can restore the colony
   but not the state that came with it.
+
+## P1 — Other hive products (creamed, hot honey, mead, propolis)
+
+**Planned (requested 2026-08-18).** Propolis has already been harvested
+for tincture. Creamed honey, hot honey, and mead are planned this
+year; propolis may later be sold as well. **None of that can be
+recorded today.**
+
+The ledger is honey-in-jars. `honey_sale_items.jar_size_id` is `NOT
+NULL`. Harvest sessions, lots, and movements are pounds of honey.
+There is no propolis harvest, no infusion/ferment batch, no SKU that
+is not a jar size. Logging a tincture sale would mean pretending it
+was a pint of honey.
+
+This is the same commerce spine as **Colony and equipment sales**,
+not a parallel shop. Design the `kind` / product catalog in that
+restructure so these land without a second migration. What differs
+is the *physical* side — each product is a different conversion of
+hive material:
+
+- **Creamed honey** is still honey: a process on a lot (seeded,
+  controlled temp, time) that produces a different SKU. Inventory
+  leaves bulk or liquid jars and enters creamed jars. Same floral
+  claim, same lot ancestry, different texture. Moisture still
+  applies.
+- **Hot honey** is honey plus ingredients (peppers, vinegar). A
+  batch consumes honey pounds from a lot *and* grocery inputs
+  (`expenses`). The sale line is a finished SKU; COGS is honey +
+  ingredients, not honey alone.
+- **Mead** is honey consumed as a fermentable. A batch has honey
+  lbs, water, yeast, start/end, vessel, and bottles out. Those
+  bottles are not `jar_sizes`. Alcohol may need its own tax
+  mapping on the GnuCash side — say so in the account map rather
+  than posting mead as honey revenue. Withdrawal/lockout still
+  applies to the honey that went in.
+- **Propolis** is not honey. Record a harvest (hive or yard, date,
+  grams or ounces scraped) that does not touch the honey
+  ledger. Tincture is a batch: propolis + alcohol → bottles. Raw
+  propolis for sale is a SKU off the harvest, no tincture step.
+  Neither decrements honey pounds.
+
+Shared rules:
+
+- One sale, mixed lines: jars of honey, a bottle of hot honey, a
+  tin of propolis, a nuc, a used box. One customer, one payment,
+  one receipt. Market day grows product buttons; it does not grow
+  a second checkout.
+- Finished SKUs are a small catalog (name, kind, unit, default
+  price, optional jar size or bottle size). Do not invent a new
+  `jar_sizes` for mead.
+- Every batch names its inputs and writes ledger movements so
+  "where did this honey go" still answers. Creamed and hot honey
+  remain traceable to a harvest lot and, if declared, a floral
+  source. Mead too, even if the customer-facing label is just
+  "mead."
+- GnuCash: more line kinds, more accounts. Honey-with-COGS does
+  not fit a tincture or a mead bottle. Design the mappings with
+  colony/equipment, not after.
+
+Do not block the spring colony sale on mead. Ship `jar` / `colony` /
+`equipment` first if the catalog is not ready, but leave the
+discriminator open so propolis does not require renaming `sales`
+a second time.
 
 ## P1 — Live GnuCash sync and reconciliation
 
@@ -421,6 +683,205 @@ durable fallback. Only curated Honey Story content is public; hive, order,
 container, apiary/stand, and equipment identifiers remain authenticated and
 internal.
 
+## P1 — Field work that still has no object
+
+**Added 2026-08-18.** Inspections, feedings, treatments, and hive status
+exist. These are the Saturday-morning objects that are still notes.
+
+- **Swarm and split readiness.** Derive a per-hive call from what is
+  already recorded: crowded brood, queen cups / cells, stores, a flow
+  on, days since last split, temperament. One list: will swarm / ready
+  to split / neither. Not a new inspection form. Voice already extracts
+  queen events; this is a rule on top, same shape as `checkInspectionDue`.
+- **Treatment vs harvest lockout.** Every treatment product has a
+  withdrawal. Harvest sessions and market day must refuse a lot whose
+  source hives are still inside that window. Date-on, date-off, and
+  "this honey cannot be extracted / sold until" on the lot and the
+  hive. Legal and money, not a reminder card. Couples to the varroa
+  `date_removed` gap and to harvest-session create.
+- **Comb age / box rotation.** Equipment already moves through the
+  ledger. Frames and boxes do not age. Record year-in-service (or
+  first-deployed) on the stock row; surface "this deep is five years
+  old, pull it." AFB-risk comb and sagging boxes are the reason.
+- **Catch boxes and lost swarms.** A swarm leaving is a queen/hive
+  event today. There is no bait-hive object: yard, stand or fence
+  line, date set, empty-as-of, occupied. Seasonal, easy to forget,
+  cheap to model. Occupied becomes colony intake (below).
+- **Package / nuc / split intake.** A new colony arrives with source,
+  date, starting stores, and cost. Today that is hive-create plus
+  notes. First-class intake writes the hive, the `bees_queens`
+  expense, and the queen-line / winter-survival cohort in one
+  transaction. Splits you already record; packages and bought nucs
+  you do not.
+
+## P1 — Place and flow
+
+**Added 2026-08-18.** Sits on the yard-map item (Leaflet, elevation,
+registered canvas). Do not start these before the pin and
+`elevation_m` exist.
+
+- **Elevation-banded flora.** Bloom observations exist; they are not
+  tied to height. Sourwood (and other flora) tracks elevation bands.
+  Per-yard flow calendar: species × elevation band × last year's
+  first/last seen. "Will this yard make sourwood this year" is the
+  question. No sourwood-only model — the band is a filter on bloom.
+  The Immich yard timeline below is evidence for that calendar, not
+  a replacement for structured bloom rows.
+- **Forage radius on the map.** A 2–3 km circle around the apiary
+  pin, on Leaflet, so tree line / crop / water from the tile layer
+  is visible. Explains two yards 400 m of elevation apart. Not a
+  land-cover classifier. This circle is also the search radius for
+  the Immich timeline.
+- **Yard flora / hive timeline from Immich.** Use Immich's own
+  search — do not re-implement CLIP. Smart search for flower /
+  bloom / blossom / hive / beehive / bees, intersected with
+  metadata search near the apiary pin (EXIF GPS inside the forage
+  radius, or Immich's `near` / map-bounds filter if the version
+  we run exposes it). Order by `DateTimeOriginal`. The result is
+  a year-scrubbable timeline on the apiary: first dandelion, first
+  sourwood, hive-front shots through the season.
+  Adopt matches as `original_external` photo rows on the apiary
+  (same link-not-copy rule). **Surface ambiguity, do not guess:**
+  a photo 1.5 km from two yards, or a houseplant "flower" indoors,
+  is offered for review, not silently attached. No EXIF GPS → not
+  in the location set; it can still appear in a smart-search-only
+  tray the operator attaches by hand.
+  A scan is a job (`POST /apiaries/{id}/photos/scan`),
+  restart-safe, same as cairn's ride-window Immich scan. No
+  unbounded walk of the whole library. Re-running the scan is
+  how a better Immich model or a moved pin updates the timeline.
+  Immich down → the timeline still renders already-adopted
+  thumbs; the scan fails loudly.
+- **Scale hives.** Daily weight is the best flow and death detector.
+  One scale per yard is enough. Ingest Broodminder / HiveTracks-style
+  CSV or MQTT. Overlay on inspections and bloom. Do not require a
+  scale on every hive.
+- **Frost and night lows at the pin.** Weather is already
+  location-aware. Surface "this stand frosted three nights last
+  week" next to elevation. Matters for sourwood and for winter.
+  No new provider if the existing snapshot already has min temp.
+
+## P1 — Colony health beyond mite counts
+
+**Added 2026-08-18.** Varroa stays its own item. This is everything
+else a deadout or a weak nuc should have taught us.
+
+- **Photo time-series.** Same hive, same angle, April vs June vs
+  August. Immich + `taken_date` + owner makes the strip cheap —
+  build it on the source-retained / Immich work, not before.
+  Disease/stores/queen-cell analysis (the unused `imageAnalysis`
+  task) runs on the original and can be reprocessed. A gallery
+  sorted by upload time is not this. Distinct from the **yard
+  flora/hive timeline** (Place and flow), which is Immich search
+  near the pin, not "this hive's front, year over year."
+- **Standard strength score.** Frames of bees / brood / stores as
+  numbers you can chart, not only 1–5 stores on the inspection.
+  Winters and splits become comparable across years. Voice parser
+  should fill these when the walkthrough says "eight frames of bees."
+- **Incident log.** Robbing, yellowjackets, bears, skunks, flood.
+  Date, hive or yard, notes. Timeline and "don't put a weak nuc
+  here." Not a status enum on the hive — a hive can be robbed and
+  still active.
+- **Deadout autopsy.** Marking deadout today is mostly a status.
+  Require (or strongly prompt): stores left, cluster position, last
+  fall mite load, queen status, moisture / mold. Winter-survival
+  reports should segment on these rows. A deadout without an
+  autopsy is a status change you cannot learn from.
+
+## P1 — Queen breeding
+
+**Added 2026-08-18.** Queen performance scoring exists. Mating place
+and raising cycle do not.
+
+- **Mating-yard / drone-source map.** Where she mated, which yards
+  were flooding drones. One extra field plus the Leaflet pin turns
+  queen scores into a place story. Couples to the yard-map item.
+- **Grafting / cell-builder cycle.** Graft date, emerge, introduce,
+  accept. Links to the queen row you already have. Skip if you
+  never graft; build when the first graft is recorded as a note
+  for the third time.
+
+## P1 — Honey as a declared product
+
+**Added 2026-08-18.** Lots, bottling, Honey Story, and market day
+exist. The claim on the jar and the number that decides if it
+bottles do not.
+
+- **Moisture / refractometer on the lot.** The number that decides
+  if a lot bottles or sits. Record at extraction (harvest session)
+  and optionally again at bottling. Reject or warn at harvest, not
+  at the market. Sibling of the deferred "lot weight is free-typed"
+  item — do both when the lot row is opened, not as two migrations.
+- **Floral source as a claim.** "Sourwood 2026, Yard B, 2100 ft."
+  Lot, label, and Honey Story share one declared source. Elevation
+  + bloom window is how you defend it. Not a free-text note on the
+  lot that the story page ignores.
+- **Pollination contracts.** Drop, pickup, colony count, payment.
+  Distinct from honey sales. Maps to GnuCash as service revenue,
+  not COGS — design against the GnuCash item, do not fork a
+  third sales system. Skip until a contract is actually signed.
+
+## P1 — Operations around the week
+
+**Added 2026-08-18.** Recommendations exist and live in the app.
+Field work wants a list and a push.
+
+- **Saturday yard queue.** One phone-first page, works offline
+  (the queue spine shipped 2026-08-17): "Yard B — pull honey A3/A4,
+  check mites C1, refill B2." Built from open recs + harvest
+  readiness + feeding status + lockout + split readiness. Not a
+  fourth recommendations inbox.
+- **ntfy / phone push.** Mite check due, feeder empty, treatment
+  off-date, "flow started at Yard B." Same events as the yard
+  queue. Optional webhook; no email-only path.
+- **Labor minutes.** Optional start/stop on the yard visit. Turns
+  cost-per-pound from feed+jars into feed+jars+Saturday. Off by
+  default; do not guilt a hobbyist.
+- **State inspection / compliance packet.** One export: hive list,
+  treatments, lots, sales, withdrawal windows. The day the
+  inspector or the market manager asks. Authenticated, not public.
+
+## P2 — Extractor controller (long-term, hardware)
+
+**Added 2026-08-18.** A controller on the extractor — cycles, times,
+speeds — that posts a run into Beez Trackz. Hardware is in-house
+and will take a while. Software should be ready to receive the
+payload when the first board can HTTP.
+
+Harvest sessions already exist (apiary, date, calculated vs actual
+extraction weight, per-hive harvest entries, true-up). The
+controller does not replace the session; it **attaches a machine
+log** to one.
+
+Ingest contract, so the firmware and this app do not invent two
+shapes:
+
+- One extractor run → one session (or one child of a session if
+  you spin the same yard twice in a day). Idempotent on a
+  controller-issued `run_id`.
+- Payload: started/ended, program name, per-cycle
+  `{rpm, seconds, direction?}`, faults, optional load-cell
+  weight if the machine has one. Store raw JSON as the source
+  (cairn rule: the controller log is reprocessable) plus the
+  columns the session UI actually charts.
+- Auth: a personal API token (`bt_…`) from Settings, same as
+  MCP. LAN-only is fine; do not put the extractor on the public
+  internet.
+- Offline: the honeyhouse may have worse wifi than the yard.
+  The controller keeps the last N runs and retries. Same
+  idempotency receipts the PWA uses, or a simpler
+  `PUT /harvest-sessions/{id}/extractor-runs/{runId}`.
+
+UI: on the session, a speed/time chart and "this honey saw 8
+minutes at 250 rpm." That is the number that explains shattered
+comb vs wet cappings next year. Do not block session create on
+the controller being present — hand-entered weight stays valid.
+
+Do not start firmware work in this repo. When the board can POST
+JSON, this item is an ingest + chart, not a microcontroller
+project. Zebra "harvest/extraction container labels" waits on
+stable process IDs; those IDs are these runs.
+
 ## P2 — Structural: make drifted list pairs one artifact
 
 **Added 2026-08-13**, promoted from the 2026-08-12 review's prose diagnosis.
@@ -513,6 +974,8 @@ link).
 - **Equipment naming clarity.** The equipment ledger is otherwise complete; only
   naming **Equipment Inventory** distinctly from **Honey Inventory** remains.
 - **Lot weight is free-typed** against linked harvests rather than derived.
+  Lot **moisture** is the sibling number and lives in the honey-product
+  item below, not here.
 
 ## Verified clean — do not re-litigate
 
