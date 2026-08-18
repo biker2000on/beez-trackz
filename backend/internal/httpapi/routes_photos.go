@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/jobs"
+	"github.com/biker2000on/beez-trackz/backend/internal/photostore"
 )
 
 const photoMaxUploadBytes = 10 << 20 // 10MB
@@ -75,23 +77,36 @@ func (s *Server) mountPhotos(r chi.Router) {
 	r.Route("/photos", func(r chi.Router) {
 		r.Post("/", s.handlePhotoUpload)
 		r.Get("/", s.handlePhotoList)
+		r.Get("/storage", s.handlePhotoStorageInfo)
+		r.Get("/library", s.handlePhotoLibrary)
+		r.Get("/library/{assetId}/thumb", s.handlePhotoLibraryThumb)
+		r.Post("/link", s.handlePhotoLink)
+		r.Get("/file/*", s.handlePhotoFile)
+		r.With(s.requireEntityParamRole("photo", false)).Get("/{id}/original", s.handlePhotoOriginal)
+		r.With(s.requireEntityParamRole("photo", true)).Post("/{id}/reprocess", s.handlePhotoReprocess)
 		r.With(s.requireEntityParamRole("photo", true)).Patch("/{id}", s.handlePhotoUpdate)
 		r.With(s.requireEntityParamRole("photo", true)).Delete("/{id}", s.handlePhotoDelete)
-		r.Get("/file/*", s.handlePhotoFile)
 	})
 }
 
 type photoResponse struct {
-	ID           string     `json:"id"`
-	OwnerType    string     `json:"ownerType"`
-	OwnerID      string     `json:"ownerId"`
-	Caption      *string    `json:"caption"`
-	Tags         []string   `json:"tags"`
-	TakenDate    *time.Time `json:"takenDate"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	OriginalURL  *string    `json:"originalUrl"`
-	ThumbnailURL *string    `json:"thumbnailUrl"`
-	MediumURL    *string    `json:"mediumUrl"`
+	ID               string     `json:"id"`
+	OwnerType        string     `json:"ownerType"`
+	OwnerID          string     `json:"ownerId"`
+	Caption          *string    `json:"caption"`
+	Tags             []string   `json:"tags"`
+	TakenDate        *time.Time `json:"takenDate"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	OriginalURL      *string    `json:"originalUrl"`
+	ThumbnailURL     *string    `json:"thumbnailUrl"`
+	MediumURL        *string    `json:"mediumUrl"`
+	StorageBackend   string     `json:"storageBackend"`
+	OriginalExternal bool       `json:"originalExternal"`
+}
+
+func photoOriginalURL(id string) *string {
+	u := "/api/v1/photos/" + id + "/original"
+	return &u
 }
 
 // POST /photos — multipart upload: file, ownerType, ownerId, caption?, tags? (JSON string array).
@@ -164,23 +179,64 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filename := header.Filename
+	if filename == "" {
+		filename = "photo.jpg"
+	}
 	key := fmt.Sprintf("photos/%s/%s/%d_%s",
-		ownerType, ownerID, time.Now().UnixMilli(), photoSanitizeFilename(header.Filename))
+		ownerType, ownerID, time.Now().UnixMilli(), photoSanitizeFilename(filename))
 
 	ctx := r.Context()
-	if err := s.store.Put(ctx, key, file, header.Size, contentType); err != nil {
+	data, err := io.ReadAll(io.LimitReader(file, photoMaxUploadBytes+1))
+	if err != nil || len(data) == 0 {
+		writeError(w, http.StatusBadRequest, "Photo file is required")
+		return
+	}
+	if len(data) > photoMaxUploadBytes {
+		writeError(w, http.StatusBadRequest, "Photo must be under 10MB")
+		return
+	}
+
+	backend := photostore.BackendMinio
+	ref := key
+	var originalKey *string
+	originalExternal := false
+	fellBack := false
+	if s.photos != nil {
+		backend, ref, fellBack, err = s.photos.Upload(ctx, filename, contentType,
+			bytes.NewReader(data), int64(len(data)), key)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to store photo")
+			return
+		}
+	} else if s.store != nil {
+		if err := s.store.Put(ctx, key, bytes.NewReader(data), int64(len(data)), contentType); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to store photo")
+			return
+		}
+	} else {
 		writeError(w, http.StatusInternalServerError, "failed to store photo")
 		return
+	}
+	if backend == photostore.BackendMinio {
+		originalKey = &key
+		ref = key
 	}
 
 	var photoID string
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO photos (owner_type, owner_id, original_key, taken_date, caption, tags)
-		VALUES ($1, $2, $3, now(), $4, $5)
+		INSERT INTO photos
+			(owner_type, owner_id, original_key, original_ref, storage_backend, original_external,
+			 taken_date, caption, tags)
+		VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8)
 		RETURNING id`,
-		ownerType, ownerID, key, caption, tags).Scan(&photoID)
+		ownerType, ownerID, originalKey, ref, backend, originalExternal, caption, tags).Scan(&photoID)
 	if err != nil {
-		_ = s.store.Delete(ctx, key)
+		if backend == photostore.BackendMinio && s.store != nil {
+			_ = s.store.Delete(ctx, key)
+		} else if s.photos != nil && !originalExternal {
+			_ = s.photos.DeleteOriginal(ctx, backend, ref)
+		}
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -192,12 +248,18 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 		// photo row survives with no thumbnail job (and no repair sweep
 		// exists), and the client's retry duplicates the photo.
 		_, _ = s.pool.Exec(ctx, `DELETE FROM photos WHERE id = $1`, photoID)
-		_ = s.store.Delete(ctx, key)
+		if backend == photostore.BackendMinio && s.store != nil {
+			_ = s.store.Delete(ctx, key)
+		} else if s.photos != nil && !originalExternal {
+			_ = s.photos.DeleteOriginal(ctx, backend, ref)
+		}
 		writeError(w, http.StatusInternalServerError, "failed to enqueue image processing")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "photoId": photoID})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true, "photoId": photoID, "storageBackend": backend, "fellBackToMinio": fellBack,
+	})
 }
 
 // GET /photos?ownerType=&ownerId= — list photos for an owner, newest first.
@@ -218,7 +280,7 @@ func (s *Server) handlePhotoList(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, owner_type, owner_id, original_key, thumbnail_key, medium_key,
-		       taken_date, caption, tags, created_at
+		       taken_date, caption, tags, created_at, storage_backend::text, original_external
 		FROM photos
 		WHERE owner_type = $1 AND owner_id = $2
 		ORDER BY created_at DESC`,
@@ -233,16 +295,17 @@ func (s *Server) handlePhotoList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var (
 			p            photoResponse
-			originalKey  string
+			originalKey  *string
 			thumbnailKey *string
 			mediumKey    *string
 		)
 		if err := rows.Scan(&p.ID, &p.OwnerType, &p.OwnerID, &originalKey, &thumbnailKey,
-			&mediumKey, &p.TakenDate, &p.Caption, &p.Tags, &p.CreatedAt); err != nil {
+			&mediumKey, &p.TakenDate, &p.Caption, &p.Tags, &p.CreatedAt,
+			&p.StorageBackend, &p.OriginalExternal); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		p.OriginalURL = photoFileURL(&originalKey)
+		p.OriginalURL = photoOriginalURL(p.ID)
 		p.ThumbnailURL = photoFileURL(thumbnailKey)
 		p.MediumURL = photoFileURL(mediumKey)
 		list = append(list, p)
@@ -311,11 +374,19 @@ func (s *Server) handlePhotoDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	var originalKey string
-	var thumbnailKey, mediumKey *string
-	err = s.pool.QueryRow(ctx,
-		`SELECT original_key, thumbnail_key, medium_key FROM photos WHERE id = $1`, id).
-		Scan(&originalKey, &thumbnailKey, &mediumKey)
+	var (
+		originalKey      *string
+		thumbnailKey     *string
+		mediumKey        *string
+		backend          string
+		originalRef      string
+		originalExternal bool
+	)
+	err = s.pool.QueryRow(ctx, `
+		SELECT original_key, thumbnail_key, medium_key, storage_backend::text,
+		       original_ref, original_external
+		FROM photos WHERE id = $1`, id).
+		Scan(&originalKey, &thumbnailKey, &mediumKey, &backend, &originalRef, &originalExternal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Photo not found")
 		return
@@ -325,16 +396,37 @@ func (s *Server) handlePhotoDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys := []string{originalKey}
-	for _, k := range []*string{thumbnailKey, mediumKey} {
-		if k != nil && *k != "" {
-			keys = append(keys, *k)
+	var inUse bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM harvest_lot_photos WHERE photo_id = $1)`, id).
+		Scan(&inUse); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if inUse {
+		writeError(w, http.StatusConflict, "photo is still used by a honey lot")
+		return
+	}
+
+	if !originalExternal && backend == photostore.BackendImmich {
+		if s.photos == nil || s.photos.Immich() == nil {
+			writeError(w, http.StatusBadGateway, "immich is not configured")
+			return
+		}
+		if err := s.photos.DeleteOriginal(ctx, backend, originalRef); err != nil {
+			writeError(w, http.StatusBadGateway, "failed to delete Immich original")
+			return
 		}
 	}
+
+	keys := []*string{originalKey, thumbnailKey, mediumKey}
 	for _, k := range keys {
+		if k == nil || *k == "" || s.store == nil {
+			continue
+		}
 		// RemoveObject is a no-op for missing keys; other errors are ignored
 		// on purpose so a half-deleted photo can still be cleaned up.
-		_ = s.store.Delete(ctx, k)
+		_ = s.store.Delete(ctx, *k)
 	}
 
 	if _, err := s.pool.Exec(ctx, `DELETE FROM photos WHERE id = $1`, id); err != nil {

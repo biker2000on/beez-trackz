@@ -186,7 +186,14 @@ func (s *Server) populateHarvestLot(r *http.Request, item *harvestLotRow) error 
 	sourceRows.Close()
 
 	photoRows, err := s.pool.Query(r.Context(), `
-		SELECT p.id, '/api/v1/photos/file/' || COALESCE(p.medium_key, p.thumbnail_key, p.original_key),
+		SELECT p.id,
+			COALESCE(
+				CASE WHEN p.medium_key IS NOT NULL AND p.medium_key <> ''
+					THEN '/api/v1/photos/file/' || p.medium_key END,
+				CASE WHEN p.thumbnail_key IS NOT NULL AND p.thumbnail_key <> ''
+					THEN '/api/v1/photos/file/' || p.thumbnail_key END,
+				'/api/v1/photos/' || p.id::text || '/original'
+			),
 			p.caption
 		FROM harvest_lot_photos lp JOIN photos p ON p.id = lp.photo_id
 		WHERE lp.lot_id = $1 ORDER BY lp.sort_order, p.created_at`, item.ID)
@@ -683,19 +690,25 @@ func (s *Server) publicHoneyStoryPhoto(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid photoId")
 		return
 	}
-	var key string
+	var (
+		backend     string
+		ref         string
+		originalKey *string
+		mediumKey   *string
+		thumbKey    *string
+	)
 	err = s.pool.QueryRow(r.Context(), `
-		SELECT COALESCE(p.medium_key, p.thumbnail_key, p.original_key)
+		SELECT p.storage_backend::text, p.original_ref, p.original_key, p.medium_key, p.thumbnail_key
 		FROM harvest_lots lot
 		JOIN harvest_lot_photos lp ON lp.lot_id=lot.id
 		JOIN photos p ON p.id=lp.photo_id
 		WHERE lot.public_slug=$1 AND lot.is_public AND p.id=$2`,
-		slug, photoID).Scan(&key)
+		slug, photoID).Scan(&backend, &ref, &originalKey, &mediumKey, &thumbKey)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "photo not found")
 		return
 	}
-	s.servePhotoKey(w, r, key)
+	s.servePhotoPreferred(w, r, backend, ref, originalKey, mediumKey, thumbKey)
 }
 
 func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Request) {

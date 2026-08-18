@@ -35,6 +35,8 @@ export interface TranscriptionFlow {
   canRetry: boolean;
   /** Forget the current job and start over. */
   reset: () => void;
+  /** Keep polling after a re-transcribe is queued. */
+  watchRetranscribe: () => void;
 }
 
 /**
@@ -51,6 +53,9 @@ export function useTranscriptionFlow(options: {
   const { mode, ownerType, ownerId } = options;
   const [blob, setBlob] = React.useState<Blob | null>(null);
   const [mediaFileId, setMediaFileId] = React.useState<string | null>(null);
+  const [watchUntil, setWatchUntil] = React.useState<number | null>(null);
+  const watchUntilRef = React.useRef<number | null>(null);
+  watchUntilRef.current = watchUntil;
 
   const uploadMutation = useMutation({
     mutationFn: uploadTranscription,
@@ -72,9 +77,11 @@ export function useTranscriptionFlow(options: {
       if (query.state.fetchFailureCount >= MAX_EMPTY_POLLS) return false;
       if (query.state.data === undefined) return POLL_INTERVAL_MS;
       const status = query.state.data.status;
-      return status === "pending" || status === "processing"
-        ? POLL_INTERVAL_MS
-        : false;
+      if (status === "pending" || status === "processing") return POLL_INTERVAL_MS;
+      if (watchUntilRef.current !== null && Date.now() < watchUntilRef.current) {
+        return POLL_INTERVAL_MS;
+      }
+      return false;
     },
   });
 
@@ -150,5 +157,6 @@ export function useTranscriptionFlow(options: {
       blob !== null ||
       (mediaFileId !== null && pollError !== null),
     reset,
+    watchRetranscribe: () => setWatchUntil(Date.now() + 120_000),
   };
 }

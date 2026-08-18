@@ -29,6 +29,14 @@ func (s *Server) mountTranscriptions(r chi.Router) {
 		Post("/transcriptions/{id}/parse", s.handleTranscriptionParse)
 	r.With(s.requireEntityParamRole("transcription", true)).
 		Post("/transcriptions/{id}/confirm", s.handleTranscriptionConfirm)
+	r.With(s.requireEntityParamRole("transcription", true)).
+		Post("/transcriptions/{id}/retranscribe", s.handleTranscriptionRetranscribe)
+	r.With(s.requireEntityParamRole("transcription", true)).
+		Post("/transcriptions/{id}/select-version", s.handleTranscriptionSelectVersion)
+	r.With(s.requireEntityParamRole("transcription", true)).
+		Post("/transcriptions/{id}/apply-reparse", s.handleTranscriptionApplyReparse)
+	r.With(s.requireEntityParamRole("transcription", true)).
+		Delete("/transcriptions/{id}", s.handleTranscriptionDelete)
 }
 
 // transcriptionRow mirrors a media_files record.
@@ -40,22 +48,64 @@ type transcriptionRow struct {
 	TranscriptionError *string
 	OwnerType          string
 	OwnerID            uuid.UUID
+	CurrentVersionID   *uuid.UUID
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+type transcriptVersionRow struct {
+	ID             uuid.UUID
+	Provider       string
+	Model          *string
+	PromptRevision *string
+	ProducedAt     time.Time
+	Text           string
 }
 
 func (s *Server) transcriptionLoad(ctx context.Context, id uuid.UUID) (*transcriptionRow, error) {
 	var row transcriptionRow
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, audio_key, transcription_text, transcription_status, transcription_error,
-		       owner_type, owner_id, created_at, updated_at
+		       owner_type, owner_id, current_transcript_version_id, created_at, updated_at
 		FROM media_files WHERE id = $1`, id).
 		Scan(&row.ID, &row.AudioKey, &row.TranscriptionText, &row.Status, &row.TranscriptionError,
-			&row.OwnerType, &row.OwnerID, &row.CreatedAt, &row.UpdatedAt)
+			&row.OwnerType, &row.OwnerID, &row.CurrentVersionID, &row.CreatedAt, &row.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
 	return &row, nil
+}
+
+func (s *Server) transcriptionVersions(ctx context.Context, mediaID uuid.UUID) ([]transcriptVersionRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, provider, model, prompt_revision, produced_at, text
+		FROM transcript_versions
+		WHERE media_file_id = $1
+		ORDER BY produced_at DESC, created_at DESC`, mediaID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []transcriptVersionRow{}
+	for rows.Next() {
+		var v transcriptVersionRow
+		if err := rows.Scan(&v.ID, &v.Provider, &v.Model, &v.PromptRevision, &v.ProducedAt, &v.Text); err != nil {
+			return nil, err
+		}
+		list = append(list, v)
+	}
+	return list, rows.Err()
+}
+
+func transcriptVersionJSON(v transcriptVersionRow) map[string]any {
+	return map[string]any{
+		"id":             v.ID,
+		"provider":       v.Provider,
+		"model":          v.Model,
+		"promptRevision": v.PromptRevision,
+		"producedAt":     v.ProducedAt,
+		"text":           v.Text,
+	}
 }
 
 func transcriptionRowJSON(row *transcriptionRow) map[string]any {
@@ -66,6 +116,7 @@ func transcriptionRowJSON(row *transcriptionRow) map[string]any {
 		"error":             row.TranscriptionError,
 		"ownerType":         row.OwnerType,
 		"ownerId":           row.OwnerID,
+		"currentVersionId":  row.CurrentVersionID,
 		"createdAt":         row.CreatedAt,
 		"updatedAt":         row.UpdatedAt,
 	}
@@ -247,7 +298,7 @@ func (s *Server) handleTranscriptionList(w http.ResponseWriter, r *http.Request)
 
 	query := `
 		SELECT id, audio_key, transcription_text, transcription_status, transcription_error,
-		       owner_type, owner_id, created_at, updated_at
+		       owner_type, owner_id, current_transcript_version_id, created_at, updated_at
 		FROM media_files`
 	args := []any{}
 	if ownerType != "" || ownerIDRaw != "" {
@@ -282,7 +333,8 @@ func (s *Server) handleTranscriptionList(w http.ResponseWriter, r *http.Request)
 	for rows.Next() {
 		var row transcriptionRow
 		if err := rows.Scan(&row.ID, &row.AudioKey, &row.TranscriptionText, &row.Status,
-			&row.TranscriptionError, &row.OwnerType, &row.OwnerID, &row.CreatedAt, &row.UpdatedAt); err != nil {
+			&row.TranscriptionError, &row.OwnerType, &row.OwnerID, &row.CurrentVersionID,
+			&row.CreatedAt, &row.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -318,11 +370,26 @@ func (s *Server) handleTranscriptionGet(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	resp := transcriptionRowJSON(row)
+	versions, err := s.transcriptionVersions(r.Context(), row.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	versionJSON := make([]map[string]any, 0, len(versions))
+	for _, v := range versions {
+		versionJSON = append(versionJSON, transcriptVersionJSON(v))
+	}
+	resp["versions"] = versionJSON
 	if row.Status == "complete" && row.TranscriptionText != nil && *row.TranscriptionText != "" {
 		parsed, err := s.transcriptionParseAndMatch(r.Context(), row, mode)
 		if err != nil {
 			resp["parseError"] = err.Error()
 		} else {
+			if inspections, ok := parsed["inspections"].([]ai.MatchedInspection); ok {
+				if diff, derr := s.transcriptionReparseDiff(r.Context(), row.ID, inspections); derr == nil {
+					parsed["diff"] = diff
+				}
+			}
 			resp["parsed"] = parsed
 		}
 	}
@@ -338,7 +405,8 @@ func (s *Server) handleTranscriptionParse(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req struct {
-		Mode string `json:"mode"`
+		Mode      string     `json:"mode"`
+		VersionID *uuid.UUID `json:"versionId"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -358,6 +426,15 @@ func (s *Server) handleTranscriptionParse(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	if req.VersionID != nil {
+		text, err := s.transcriptionVersionText(r.Context(), id, *req.VersionID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		row.TranscriptionText = &text
+		row.CurrentVersionID = req.VersionID
+	}
 	if row.TranscriptionText == nil || *row.TranscriptionText == "" {
 		writeError(w, http.StatusBadRequest, "No transcription text to parse")
 		return
@@ -366,6 +443,14 @@ func (s *Server) handleTranscriptionParse(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
+	}
+	if inspections, ok := parsed["inspections"].([]ai.MatchedInspection); ok {
+		diff, derr := s.transcriptionReparseDiff(r.Context(), row.ID, inspections)
+		if derr != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		parsed["diff"] = diff
 	}
 	writeJSON(w, http.StatusOK, parsed)
 }
@@ -388,6 +473,7 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 	}
 	var req struct {
 		Mode        string                     `json:"mode"`
+		VersionID   *uuid.UUID                 `json:"versionId"`
 		Inspections []transcriptionConfirmItem `json:"inspections"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -412,6 +498,21 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	if existing, err := s.transcriptionSourceCounts(ctx, row.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if existing.total() > 0 {
+		writeError(w, http.StatusConflict,
+			"this recording already has confirmed rows; use apply-reparse instead of inserting another walkthrough")
+		return
+	}
+
+	versionID, err := s.transcriptionResolveVersion(ctx, row, req.VersionID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -466,12 +567,13 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 		err = tx.QueryRow(ctx, `
 			INSERT INTO inspections
 				(hive_id, date, queen_seen, queen_health, brood_pattern,
-				 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+				 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media,
+				 source_media_file_id, source_transcript_version_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			RETURNING id`,
 			*hiveID, now, item.QueenSeen, item.QueenHealth, item.BroodPattern,
 			clampRating(item.StoresHoney), clampRating(item.StoresPollen), clampRating(item.Temperament),
-			pestsJSON, treatmentsJSON, item.Notes, sourceMedia).Scan(&createdID)
+			pestsJSON, treatmentsJSON, item.Notes, sourceMedia, row.ID, versionID).Scan(&createdID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -483,13 +585,15 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			// The shared insert path applies the feeder-lifecycle rule: a
 			// feeding with no feeder is recorded closed, not left open.
 			eventID, err := feedingInsert(ctx, tx, feedingFields{
-				HiveID:       *hiveID,
-				DateFed:      now,
-				Type:         feeding.Type,
-				Quantity:     feeding.Quantity,
-				QuantityUnit: feeding.QuantityUnit,
-				FeederType:   feedingFeederPtr(feeding.FeederType),
-				Notes:        feeding.Notes,
+				HiveID:                    *hiveID,
+				DateFed:                   now,
+				Type:                      feeding.Type,
+				Quantity:                  feeding.Quantity,
+				QuantityUnit:              feeding.QuantityUnit,
+				FeederType:                feedingFeederPtr(feeding.FeederType),
+				Notes:                     feeding.Notes,
+				SourceMediaFileID:         &row.ID,
+				SourceTranscriptVersionID: &versionID,
 			}, actorID(r))
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid feeding extracted from transcript")
@@ -501,9 +605,11 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			var eventID uuid.UUID
 			err = tx.QueryRow(ctx, `
 				INSERT INTO treatment_events
-					(hive_id, inspection_id, date_applied, product, method)
-				VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-				*hiveID, createdID, now, treatment.Product, treatment.Method).Scan(&eventID)
+					(hive_id, inspection_id, date_applied, product, method,
+					 source_media_file_id, source_transcript_version_id)
+				VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+				*hiveID, createdID, now, treatment.Product, treatment.Method,
+				row.ID, versionID).Scan(&eventID)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid treatment extracted from transcript")
 				return
@@ -526,10 +632,11 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			var eventID uuid.UUID
 			err = tx.QueryRow(ctx, `
 				INSERT INTO mite_counts
-					(hive_id, inspection_id, date, method, mites_count, sample_size, notes)
-				VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+					(hive_id, inspection_id, date, method, mites_count, sample_size, notes,
+					 source_media_file_id, source_transcript_version_id)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
 				*hiveID, createdID, now, miteCount.Method, miteCount.MitesCount,
-				miteCount.SampleSize, miteCount.Notes).Scan(&eventID)
+				miteCount.SampleSize, miteCount.Notes, row.ID, versionID).Scan(&eventID)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid mite count extracted from transcript")
 				return

@@ -63,6 +63,12 @@ type TranscriptionResult struct {
 	Inspections []ParsedInspection `json:"inspections"`
 }
 
+// Prompt revisions recorded on transcript versions / parse lineage.
+const (
+	STTPromptRevision   = "stt-v1"
+	ParsePromptRevision = "extract-v1"
+)
+
 // Prompts ported VERBATIM from src/lib/ai/transcription-parser.ts.
 const singleModePrompt = `You are a beekeeping inspection data extractor. Given a transcription of a beekeeper describing a hive inspection, extract structured fields.
 

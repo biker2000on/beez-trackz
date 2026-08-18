@@ -226,9 +226,9 @@ func copyLegacyPhotos(ctx context.Context, src, dst *pgx.Conn) (int, error) {
 		}
 		tag, err := dst.Exec(ctx, `
 			INSERT INTO photos
-				(id, owner_type, owner_id, original_key, thumbnail_key, medium_key,
-				 taken_date, caption, tags, created_at)
-			SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10
+				(id, owner_type, owner_id, original_key, original_ref, storage_backend,
+				 thumbnail_key, medium_key, taken_date, caption, tags, created_at)
+			SELECT $1,$2,$3,$4,$4,'minio',$5,$6,$7,$8,$9,$10
 			WHERE NOT EXISTS (SELECT 1 FROM photos WHERE id=$1 OR original_key=$4)`,
 			vals...)
 		if err != nil {
@@ -322,8 +322,9 @@ func importFilesystemPhotos(ctx context.Context, dst *pgx.Conn, dataDir string) 
 		}
 		tag, err := dst.Exec(ctx, `
 			INSERT INTO photos
-				(owner_type, owner_id, original_key, thumbnail_key, medium_key, taken_date, created_at)
-			SELECT $1,$2,$3,$4,$5,$6,$6
+				(owner_type, owner_id, original_key, original_ref, storage_backend,
+				 thumbnail_key, medium_key, taken_date, created_at)
+			SELECT $1,$2,$3,$3,'minio',$4,$5,$6,$6
 			WHERE NOT EXISTS (SELECT 1 FROM photos WHERE original_key=$3)`,
 			ownerType, ownerID, key, thumbnailKey, mediumKey, info.ModTime())
 		if err != nil {

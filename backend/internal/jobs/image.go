@@ -40,9 +40,17 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("process image: bad payload: %v: %w", err, asynq.SkipRetry)
 	}
 
-	var originalKey string
-	err := h.pool.QueryRow(ctx,
-		`SELECT original_key FROM photos WHERE id = $1`, payload.PhotoID).Scan(&originalKey)
+	var (
+		originalKey *string
+		originalRef string
+		backend     string
+		ownerType   string
+		ownerID     string
+	)
+	err := h.pool.QueryRow(ctx, `
+		SELECT original_key, original_ref, storage_backend::text, owner_type::text, owner_id::text
+		FROM photos WHERE id = $1`, payload.PhotoID).
+		Scan(&originalKey, &originalRef, &backend, &ownerType, &ownerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Photo deleted before processing ran — nothing to do, don't retry.
 		slog.Info("process image: photo row gone, skipping", "photoId", payload.PhotoID)
@@ -52,26 +60,21 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("process image: load photo %s: %w", payload.PhotoID, err)
 	}
 
-	obj, err := h.store.Get(ctx, originalKey)
+	data, sourceLabel, err := h.readPhotoOriginal(ctx, backend, originalRef, originalKey)
 	if err != nil {
-		return fmt.Errorf("process image: get %s: %w", originalKey, err)
-	}
-	data, err := io.ReadAll(obj)
-	obj.Close()
-	if err != nil {
-		return fmt.Errorf("process image: download %s: %w", originalKey, err)
+		return fmt.Errorf("process image: get %s: %w", sourceLabel, err)
 	}
 
 	if err := imgCheckDimensions(data); err != nil {
-		return fmt.Errorf("process image: %s: %v: %w", originalKey, err, asynq.SkipRetry)
+		return fmt.Errorf("process image: %s: %v: %w", sourceLabel, err, asynq.SkipRetry)
 	}
 	src, format, err := imgDecode(data)
 	if err != nil {
-		return fmt.Errorf("process image: decode %s: %v: %w", originalKey, err, asynq.SkipRetry)
+		return fmt.Errorf("process image: decode %s: %v: %w", sourceLabel, err, asynq.SkipRetry)
 	}
 	src = imgApplyEXIFOrientation(src, data)
 
-	base, ext := imgSplitKey(originalKey)
+	base, ext := imgRenditionBase(originalKey, ownerType, ownerID, payload.PhotoID)
 	encodeFormat := format
 	if !imgCanEncode(format) {
 		// Formats we can decode but not encode (e.g. webp) fall back to JPEG.
@@ -85,11 +88,11 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 
 	thumbBytes, err := imgEncodeResized(src, imgThumbWidth, encodeFormat)
 	if err != nil {
-		return fmt.Errorf("process image: encode thumbnail for %s: %w", originalKey, err)
+		return fmt.Errorf("process image: encode thumbnail for %s: %w", sourceLabel, err)
 	}
 	mediumBytes, err := imgEncodeResized(src, imgMediumWidth, encodeFormat)
 	if err != nil {
-		return fmt.Errorf("process image: encode medium for %s: %w", originalKey, err)
+		return fmt.Errorf("process image: encode medium for %s: %w", sourceLabel, err)
 	}
 
 	if err := h.store.Put(ctx, thumbKey, bytes.NewReader(thumbBytes),
@@ -233,4 +236,39 @@ func imgSplitKey(key string) (string, string) {
 		return key, ""
 	}
 	return key[:dot], key[dot:]
+}
+
+// imgRenditionBase picks MinIO keys for thumb/medium. Immich-held originals
+// have no original_key, so renditions are namespaced by photo id.
+func imgRenditionBase(originalKey *string, ownerType, ownerID, photoID string) (string, string) {
+	if originalKey != nil && *originalKey != "" {
+		return imgSplitKey(*originalKey)
+	}
+	return fmt.Sprintf("photos/%s/%s/%s", ownerType, ownerID, photoID), ".jpg"
+}
+
+func (h *Handlers) readPhotoOriginal(ctx context.Context, backend, ref string, originalKey *string) ([]byte, string, error) {
+	label := ref
+	if originalKey != nil && *originalKey != "" {
+		label = *originalKey
+	}
+	if h.photos != nil && backend != "" {
+		obj, _, _, err := h.photos.OpenOriginal(ctx, backend, ref)
+		if err != nil {
+			return nil, label, err
+		}
+		defer obj.Close()
+		data, err := io.ReadAll(obj)
+		return data, label, err
+	}
+	if originalKey == nil || *originalKey == "" {
+		return nil, label, fmt.Errorf("photo original is not in minio")
+	}
+	obj, err := h.store.Get(ctx, *originalKey)
+	if err != nil {
+		return nil, label, err
+	}
+	data, err := io.ReadAll(obj)
+	obj.Close()
+	return data, label, err
 }

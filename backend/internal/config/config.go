@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,13 @@ type Config struct {
 	// TrustedProxies is the CIDR allowlist of reverse proxies whose
 	// X-Forwarded-For / X-Real-IP headers may be used as the client address.
 	TrustedProxies []*net.IPNet
+
+	// Photo originals. MinIO is always present. Immich is optional.
+	// PHOTO_STORAGE_BACKEND unset means Immich if configured, else MinIO.
+	// Startup validates the shape of these values and never contacts Immich.
+	PhotoStorageBackend string
+	ImmichBaseURL       string
+	ImmichAPIKey        string
 }
 
 const defaultTrustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -49,19 +57,22 @@ const defaultTrustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 func Load() (*Config, error) {
 	loadDotEnv()
 	cfg := &Config{
-		ListenAddr:       getenv("LISTEN_ADDR", ":8080"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		RedisURL:         getenv("REDIS_URL", "redis://localhost:6379"),
-		MinioEndpoint:    getenv("MINIO_ENDPOINT", "localhost:9000"),
-		MinioAccessKey:   os.Getenv("MINIO_ACCESS_KEY"),
-		MinioSecretKey:   os.Getenv("MINIO_SECRET_KEY"),
-		MinioUseSSL:      os.Getenv("MINIO_USE_SSL") == "true",
-		MinioBucket:      getenv("MINIO_BUCKET", "beeztrackz-media"),
-		SessionSecret:    os.Getenv("SESSION_SECRET"),
-		AppURL:           getenv("APP_URL", "http://localhost:3000"),
-		OIDCIssuer:       os.Getenv("OIDC_ISSUER"),
-		OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+		ListenAddr:          getenv("LISTEN_ADDR", ":8080"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		RedisURL:            getenv("REDIS_URL", "redis://localhost:6379"),
+		MinioEndpoint:       getenv("MINIO_ENDPOINT", "localhost:9000"),
+		MinioAccessKey:      os.Getenv("MINIO_ACCESS_KEY"),
+		MinioSecretKey:      os.Getenv("MINIO_SECRET_KEY"),
+		MinioUseSSL:         os.Getenv("MINIO_USE_SSL") == "true",
+		MinioBucket:         getenv("MINIO_BUCKET", "beeztrackz-media"),
+		SessionSecret:       os.Getenv("SESSION_SECRET"),
+		AppURL:              getenv("APP_URL", "http://localhost:3000"),
+		OIDCIssuer:          os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:        os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:    os.Getenv("OIDC_CLIENT_SECRET"),
+		PhotoStorageBackend: strings.TrimSpace(strings.ToLower(os.Getenv("PHOTO_STORAGE_BACKEND"))),
+		ImmichBaseURL:       strings.TrimSpace(os.Getenv("IMMICH_BASE_URL")),
+		ImmichAPIKey:        strings.TrimSpace(os.Getenv("IMMICH_API_KEY")),
 	}
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
@@ -89,7 +100,67 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.TrustedProxies = proxies
+	if err := validatePhotoStorage(cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+const (
+	PhotoBackendMinio  = "minio"
+	PhotoBackendImmich = "immich"
+)
+
+// ImmichConfigured is true when both the base URL and API key are set.
+// It does not mean Immich is reachable.
+func (c *Config) ImmichConfigured() bool {
+	return c != nil && c.ImmichBaseURL != "" && c.ImmichAPIKey != ""
+}
+
+// ResolvedPhotoBackend is the backend new uploads try first. Explicit
+// PHOTO_STORAGE_BACKEND always wins; otherwise Immich if configured, else MinIO.
+func (c *Config) ResolvedPhotoBackend() string {
+	if c == nil {
+		return PhotoBackendMinio
+	}
+	switch c.PhotoStorageBackend {
+	case PhotoBackendMinio, PhotoBackendImmich:
+		return c.PhotoStorageBackend
+	}
+	if c.ImmichConfigured() {
+		return PhotoBackendImmich
+	}
+	return PhotoBackendMinio
+}
+
+// validatePhotoStorage checks config shape only. Unreachable Immich is not a
+// boot failure; a bad URL or a key without a URL is.
+func validatePhotoStorage(cfg *Config) error {
+	switch cfg.PhotoStorageBackend {
+	case "", PhotoBackendMinio, PhotoBackendImmich:
+	default:
+		return fmt.Errorf("PHOTO_STORAGE_BACKEND must be minio, immich, or unset")
+	}
+	if cfg.ImmichAPIKey != "" && cfg.ImmichBaseURL == "" {
+		return fmt.Errorf("IMMICH_API_KEY requires IMMICH_BASE_URL")
+	}
+	if cfg.ImmichBaseURL != "" {
+		if !validHTTPBaseURL(cfg.ImmichBaseURL) {
+			return fmt.Errorf("IMMICH_BASE_URL is not a valid http(s) URL")
+		}
+		if cfg.ImmichAPIKey == "" {
+			return fmt.Errorf("IMMICH_BASE_URL requires IMMICH_API_KEY")
+		}
+	}
+	if cfg.PhotoStorageBackend == PhotoBackendImmich && !cfg.ImmichConfigured() {
+		return fmt.Errorf("PHOTO_STORAGE_BACKEND=immich requires IMMICH_BASE_URL and IMMICH_API_KEY")
+	}
+	return nil
+}
+
+func validHTTPBaseURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
 }
 
 // parseTrustedProxies reads a comma-separated CIDR list. A bare IP is treated

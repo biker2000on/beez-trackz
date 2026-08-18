@@ -173,10 +173,11 @@ export function BatchTranscribePage() {
           </div>
         ) : (
           <BatchReviewPanel
-            // Remount the review when a retry produces a new job.
-            key={flow.transcription.id}
+            // Remount the review when a retry produces a new job or version.
+            key={`${flow.transcription.id}-${flow.transcription.currentVersionId ?? ""}`}
             transcription={flow.transcription}
             hives={activeHives}
+            onRetranscribe={flow.watchRetranscribe}
           />
         )
       )}

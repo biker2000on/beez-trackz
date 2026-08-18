@@ -107,13 +107,15 @@ func feedingScan(row pgx.Row) (feedingJSON, error) {
 
 // feedingFields is the writable feeding column set shared by single + bulk create.
 type feedingFields struct {
-	HiveID       uuid.UUID
-	DateFed      time.Time
-	Type         string
-	Quantity     float64
-	QuantityUnit string
-	FeederType   *string
-	Notes        *string
+	HiveID                    uuid.UUID
+	DateFed                   time.Time
+	Type                      string
+	Quantity                  float64
+	QuantityUnit              string
+	FeederType                *string
+	Notes                     *string
+	SourceMediaFileID         *uuid.UUID
+	SourceTranscriptVersionID *uuid.UUID
 }
 
 // feedingInsert is the single insert path for feedings.
@@ -130,18 +132,23 @@ func feedingInsert(ctx context.Context, q inspectionQuerier, f feedingFields, ac
 			INSERT INTO feedings
 				(hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes,
 				 status, closed_at, closed_reason, date_empty,
-				 status_changed_at, status_changed_by)
+				 status_changed_at, status_changed_by,
+				 source_media_file_id, source_transcript_version_id)
 			VALUES ($1, $2, $3, $4, $5, NULL, $6,
-				'closed', now(), 'not_installed', $2, now(), $7)
+				'closed', now(), 'not_installed', $2, now(), $7, $8, $9)
 			RETURNING id`,
-			f.HiveID, f.DateFed, f.Type, f.Quantity, f.QuantityUnit, f.Notes, actor).Scan(&id)
+			f.HiveID, f.DateFed, f.Type, f.Quantity, f.QuantityUnit, f.Notes, actor,
+			f.SourceMediaFileID, f.SourceTranscriptVersionID).Scan(&id)
 		return id, err
 	}
 	err := q.QueryRow(ctx, `
-		INSERT INTO feedings (hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO feedings
+			(hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes,
+			 source_media_file_id, source_transcript_version_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id`,
-		f.HiveID, f.DateFed, f.Type, f.Quantity, f.QuantityUnit, f.FeederType, f.Notes).Scan(&id)
+		f.HiveID, f.DateFed, f.Type, f.Quantity, f.QuantityUnit, f.FeederType, f.Notes,
+		f.SourceMediaFileID, f.SourceTranscriptVersionID).Scan(&id)
 	return id, err
 }
 

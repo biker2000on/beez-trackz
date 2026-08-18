@@ -245,7 +245,13 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 				COALESCE((
 					SELECT jsonb_agg(jsonb_build_object(
 						'id', p.id,
-						'url', '/api/v1/photos/file/' || COALESCE(p.medium_key, p.thumbnail_key, p.original_key),
+						'url', COALESCE(
+							CASE WHEN p.medium_key IS NOT NULL AND p.medium_key <> ''
+								THEN '/api/v1/photos/file/' || p.medium_key END,
+							CASE WHEN p.thumbnail_key IS NOT NULL AND p.thumbnail_key <> ''
+								THEN '/api/v1/photos/file/' || p.thumbnail_key END,
+							'/api/v1/photos/' || p.id::text || '/original'
+						),
 						'caption', p.caption
 					) ORDER BY p.created_at)
 					FROM photos p WHERE p.owner_type = 'inspection' AND p.owner_id = i.id

@@ -80,6 +80,36 @@ export interface ParsedInspection {
 export interface ParsedResult {
   rawText: string;
   inspections: ParsedInspection[];
+  diff?: ReparseDiff;
+}
+
+export interface TranscriptVersion {
+  id: string;
+  provider: string;
+  model?: string | null;
+  promptRevision?: string | null;
+  producedAt: string;
+  text: string;
+}
+
+export interface ReparseProposal {
+  action: "create" | "update" | "unchanged";
+  kind: "inspection" | "feeding" | "treatment" | "mite_count";
+  existingId?: string | null;
+  hiveId?: string | null;
+  current?: unknown;
+  proposed?: unknown;
+}
+
+export interface ReparseDiff {
+  hasExisting: boolean;
+  counts: {
+    inspections: number;
+    feedings: number;
+    treatments: number;
+    miteCounts: number;
+  };
+  proposals: ReparseProposal[];
 }
 
 /** GET /transcriptions/{id} response. */
@@ -90,6 +120,8 @@ export interface Transcription {
   error: string | null;
   ownerType: "hive" | "apiary";
   ownerId: string;
+  currentVersionId?: string | null;
+  versions?: TranscriptVersion[];
   createdAt: string;
   updatedAt: string;
   /** Present when status is complete and the parse succeeded. */
@@ -194,8 +226,39 @@ export function getTranscription(
 export function parseTranscription(
   id: string,
   mode: TranscriptionMode,
+  versionId?: string | null,
 ): Promise<ParsedResult> {
-  return api.post<ParsedResult>(`/transcriptions/${id}/parse`, { mode });
+  return api.post<ParsedResult>(`/transcriptions/${id}/parse`, {
+    mode,
+    versionId: versionId || undefined,
+  });
+}
+
+export function retranscribeRecording(id: string): Promise<{ queued: boolean }> {
+  return api.post<{ queued: boolean }>(`/transcriptions/${id}/retranscribe`, {});
+}
+
+export function selectTranscriptVersion(
+  id: string,
+  versionId: string,
+): Promise<{ currentVersionId: string; transcriptionText: string }> {
+  return api.post(`/transcriptions/${id}/select-version`, { versionId });
+}
+
+export function applyReparse(
+  id: string,
+  accept: Array<{
+    kind: ReparseProposal["kind"];
+    existingId?: string | null;
+    hiveId?: string | null;
+    fields: unknown;
+  }>,
+  versionId?: string | null,
+): Promise<{ success: boolean; updated: number; created: number }> {
+  return api.post(`/transcriptions/${id}/apply-reparse`, {
+    versionId: versionId || undefined,
+    accept,
+  });
 }
 
 /** POST /transcriptions/{id}/confirm — create inspections from reviewed data. */

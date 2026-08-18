@@ -7,14 +7,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
+	"github.com/biker2000on/beez-trackz/backend/internal/photostore"
 	"github.com/biker2000on/beez-trackz/backend/internal/storage"
 )
 
 // Handlers holds worker-side dependencies.
 type Handlers struct {
-	cfg   *config.Config
-	pool  *pgxpool.Pool
-	store *storage.Store
+	cfg    *config.Config
+	pool   *pgxpool.Pool
+	store  *storage.Store
+	photos *photostore.Resolver
 }
 
 // NewWorker builds the asynq server and task mux for the worker binary.
@@ -28,7 +30,7 @@ func NewWorker(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*a
 		Logger:      asynqLogger{},
 	})
 
-	h := &Handlers{cfg: cfg, pool: pool, store: store}
+	h := &Handlers{cfg: cfg, pool: pool, store: store, photos: photostore.New(cfg, store)}
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TypeProcessImage, h.handleProcessImage)
 	mux.HandleFunc(TypeTranscribeAudio, h.handleTranscribeAudio)

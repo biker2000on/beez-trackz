@@ -103,10 +103,11 @@ export default function HiveTranscribePage({
 
       {complete && flow.transcription && (
         <SingleReviewPanel
-          // Remount the review when a retry produces a new job.
-          key={flow.transcription.id}
+          // Remount the review when a retry produces a new job or version.
+          key={`${flow.transcription.id}-${flow.transcription.currentVersionId ?? ""}`}
           transcription={flow.transcription}
           hiveId={id}
+          onRetranscribe={flow.watchRetranscribe}
         />
       )}
 

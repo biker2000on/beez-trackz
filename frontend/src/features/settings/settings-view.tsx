@@ -2,6 +2,7 @@
 
 import {
   Bot,
+  Images,
   KeyRound,
   Lock,
   Milk,
@@ -17,6 +18,7 @@ import { JarSizesSection } from "./jar-sizes-section";
 import { PasswordSection } from "./password-section";
 import { PreferencesSection } from "./preferences-section";
 import { SettingsSection } from "./settings-section";
+import { StorageSection } from "./storage-section";
 
 export function SettingsView() {
   const profile = useAccessProfile();
@@ -60,6 +62,14 @@ export function SettingsView() {
             defaultOpen={false}
           >
             <JarSizesSection />
+          </SettingsSection>
+          <SettingsSection
+            title="Photo storage"
+            description="Default original backend, Immich health, and photo counts."
+            icon={Images}
+            defaultOpen={false}
+          >
+            <StorageSection />
           </SettingsSection>
         </>
       ) : null}

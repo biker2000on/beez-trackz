@@ -34,6 +34,8 @@ import {
   type ParsedResult,
   type Transcription,
 } from "./api";
+import { ReparseDiffPanel } from "./reparse-diff";
+import { TranscriptSourceControls } from "./transcript-source";
 import {
   InspectionFields,
   toConfirmPayload,
@@ -71,6 +73,7 @@ interface BatchReviewPanelProps {
   transcription: Transcription;
   /** Active hives to match against (options for the hive selects). */
   hives: HiveSummary[];
+  onRetranscribe?: () => void;
 }
 
 /**
@@ -82,6 +85,7 @@ interface BatchReviewPanelProps {
 export function BatchReviewPanel({
   transcription,
   hives,
+  onRetranscribe,
 }: BatchReviewPanelProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -160,6 +164,11 @@ export function BatchReviewPanel({
           <p className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-md bg-secondary/50 p-3 text-sm">
             {rawText || "No transcript text."}
           </p>
+          <TranscriptSourceControls
+            transcription={transcription}
+            disabled={reparse.isPending || confirm.isPending}
+            onRetranscribe={onRetranscribe}
+          />
           {parseError && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -258,6 +267,15 @@ export function BatchReviewPanel({
           </Card>
         ))}
 
+        {parsed?.diff?.hasExisting ? (
+          <ReparseDiffPanel
+            mediaFileId={transcription.id}
+            versionId={transcription.currentVersionId}
+            diff={parsed.diff}
+            disabled={reparse.isPending}
+          />
+        ) : null}
+
         {items.length > 0 && (
           <div className="grid gap-2">
             {unmatchedCount > 0 && (
@@ -274,7 +292,8 @@ export function BatchReviewPanel({
                 confirm.isPending ||
                 reparse.isPending ||
                 included.length === 0 ||
-                unmatchedCount > 0
+                unmatchedCount > 0 ||
+                Boolean(parsed?.diff?.hasExisting)
               }
             >
               {confirm.isPending ? (
