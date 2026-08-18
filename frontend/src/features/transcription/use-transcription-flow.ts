@@ -55,7 +55,9 @@ export function useTranscriptionFlow(options: {
   const [mediaFileId, setMediaFileId] = React.useState<string | null>(null);
   const [watchUntil, setWatchUntil] = React.useState<number | null>(null);
   const watchUntilRef = React.useRef<number | null>(null);
-  watchUntilRef.current = watchUntil;
+  React.useEffect(() => {
+    watchUntilRef.current = watchUntil;
+  }, [watchUntil]);
 
   const uploadMutation = useMutation({
     mutationFn: uploadTranscription,

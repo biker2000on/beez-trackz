@@ -323,12 +323,8 @@ function MoistureCard({
   moisturePct: number | null;
 }) {
   const update = useUpdateSession(sessionId);
-  const [value, setValue] = React.useState(
-    moisturePct != null ? String(moisturePct) : "",
-  );
-  React.useEffect(() => {
-    setValue(moisturePct != null ? String(moisturePct) : "");
-  }, [moisturePct]);
+  const [edited, setEdited] = React.useState<string | null>(null);
+  const value = edited ?? (moisturePct != null ? String(moisturePct) : "");
 
   return (
     <Card>
@@ -360,7 +356,7 @@ function MoistureCard({
               max={100}
               className="w-32"
               value={value}
-              onChange={(event) => setValue(event.target.value)}
+              onChange={(event) => setEdited(event.target.value)}
             />
           </div>
           <Button type="submit" disabled={update.isPending}>

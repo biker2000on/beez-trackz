@@ -997,7 +997,9 @@ function HiveOfferLoader({
 }) {
   const offer = useHiveSaleOffer(hiveId);
   const onOfferRef = React.useRef(onOffer);
-  onOfferRef.current = onOffer;
+  React.useEffect(() => {
+    onOfferRef.current = onOffer;
+  }, [onOffer]);
   React.useEffect(() => {
     if (offer.data) onOfferRef.current(offer.data);
   }, [offer.data]);

@@ -461,16 +461,13 @@ function AddBatchDialog({
 
   const matching = products.filter((product) => product.kind === kind);
   const honeyKind = kind === "creamed_honey" || kind === "hot_honey" || kind === "mead";
-
-  React.useEffect(() => {
-    if (!matching.some((product) => product.id === productId)) {
-      setProductId(matching[0]?.id ?? "");
-    }
-  }, [kind, matching, productId]);
+  const selectedProductId = matching.some((product) => product.id === productId)
+    ? productId
+    : (matching[0]?.id ?? "");
 
   function submit() {
     const out = parseNum(quantityOut);
-    if (!productId || out === null || out <= 0) return;
+    if (!selectedProductId || out === null || out <= 0) return;
     if (honeyKind) {
       const lbs = parseNum(honeyLbs);
       if (lbs === null || lbs <= 0) return;
@@ -482,7 +479,7 @@ function AddBatchDialog({
     create.mutate(
       {
         kind,
-        productId,
+        productId: selectedProductId,
         harvestLotId: lotId === "none" ? undefined : lotId,
         startedAt,
         honeyLbs: honeyKind ? parseNum(honeyLbs) ?? undefined : undefined,
@@ -535,7 +532,7 @@ function AddBatchDialog({
               </div>
               <div className="grid gap-1.5">
                 <Label>Product</Label>
-                <Select value={productId} onValueChange={setProductId}>
+                <Select value={selectedProductId} onValueChange={setProductId}>
                   <SelectTrigger><SelectValue placeholder="Choose SKU" /></SelectTrigger>
                   <SelectContent>
                     {matching.map((product) => (
