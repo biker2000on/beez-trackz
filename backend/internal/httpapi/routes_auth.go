@@ -73,6 +73,29 @@ func (s *Server) loadSettings(ctx context.Context) (*settingsRow, error) {
 	return scanSettings(s.pool.QueryRow(ctx, userSettingsSelect))
 }
 
+func (s *Server) passwordLoginEnabled(ctx context.Context, row *settingsRow) (bool, error) {
+	if row != nil && row.PasswordHash != nil {
+		return true, nil
+	}
+	var enabled bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM app_users
+			WHERE is_active AND password_hash IS NOT NULL
+		)`).Scan(&enabled)
+	return enabled, err
+}
+
+const dummyPasswordHash = "$2a$10$abcdefghijklmnopqrstuv1234567890abcdefghijklmnopqrstuv"
+
+func loginIdentifier(email, username string) string {
+	value := strings.TrimSpace(email)
+	if value == "" {
+		value = strings.TrimSpace(username)
+	}
+	return value
+}
+
 // GET /auth/status — the login/setup pages probe this.
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	row, err := s.loadSettings(r.Context())
@@ -80,10 +103,15 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	passwordLogin, err := s.passwordLoginEnabled(r.Context(), row)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	resp := map[string]any{
 		"setupComplete": row != nil && row.PasswordHash != nil,
 		"oidcEnabled":   s.oidcEnabled(),
-		"passwordLogin": row != nil && row.PasswordHash != nil,
+		"passwordLogin": passwordLogin,
 	}
 	if sess, err := auth.SessionFromRequest(r, s.cfg.SessionSecret); err == nil {
 		if user, userErr := s.principalFromSession(r, sess); userErr == nil {
@@ -220,7 +248,9 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
-// POST /auth/login {password}
+// POST /auth/login {email?, username?, password}
+// Email/username signs in the matching app user (same principal as SSO).
+// Password-only still accepts the instance owner hash from first-run setup.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// One instance-wide password on an internet-exposed endpoint: throttle
 	// repeated failures per client IP before touching bcrypt.
@@ -232,12 +262,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Email    string `json:"email"`
+		Username string `json:"username"`
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	if identifier := loginIdentifier(req.Email, req.Username); identifier != "" {
+		s.handleUserPasswordLogin(w, r, ip, identifier, req.Password)
+		return
+	}
+
 	row, err := s.loadSettings(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -253,7 +291,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if bcrypt.CompareHashAndPassword([]byte(*row.PasswordHash), []byte(req.Password)) != nil {
 		loginThrottle.fail(ip)
-		writeError(w, http.StatusUnauthorized, "Invalid password")
+		writeError(w, http.StatusUnauthorized, "Invalid email or password")
 		return
 	}
 	loginThrottle.success(ip)
@@ -261,7 +299,44 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if row.DisplayName != nil {
 		name = *row.DisplayName
 	}
-	token, err := auth.IssueToken(s.cfg.SessionSecret, "password", name)
+	s.issuePasswordSession(w, "password", name)
+}
+
+func (s *Server) handleUserPasswordLogin(
+	w http.ResponseWriter,
+	r *http.Request,
+	ip, identifier, password string,
+) {
+	var (
+		subject string
+		name    string
+		hash    *string
+	)
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT COALESCE(auth_subject, ''), COALESCE(display_name, ''), password_hash
+		FROM app_users
+		WHERE is_active AND password_hash IS NOT NULL AND (
+			(email IS NOT NULL AND lower(email)=lower($1))
+			OR (username IS NOT NULL AND lower(username)=lower($1))
+		)`,
+		identifier).Scan(&subject, &name, &hash)
+	if err != nil || hash == nil || subject == "" {
+		_ = bcrypt.CompareHashAndPassword([]byte(dummyPasswordHash), []byte(password))
+		loginThrottle.fail(ip)
+		writeError(w, http.StatusUnauthorized, "Invalid email or password")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(*hash), []byte(password)) != nil {
+		loginThrottle.fail(ip)
+		writeError(w, http.StatusUnauthorized, "Invalid email or password")
+		return
+	}
+	loginThrottle.success(ip)
+	s.issuePasswordSession(w, subject, name)
+}
+
+func (s *Server) issuePasswordSession(w http.ResponseWriter, subject, name string) {
+	token, err := auth.IssueToken(s.cfg.SessionSecret, subject, name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session error")
 		return

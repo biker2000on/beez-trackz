@@ -2,6 +2,8 @@ package config
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -85,6 +87,33 @@ func TestLoadRejectsInvalidTrustedProxies(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("invalid TRUSTED_PROXIES was accepted")
+	}
+}
+
+func TestApplyEnvFileDoesNotOverrideExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env.local")
+	if err := os.WriteFile(path, []byte("BEEZ_DOTENV_TEST=from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEEZ_DOTENV_TEST", "from-process")
+	applyEnvFile(path)
+	if got := os.Getenv("BEEZ_DOTENV_TEST"); got != "from-process" {
+		t.Fatalf("existing env was overwritten: %q", got)
+	}
+}
+
+func TestApplyEnvFileSetsMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env.local")
+	if err := os.WriteFile(path, []byte("# comment\nBEEZ_DOTENV_MISSING=from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BEEZ_DOTENV_MISSING", "placeholder")
+	os.Unsetenv("BEEZ_DOTENV_MISSING")
+	applyEnvFile(path)
+	if got := os.Getenv("BEEZ_DOTENV_MISSING"); got != "from-file" {
+		t.Fatalf("missing env not loaded: %q", got)
 	}
 }
 

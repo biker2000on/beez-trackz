@@ -16,7 +16,9 @@ export interface AccessProfile {
   id: string;
   displayName: string;
   email: string | null;
+  username?: string | null;
   isAdmin: boolean;
+  hasPassword?: boolean;
   memberships: AccessMembership[];
 }
 

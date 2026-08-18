@@ -124,3 +124,144 @@ func TestConcurrentSetupCreatesSingleRow(t *testing.T) {
 		t.Fatalf("setup statuses = %v, want one 200 and one 409", codes)
 	}
 }
+
+func TestUserPasswordLoginUsesSSOSubject(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	email := "sso-" + suffix + "@example.com"
+	subject := "oidc:https://idp.example/" + suffix
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-horse"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	var userID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO app_users (auth_subject, display_name, email, is_admin, password_hash)
+		VALUES ($1, 'SSO Owner', $2, true, $3)
+		RETURNING id`, subject, email, string(hash)).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = server.pool.Exec(context.Background(), `DELETE FROM app_users WHERE id=$1`, userID)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"`+email+`","password":"correct-horse"}`))
+	request.RemoteAddr = "198.51.100.90:1"
+	response := httptest.NewRecorder()
+	server.handleLogin(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("login = %d %s", response.Code, response.Body.String())
+	}
+	var cookie *http.Cookie
+	for _, item := range response.Result().Cookies() {
+		if item.Name == "session" {
+			cookie = item
+		}
+	}
+	if cookie == nil {
+		t.Fatal("login did not set session cookie")
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	request.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	server.handleAuthStatus(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"authenticated":true`) {
+		t.Fatalf("password login did not authenticate as the SSO user: %s", response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"passwordLogin":true`) {
+		t.Fatalf("status did not advertise password login: %s", response.Body.String())
+	}
+
+	wrong := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"`+email+`","password":"wrong-password"}`))
+	wrong.RemoteAddr = "198.51.100.91:1"
+	denied := httptest.NewRecorder()
+	server.handleLogin(denied, wrong)
+	if denied.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password = %d, want 401", denied.Code)
+	}
+}
+
+func TestUsernamePasswordLogin(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	subject := "oidc:https://idp.example/user-" + suffix
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct-horse"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	var userID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO app_users (auth_subject, display_name, username, is_admin, password_hash)
+		VALUES ($1, 'No Email', $2, true, $3)
+		RETURNING id`, subject, "keeper-"+suffix[:8], string(hash)).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = server.pool.Exec(context.Background(), `DELETE FROM app_users WHERE id=$1`, userID)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"keeper-`+suffix[:8]+`","password":"correct-horse"}`))
+	request.RemoteAddr = "198.51.100.93:1"
+	response := httptest.NewRecorder()
+	server.handleLogin(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("username login = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSetPasswordOnSSOUserThenLogin(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	email := "setpw-" + suffix + "@example.com"
+	subject := "oidc:https://idp.example/" + suffix
+	var userID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO app_users (auth_subject, display_name, email, is_admin)
+		VALUES ($1, 'SSO Owner', $2, true)
+		RETURNING id`, subject, email).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = server.pool.Exec(context.Background(), `DELETE FROM app_users WHERE id=$1`, userID)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/access/me/password",
+		strings.NewReader(`{"password":"new-password","confirmPassword":"new-password"}`))
+	request = request.WithContext(context.WithValue(request.Context(), principalKey, &principal{
+		ID: userID, DisplayName: "SSO Owner", Email: &email, IsAdmin: true, AuthSubject: subject,
+	}))
+	response := httptest.NewRecorder()
+	server.accessSetPassword(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("set password = %d %s", response.Code, response.Body.String())
+	}
+
+	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"`+email+`","password":"new-password"}`))
+	login.RemoteAddr = "198.51.100.92:1"
+	loggedIn := httptest.NewRecorder()
+	server.handleLogin(loggedIn, login)
+	if loggedIn.Code != http.StatusOK {
+		t.Fatalf("login after set password = %d %s", loggedIn.Code, loggedIn.Body.String())
+	}
+
+	again := httptest.NewRequest(http.MethodPost, "/api/v1/access/me/password",
+		strings.NewReader(`{"password":"other-password","confirmPassword":"other-password"}`))
+	again = again.WithContext(context.WithValue(again.Context(), principalKey, &principal{
+		ID: userID, DisplayName: "SSO Owner", Email: &email, IsAdmin: true, AuthSubject: subject,
+	}))
+	blocked := httptest.NewRecorder()
+	server.accessSetPassword(blocked, again)
+	if blocked.Code != http.StatusBadRequest {
+		t.Fatalf("change without current = %d, want 400", blocked.Code)
+	}
+}

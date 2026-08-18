@@ -25,6 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const loginSchema = z.object({
+  email: z.string().trim(),
   password: z.string().min(1, "Enter your password"),
 });
 
@@ -67,13 +68,20 @@ function LoginForm() {
 
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { password: "" },
+    defaultValues: { email: "", password: "" },
   });
 
   async function onSubmit(values: LoginValues) {
     setServerError(null);
     try {
+      if (showSso && !values.email) {
+        form.setError("email", {
+          message: "Enter your email or username",
+        });
+        return;
+      }
       await api.post<{ success: boolean }>("/auth/login", {
+        ...(values.email ? { email: values.email } : {}),
         password: values.password,
       });
       router.replace("/dashboard");
@@ -129,12 +137,33 @@ function LoginForm() {
                 noValidate
               >
                 <div className="grid gap-2">
+                  <Label htmlFor="email">Email or username</Label>
+                  <Input
+                    id="email"
+                    type="text"
+                    autoComplete="username"
+                    autoFocus={showSso}
+                    placeholder={
+                      showSso ? "SSO email or the username you chose" : undefined
+                    }
+                    aria-invalid={
+                      form.formState.errors.email ? true : undefined
+                    }
+                    {...form.register("email")}
+                  />
+                  {form.formState.errors.email && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {form.formState.errors.email.message}
+                    </p>
+                  )}
+                </div>
+                <div className="grid gap-2">
                   <Label htmlFor="password">Password</Label>
                   <Input
                     id="password"
                     type="password"
                     autoComplete="current-password"
-                    autoFocus
+                    autoFocus={!showSso}
                     aria-invalid={
                       form.formState.errors.password ? true : undefined
                     }

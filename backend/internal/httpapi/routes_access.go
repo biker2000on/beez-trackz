@@ -12,10 +12,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func (s *Server) mountAccess(r chi.Router) {
 	r.Get("/access/me", s.accessMe)
+	r.Post("/access/me/password", s.accessSetPassword)
 	r.Get("/access/tokens", s.accessTokenList)
 	r.Post("/access/tokens", s.accessTokenCreate)
 	r.Delete("/access/tokens/{id}", s.accessTokenDelete)
@@ -285,10 +287,109 @@ func (s *Server) accessMe(w http.ResponseWriter, r *http.Request) {
 		}
 		memberships = append(memberships, item)
 	}
+	var (
+		hasPassword bool
+		username    *string
+	)
+	if err := s.pool.QueryRow(r.Context(),
+		`SELECT password_hash IS NOT NULL, username FROM app_users WHERE id=$1`,
+		user.ID).Scan(&hasPassword, &username); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": user.ID, "displayName": user.DisplayName, "email": user.Email,
-		"isAdmin": user.IsAdmin, "memberships": memberships,
+		"username": username, "isAdmin": user.IsAdmin, "hasPassword": hasPassword,
+		"memberships": memberships,
 	})
+}
+
+func (s *Server) accessSetPassword(w http.ResponseWriter, r *http.Request) {
+	user := principalFrom(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req struct {
+		Username        string `json:"username"`
+		CurrentPassword string `json:"currentPassword"`
+		Password        string `json:"password"`
+		ConfirmPassword string `json:"confirmPassword"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Username = strings.ToLower(strings.TrimSpace(req.Username))
+	req.Password = strings.TrimSpace(req.Password)
+	req.ConfirmPassword = strings.TrimSpace(req.ConfirmPassword)
+	email := ""
+	if user.Email != nil {
+		email = strings.TrimSpace(*user.Email)
+	}
+	switch {
+	case email == "" && req.Username == "":
+		writeError(w, http.StatusBadRequest, "Choose a username so you can sign in without SSO")
+		return
+	case req.Username != "" && (strings.ContainsAny(req.Username, " \t") || len(req.Username) < 3 || len(req.Username) > 64):
+		writeError(w, http.StatusBadRequest, "Username must be 3–64 characters with no spaces")
+		return
+	case req.Password == "":
+		writeError(w, http.StatusBadRequest, "Password is required")
+		return
+	case req.Password != req.ConfirmPassword:
+		writeError(w, http.StatusBadRequest, "Passwords do not match")
+		return
+	case len(req.Password) < 8:
+		writeError(w, http.StatusBadRequest, "Password must be at least 8 characters")
+		return
+	}
+
+	var (
+		subject string
+		hash    *string
+	)
+	err := s.pool.QueryRow(r.Context(),
+		`SELECT COALESCE(auth_subject, ''), password_hash FROM app_users WHERE id=$1`,
+		user.ID).Scan(&subject, &hash)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if subject == "" {
+		writeError(w, http.StatusBadRequest, "Sign in with SSO once before adding a password")
+		return
+	}
+	if hash != nil {
+		if req.CurrentPassword == "" {
+			writeError(w, http.StatusBadRequest, "Current password is required")
+			return
+		}
+		if bcrypt.CompareHashAndPassword([]byte(*hash), []byte(req.CurrentPassword)) != nil {
+			writeError(w, http.StatusUnauthorized, "Current password is incorrect")
+			return
+		}
+	}
+
+	next, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "hashing failed")
+		return
+	}
+	if req.Username != "" {
+		if _, err := s.pool.Exec(r.Context(),
+			`UPDATE app_users SET password_hash=$1, username=$2 WHERE id=$3`,
+			string(next), req.Username, user.ID); err != nil {
+			writeError(w, http.StatusConflict, "That username is already in use")
+			return
+		}
+	} else if _, err := s.pool.Exec(r.Context(),
+		`UPDATE app_users SET password_hash=$1 WHERE id=$2`,
+		string(next), user.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "hasPassword": true})
 }
 
 type accessTokenRow struct {

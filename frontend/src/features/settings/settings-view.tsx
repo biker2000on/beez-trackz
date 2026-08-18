@@ -3,6 +3,7 @@
 import {
   Bot,
   KeyRound,
+  Lock,
   Milk,
   MonitorSmartphone,
   SlidersHorizontal,
@@ -13,6 +14,7 @@ import { useAccessProfile } from "@/features/access/api";
 import { AISection } from "./ai-section";
 import { InstallSection } from "./install-section";
 import { JarSizesSection } from "./jar-sizes-section";
+import { PasswordSection } from "./password-section";
 import { PreferencesSection } from "./preferences-section";
 import { SettingsSection } from "./settings-section";
 
@@ -24,9 +26,16 @@ export function SettingsView() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          Preferences, AI providers, jar sizes, and app install.
+          Preferences, sign-in, AI providers, jar sizes, and app install.
         </p>
       </div>
+      <SettingsSection
+        title="Password login"
+        description="Use your SSO email and a password, or keep signing in with SSO."
+        icon={Lock}
+      >
+        <PasswordSection />
+      </SettingsSection>
       {isAdmin ? (
         <>
           <SettingsSection

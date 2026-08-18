@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -45,6 +47,7 @@ type Config struct {
 const defaultTrustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 func Load() (*Config, error) {
+	loadDotEnv()
 	cfg := &Config{
 		ListenAddr:       getenv("LISTEN_ADDR", ":8080"),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
@@ -131,4 +134,53 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadDotEnv fills unset process env from nearby .env files so `go run ./cmd/...`
+// works from backend/ or the repo root without a manual export. Existing
+// environment variables always win, including empty values set by tests.
+func loadDotEnv() {
+	for _, path := range []string{
+		filepath.Join("..", ".env"),
+		filepath.Join("..", ".env.local"),
+		filepath.Join("backend", ".env"),
+		filepath.Join("backend", ".env.local"),
+		".env",
+		".env.local",
+	} {
+		applyEnvFile(path)
+	}
+}
+
+func applyEnvFile(path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 {
+			if q := value[0]; (q == '"' || q == '\'') && value[len(value)-1] == q {
+				value = value[1 : len(value)-1]
+			}
+		}
+		_ = os.Setenv(key, value)
+	}
 }
