@@ -31,22 +31,23 @@ func (s *Server) mountHives(r chi.Router) {
 
 // hiveJSON is the hive response shape (list and detail).
 type hiveJSON struct {
-	ID            string     `json:"id"`
-	ApiaryID      string     `json:"apiaryId"`
-	ApiaryName    string     `json:"apiaryName"`
-	PositionLabel string     `json:"positionLabel"`
-	StandID       *string    `json:"standId"`
-	SlotRow       *int       `json:"slotRow"`
-	SlotCol       *int       `json:"slotCol"`
-	Placement     *string    `json:"placement"`
-	FacingDegrees *int       `json:"facingDegrees"`
-	Status        string     `json:"status"`
-	InstalledDate *time.Time `json:"installedDate"`
-	IsArchived    bool       `json:"isArchived"`
-	DeadoutDate   *time.Time `json:"deadoutDate"`
-	Notes         *string    `json:"notes"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	ID            string           `json:"id"`
+	ApiaryID      string           `json:"apiaryId"`
+	ApiaryName    string           `json:"apiaryName"`
+	PositionLabel string           `json:"positionLabel"`
+	StandID       *string          `json:"standId"`
+	SlotRow       *int             `json:"slotRow"`
+	SlotCol       *int             `json:"slotCol"`
+	Placement     *string          `json:"placement"`
+	FacingDegrees *int             `json:"facingDegrees"`
+	Status        string           `json:"status"`
+	InstalledDate *time.Time       `json:"installedDate"`
+	IsArchived    bool             `json:"isArchived"`
+	DeadoutDate   *time.Time       `json:"deadoutDate"`
+	Notes         *string          `json:"notes"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
+	Lockout       *hiveLockoutJSON `json:"lockout,omitempty"`
 }
 
 const hiveSelectSQL = `
@@ -224,6 +225,10 @@ func (s *Server) handleHiveList(w http.ResponseWriter, r *http.Request) {
 		items = append(items, *h)
 	}
 	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := s.attachHiveLockouts(r.Context(), items, time.Now()); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -472,6 +477,10 @@ func (s *Server) handleHiveGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := s.fillHiveLockout(r.Context(), hive); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}

@@ -1,51 +1,48 @@
-# PR 3 — Varroa program remaining
+# PR 2 — Treatment lockout, lot moisture, Saturday yard queue
 
-Branch: `feat/1f80f067-pr-3-varroa-program`
+Branch: `feat/1f80f067-pr-2-lockout-queue`
 
-Sticky-board vs rate chart is unchanged: washes/rolls still plot as mites per
-100; board/visual stay off that axis unless they have a per-day rate.
+Legal/money gates on honey, plus one phone-first Saturday work list. Not a
+reminder card and not a fourth recommendations inbox.
 
 ## Shipped
 
-1. **Board exposure duration.** `mite_counts.days_on_board` plus generated
-   `mites_per_day` for `sticky_board` / `visual`. Washes/rolls stay
-   `mites_per_100`. Sticky boards default to 1 day when duration is omitted.
-2. **Action levels.** Seasonal wash thresholds (spring/fall 2.0, summer/winter
-   3.0) and a 9 mites/day board line. Optional overrides on `user_settings`
-   (`mite_threshold_per_100`, `mite_threshold_per_day`,
-   `mite_check_interval_days`). `treat_now` reads the latest comparable count
-   and fires high/urgent. Health panel shows the latest **number** plus a
-   threshold line — 0.3 vs 9.0 is not color-only.
-3. **Sampling reminder.** `mite_check_due` mirrors `inspection_due`: never
-   sampled, then overdue by interval (14 days in season, 28 off-season, or the
-   settings override).
-4. **Counts can be corrected.** `PATCH /mite-counts/{id}` and existing DELETE.
-   Inspection GET includes `miteCounts`; PUT replaces them. Standalone upsert
-   uses a partial unique index on `(hive_id, date, method) WHERE inspection_id
-   IS NULL` (NULL no longer silently inserts duplicates).
-5. **Fleet analytics.** `GET /analytics/varroa` without `hiveId` returns every
-   visible hive, last count, and `overThreshold`.
-6. **Efficacy pairing.** Before is last comparable count in the 21 days up to
-   `date_applied`. After is first comparable count after
-   `COALESCE(date_removed, date_applied)`, within 42 days, and before the next
-   treatment. Board rates pair as mites/day. Mixed units do not invent a %.
-   Tests cover the windows, `date_removed`, next-treatment bound, and board
-   rates.
-7. **Hive overview card** shows the last mite number (e.g. `9.0 / 100`), not
-   only a “Varroa trends” link.
-8. **MCP** `record_mite_count` (same path as `record_inspection` /
-   `record_feeding`).
+1. **Treatment vs harvest lockout.** Treatment products carry withdrawal days
+   (catalog + stamped `treatment_events.withdrawal_days`). A hive is locked
+   while the treatment is still on (`date_removed` is null) and until
+   `date_removed + days`. Standalone harvests, harvest-session entries, and
+   sales of lots whose source harvests were extracted inside that window
+   return 409 with `This honey cannot be extracted/sold until DATE` (or
+   until the product is removed). The same payload is on hive GET/list and
+   harvest-lot GET/list.
+2. **Lot moisture.** Refractometer `%` on the harvest session (create +
+   PATCH) and on the lot (`moisture_pct` at extraction, optional
+   `bottling_moisture_pct` at bottling). Harvest session create/update and
+   lot create/update reject readings over the threshold (default 18.6%,
+   override on `user_settings.moisture_threshold_pct`). Sales do not
+   re-check moisture.
+3. **Saturday yard queue.** `GET /operations/yard-queue` and
+   `/operations/yard-queue`: open recs (`treat_now`, `mite_check_due`,
+   others except `feeder_check`), harvest-ready hives (stores ≥ 4 and not
+   locked), feeders needing refill, and lockout end dates, grouped by yard.
+   In nav (`g k`), dashboard, PWA shell cache.
 
 ## Schema
 
-Migration **00016** only: `00016_varroa_program.sql`.
+Migration **00019** only: `00019_lockout_moisture.sql`.
+
+- `treatment_products` catalog (seeded common miticides)
+- `treatment_events.withdrawal_days` (NOT NULL, stamped at record time)
+- `harvest_sessions.moisture_pct`
+- `harvest_lots.moisture_pct`, `harvest_lots.bottling_moisture_pct`
+- `user_settings.moisture_threshold_pct`
 
 ## Tests
 
-- `backend/internal/httpapi/routes_operations_varroa_test.go` — upsert, PATCH,
-  DELETE, inspection GET/PUT, fleet analytics, efficacy SQL.
-- `backend/internal/recs/varroa_test.go` — seasonal thresholds / comparable
-  rate.
-- `backend/internal/recs/rules_varroa_test.go` — treat-now and mite-check-due.
+- `backend/internal/httpapi/lockout_test.go` — date math, still-on vs
+  withdrawal window, moisture threshold compare (no database).
+- `backend/internal/httpapi/routes_lockout_moisture_test.go` — harvest
+  refuse while on / in window, session entry refuse, sale refuse of a
+  tainted lot, session/lot moisture reject, settings override.
 
 Integration tests need `TEST_DATABASE_URL`.

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -233,8 +234,16 @@ func feedingStatusSort(rows []feedingStatusRow) {
 // that have never been fed remain visible with zero counts and no latest feed,
 // rather than disappearing from an ostensibly per-hive status view.
 func (s *Server) handleFeedingsStatus(w http.ResponseWriter, r *http.Request) {
-	user := principalFrom(r)
-	rows, err := s.pool.Query(r.Context(), `
+	list, err := s.listFeedingStatus(r.Context(), principalFrom(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (s *Server) listFeedingStatus(ctx context.Context, user *principal) ([]feedingStatusRow, error) {
+	rows, err := s.pool.Query(ctx, `
 		WITH visible_hives AS (
 			SELECT hive.id AS hive_id, hive.position_label AS hive_name,
 				hive.apiary_id, apiary.name AS apiary_name
@@ -274,8 +283,7 @@ func (s *Server) handleFeedingsStatus(w http.ResponseWriter, r *http.Request) {
 		GROUP BY hive_id, hive_name, apiary_id, apiary_name`,
 		user.IsAdmin, user.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -289,16 +297,14 @@ func (s *Server) handleFeedingsStatus(w http.ResponseWriter, r *http.Request) {
 			&row.LatestFeedType, &row.LatestQuantity, &row.LatestQuantityUnit,
 			&row.LatestFeederType, &row.LatestFeedingID,
 			&row.oldestOpenID, &row.oldestUnverifiedID); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return nil, err
 		}
 		feedingStatusEvaluate(&row, now)
 		list = append(list, row)
 	}
 	if rows.Err() != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+		return nil, rows.Err()
 	}
 	feedingStatusSort(list)
-	writeJSON(w, http.StatusOK, list)
+	return list, nil
 }

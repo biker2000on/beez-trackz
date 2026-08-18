@@ -59,6 +59,7 @@ import {
   useHarvestSession,
   useHiveOptions,
   useTrueUpSession,
+  useUpdateSession,
   type SessionEntryBody,
 } from "./hooks";
 import type { HarvestSessionEntry, SessionTrueUp } from "./types";
@@ -157,6 +158,8 @@ export function SessionDetail({ id }: { id: string }) {
           )}
         />
       </div>
+
+      <MoistureCard sessionId={id} moisturePct={data.moisturePct} />
 
       <Card>
         <CardHeader>
@@ -309,6 +312,63 @@ export function SessionDetail({ id }: { id: string }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+function MoistureCard({
+  sessionId,
+  moisturePct,
+}: {
+  sessionId: string;
+  moisturePct: number | null;
+}) {
+  const update = useUpdateSession(sessionId);
+  const [value, setValue] = React.useState(
+    moisturePct != null ? String(moisturePct) : "",
+  );
+  React.useEffect(() => {
+    setValue(moisturePct != null ? String(moisturePct) : "");
+  }, [moisturePct]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Refractometer moisture</CardTitle>
+        <CardDescription>
+          Recorded at extraction. Harvest refuses readings over the instance
+          threshold (default 18.6%).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ShortcutForm
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const pct = parseNum(value);
+            if (pct == null) return;
+            update.mutate({ moisturePct: pct });
+          }}
+        >
+          <div className="grid gap-1.5">
+            <Label htmlFor="session-moisture">Moisture %</Label>
+            <Input
+              id="session-moisture"
+              type="number"
+              inputMode="decimal"
+              step="0.1"
+              min={0}
+              max={100}
+              className="w-32"
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          </div>
+          <Button type="submit" disabled={update.isPending}>
+            {update.isPending ? "Saving…" : "Save moisture"}
+          </Button>
+        </ShortcutForm>
+      </CardContent>
+    </Card>
   );
 }
 

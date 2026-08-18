@@ -23,6 +23,7 @@ const SHELL = [
   "/offline",
   "/login",
   "/dashboard",
+  "/operations/yard-queue",
   "/harvest",
   "/harvest/market-day",
   "/icons/icon-192.png",

@@ -184,6 +184,13 @@ func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	if msg, err := refuseHiveHarvest(r.Context(), s.pool, hiveID, date); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusConflict, msg)
+		return
+	}
 
 	var id uuid.UUID
 	err = s.pool.QueryRow(r.Context(), `
@@ -990,6 +997,15 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	if message := honeyCheckJarAvailability(onHand, labels, needed); message != "" {
 		writeError(w, http.StatusBadRequest, message)
 		return
+	}
+	if req.HarvestLotID != nil {
+		if msg, err := refuseLotSale(ctx, tx, *req.HarvestLotID, date); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		} else if msg != "" {
+			writeError(w, http.StatusConflict, msg)
+			return
+		}
 	}
 
 	var wholesaleMinimum *money

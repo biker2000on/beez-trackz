@@ -17,6 +17,7 @@ import { JarSizesSection } from "./jar-sizes-section";
 import { PasswordSection } from "./password-section";
 import { PreferencesSection } from "./preferences-section";
 import { SettingsSection } from "./settings-section";
+import { TreatmentProductsSection } from "./treatment-products-section";
 
 export function SettingsView() {
   const profile = useAccessProfile();
@@ -60,6 +61,14 @@ export function SettingsView() {
             defaultOpen={false}
           >
             <JarSizesSection />
+          </SettingsSection>
+          <SettingsSection
+            title="Treatment withdrawals"
+            description="Days after date-off before honey from that hive can be extracted or sold."
+            icon={SlidersHorizontal}
+            defaultOpen={false}
+          >
+            <TreatmentProductsSection />
           </SettingsSection>
         </>
       ) : null}

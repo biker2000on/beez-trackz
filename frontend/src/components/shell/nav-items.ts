@@ -1,4 +1,5 @@
 import {
+  ClipboardList,
   Crown,
   Droplets,
   Hexagon,
@@ -44,6 +45,14 @@ export const NAV_ITEMS: NavItem[] = [
     icon: LayoutDashboard,
     shortcutKey: "d",
     keywords: ["home"],
+  },
+  {
+    label: "Yard queue",
+    shortLabel: "Queue",
+    href: "/operations/yard-queue",
+    icon: ClipboardList,
+    shortcutKey: "k",
+    keywords: ["saturday", "field work", "lockout", "harvest"],
   },
   {
     label: "Apiaries",
@@ -348,6 +357,7 @@ const MOBILE_PRIORITY = [
   "/apiaries",
   "/hives",
   "/harvest",
+  "/operations/yard-queue",
   "/inventory",
   "/reports",
   "/recommendations",

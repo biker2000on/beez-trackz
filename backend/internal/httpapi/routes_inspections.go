@@ -365,12 +365,17 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		if strings.TrimSpace(treatment.Product) == "" {
 			continue
 		}
+		days, err := s.resolveWithdrawalDays(r.Context(), treatment.Product)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO treatment_events
-				(hive_id, inspection_id, date_applied, product, method)
-			VALUES ($1,$2,$3,$4,$5)`,
+				(hive_id, inspection_id, date_applied, product, method, withdrawal_days)
+			VALUES ($1,$2,$3,$4,$5,$6)`,
 			hiveID, id, date, strings.TrimSpace(treatment.Product),
-			inspectionTrimPtr(treatment.Method)); err != nil {
+			inspectionTrimPtr(treatment.Method), days); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid treatment")
 			return
 		}

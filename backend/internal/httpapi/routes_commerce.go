@@ -82,48 +82,54 @@ func commerceOptionalHTTPURL(value *string) (*string, error) {
 }
 
 type harvestLotPayload struct {
-	LotCode        string         `json:"lotCode"`
-	PublicSlug     string         `json:"publicSlug"`
-	ExtractionDate string         `json:"extractionDate"`
-	HoneyWeightLbs float64        `json:"honeyWeightLbs"`
-	HoneyVariety   *string        `json:"honeyVariety"`
-	Season         *string        `json:"season"`
-	ApiaryRegion   *string        `json:"apiaryRegion"`
-	BloomNotes     *string        `json:"bloomNotes"`
-	BeekeeperStory *string        `json:"beekeeperStory"`
-	TestingData    map[string]any `json:"testingData"`
-	ReorderURL     *string        `json:"reorderUrl"`
-	IsPublic       *bool          `json:"isPublic"`
-	HarvestIDs     []uuid.UUID    `json:"harvestIds"`
-	PhotoIDs       []uuid.UUID    `json:"photoIds"`
+	LotCode             string         `json:"lotCode"`
+	PublicSlug          string         `json:"publicSlug"`
+	ExtractionDate      string         `json:"extractionDate"`
+	HoneyWeightLbs      float64        `json:"honeyWeightLbs"`
+	HoneyVariety        *string        `json:"honeyVariety"`
+	Season              *string        `json:"season"`
+	ApiaryRegion        *string        `json:"apiaryRegion"`
+	BloomNotes          *string        `json:"bloomNotes"`
+	BeekeeperStory      *string        `json:"beekeeperStory"`
+	TestingData         map[string]any `json:"testingData"`
+	ReorderURL          *string        `json:"reorderUrl"`
+	IsPublic            *bool          `json:"isPublic"`
+	HarvestIDs          []uuid.UUID    `json:"harvestIds"`
+	PhotoIDs            []uuid.UUID    `json:"photoIds"`
+	MoisturePct         *float64       `json:"moisturePct"`
+	BottlingMoisturePct *float64       `json:"bottlingMoisturePct"`
 }
 
 type harvestLotRow struct {
-	ID               uuid.UUID        `json:"id"`
-	LotCode          string           `json:"lotCode"`
-	PublicSlug       string           `json:"publicSlug"`
-	ExtractionDate   time.Time        `json:"extractionDate"`
-	HoneyWeightLbs   float64          `json:"honeyWeightLbs"`
-	HoneyVariety     *string          `json:"honeyVariety"`
-	Season           *string          `json:"season"`
-	ApiaryRegion     *string          `json:"apiaryRegion"`
-	BloomNotes       *string          `json:"bloomNotes"`
-	BeekeeperStory   *string          `json:"beekeeperStory"`
-	TestingData      map[string]any   `json:"testingData"`
-	ReorderURL       *string          `json:"reorderUrl"`
-	IsPublic         bool             `json:"isPublic"`
-	SourceHarvestIDs []uuid.UUID      `json:"sourceHarvestIds"`
-	SourceApiaries   []string         `json:"sourceApiaries"`
-	Photos           []map[string]any `json:"photos"`
-	BottlingRuns     []map[string]any `json:"bottlingRuns"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
+	ID                  uuid.UUID        `json:"id"`
+	LotCode             string           `json:"lotCode"`
+	PublicSlug          string           `json:"publicSlug"`
+	ExtractionDate      time.Time        `json:"extractionDate"`
+	HoneyWeightLbs      float64          `json:"honeyWeightLbs"`
+	HoneyVariety        *string          `json:"honeyVariety"`
+	Season              *string          `json:"season"`
+	ApiaryRegion        *string          `json:"apiaryRegion"`
+	BloomNotes          *string          `json:"bloomNotes"`
+	BeekeeperStory      *string          `json:"beekeeperStory"`
+	TestingData         map[string]any   `json:"testingData"`
+	ReorderURL          *string          `json:"reorderUrl"`
+	IsPublic            bool             `json:"isPublic"`
+	MoisturePct         *float64         `json:"moisturePct"`
+	BottlingMoisturePct *float64         `json:"bottlingMoisturePct"`
+	Lockout             *hiveLockoutJSON `json:"lockout,omitempty"`
+	SourceHarvestIDs    []uuid.UUID      `json:"sourceHarvestIds"`
+	SourceApiaries      []string         `json:"sourceApiaries"`
+	Photos              []map[string]any `json:"photos"`
+	BottlingRuns        []map[string]any `json:"bottlingRuns"`
+	CreatedAt           time.Time        `json:"createdAt"`
+	UpdatedAt           time.Time        `json:"updatedAt"`
 }
 
 const harvestLotSelect = `
 	SELECT id, lot_code, public_slug, extraction_date, honey_weight_lbs,
 		honey_variety, season, apiary_region, bloom_notes, beekeeper_story,
-		COALESCE(testing_data, '{}'::jsonb), reorder_url, is_public, created_at, updated_at
+		COALESCE(testing_data, '{}'::jsonb), reorder_url, is_public,
+		moisture_pct, bottling_moisture_pct, created_at, updated_at
 	FROM harvest_lots`
 
 func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]harvestLotRow, error) {
@@ -138,7 +144,8 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 		if err := rows.Scan(&item.ID, &item.LotCode, &item.PublicSlug, &item.ExtractionDate,
 			&item.HoneyWeightLbs, &item.HoneyVariety, &item.Season, &item.ApiaryRegion,
 			&item.BloomNotes, &item.BeekeeperStory, &item.TestingData, &item.ReorderURL,
-			&item.IsPublic, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
+			&item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		item.SourceHarvestIDs = []uuid.UUID{}
@@ -238,9 +245,24 @@ func (s *Server) populateHarvestLot(r *http.Request, item *harvestLotRow) error 
 	return runRows.Err()
 }
 
+func (s *Server) attachLotLockouts(r *http.Request, items []harvestLotRow) error {
+	for i := range items {
+		st, err := lotLockoutAsOf(r.Context(), s.pool, items[i].ID, time.Now())
+		if err != nil {
+			return err
+		}
+		items[i].Lockout = st.toJSON()
+	}
+	return nil
+}
+
 func (s *Server) harvestLotList(w http.ResponseWriter, r *http.Request) {
 	items, err := s.harvestLotRows(r, "ORDER BY extraction_date DESC, lot_code DESC")
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := s.attachLotLockouts(r, items); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -262,6 +284,10 @@ func (s *Server) harvestLotGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "harvest lot not found")
 		return
 	}
+	if err := s.attachLotLockouts(r, items); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, items[0])
 }
 
@@ -274,6 +300,17 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 	date, err := parseDate(req.ExtractionDate)
 	if err != nil || strings.TrimSpace(req.LotCode) == "" || req.HoneyWeightLbs < 0 {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
+		return
+	}
+	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg := validateMoisturePct(req.BottlingMoisturePct); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	public := true
@@ -300,13 +337,13 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO harvest_lots
 			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_variety,
 			 season, apiary_region, bloom_notes, beekeeper_story, testing_data,
-			 reorder_url, is_public, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+			 reorder_url, is_public, moisture_pct, bottling_moisture_pct, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
 		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public, actorID(r)).Scan(&id)
+		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct, actorID(r)).Scan(&id)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -354,6 +391,17 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
 		return
 	}
+	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	if msg := validateMoisturePct(req.BottlingMoisturePct); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	public := true
 	if req.IsPublic != nil {
 		public = *req.IsPublic
@@ -392,12 +440,12 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		UPDATE harvest_lots SET lot_code=$1, public_slug=$2, extraction_date=$3,
 			honey_weight_lbs=$4, honey_variety=$5, season=$6, apiary_region=$7,
 			bloom_notes=$8, beekeeper_story=$9, testing_data=$10, reorder_url=$11,
-			is_public=$12 WHERE id=$13`,
+			is_public=$12, moisture_pct=$13, bottling_moisture_pct=$14 WHERE id=$15`,
 		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public, id)
+		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct, id)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -447,6 +495,7 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		HoneyLbs    *float64   `json:"honeyLbs"`
 		Notes       *string    `json:"notes"`
 		Serialize   bool       `json:"serialize"`
+		MoisturePct *float64   `json:"moisturePct"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -470,6 +519,10 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	if req.JarSizeID == nil {
 		writeError(w, http.StatusBadRequest,
 			"jarSizeId is required so the bottled jars enter inventory")
+		return
+	}
+	if msg := validateMoisturePct(req.MoisturePct); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -582,6 +635,14 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			serials = append(serials, serial)
+		}
+	}
+	if req.MoisturePct != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE harvest_lots SET bottling_moisture_pct = $2 WHERE id = $1`,
+			lotID, req.MoisturePct); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
 		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {

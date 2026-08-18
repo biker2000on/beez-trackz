@@ -22,6 +22,7 @@ import { HoneySummaryWidget } from "./honey-summary-widget";
 import { NeedsAttentionWidget } from "./needs-attention-widget";
 import { RecentInspectionsWidget } from "./recent-inspections-widget";
 import { TodaysActionsWidget } from "./todays-actions-widget";
+import { YardQueueLink } from "@/features/operations/yard-queue";
 import { FIELD_VISIBLE, useFieldWork, type FieldItem } from "./hooks";
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
@@ -33,6 +34,7 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 }
 
 const REPORTS = [
+  { href: "/operations/yard-queue", label: "Saturday yard queue" },
   { href: "/reports", label: "Reports and analytics" },
   { href: "/recommendations", label: "All recommendations" },
 ];
@@ -209,7 +211,10 @@ export function DashboardView() {
   return (
     <div className="grid gap-8">
       <div className="flex flex-wrap items-end justify-between gap-2">
-        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+          <YardQueueLink />
+        </div>
         {visibleItems.length > 0 && (
           <p className="hidden text-[11px] text-muted-foreground md:block">
             Keyboard: <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">↑/↓</kbd> move ·{" "}

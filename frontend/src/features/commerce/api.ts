@@ -19,6 +19,18 @@ export interface HarvestLot {
   testingData: Record<string, unknown>;
   reorderUrl: string | null;
   isPublic: boolean;
+  moisturePct: number | null;
+  bottlingMoisturePct: number | null;
+  lockout?: {
+    locked: boolean;
+    treatmentOn: boolean;
+    lockoutUntil: string | null;
+    product: string | null;
+    dateApplied: string | null;
+    dateRemoved: string | null;
+    withdrawalDays: number;
+    message: string;
+  } | null;
   sourceHarvestIds: string[];
   sourceApiaries: string[];
   photos: { id: string; url: string; caption: string | null }[];
@@ -51,6 +63,8 @@ export interface HarvestLotInput {
   isPublic: boolean;
   harvestIds: string[];
   photoIds: string[];
+  moisturePct?: number | null;
+  bottlingMoisturePct?: number | null;
 }
 
 export interface Expense {
@@ -227,6 +241,7 @@ export function useCreateBottlingRun(lotId: string) {
       honeyLbs?: number;
       notes?: string;
       serialize: boolean;
+      moisturePct?: number;
     }) => api.post(`/harvest-lots/${lotId}/bottling-runs`, body),
     "Bottling run recorded",
   );

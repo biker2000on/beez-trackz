@@ -63,6 +63,7 @@ test("service worker source encodes offline queue contracts", async ({
 
   expect(sw).toContain('"/login"');
   expect(sw).toContain('"/dashboard"');
+  expect(sw).toContain('"/operations/yard-queue"');
   expect(sw).toContain('"/harvest"');
   expect(sw).toContain('"/harvest/market-day"');
   expect(sw).toContain("function navigateFallback");

@@ -33,6 +33,7 @@ const GUARD_POLL_MS = 1_000;
  */
 const CALM_ROUTES = new Set([
   "/dashboard",
+  "/operations/yard-queue",
   "/apiaries",
   "/hives",
   "/genealogy",

@@ -10,6 +10,17 @@ import { api } from "@/lib/api";
 
 // --- types (mirror backend/internal/httpapi/routes_hives.go et al.) ---
 
+export interface HiveLockout {
+  locked: boolean;
+  treatmentOn: boolean;
+  lockoutUntil: string | null;
+  product: string | null;
+  dateApplied: string | null;
+  dateRemoved: string | null;
+  withdrawalDays: number;
+  message: string;
+}
+
 export interface Hive {
   id: string;
   apiaryId: string;
@@ -27,6 +38,7 @@ export interface Hive {
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+  lockout?: HiveLockout | null;
 }
 
 export interface HivePayload {

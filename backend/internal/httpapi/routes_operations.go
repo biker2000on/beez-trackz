@@ -32,6 +32,9 @@ func (s *Server) mountOperations(r chi.Router) {
 	r.Get("/analytics/varroa", s.varroaAnalytics)
 	r.Get("/analytics/survival", s.survivalAnalytics)
 	r.Get("/analytics/yield", s.yieldAnalytics)
+	r.Get("/operations/yard-queue", s.yardQueue)
+	r.Get("/treatment-products", s.treatmentProductList)
+	r.With(s.requireAdmin).Patch("/treatment-products/{id}", s.treatmentProductUpdate)
 }
 
 var miteMethods = map[string]bool{
@@ -174,13 +177,14 @@ var queenEventTypes = map[string]bool{
 
 func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		HiveID       uuid.UUID  `json:"hiveId"`
-		InspectionID *uuid.UUID `json:"inspectionId"`
-		DateApplied  string     `json:"dateApplied"`
-		Product      string     `json:"product"`
-		Method       *string    `json:"method"`
-		DateRemoved  *string    `json:"dateRemoved"`
-		Notes        *string    `json:"notes"`
+		HiveID         uuid.UUID  `json:"hiveId"`
+		InspectionID   *uuid.UUID `json:"inspectionId"`
+		DateApplied    string     `json:"dateApplied"`
+		Product        string     `json:"product"`
+		Method         *string    `json:"method"`
+		DateRemoved    *string    `json:"dateRemoved"`
+		Notes          *string    `json:"notes"`
+		WithdrawalDays *int       `json:"withdrawalDays"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -203,13 +207,28 @@ func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		removed = &v
 	}
+	days := 0
+	if req.WithdrawalDays != nil {
+		if *req.WithdrawalDays < 0 {
+			writeError(w, http.StatusBadRequest, "withdrawalDays must be zero or greater")
+			return
+		}
+		days = *req.WithdrawalDays
+	} else {
+		resolved, err := s.resolveWithdrawalDays(r.Context(), req.Product)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		days = resolved
+	}
 	var id uuid.UUID
 	err = s.pool.QueryRow(r.Context(), `
 		INSERT INTO treatment_events
-			(hive_id, inspection_id, date_applied, product, method, date_removed, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			(hive_id, inspection_id, date_applied, product, method, date_removed, notes, withdrawal_days)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 		req.HiveID, req.InspectionID, date, strings.TrimSpace(req.Product),
-		honeyTrimPtr(req.Method), removed, honeyTrimPtr(req.Notes)).Scan(&id)
+		honeyTrimPtr(req.Method), removed, honeyTrimPtr(req.Notes), days).Scan(&id)
 	if err != nil {
 		if honeyIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid hiveId or inspectionId")
@@ -340,7 +359,12 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 			UNION ALL
 			SELECT t.id, 'treatment', t.date_applied, 'Treatment: ' || t.product,
 				concat_ws(' · ', t.method, t.notes), '[]'::jsonb,
-				jsonb_build_object('dateRemoved', t.date_removed)
+				jsonb_build_object(
+					'dateRemoved', t.date_removed,
+					'withdrawalDays', t.withdrawal_days,
+					'lockoutUntil', CASE WHEN t.date_removed IS NULL THEN NULL
+						ELSE (t.date_removed::date + t.withdrawal_days)::date END
+				)
 			FROM treatment_events t WHERE t.hive_id = $1
 			UNION ALL
 			SELECT m.id, 'mite_count', m.date, 'Varroa count',
@@ -798,6 +822,76 @@ func (s *Server) yieldAnalytics(w http.ResponseWriter, r *http.Request) {
 		"year": year, "totalPounds": total, "byHive": hives,
 		"byApiary": apiaries, "byYear": byYear,
 	})
+}
+
+func (s *Server) treatmentProductList(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT id, name, aliases, withdrawal_days, notes
+		FROM treatment_products ORDER BY name`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer rows.Close()
+	type product struct {
+		ID             uuid.UUID `json:"id"`
+		Name           string    `json:"name"`
+		Aliases        []string  `json:"aliases"`
+		WithdrawalDays int       `json:"withdrawalDays"`
+		Notes          *string   `json:"notes"`
+	}
+	out := make([]product, 0)
+	for rows.Next() {
+		var item product
+		if err := rows.Scan(&item.ID, &item.Name, &item.Aliases, &item.WithdrawalDays, &item.Notes); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if item.Aliases == nil {
+			item.Aliases = []string{}
+		}
+		out = append(out, item)
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) treatmentProductUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		WithdrawalDays *int `json:"withdrawalDays"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.WithdrawalDays == nil {
+		writeError(w, http.StatusBadRequest, "withdrawalDays is required")
+		return
+	}
+	if *req.WithdrawalDays < 0 {
+		writeError(w, http.StatusBadRequest, "withdrawalDays must be zero or greater")
+		return
+	}
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE treatment_products SET withdrawal_days = $2 WHERE id = $1`,
+		id, *req.WithdrawalDays)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "treatment product not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // Make sure the pgx import remains tied to an actual error classification in

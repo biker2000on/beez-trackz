@@ -32,6 +32,7 @@ type prefsJSON struct {
 	MiteThresholdPer100   *float64   `json:"miteThresholdPer100"`
 	MiteThresholdPerDay   *float64   `json:"miteThresholdPerDay"`
 	MiteCheckIntervalDays *int       `json:"miteCheckIntervalDays"`
+	MoistureThresholdPct  *float64   `json:"moistureThresholdPct"`
 }
 
 func prefsOr(v *string, def string) string {
@@ -49,13 +50,15 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		defaultApiaryID                            *uuid.UUID
 		thresholdPer100, thresholdPerDay           *float64
 		checkInterval                              *int
+		moistureThreshold                          *float64
 	)
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT display_name, theme, default_apiary_id, date_format, weight_unit,
-			mite_threshold_per_100, mite_threshold_per_day, mite_check_interval_days
+			mite_threshold_per_100, mite_threshold_per_day, mite_check_interval_days,
+			moisture_threshold_pct
 		FROM user_settings LIMIT 1`).
 		Scan(&displayName, &theme, &defaultApiaryID, &dateFormat, &weightUnit,
-			&thresholdPer100, &thresholdPerDay, &checkInterval)
+			&thresholdPer100, &thresholdPerDay, &checkInterval, &moistureThreshold)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -69,6 +72,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		MiteThresholdPer100:   thresholdPer100,
 		MiteThresholdPerDay:   thresholdPerDay,
 		MiteCheckIntervalDays: checkInterval,
+		MoistureThresholdPct:  moistureThreshold,
 	})
 }
 
@@ -82,6 +86,7 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		MiteThresholdPer100   *float64 `json:"miteThresholdPer100"`
 		MiteThresholdPerDay   *float64 `json:"miteThresholdPerDay"`
 		MiteCheckIntervalDays *int     `json:"miteCheckIntervalDays"`
+		MoistureThresholdPct  *float64 `json:"moistureThresholdPct"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -108,6 +113,10 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "miteCheckIntervalDays must be positive")
 		return
 	}
+	if req.MoistureThresholdPct != nil && (*req.MoistureThresholdPct <= 0 || *req.MoistureThresholdPct > 100) {
+		writeError(w, http.StatusBadRequest, "moistureThresholdPct must be between 0 and 100")
+		return
+	}
 
 	theme := prefsOr(&req.Theme, prefsDefaultTheme)
 	dateFormat := prefsOr(&req.DateFormat, prefsDefaultDateFormat)
@@ -117,10 +126,11 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		UPDATE user_settings
 		SET theme = $1, default_apiary_id = $2, date_format = $3, weight_unit = $4,
 			mite_threshold_per_100 = $5, mite_threshold_per_day = $6,
-			mite_check_interval_days = $7
+			mite_check_interval_days = $7, moisture_threshold_pct = $8
 		WHERE id = (SELECT id FROM user_settings LIMIT 1)`,
 		theme, defaultApiaryID, dateFormat, weightUnit,
-		req.MiteThresholdPer100, req.MiteThresholdPerDay, req.MiteCheckIntervalDays)
+		req.MiteThresholdPer100, req.MiteThresholdPerDay, req.MiteCheckIntervalDays,
+		req.MoistureThresholdPct)
 	if err != nil {
 		if inspectionIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "Apiary not found")

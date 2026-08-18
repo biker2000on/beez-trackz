@@ -88,6 +88,7 @@ export function PreferencesSection() {
       miteThresholdPer100: current.miteThresholdPer100,
       miteThresholdPerDay: current.miteThresholdPerDay,
       miteCheckIntervalDays: current.miteCheckIntervalDays,
+      moistureThresholdPct: current.moistureThresholdPct,
       ...patch,
     };
     // Optimistic cache write so the selects don't snap back while saving.
@@ -261,6 +262,31 @@ export function PreferencesSection() {
             queryClient.setQueryData<Preferences>(["settings", "preferences"], {
               ...data,
               miteThresholdPerDay: raw === "" ? null : Number(raw),
+            });
+          }}
+        />
+      </PreferenceField>
+
+      <PreferenceField label="Harvest moisture threshold %" htmlFor="pref-moisture">
+        <Input
+          id="pref-moisture"
+          type="number"
+          min="0.1"
+          max="100"
+          step="0.1"
+          placeholder="18.6"
+          value={data.moistureThresholdPct ?? ""}
+          onBlur={(event) => {
+            const raw = event.target.value.trim();
+            save({
+              moistureThresholdPct: raw === "" ? null : Number(raw),
+            });
+          }}
+          onChange={(event) => {
+            const raw = event.target.value.trim();
+            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              ...data,
+              moistureThresholdPct: raw === "" ? null : Number(raw),
             });
           }}
         />

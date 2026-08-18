@@ -498,12 +498,17 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			feedingIDs = append(feedingIDs, eventID)
 		}
 		for _, treatment := range item.Treatments {
+			days, resolveErr := s.resolveWithdrawalDays(ctx, treatment.Product)
+			if resolveErr != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
 			var eventID uuid.UUID
 			err = tx.QueryRow(ctx, `
 				INSERT INTO treatment_events
-					(hive_id, inspection_id, date_applied, product, method)
-				VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-				*hiveID, createdID, now, treatment.Product, treatment.Method).Scan(&eventID)
+					(hive_id, inspection_id, date_applied, product, method, withdrawal_days)
+				VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+				*hiveID, createdID, now, treatment.Product, treatment.Method, days).Scan(&eventID)
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid treatment extracted from transcript")
 				return

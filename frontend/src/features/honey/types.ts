@@ -106,6 +106,7 @@ export interface HarvestSessionRow {
   date: string;
   totalExtractedWeight: number | null;
   notes: string | null;
+  moisturePct: number | null;
   apiaryName: string;
   entryCount: number;
   calculatedTotal: number;
@@ -137,6 +138,7 @@ export interface HarvestSessionDetail {
   date: string;
   totalExtractedWeight: number | null;
   notes: string | null;
+  moisturePct: number | null;
   createdAt: string;
   entries: HarvestSessionEntry[];
   calculatedTotal: number;
@@ -151,6 +153,11 @@ export interface HiveOption {
   apiaryName: string;
   positionLabel: string;
   status: string;
+  lockout?: {
+    locked: boolean;
+    message: string;
+    lockoutUntil: string | null;
+  } | null;
 }
 
 /** Minimal apiary shape used for select lists (GET /apiaries). */
