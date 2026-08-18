@@ -3,6 +3,8 @@ package jobs
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
@@ -21,6 +23,8 @@ type ProcessImagePayload struct {
 
 type TranscribeAudioPayload struct {
 	RecordingID string `json:"recordingId"`
+	// Force writes a new transcript version even when one is already complete.
+	Force bool `json:"force,omitempty"`
 }
 
 // TranscribeTaskID is the asynq TaskID for a recording so duplicate enqueues
@@ -29,13 +33,24 @@ func TranscribeTaskID(recordingID string) string {
 	return "transcribe:" + recordingID
 }
 
-// NewTranscribeAudioTask builds the transcription job with a stable TaskID.
+// NewTranscribeAudioTask builds the first-pass transcription job with a stable TaskID.
 func NewTranscribeAudioTask(recordingID string) (*asynq.Task, error) {
-	payload, err := json.Marshal(TranscribeAudioPayload{RecordingID: recordingID})
+	return newTranscribeAudioTask(recordingID, false, TranscribeTaskID(recordingID))
+}
+
+// NewRetranscribeAudioTask enqueues a new STT pass that adds a version instead
+// of overwriting the complete transcript.
+func NewRetranscribeAudioTask(recordingID string) (*asynq.Task, error) {
+	return newTranscribeAudioTask(recordingID, true,
+		"retranscribe:"+recordingID+":"+strconv.FormatInt(time.Now().UnixNano(), 10))
+}
+
+func newTranscribeAudioTask(recordingID string, force bool, taskID string) (*asynq.Task, error) {
+	payload, err := json.Marshal(TranscribeAudioPayload{RecordingID: recordingID, Force: force})
 	if err != nil {
 		return nil, err
 	}
-	return asynq.NewTask(TypeTranscribeAudio, payload, asynq.TaskID(TranscribeTaskID(recordingID))), nil
+	return asynq.NewTask(TypeTranscribeAudio, payload, asynq.TaskID(taskID)), nil
 }
 
 type GenerateRecsPayload struct {

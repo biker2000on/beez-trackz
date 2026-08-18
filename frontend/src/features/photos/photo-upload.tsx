@@ -10,7 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { cn } from "@/lib/utils";
-import { useUploadPhoto, type PhotoOwnerType } from "./hooks";
+import {
+  useLinkPhoto,
+  usePhotoLibrary,
+  usePhotoStorage,
+  useUploadPhoto,
+  type PhotoOwnerType,
+} from "./hooks";
 
 /**
  * Drag-drop / browse photo uploader with preview and caption.
@@ -26,6 +32,12 @@ export function PhotoUpload({
   onUploaded?: () => void;
 }) {
   const upload = useUploadPhoto();
+  const storage = usePhotoStorage();
+  const [libraryOpen, setLibraryOpen] = React.useState(false);
+  const library = usePhotoLibrary(
+    Boolean(storage.data?.immichConfigured && libraryOpen),
+  );
+  const linkPhoto = useLinkPhoto();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [file, setFile] = React.useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
@@ -128,6 +140,16 @@ export function PhotoUpload({
             >
               Browse files
             </Button>
+            {storage.data?.immichConfigured ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setLibraryOpen((open) => !open)}
+              >
+                Link from library
+              </Button>
+            ) : null}
           </div>
         )}
         <input
@@ -138,6 +160,61 @@ export function PhotoUpload({
           onChange={(event) => selectFile(event.target.files?.[0] ?? null)}
         />
       </div>
+      {libraryOpen && storage.data?.immichConfigured && (
+        <div className="grid gap-2 rounded-md border p-3">
+          <p className="text-sm text-muted-foreground">
+            Adopt an Immich image. The library original is not copied or
+            deleted.
+          </p>
+          {library.isPending ? (
+            <p className="text-sm text-muted-foreground">Loading library…</p>
+          ) : library.isError ? (
+            <p className="text-sm text-destructive">
+              Could not load Immich library.
+            </p>
+          ) : (
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {(library.data?.items ?? []).map((asset) => (
+                <button
+                  key={asset.id}
+                  type="button"
+                  className="overflow-hidden rounded-md border text-left"
+                  disabled={linkPhoto.isPending}
+                  onClick={async () => {
+                    try {
+                      await linkPhoto.mutateAsync({
+                        assetId: asset.id,
+                        ownerType,
+                        ownerId,
+                      });
+                      toast.success("Photo linked from library");
+                      setLibraryOpen(false);
+                      onUploaded?.();
+                    } catch (error) {
+                      toast.error(
+                        error instanceof ApiError
+                          ? error.message
+                          : "Could not link photo",
+                      );
+                    }
+                  }}
+                >
+                  {/* Immich thumbs are proxied by the API. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={asset.thumbnailUrl}
+                    alt={asset.originalFileName}
+                    className="aspect-square w-full object-cover"
+                  />
+                  <span className="block truncate px-1 py-0.5 text-[11px] text-muted-foreground">
+                    {asset.originalFileName}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {file && (
         <>
           <div className="grid gap-2">

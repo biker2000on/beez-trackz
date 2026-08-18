@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
 
@@ -16,7 +17,8 @@ import (
 )
 
 // transcriptionAlreadyComplete is true when a later asynq delivery must not
-// call the provider or overwrite the stored text.
+// call the provider or overwrite the stored text — unless this is an explicit
+// re-transcribe (Force), which writes a new version instead.
 func transcriptionAlreadyComplete(status string, text *string) bool {
 	return status == "complete" && text != nil && *text != ""
 }
@@ -26,9 +28,9 @@ func transcriptionAlreadyComplete(status string, text *string) bool {
 const transcribeIncompleteSQL = `NOT (transcription_status = 'complete' AND COALESCE(transcription_text, '') <> '')`
 
 // handleTranscribeAudio downloads the recording from MinIO, transcribes it with
-// the configured provider, and stores the text. Errors mark the row failed and
-// are returned so asynq retries (MaxRetry set at enqueue). A late retry of an
-// already-complete transcript is a no-op.
+// the configured provider, and stores the text as a new transcript_versions
+// row. The first complete text is never overwritten in place: a late retry is
+// a no-op, and a re-transcribe (Force) inserts another version.
 func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) error {
 	var p TranscribeAudioPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
@@ -36,11 +38,13 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 	}
 
 	var audioKey string
+	var hadComplete bool
 	err := h.pool.QueryRow(ctx, `
 		UPDATE media_files
 		SET transcription_status = 'processing', transcription_error = NULL
-		WHERE id = $1 AND `+transcribeIncompleteSQL+`
-		RETURNING audio_key`, p.RecordingID).Scan(&audioKey)
+		WHERE id = $1 AND ($2::boolean OR `+transcribeIncompleteSQL+`)
+		RETURNING audio_key, COALESCE(transcription_text, '') <> ''`, p.RecordingID, p.Force).
+		Scan(&audioKey, &hadComplete)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var status string
 		var existing *string
@@ -53,7 +57,7 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 		} else if lerr != nil {
 			return fmt.Errorf("transcribe: lookup: %w", lerr)
 		}
-		if transcriptionAlreadyComplete(status, existing) {
+		if !p.Force && transcriptionAlreadyComplete(status, existing) {
 			slog.Info("transcribe: already complete, skipping", "recordingId", p.RecordingID)
 			return nil
 		}
@@ -71,6 +75,17 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 		writeCtx, cancel := context.WithTimeout(
 			context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
+		if hadComplete {
+			// Re-transcribe failed: restore complete and keep the old text.
+			if _, uerr := h.pool.Exec(writeCtx, `
+				UPDATE media_files
+				SET transcription_status = 'complete', transcription_error = $2
+				WHERE id = $1 AND COALESCE(transcription_text, '') <> ''`,
+				p.RecordingID, cause.Error()); uerr != nil {
+				slog.Error("transcribe: failed to record error", "recordingId", p.RecordingID, "err", uerr)
+			}
+			return cause
+		}
 		if _, uerr := h.pool.Exec(writeCtx, `
 			UPDATE media_files
 			SET transcription_status = 'failed', transcription_error = $2
@@ -105,12 +120,38 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 		return fail(err)
 	}
 
+	mediaID, err := uuid.Parse(p.RecordingID)
+	if err != nil {
+		return fail(fmt.Errorf("recording id: %w", err))
+	}
+	model := cfg.Transcription.Model
+	var modelArg any
+	if model != "" {
+		modelArg = model
+	}
+	var versionID uuid.UUID
+	err = h.pool.QueryRow(ctx, `
+		INSERT INTO transcript_versions
+			(media_file_id, provider, model, prompt_revision, produced_at, text)
+		VALUES ($1, $2, $3, $4, now(), $5)
+		RETURNING id`,
+		mediaID, cfg.Transcription.Provider, modelArg, ai.STTPromptRevision, text).
+		Scan(&versionID)
+	if err != nil {
+		return fail(fmt.Errorf("save transcript version: %w", err))
+	}
+
 	if _, err := h.pool.Exec(ctx, `
 		UPDATE media_files
-		SET transcription_status = 'complete', transcription_text = $2, transcription_error = NULL
-		WHERE id = $1 AND `+transcribeIncompleteSQL, p.RecordingID, text); err != nil {
+		SET transcription_status = 'complete',
+		    transcription_text = $2,
+		    transcription_error = NULL,
+		    current_transcript_version_id = $3
+		WHERE id = $1 AND (transcription_status = 'processing' OR `+transcribeIncompleteSQL+`)`,
+		p.RecordingID, text, versionID); err != nil {
 		return fail(fmt.Errorf("save transcription: %w", err))
 	}
-	slog.Info("transcribe: complete", "recordingId", p.RecordingID, "chars", len(text))
+	slog.Info("transcribe: complete", "recordingId", p.RecordingID,
+		"versionId", versionID, "chars", len(text), "force", p.Force)
 	return nil
 }

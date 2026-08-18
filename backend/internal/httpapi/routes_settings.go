@@ -15,6 +15,7 @@ func (s *Server) mountSettings(r chi.Router) {
 	admin := r.With(s.requireAdmin)
 	admin.Get("/settings", s.handleSettingsGet)
 	admin.Put("/settings/preferences", s.handleSettingsUpdatePreferences)
+	admin.Get("/settings/storage", s.handleSettingsStorage)
 }
 
 const (
@@ -144,4 +145,56 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// GET /settings/storage — default backend, fallback, Immich health, counts.
+func (s *Server) handleSettingsStorage(w http.ResponseWriter, r *http.Request) {
+	defaultBackend := "minio"
+	configured := false
+	if s.cfg != nil {
+		defaultBackend = s.cfg.ResolvedPhotoBackend()
+		configured = s.cfg.ImmichConfigured()
+	} else if s.photos != nil {
+		defaultBackend = s.photos.Preferred()
+		configured = s.photos.ImmichConfigured()
+	}
+
+	counts := map[string]int{"minio": 0, "immich": 0}
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT storage_backend::text, count(*) FROM photos GROUP BY storage_backend`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	for rows.Next() {
+		var backend string
+		var n int
+		if err := rows.Scan(&backend, &n); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		counts[backend] = n
+	}
+	rows.Close()
+
+	var healthy any
+	var healthErr any
+	if configured && s.photos != nil && s.photos.Immich() != nil {
+		if err := s.photos.Immich().Health(r.Context()); err != nil {
+			healthy = false
+			healthErr = err.Error()
+		} else {
+			healthy = true
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"defaultBackend":   defaultBackend,
+		"fallbackBackend":  "minio",
+		"immichConfigured": configured,
+		"immichHealthy":    healthy,
+		"immichError":      healthErr,
+		"counts":           counts,
+	})
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
+	"github.com/biker2000on/beez-trackz/backend/internal/photostore"
 	"github.com/biker2000on/beez-trackz/backend/internal/storage"
 )
 
@@ -19,14 +20,15 @@ const apiJSONBodyLimit = 1 << 20 // 1MB; photo/transcription uploads opt out.
 
 // Server bundles shared dependencies for all HTTP handlers.
 type Server struct {
-	cfg   *config.Config
-	pool  *pgxpool.Pool
-	store *storage.Store
-	queue *asynq.Client
+	cfg    *config.Config
+	pool   *pgxpool.Pool
+	store  *storage.Store
+	queue  *asynq.Client
+	photos *photostore.Resolver
 }
 
 func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, queue *asynq.Client) http.Handler {
-	s := &Server{cfg: cfg, pool: pool, store: store, queue: queue}
+	s := &Server{cfg: cfg, pool: pool, store: store, queue: queue, photos: photostore.New(cfg, store)}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

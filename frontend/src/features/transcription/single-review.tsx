@@ -21,6 +21,8 @@ import {
   type ParsedResult,
   type Transcription,
 } from "./api";
+import { ReparseDiffPanel } from "./reparse-diff";
+import { TranscriptSourceControls } from "./transcript-source";
 import {
   InspectionFields,
   toConfirmPayload,
@@ -32,6 +34,7 @@ interface SingleReviewPanelProps {
   transcription: Transcription;
   /** The hive the recording belongs to (owner of the media file). */
   hiveId: string;
+  onRetranscribe?: () => void;
 }
 
 /**
@@ -42,6 +45,7 @@ interface SingleReviewPanelProps {
 export function SingleReviewPanel({
   transcription,
   hiveId,
+  onRetranscribe,
 }: SingleReviewPanelProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -96,6 +100,11 @@ export function SingleReviewPanel({
           <p className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-md bg-secondary/50 p-3 text-sm">
             {rawText || "No transcript text."}
           </p>
+          <TranscriptSourceControls
+            transcription={transcription}
+            disabled={reparse.isPending || confirm.isPending}
+            onRetranscribe={onRetranscribe}
+          />
           {parseError && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -133,9 +142,21 @@ export function SingleReviewPanel({
             idPrefix="single"
             disabled={confirm.isPending}
           />
+          {parsed?.diff?.hasExisting ? (
+            <ReparseDiffPanel
+              mediaFileId={transcription.id}
+              versionId={transcription.currentVersionId}
+              diff={parsed.diff}
+              disabled={reparse.isPending}
+            />
+          ) : null}
           <Button
             type="button"
-            disabled={confirm.isPending || reparse.isPending}
+            disabled={
+              confirm.isPending ||
+              reparse.isPending ||
+              Boolean(parsed?.diff?.hasExisting)
+            }
             onClick={() => confirm.mutate()}
           >
             {confirm.isPending ? (

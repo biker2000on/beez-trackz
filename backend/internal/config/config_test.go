@@ -14,6 +14,9 @@ func TestLoadRequiresCoreSecrets(t *testing.T) {
 	t.Setenv("SESSION_SECRET", "test-secret")
 	t.Setenv("MINIO_ACCESS_KEY", "")
 	t.Setenv("MINIO_SECRET_KEY", "")
+	t.Setenv("PHOTO_STORAGE_BACKEND", "")
+	t.Setenv("IMMICH_BASE_URL", "")
+	t.Setenv("IMMICH_API_KEY", "")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("missing MinIO credentials were accepted")
@@ -40,6 +43,9 @@ func TestLoadDefaultTrustedProxiesAreRFC1918(t *testing.T) {
 	t.Setenv("SESSION_SECRET", "test-secret")
 	t.Setenv("MINIO_ACCESS_KEY", "access")
 	t.Setenv("MINIO_SECRET_KEY", "secret")
+	t.Setenv("PHOTO_STORAGE_BACKEND", "")
+	t.Setenv("IMMICH_BASE_URL", "")
+	t.Setenv("IMMICH_API_KEY", "")
 	t.Setenv("TRUSTED_PROXIES", "")
 
 	cfg, err := Load()
@@ -61,6 +67,9 @@ func TestLoadParsesCustomTrustedProxies(t *testing.T) {
 	t.Setenv("SESSION_SECRET", "test-secret")
 	t.Setenv("MINIO_ACCESS_KEY", "access")
 	t.Setenv("MINIO_SECRET_KEY", "secret")
+	t.Setenv("PHOTO_STORAGE_BACKEND", "")
+	t.Setenv("IMMICH_BASE_URL", "")
+	t.Setenv("IMMICH_API_KEY", "")
 	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,2001:db8::/32")
 
 	cfg, err := Load()
@@ -83,6 +92,9 @@ func TestLoadRejectsInvalidTrustedProxies(t *testing.T) {
 	t.Setenv("SESSION_SECRET", "test-secret")
 	t.Setenv("MINIO_ACCESS_KEY", "access")
 	t.Setenv("MINIO_SECRET_KEY", "secret")
+	t.Setenv("PHOTO_STORAGE_BACKEND", "")
+	t.Setenv("IMMICH_BASE_URL", "")
+	t.Setenv("IMMICH_API_KEY", "")
 	t.Setenv("TRUSTED_PROXIES", "not-a-cidr")
 
 	if _, err := Load(); err == nil {
@@ -114,6 +126,81 @@ func TestApplyEnvFileSetsMissing(t *testing.T) {
 	applyEnvFile(path)
 	if got := os.Getenv("BEEZ_DOTENV_MISSING"); got != "from-file" {
 		t.Fatalf("missing env not loaded: %q", got)
+	}
+}
+
+func TestLoadPhotoStorageValidation(t *testing.T) {
+	setCore := func() {
+		t.Setenv("DATABASE_URL", "postgres://example/db")
+		t.Setenv("SESSION_SECRET", "test-secret")
+		t.Setenv("MINIO_ACCESS_KEY", "access")
+		t.Setenv("MINIO_SECRET_KEY", "secret")
+		t.Setenv("PHOTO_STORAGE_BACKEND", "")
+		t.Setenv("IMMICH_BASE_URL", "")
+		t.Setenv("IMMICH_API_KEY", "")
+	}
+
+	setCore()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("empty photo config: %v", err)
+	}
+	if cfg.ResolvedPhotoBackend() != PhotoBackendMinio {
+		t.Fatalf("default backend = %q", cfg.ResolvedPhotoBackend())
+	}
+
+	setCore()
+	t.Setenv("IMMICH_BASE_URL", "https://photos.example")
+	t.Setenv("IMMICH_API_KEY", "key")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("immich configured: %v", err)
+	}
+	if !cfg.ImmichConfigured() || cfg.ResolvedPhotoBackend() != PhotoBackendImmich {
+		t.Fatalf("unset backend should pick immich when configured, got %q", cfg.ResolvedPhotoBackend())
+	}
+
+	setCore()
+	t.Setenv("PHOTO_STORAGE_BACKEND", "minio")
+	t.Setenv("IMMICH_BASE_URL", "https://photos.example")
+	t.Setenv("IMMICH_API_KEY", "key")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("explicit minio: %v", err)
+	}
+	if cfg.ResolvedPhotoBackend() != PhotoBackendMinio {
+		t.Fatalf("explicit minio lost to %q", cfg.ResolvedPhotoBackend())
+	}
+
+	setCore()
+	t.Setenv("IMMICH_API_KEY", "key")
+	if _, err := Load(); err == nil {
+		t.Fatal("key without URL was accepted")
+	}
+
+	setCore()
+	t.Setenv("IMMICH_BASE_URL", "https://photos.example")
+	if _, err := Load(); err == nil {
+		t.Fatal("URL without key was accepted")
+	}
+
+	setCore()
+	t.Setenv("IMMICH_BASE_URL", "not-a-url")
+	t.Setenv("IMMICH_API_KEY", "key")
+	if _, err := Load(); err == nil {
+		t.Fatal("malformed Immich URL was accepted")
+	}
+
+	setCore()
+	t.Setenv("PHOTO_STORAGE_BACKEND", "s3")
+	if _, err := Load(); err == nil {
+		t.Fatal("unknown PHOTO_STORAGE_BACKEND was accepted")
+	}
+
+	setCore()
+	t.Setenv("PHOTO_STORAGE_BACKEND", "immich")
+	if _, err := Load(); err == nil {
+		t.Fatal("immich backend without credentials was accepted")
 	}
 }
 

@@ -2,6 +2,7 @@
 
 import {
   Bot,
+  Images,
   KeyRound,
   Lock,
   Milk,
@@ -17,6 +18,7 @@ import { JarSizesSection } from "./jar-sizes-section";
 import { PasswordSection } from "./password-section";
 import { PreferencesSection } from "./preferences-section";
 import { SettingsSection } from "./settings-section";
+import { StorageSection } from "./storage-section";
 import { TreatmentProductsSection } from "./treatment-products-section";
 
 export function SettingsView() {
@@ -69,6 +71,14 @@ export function SettingsView() {
             defaultOpen={false}
           >
             <TreatmentProductsSection />
+          </SettingsSection>
+          <SettingsSection
+            title="Photo storage"
+            description="Default original backend, Immich health, and photo counts."
+            icon={Images}
+            defaultOpen={false}
+          >
+            <StorageSection />
           </SettingsSection>
         </>
       ) : null}

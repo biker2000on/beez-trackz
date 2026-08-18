@@ -35,6 +35,40 @@ export interface Photo {
   originalUrl: string | null;
   thumbnailUrl: string | null;
   mediumUrl: string | null;
+  storageBackend?: "minio" | "immich";
+  originalExternal?: boolean;
+}
+
+export interface PhotoStorageInfo {
+  defaultBackend: "minio" | "immich";
+  fallbackBackend: "minio";
+  immichConfigured: boolean;
+}
+
+export interface LibraryAsset {
+  id: string;
+  originalFileName: string;
+  takenAt?: string | null;
+  thumbnailUrl: string;
+}
+
+export function usePhotoStorage() {
+  return useQuery({
+    queryKey: ["photos", "storage"],
+    queryFn: () => api.get<PhotoStorageInfo>("/photos/storage"),
+  });
+}
+
+export function usePhotoLibrary(enabled: boolean, page = 1) {
+  return useQuery({
+    queryKey: ["photos", "library", page],
+    queryFn: () =>
+      api.get<{ items: LibraryAsset[]; nextPage: string }>(
+        "/photos/library",
+        { params: { page, size: 24 } },
+      ),
+    enabled,
+  });
 }
 
 export function usePhotos(ownerType: PhotoOwnerType, ownerId: string) {
@@ -87,6 +121,21 @@ function useInvalidatePhotos() {
       queryKey: ["photos", ownerType, ownerId],
     });
   };
+}
+
+export function useLinkPhoto() {
+  const invalidate = useInvalidatePhotos();
+  return useMutation({
+    mutationFn: (input: {
+      assetId: string;
+      ownerType: PhotoOwnerType;
+      ownerId: string;
+      caption?: string;
+    }) => api.post<{ success: boolean; photoId: string }>("/photos/link", input),
+    onSuccess: (_data, variables) => {
+      invalidate(variables.ownerType, variables.ownerId);
+    },
+  });
 }
 
 export function useUploadPhoto() {

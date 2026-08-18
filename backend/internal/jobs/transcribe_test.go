@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -87,6 +88,41 @@ func TestHandleTranscribeAudioSkipsCompleteTranscript(t *testing.T) {
 	}
 	if status != "complete" || text != original {
 		t.Fatalf("row = %s %q, want complete %q", status, text, original)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO transcript_versions (media_file_id, provider, prompt_revision, text)
+		VALUES ($1, 'gemini', 'stt-v1', $2)`, id, original); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	var versions int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM transcript_versions WHERE media_file_id=$1`, id).Scan(&versions); err != nil {
+		t.Fatalf("count versions: %v", err)
+	}
+	if err := h.handleTranscribeAudio(ctx, task); err != nil {
+		t.Fatalf("second handleTranscribeAudio: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM transcript_versions WHERE media_file_id=$1`, id).Scan(&versions); err != nil {
+		t.Fatalf("recount versions: %v", err)
+	}
+	if versions != 1 {
+		t.Fatalf("retry created %d versions, want 1", versions)
+	}
+}
+
+func TestNewRetranscribeAudioTaskIsForced(t *testing.T) {
+	task, err := NewRetranscribeAudioTask("rec-1")
+	if err != nil {
+		t.Fatalf("NewRetranscribeAudioTask: %v", err)
+	}
+	var payload TranscribeAudioPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if !payload.Force || payload.RecordingID != "rec-1" {
+		t.Fatalf("payload = %+v", payload)
 	}
 }
 
