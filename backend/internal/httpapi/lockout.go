@@ -51,8 +51,17 @@ type lockoutStatus struct {
 }
 
 func calendarDate(t time.Time) time.Time {
-	y, m, d := t.In(time.Local).Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	// Date-only values are stored as midnight. A timestamptz of
+	// 2026-08-10 00:00 UTC (Postgres date literal) is 20:00 the previous
+	// evening in America/New_York — using t.Date() in Local shortens every
+	// withdrawal window by a day. Treat UTC midnight as that UTC civil date.
+	utc := t.UTC()
+	if utc.Hour() == 0 && utc.Minute() == 0 && utc.Second() == 0 && utc.Nanosecond() == 0 {
+		y, m, d := utc.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
 func lockoutEndDate(removed time.Time, days int) time.Time {

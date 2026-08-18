@@ -15,6 +15,24 @@ func testDay(s string) time.Time {
 	return t
 }
 
+func TestLockoutWindowUsesPostgresDateNotServerTZ(t *testing.T) {
+	// DATE columns come back as UTC midnight even when the host is not UTC.
+	removed := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	row := treatmentLockoutRow{
+		Product:        "Apivar",
+		DateApplied:    time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		DateRemoved:    &removed,
+		WithdrawalDays: 14,
+	}
+	inside := evaluateTreatment(row, testDay("2026-08-23"))
+	if !inside.Locked {
+		t.Fatal("UTC DATE + local as-of must still lock the day before until")
+	}
+	if inside.Until == nil || calendarDate(*inside.Until).Format("2006-01-02") != "2026-08-24" {
+		t.Fatalf("until = %v, want 2026-08-24", inside.Until)
+	}
+}
+
 func TestEvaluateTreatmentStillOnLocks(t *testing.T) {
 	st := evaluateTreatment(treatmentLockoutRow{
 		Product:        "Apivar",
