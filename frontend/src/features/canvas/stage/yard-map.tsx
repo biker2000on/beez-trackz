@@ -82,6 +82,10 @@ export function YardMap({
         zoomDelta: 0.5,
         minZoom: 4,
         maxZoom: YARD_MAX_ZOOM,
+        // Sibling Konva overlay is not in the map pane; CSS zoom
+        // animation would slide tiles while the overlay snaps to target.
+        zoomAnimation: false,
+        markerZoomAnimation: false,
         zoomControl: false,
         attributionControl: true,
       });

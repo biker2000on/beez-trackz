@@ -129,28 +129,65 @@ export interface GeoOverlayTransform {
 }
 
 /**
+ * Fractional container point. Leaflet's latLngToContainerPoint rounds to
+ * integers so a 1 m sample (or the pin itself) snaps by half a pixel —
+ * at low zoom that is tens of meters and the yard jumps when tiles swap.
+ */
+export function containerPointPrecise(
+  map: LeafletMap,
+  lat: number,
+  lng: number,
+  view?: CanvasMapView,
+): { x: number; y: number } {
+  const zoom = view?.zoom ?? map.getZoom();
+  const center = view
+    ? { lat: view.centerLat, lng: view.centerLng }
+    : map.getCenter();
+  const size = map.getSize();
+  const projected = map.project([lat, lng], zoom);
+  const projectedCenter = map.project([center.lat, center.lng], zoom);
+  return {
+    x: projected.x - projectedCenter.x + size.x / 2,
+    y: projected.y - projectedCenter.y + size.y / 2,
+  };
+}
+
+/** Unrounded Web Mercator pixels per ground meter at the pin. */
+export function pixelsPerMeter(
+  map: LeafletMap,
+  pin: { lat: number; lng: number },
+  zoom?: number,
+): number {
+  const z = zoom ?? map.getZoom();
+  const baselineM = 100;
+  const east = offsetLatLng(pin.lat, pin.lng, baselineM, 0);
+  const a = map.project([pin.lat, pin.lng], z);
+  const b = map.project([east.lat, east.lng], z);
+  return a.distanceTo(b) / baselineM;
+}
+
+/**
  * Konva layer transform so canvas world coords stay nailed to lat/lng
- * while Leaflet pans and zooms (including zoom < 19).
+ * while Leaflet pans and zooms (including overzoom past native tiles).
  */
 export function overlayTransform(
   map: LeafletMap,
   pin: { lat: number; lng: number },
   reg: CanvasRegistration,
+  view?: CanvasMapView,
 ): GeoOverlayTransform {
-  const pinPt = map.latLngToContainerPoint([pin.lat, pin.lng]);
-  const east = offsetLatLng(pin.lat, pin.lng, 1, 0);
-  const eastPt = map.latLngToContainerPoint([east.lat, east.lng]);
-  const metersToScreen = Math.hypot(eastPt.x - pinPt.x, eastPt.y - pinPt.y);
-  const canvasToScreen = (metersToScreen / PX_PER_METER) * reg.scale;
-
-  const offX = reg.offsetX * (metersToScreen / PX_PER_METER);
-  const offY = reg.offsetY * (metersToScreen / PX_PER_METER);
-  // Place the registration origin at pin + unrotated offset, then let
-  // Konva rotate about that point. Rotating the offset around the pin
-  // made the stands orbit whatever was off-screen after a nudge/pan.
+  const zoom = view?.zoom ?? map.getZoom();
+  const originGeo = offsetLatLng(
+    pin.lat,
+    pin.lng,
+    reg.offsetX / PX_PER_METER,
+    reg.offsetY / PX_PER_METER,
+  );
+  const originPt = containerPointPrecise(map, originGeo.lat, originGeo.lng, view);
+  const canvasToScreen = (pixelsPerMeter(map, pin, zoom) / PX_PER_METER) * reg.scale;
   return {
-    x: pinPt.x + offX,
-    y: pinPt.y + offY,
+    x: originPt.x,
+    y: originPt.y,
     scaleX: canvasToScreen,
     scaleY: canvasToScreen,
     rotation: reg.rotation,
@@ -167,12 +204,9 @@ export function screenDeltaToRegistrationOffset(
   dxScreen: number,
   dyScreen: number,
 ): { offsetX: number; offsetY: number } {
-  const pinPt = map.latLngToContainerPoint([pin.lat, pin.lng]);
-  const east = offsetLatLng(pin.lat, pin.lng, 1, 0);
-  const eastPt = map.latLngToContainerPoint([east.lat, east.lng]);
-  const metersToScreen = Math.hypot(eastPt.x - pinPt.x, eastPt.y - pinPt.y);
-  if (metersToScreen < 1e-6) return { offsetX: reg.offsetX, offsetY: reg.offsetY };
-  const pxPerCanvas = metersToScreen / PX_PER_METER;
+  const ppm = pixelsPerMeter(map, pin);
+  if (ppm < 1e-9) return { offsetX: reg.offsetX, offsetY: reg.offsetY };
+  const pxPerCanvas = ppm / PX_PER_METER;
   return {
     offsetX: reg.offsetX + dxScreen / pxPerCanvas,
     offsetY: reg.offsetY + dyScreen / pxPerCanvas,

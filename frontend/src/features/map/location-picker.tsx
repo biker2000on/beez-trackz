@@ -33,6 +33,14 @@ function parseCoord(raw: string): number | null {
   return raw.trim() !== "" && Number.isFinite(n) ? n : null;
 }
 
+/** ~1.1 mm at the equator. toFixed(6) was ~11 cm and clipped pin drops. */
+const COORD_DECIMALS = 8;
+
+function roundCoord(n: number): number {
+  const factor = 10 ** COORD_DECIMALS;
+  return Math.round(n * factor) / factor;
+}
+
 /**
  * Leaflet pin picker. Click or drag the pin; typed lat/lng write the pin.
  * Device location seeds lat/lng and altitude when the browser supplies it.
@@ -122,8 +130,8 @@ export function LocationPicker({
       const commit = (lat: number, lng: number) => {
         const cur = valueRef.current;
         onChangeRef.current({
-          latitude: Number(lat.toFixed(6)),
-          longitude: Number(lng.toFixed(6)),
+          latitude: roundCoord(lat),
+          longitude: roundCoord(lng),
           elevationM: cur.elevationM,
           elevationSource: cur.elevationSource,
         });
@@ -267,8 +275,8 @@ export function LocationPicker({
       return;
     }
     onChange({
-      latitude: Number(lat.toFixed(6)),
-      longitude: Number(lng.toFixed(6)),
+      latitude: roundCoord(lat),
+      longitude: roundCoord(lng),
       elevationM: value.elevationM,
       elevationSource: value.elevationSource,
     });
@@ -301,8 +309,8 @@ export function LocationPicker({
         const altitude = position.coords.altitude;
         const hasAlt = altitude != null && Number.isFinite(altitude);
         onChange({
-          latitude: Number(position.coords.latitude.toFixed(6)),
-          longitude: Number(position.coords.longitude.toFixed(6)),
+          latitude: roundCoord(position.coords.latitude),
+          longitude: roundCoord(position.coords.longitude),
           elevationM: hasAlt ? Math.round(altitude * 10) / 10 : value.elevationM,
           elevationSource: hasAlt ? "geolocation" : value.elevationSource,
         });
@@ -342,8 +350,8 @@ export function LocationPicker({
       return;
     }
     onChange({
-      latitude: Number(lat.toFixed(6)),
-      longitude: Number(lng.toFixed(6)),
+      latitude: roundCoord(lat),
+      longitude: roundCoord(lng),
       elevationM: Math.round(meters * 10) / 10,
       elevationSource: "terrain",
     });

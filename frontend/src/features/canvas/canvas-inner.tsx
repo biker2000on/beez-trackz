@@ -772,7 +772,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           <MenuHeading>{hive.positionLabel}</MenuHeading>
           {derived && (
             <p className="px-2 pb-1 font-mono text-[11px] text-muted-foreground">
-              {derived.lat.toFixed(6)}, {derived.lng.toFixed(6)}
+              {derived.lat.toFixed(8)}, {derived.lng.toFixed(8)}
             </p>
           )}
           <MenuSeparator />
@@ -874,7 +874,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           </MenuHeading>
           {derived && (
             <p className="px-2 pb-1 font-mono text-[11px] text-muted-foreground">
-              {derived.lat.toFixed(6)}, {derived.lng.toFixed(6)}
+              {derived.lat.toFixed(8)}, {derived.lng.toFixed(8)}
             </p>
           )}
           <MenuSeparator />
@@ -1292,17 +1292,19 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
             scaleY={hasLocation && geo ? geo.scaleY : 1}
             rotation={hasLocation && geo ? geo.rotation : 0}
           >
-            <NorthArrow
-              x={northArrow.x}
-              y={northArrow.y}
-              rotation={northArrow.rotation}
-              draggable={editMode && !registerMode}
-              onDragEnd={(x, y) => dispatch({ type: "moveNorthArrow", x, y })}
-              onRightClick={handleNorthRightClick}
-              onRotateHandleDown={() => {
-                rotationDrag.current = { kind: "north" };
-              }}
-            />
+            {!hasLocation && (
+              <NorthArrow
+                x={northArrow.x}
+                y={northArrow.y}
+                rotation={northArrow.rotation}
+                draggable={editMode && !registerMode}
+                onDragEnd={(x, y) => dispatch({ type: "moveNorthArrow", x, y })}
+                onRightClick={handleNorthRightClick}
+                onRotateHandleDown={() => {
+                  rotationDrag.current = { kind: "north" };
+                }}
+              />
+            )}
 
             {stands.map((stand) => (
               <StandGroup
