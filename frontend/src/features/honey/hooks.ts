@@ -20,6 +20,10 @@ import type {
   HoneyInventoryRow,
   HoneyOverview,
   HoneySale,
+  ProductBatch,
+  ProductCatalogResponse,
+  PropolisHarvest,
+  SaleLineKind,
   TimelineEntry,
 } from "./types";
 
@@ -95,6 +99,30 @@ export function useApiaryOptions() {
   return useQuery({
     queryKey: ["apiaries", "options"],
     queryFn: () => api.get<ApiaryOption[]>("/apiaries"),
+  });
+}
+
+export function useProductCatalog(inStock = false) {
+  return useQuery({
+    queryKey: ["products", { inStock }],
+    queryFn: () =>
+      api.get<ProductCatalogResponse>("/products", {
+        params: inStock ? { inStock: "1" } : undefined,
+      }),
+  });
+}
+
+export function usePropolisHarvests() {
+  return useQuery({
+    queryKey: ["propolis-harvests"],
+    queryFn: () => api.get<PropolisHarvest[]>("/propolis-harvests"),
+  });
+}
+
+export function useProductBatches() {
+  return useQuery({
+    queryKey: ["product-batches"],
+    queryFn: () => api.get<ProductBatch[]>("/product-batches"),
   });
 }
 
@@ -203,10 +231,11 @@ export function useAdjustJars() {
 // --- sales mutations ---
 
 export interface SaleLineBody {
-  kind: "jar" | "colony" | "equipment";
+  kind: SaleLineKind;
   jarSizeId?: string;
   hiveId?: string;
   equipmentStockId?: string;
+  productId?: string;
   quantity: number;
   unitPrice: number;
 }
@@ -236,7 +265,60 @@ export function useRecordSale() {
     mutationFn: (body: SaleBody) => api.post("/sales", body),
     successMessage: "Sale recorded",
     silentError: true,
-    invalidate: [["commerce"], ["hives"], ["equipment"], ["feedings"]],
+    invalidate: [["commerce"], ["hives"], ["equipment"], ["feedings"], ["products"]],
+  });
+}
+
+export function useCreateProduct() {
+  return useHoneyMutation({
+    mutationFn: (body: {
+      name: string;
+      kind: string;
+      unit: string;
+      defaultPrice: number;
+      sizeLabel?: string;
+    }) => api.post("/products", body),
+    successMessage: "Product saved",
+    invalidate: [["products"]],
+  });
+}
+
+export function useCreatePropolisHarvest() {
+  return useHoneyMutation({
+    mutationFn: (body: {
+      hiveId?: string;
+      apiaryId?: string;
+      date: string;
+      amount: number;
+      unit: "grams" | "ounces";
+      notes?: string;
+    }) => api.post("/propolis-harvests", body),
+    successMessage: "Propolis harvest recorded",
+    invalidate: [["propolis-harvests"], ["products"]],
+  });
+}
+
+export function useCreateProductBatch() {
+  return useHoneyMutation({
+    mutationFn: (body: {
+      kind: string;
+      productId: string;
+      harvestLotId?: string;
+      startedAt: string;
+      finishedAt?: string;
+      honeyLbs?: number;
+      waterLiters?: number;
+      yeast?: string;
+      vessel?: string;
+      propolisHarvestId?: string;
+      propolisAmount?: number;
+      propolisUnit?: "grams" | "ounces";
+      quantityOut: number;
+      notes?: string;
+      expenseIds?: string[];
+    }) => api.post("/product-batches", body),
+    successMessage: "Batch recorded",
+    invalidate: [["product-batches"], ["products"], ["honey"], ["propolis-harvests"]],
   });
 }
 
@@ -270,7 +352,7 @@ export function useDeleteSale() {
   return useHoneyMutation({
     mutationFn: (id: string) => api.delete(`/sales/${id}`),
     successMessage: "Sale cancelled",
-    invalidate: [["commerce"], ["hives"], ["equipment"], ["feedings"]],
+    invalidate: [["commerce"], ["hives"], ["equipment"], ["feedings"], ["products"]],
   });
 }
 

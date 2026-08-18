@@ -37,6 +37,7 @@ export const HONEY_SECTIONS = [
       "/harvest/lots",
       "/harvest/serials",
       "/harvest/sessions",
+      "/harvest/products",
     ],
   },
 ] as const;

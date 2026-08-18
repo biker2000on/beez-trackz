@@ -136,7 +136,7 @@ export function ExpensesPanel({ year }: { year: number }) {
   );
 }
 
-const EXPENSE_CATEGORIES = ["bees_queens", "feed", "treatments", "packaging", "equipment", "mileage", "market_fees", "labor", "other"];
+const EXPENSE_CATEGORIES = ["bees_queens", "feed", "treatments", "packaging", "equipment", "mileage", "market_fees", "labor", "other", "grocery"];
 
 function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const create = useCreateExpense();

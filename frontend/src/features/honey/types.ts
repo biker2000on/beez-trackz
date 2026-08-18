@@ -58,7 +58,22 @@ export interface TimelineEntry {
   cancelled?: boolean;
 }
 
-export type SaleLineKind = "jar" | "colony" | "equipment";
+export type SaleLineKind =
+  | "jar"
+  | "colony"
+  | "equipment"
+  | "creamed_honey"
+  | "hot_honey"
+  | "mead"
+  | "propolis"
+  | "tincture";
+
+export type CatalogProductKind =
+  | "creamed_honey"
+  | "hot_honey"
+  | "mead"
+  | "propolis"
+  | "tincture";
 
 export interface SaleLineItem {
   saleId: string;
@@ -66,9 +81,66 @@ export interface SaleLineItem {
   jarSizeId: string | null;
   hiveId: string | null;
   equipmentStockId: string | null;
+  productId?: string | null;
   quantity: number;
   unitPrice: number;
   label: string;
+}
+
+export interface CatalogProduct {
+  id: string;
+  name: string;
+  kind: CatalogProductKind;
+  unit: string;
+  defaultPrice: number;
+  sizeLabel: string | null;
+  isActive: boolean;
+  made: number;
+  sold: number;
+  onHand: number;
+  inStock: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProductCatalogResponse {
+  items: CatalogProduct[];
+  propolisOnHandGrams: number;
+}
+
+export interface PropolisHarvest {
+  id: string;
+  hiveId: string | null;
+  apiaryId: string | null;
+  date: string;
+  amount: number;
+  unit: "grams" | "ounces";
+  notes: string | null;
+  hiveName: string | null;
+  apiaryName: string | null;
+  createdAt: string;
+}
+
+export interface ProductBatch {
+  id: string;
+  kind: "creamed_honey" | "hot_honey" | "mead" | "tincture";
+  productId: string;
+  productName: string;
+  harvestLotId: string | null;
+  harvestLotCode: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  honeyLbs: number | null;
+  waterLiters: number | null;
+  yeast: string | null;
+  vessel: string | null;
+  propolisHarvestId: string | null;
+  propolisAmount: number | null;
+  propolisUnit: "grams" | "ounces" | null;
+  quantityOut: number;
+  notes: string | null;
+  expenseIds: string[];
+  createdAt: string;
 }
 
 export interface HoneySale {

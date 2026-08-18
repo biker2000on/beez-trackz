@@ -63,7 +63,7 @@ export function MarketDayPage() {
           </h1>
           {cartCount > 0 && (
             <Badge variant="accent">
-              {cartCount} {cartCount === 1 ? "jar" : "jars"} in cart
+              {cartCount} {cartCount === 1 ? "item" : "items"} in cart
             </Badge>
           )}
         </div>
@@ -82,9 +82,9 @@ export function MarketDayPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Leave market day?</AlertDialogTitle>
             <AlertDialogDescription>
-              The current sale has {cartCount} {cartCount === 1 ? "jar" : "jars"}{" "}
-              in the cart. Leaving discards it — nothing is recorded until you
-              complete the sale.
+              The current sale has {cartCount}{" "}
+              {cartCount === 1 ? "item" : "items"} in the cart. Leaving
+              discards it — nothing is recorded until you complete the sale.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

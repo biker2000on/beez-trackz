@@ -63,6 +63,9 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		{"wholesale_price_list_items", "unit_price_cents"},
 		{"honey_movements", "reverses_movement_id"},
 		{"honey_movements", "bottling_run_id"},
+		{"honey_movements", "product_batch_id"},
+		{"sale_items", "product_id"},
+		{"product_catalog", "default_price_cents"},
 		{"honey_harvests", "deleted_at"},
 		{"expenses", "deleted_at"},
 		{"sales", "cancelled_at"},
@@ -97,6 +100,7 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		"sales", "sale_items", "honey_movements", "honey_harvests",
 		"harvest_sessions", "jar_sizes", "expenses", "bottling_runs",
 		"wholesale_price_lists", "wholesale_price_list_items",
+		"product_catalog", "propolis_harvests", "product_batches",
 	} {
 		for _, column := range []string{"updated_at", "created_by"} {
 			var exists bool
@@ -120,6 +124,10 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		"apiary_weather_cache",
 		"harvest_session_true_ups",
 		"external_sync",
+		"product_catalog",
+		"propolis_harvests",
+		"product_batches",
+		"product_batch_expenses",
 	} {
 		var exists bool
 		if err := pool.QueryRow(ctx, `

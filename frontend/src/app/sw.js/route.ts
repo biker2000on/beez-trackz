@@ -351,6 +351,9 @@ function queueableMutation(request, url) {
     "/api/v1/customers",
     "/api/v1/harvest-lots",
     "/api/v1/wholesale-price-lists",
+    "/api/v1/products",
+    "/api/v1/propolis-harvests",
+    "/api/v1/product-batches",
   ];
   const supportedHiveMutation =
     path === "/api/v1/hives/bulk" ||

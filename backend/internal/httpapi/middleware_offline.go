@@ -94,6 +94,9 @@ func offlineMutationSupported(method, path string) bool {
 		"/api/v1/customers",
 		"/api/v1/harvest-lots",
 		"/api/v1/wholesale-price-lists",
+		"/api/v1/products",
+		"/api/v1/propolis-harvests",
+		"/api/v1/product-batches",
 	}
 	supported := false
 	for _, prefix := range prefixes {

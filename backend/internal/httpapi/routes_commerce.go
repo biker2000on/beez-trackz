@@ -752,7 +752,8 @@ func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Reques
 
 var expenseCategories = map[string]bool{
 	"bees_queens": true, "feed": true, "treatments": true, "packaging": true,
-	"equipment": true, "mileage": true, "market_fees": true, "labor": true, "other": true,
+	"equipment": true, "mileage": true, "market_fees": true, "labor": true,
+	"other": true, "grocery": true,
 }
 
 func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {

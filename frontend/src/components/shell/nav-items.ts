@@ -92,10 +92,16 @@ export const NAV_ITEMS: NavItem[] = [
           "/harvest/lots",
           "/harvest/serials",
           "/harvest/sessions",
+          "/harvest/products",
         ],
         children: [
           { label: "Harvests", href: "/harvest/harvests", keywords: ["extraction sessions"] },
           { label: "Jars", href: "/harvest/jars", keywords: ["bottling inventory"] },
+          {
+            label: "Hive products",
+            href: "/harvest/products",
+            keywords: ["creamed honey hot honey mead propolis tincture catalog"],
+          },
           {
             label: "Lots & QR",
             href: "/harvest/lots",
@@ -119,7 +125,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Receipt,
     shortcutKey: "c",
     adminOnly: true,
-    keywords: ["orders receipts colonies equipment"],
+    keywords: ["orders receipts colonies equipment creamed mead propolis"],
     children: [
       {
         label: "Market day",
