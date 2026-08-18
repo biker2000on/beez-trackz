@@ -140,7 +140,18 @@ export function RecordSaleDialog({
     });
     if (missingPrice) {
       setLineError(
-        "Every jar line with a quantity needs a price — enter 0 for a giveaway.",
+        "Every jar line with a quantity needs a price — enter 0 for a gift.",
+      );
+      return;
+    }
+    const zeroPricedPaid = lines.some((line) => {
+      const qty = parseNum(line.quantity) ?? 0;
+      const price = parseNum(line.unitPrice ?? "");
+      return qty > 0 && price === 0 && values.channel !== "gift";
+    });
+    if (zeroPricedPaid) {
+      setLineError(
+        "Paid sales need a price on every line. Use the gift channel to give jars away.",
       );
       return;
     }

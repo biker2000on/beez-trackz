@@ -68,6 +68,7 @@ export function MarketDayTab({
       unitPrice: row.defaultPrice ?? 0,
     }))
     .filter((line) => line.quantity > 0);
+  const unpriced = lines.filter((line) => line.unitPrice <= 0);
   const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
   const discountAmount = Math.min(subtotal, Math.max(0, Number(discount) || 0));
   const total = subtotal - discountAmount;
@@ -80,7 +81,7 @@ export function MarketDayTab({
   }
 
   function checkout() {
-    if (lines.length === 0) return;
+    if (lines.length === 0 || unpriced.length > 0) return;
     sale.mutate({
       date,
       channel,
@@ -138,7 +139,7 @@ export function MarketDayTab({
               <Card key={row.jarSizeId} className={quantity > 0 ? "border-primary" : ""}>
                 <CardContent className="grid gap-3 p-4">
                   <button type="button" className="grid min-h-20 place-items-center rounded-md bg-amber-500/10 p-3 text-center hover:bg-amber-500/20" onClick={() => adjust(row.jarSizeId, 1, row.onHand)} disabled={row.onHand <= quantity}>
-                    <span><span className="block text-lg font-bold">{row.label}</span><span className="text-sm text-muted-foreground">{formatMoney(row.defaultPrice ?? 0)} · {row.onHand} left</span></span>
+                    <span><span className="block text-lg font-bold">{row.label}</span><span className="text-sm text-muted-foreground">{row.defaultPrice && row.defaultPrice > 0 ? formatMoney(row.defaultPrice) : "No price"} · {row.onHand} left</span></span>
                   </button>
                   <div className="flex items-center justify-between">
                     <Button size="icon-sm" variant="outline" onClick={() => adjust(row.jarSizeId, -1, row.onHand)} disabled={quantity === 0}><Minus /></Button>
@@ -161,6 +162,22 @@ export function MarketDayTab({
               }}
               onSubmitAndReset={checkout}
             >
+            {unpriced.length > 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  Set a default price on{" "}
+                  {unpriced
+                    .map((line) =>
+                      inventory.data.find((row) => row.jarSizeId === line.jarSizeId)
+                        ?.label,
+                    )
+                    .filter(Boolean)
+                    .join(", ")}{" "}
+                  in Settings before recording a paid sale.
+                </span>
+              </div>
+            )}
             {saleError && (
               <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" />
@@ -199,7 +216,7 @@ export function MarketDayTab({
               {discountAmount > 0 && <div className="flex justify-between text-muted-foreground"><span>Discount</span><span>−{formatMoney(discountAmount)}</span></div>}
             </div>
             <div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Total</span><span className="text-3xl font-bold tabular-nums">{formatMoney(total)}</span></div>
-            <Button type="submit" size="lg" className="h-14 text-base" disabled={sale.isPending || lines.length === 0}>{sale.isPending ? "Completing…" : "Complete sale"}</Button>
+            <Button type="submit" size="lg" className="h-14 text-base" disabled={sale.isPending || lines.length === 0 || unpriced.length > 0}>{sale.isPending ? "Completing…" : "Complete sale"}</Button>
             </ShortcutForm>
           </CardContent>
         </Card>

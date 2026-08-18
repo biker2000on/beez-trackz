@@ -83,7 +83,14 @@ export function HoneyOverview() {
           icon={Droplets}
           label="Bulk on hand"
           value={data ? formatLbs(data.bulkOnHandLbs) : undefined}
-          sub={data ? `${formatLbs(data.totalHarvestedLbs)} harvested to date` : undefined}
+          sub={
+            data
+              ? data.bulkOnHandLbs < 0
+                ? "Jars on the shelf exceed recorded harvests."
+                : `${formatLbs(data.totalHarvestedLbs)} harvested to date`
+              : undefined
+          }
+          tone={data && data.bulkOnHandLbs < 0 ? "danger" : "default"}
           loading={overview.isPending}
           error={
             overview.isError
@@ -275,7 +282,15 @@ function NextActions({
 }) {
   const prompts: { key: string; title: string; detail: string; href: string; cta: string }[] = [];
 
-  if (bulkOnHandLbs > 0) {
+  if (bulkOnHandLbs < 0) {
+    prompts.push({
+      key: "bulk-short",
+      title: "Bulk honey is short of what was jarred",
+      detail: `${formatLbs(Math.abs(bulkOnHandLbs))} more has been jarred than harvested. Record the missing harvests or write off the gap.`,
+      href: "/harvest/harvests",
+      cta: "Record harvests",
+    });
+  } else if (bulkOnHandLbs > 0) {
     prompts.push({
       key: "bottle",
       title: `${formatLbs(bulkOnHandLbs)} awaiting bottling`,
@@ -352,6 +367,7 @@ function StatCard({
   loading,
   error,
   onRetry,
+  tone = "default",
 }: {
   icon: LucideIcon;
   label: string;
@@ -360,6 +376,7 @@ function StatCard({
   loading: boolean;
   error?: string;
   onRetry?: () => void;
+  tone?: "default" | "danger";
 }) {
   return (
     <Card>
@@ -382,7 +399,13 @@ function StatCard({
         ) : loading || value == null ? (
           <Skeleton className="mt-2 h-7 w-24" />
         ) : (
-          <p className="mt-1 truncate text-2xl font-bold tabular-nums">
+          <p
+            className={
+              tone === "danger"
+                ? "mt-1 truncate text-2xl font-bold tabular-nums text-destructive"
+                : "mt-1 truncate text-2xl font-bold tabular-nums"
+            }
+          >
             {value}
           </p>
         )}

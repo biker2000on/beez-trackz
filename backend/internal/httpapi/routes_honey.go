@@ -848,6 +848,21 @@ type honeySaleLine struct {
 	UnitPrice money
 }
 
+// honeySalePriceRequired rejects a $0 paid sale. Gift is the only channel
+// that may give jars away; every other channel needs a unit price so a
+// missing jar-size default cannot silently understate revenue.
+func honeySalePriceRequired(channel string, lines []honeySaleLine) error {
+	if channel == "gift" {
+		return nil
+	}
+	for _, line := range lines {
+		if line.UnitPrice == 0 {
+			return errors.New("unitPrice must be greater than zero unless the channel is gift")
+		}
+	}
+	return nil
+}
+
 func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, error) {
 	lines := make([]honeySaleLine, 0, len(inputs))
 	byJarSize := make(map[uuid.UUID]int, len(inputs))
@@ -1025,6 +1040,10 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			}
 			lines[i].UnitPrice = unitPrice
 		}
+	}
+	if err := honeySalePriceRequired(req.Channel, lines); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// All money arithmetic is exact integer cents: no float sums, no float

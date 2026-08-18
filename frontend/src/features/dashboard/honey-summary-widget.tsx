@@ -37,7 +37,13 @@ export function HoneySummaryWidget() {
         <dl className="grid grid-cols-3 gap-2 text-center">
           <div>
             <dt className="text-xs text-muted-foreground">Bulk lbs</dt>
-            <dd className="text-lg font-semibold">
+            <dd
+              className={
+                (data?.bulkOnHandLbs ?? 0) < 0
+                  ? "text-lg font-semibold text-destructive"
+                  : "text-lg font-semibold"
+              }
+            >
               {(data?.bulkOnHandLbs ?? 0).toFixed(1)}
             </dd>
           </div>
@@ -52,6 +58,12 @@ export function HoneySummaryWidget() {
             </dd>
           </div>
         </dl>
+        {(data?.bulkOnHandLbs ?? 0) < 0 && (
+          <p className="text-xs text-destructive">
+            Bulk is short of recorded harvests. Record the missing extractions
+            or write off the gap.
+          </p>
+        )}
         {(data?.inventory.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {data?.inventory.map((row) => (

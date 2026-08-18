@@ -82,6 +82,21 @@ func TestParseBoundedLimitClampsAndDefaults(t *testing.T) {
 	}
 }
 
+func TestHoneySalePriceRequired(t *testing.T) {
+	line := honeySaleLine{JarSizeID: uuid.New(), Quantity: 1, UnitPrice: 0}
+	if err := honeySalePriceRequired("farmers_market", []honeySaleLine{line}); err == nil {
+		t.Fatal("a $0 farmers-market sale was accepted")
+	}
+	if err := honeySalePriceRequired("gift", []honeySaleLine{line}); err != nil {
+		t.Fatalf("a $0 gift was rejected: %v", err)
+	}
+	priced := line
+	priced.UnitPrice = 800
+	if err := honeySalePriceRequired("direct", []honeySaleLine{priced}); err != nil {
+		t.Fatalf("a priced sale was rejected: %v", err)
+	}
+}
+
 func TestNormalizeHoneySaleLinesRejectsConflictingOrNegativePrices(t *testing.T) {
 	jarSizeID := uuid.New().String()
 	tests := []struct {
