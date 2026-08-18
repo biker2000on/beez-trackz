@@ -282,6 +282,7 @@ const sessionSchema = z.object({
   apiaryId: z.string().min(1, "Apiary is required"),
   date: z.string().min(1, "Date is required"),
   notes: z.string(),
+  moisturePct: z.string(),
 });
 type SessionValues = z.infer<typeof sessionSchema>;
 
@@ -296,12 +297,12 @@ function NewSessionDialog({
   const mutation = useCreateSession();
   const form = useForm<SessionValues>({
     resolver: zodResolver(sessionSchema),
-    defaultValues: { apiaryId: "", date: todayISO(), notes: "" },
+    defaultValues: { apiaryId: "", date: todayISO(), notes: "", moisturePct: "" },
   });
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({ apiaryId: "", date: todayISO(), notes: "" });
+    form.reset({ apiaryId: "", date: todayISO(), notes: "", moisturePct: "" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -311,10 +312,11 @@ function NewSessionDialog({
         apiaryId: values.apiaryId,
         date: values.date,
         notes: values.notes.trim() || undefined,
+        moisturePct: parseNum(values.moisturePct) ?? undefined,
       },
       {
         onSuccess: () => {
-          if (resetAfter) form.reset({ apiaryId: "", date: todayISO(), notes: "" });
+          if (resetAfter) form.reset({ apiaryId: "", date: todayISO(), notes: "", moisturePct: "" });
           else onOpenChange(false);
         },
       },
@@ -363,6 +365,22 @@ function NewSessionDialog({
             <Label htmlFor="session-date">Date</Label>
             <Input id="session-date" type="date" {...form.register("date")} />
             <FieldError message={errors.date?.message} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="session-moisture">Refractometer moisture %</Label>
+            <Input
+              id="session-moisture"
+              type="number"
+              inputMode="decimal"
+              step="0.1"
+              min={0}
+              max={100}
+              placeholder="e.g. 17.8"
+              {...form.register("moisturePct")}
+            />
+            <p className="text-xs text-muted-foreground">
+              Harvest is refused above the instance threshold (default 18.6%).
+            </p>
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="session-notes">Notes</Label>
@@ -542,6 +560,17 @@ function NewHarvestDialog({
               </SelectContent>
             </Select>
             <FieldError message={errors.hiveId?.message} />
+            {(() => {
+              const selected = (hives.data ?? []).find(
+                (hive) => hive.id === form.watch("hiveId"),
+              );
+              if (!selected?.lockout?.locked) return null;
+              return (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  {selected.lockout.message}
+                </p>
+              );
+            })()}
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="harvest-date">Date</Label>

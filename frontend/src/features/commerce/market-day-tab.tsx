@@ -231,10 +231,21 @@ export function MarketDayTab({
                 <SelectContent>
                   <SelectItem value="none">Unassigned</SelectItem>
                   {(lots.data ?? []).map((lot) => (
-                    <SelectItem key={lot.id} value={lot.id}>{lot.lotCode}</SelectItem>
+                    <SelectItem key={lot.id} value={lot.id} disabled={lot.lockout?.locked}>
+                      {lot.lotCode}{lot.lockout?.locked ? " · locked" : ""}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {(() => {
+                const selected = (lots.data ?? []).find((lot) => lot.id === harvestLotId);
+                if (!selected?.lockout?.locked) return null;
+                return (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    {selected.lockout.message}
+                  </p>
+                );
+              })()}
             </div>
             <div className="grid grid-cols-2 gap-3"><div className="grid gap-1"><Label>Discount</Label><Input type="number" min="0" step="0.01" value={discount} onChange={(e) => setDiscount(e.target.value)} /></div><div className="grid gap-1"><Label>Customer</Label><Input value={customer} onChange={(e) => setCustomer(e.target.value)} placeholder="Optional" /></div></div>
             <div className="grid gap-1 border-y py-3 text-sm">

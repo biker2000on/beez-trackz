@@ -15,6 +15,7 @@ export interface Preferences {
   miteThresholdPer100: number | null;
   miteThresholdPerDay: number | null;
   miteCheckIntervalDays: number | null;
+  moistureThresholdPct: number | null;
 }
 
 export interface PreferencesPayload {
@@ -25,6 +26,7 @@ export interface PreferencesPayload {
   miteThresholdPer100?: number | null;
   miteThresholdPerDay?: number | null;
   miteCheckIntervalDays?: number | null;
+  moistureThresholdPct?: number | null;
 }
 
 export interface ApiaryOption {
@@ -206,6 +208,33 @@ export function useCreateJarSize() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["jar-sizes"] });
       queryClient.invalidateQueries({ queryKey: ["honey"] });
+    },
+  });
+}
+
+export interface TreatmentProduct {
+  id: string;
+  name: string;
+  aliases: string[];
+  withdrawalDays: number;
+  notes: string | null;
+}
+
+export function useTreatmentProducts() {
+  return useQuery({
+    queryKey: ["treatment-products"],
+    queryFn: () => api.get<TreatmentProduct[]>("/treatment-products"),
+  });
+}
+
+export function useUpdateTreatmentProduct() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, withdrawalDays }: { id: string; withdrawalDays: number }) =>
+      api.patch<{ success: boolean }>(`/treatment-products/${id}`, { withdrawalDays }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["treatment-products"] });
+      queryClient.invalidateQueries({ queryKey: ["hives"] });
     },
   });
 }

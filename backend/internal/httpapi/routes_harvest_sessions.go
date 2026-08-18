@@ -24,6 +24,8 @@ func (s *Server) mountHarvestSessions(r chi.Router) {
 	r.With(s.requireEntityParamRole("harvest_session", false)).
 		Get("/harvest-sessions/{id}", s.hsDetail)
 	r.With(s.requireEntityParamRole("harvest_session", true)).
+		Patch("/harvest-sessions/{id}", s.hsUpdate)
+	r.With(s.requireEntityParamRole("harvest_session", true)).
 		Post("/harvest-sessions/{id}/entries", s.hsAddEntry)
 	r.With(s.requireEntityParamRole("harvest_session", true)).
 		Post("/harvest-sessions/{id}/true-up", s.hsTrueUp)
@@ -50,7 +52,7 @@ func hsIsFKViolation(err error) bool {
 // GET /harvest-sessions — list with entryCount + calculatedTotal.
 func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hs.id, hs.date, hs.total_extracted_weight, hs.notes, a.name,
+		SELECT hs.id, hs.date, hs.total_extracted_weight, hs.notes, hs.moisture_pct, a.name,
 		       COUNT(hh.id)::int, COALESCE(SUM(hh.calculated_honey_weight), 0)
 		FROM harvest_sessions hs
 		JOIN apiaries a ON a.id = hs.apiary_id
@@ -72,6 +74,7 @@ func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 		Date                 time.Time `json:"date"`
 		TotalExtractedWeight *float64  `json:"totalExtractedWeight"`
 		Notes                *string   `json:"notes"`
+		MoisturePct          *float64  `json:"moisturePct"`
 		ApiaryName           string    `json:"apiaryName"`
 		EntryCount           int       `json:"entryCount"`
 		CalculatedTotal      float64   `json:"calculatedTotal"`
@@ -80,7 +83,7 @@ func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row sessionRow
 		if err := rows.Scan(&row.ID, &row.Date, &row.TotalExtractedWeight, &row.Notes,
-			&row.ApiaryName, &row.EntryCount, &row.CalculatedTotal); err != nil {
+			&row.MoisturePct, &row.ApiaryName, &row.EntryCount, &row.CalculatedTotal); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -96,9 +99,10 @@ func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 // POST /harvest-sessions {apiaryId, date, notes?}
 func (s *Server) hsCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ApiaryID string  `json:"apiaryId"`
-		Date     string  `json:"date"`
-		Notes    *string `json:"notes"`
+		ApiaryID    string   `json:"apiaryId"`
+		Date        string   `json:"date"`
+		Notes       *string  `json:"notes"`
+		MoisturePct *float64 `json:"moisturePct"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -125,14 +129,21 @@ func (s *Server) hsCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
+	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	var id uuid.UUID
 	var createdAt time.Time
 	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO harvest_sessions (apiary_id, date, notes, created_by)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO harvest_sessions (apiary_id, date, notes, moisture_pct, created_by)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, created_at`,
-		apiaryID, date, hsTrimPtr(req.Notes), actorID(r)).Scan(&id, &createdAt)
+		apiaryID, date, hsTrimPtr(req.Notes), req.MoisturePct, actorID(r)).Scan(&id, &createdAt)
 	if err != nil {
 		if hsIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid apiaryId")
@@ -147,6 +158,7 @@ func (s *Server) hsCreate(w http.ResponseWriter, r *http.Request) {
 		"date":                 date,
 		"totalExtractedWeight": nil,
 		"notes":                hsTrimPtr(req.Notes),
+		"moisturePct":          req.MoisturePct,
 		"createdAt":            createdAt,
 	})
 }
@@ -165,11 +177,12 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		date, createdAt      time.Time
 		totalExtractedWeight *float64
 		notes                *string
+		moisturePct          *float64
 	)
 	err = s.pool.QueryRow(ctx, `
-		SELECT apiary_id, date, total_extracted_weight, notes, created_at
+		SELECT apiary_id, date, total_extracted_weight, notes, moisture_pct, created_at
 		FROM harvest_sessions WHERE id = $1`, id).
-		Scan(&apiaryID, &date, &totalExtractedWeight, &notes, &createdAt)
+		Scan(&apiaryID, &date, &totalExtractedWeight, &notes, &moisturePct, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
@@ -240,12 +253,55 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		"date":                 date,
 		"totalExtractedWeight": totalExtractedWeight,
 		"notes":                notes,
+		"moisturePct":          moisturePct,
 		"createdAt":            createdAt,
 		"entries":              entries,
 		"calculatedTotal":      calculatedTotal,
 		"difference":           difference,
 		"trueUpHistory":        trueUps,
 	})
+}
+
+// PATCH /harvest-sessions/{id} {moisturePct?, notes?}
+func (s *Server) hsUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		MoisturePct *float64 `json:"moisturePct"`
+		Notes       *string  `json:"notes"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.MoisturePct == nil && req.Notes == nil {
+		writeError(w, http.StatusBadRequest, "moisturePct or notes is required")
+		return
+	}
+	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE harvest_sessions
+		SET moisture_pct = COALESCE($2, moisture_pct),
+		    notes = COALESCE($3, notes)
+		WHERE id = $1`, id, req.MoisturePct, hsTrimPtr(req.Notes))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 func (s *Server) hsTrueUpHistory(ctx context.Context, sessionID uuid.UUID) ([]map[string]any, error) {
@@ -403,6 +459,13 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 		if hiveApiaryID != sessionApiaryID {
 			writeError(w, http.StatusBadRequest,
 				lineName+"hive must belong to the harvest session apiary")
+			return
+		}
+		if msg, err := refuseHiveHarvest(ctx, s.pool, hiveID, sessionDate); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		} else if msg != "" {
+			writeError(w, http.StatusConflict, lineName+msg)
 			return
 		}
 		resolved = append(resolved, resolvedEntry{

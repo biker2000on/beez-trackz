@@ -409,6 +409,16 @@ export interface SessionBody {
   apiaryId: string;
   date: string;
   notes?: string;
+  moisturePct?: number;
+}
+
+export function useUpdateSession(sessionId: string) {
+  return useHoneyMutation({
+    mutationFn: (body: { moisturePct?: number; notes?: string }) =>
+      api.patch(`/harvest-sessions/${sessionId}`, body),
+    successMessage: "Session updated",
+    invalidate: [["harvest-sessions"]],
+  });
 }
 
 export function useCreateSession() {

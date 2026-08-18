@@ -233,6 +233,11 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
             </span>
           )}
         </p>
+        {data.lockout?.locked && (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
+            {data.lockout.message}
+          </p>
+        )}
       </div>
 
       {canEdit ? (

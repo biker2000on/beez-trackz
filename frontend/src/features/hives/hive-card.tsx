@@ -77,6 +77,11 @@ export function HiveCard({
       </CardHeader>
       <CardContent className="grid gap-0.5 text-sm text-muted-foreground">
         {showApiary && <p>{hive.apiaryName}</p>}
+        {hive.lockout?.locked && (
+          <p className="text-amber-700 dark:text-amber-400">
+            {hive.lockout.message}
+          </p>
+        )}
         {hive.installedDate && (
           <p>Installed {formatDate(hive.installedDate)}</p>
         )}

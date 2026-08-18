@@ -84,7 +84,10 @@ export function LotsTab() {
                     {formatDate(lot.extractionDate)} · {formatLbs(lot.honeyWeightLbs)}
                   </p>
                 </div>
-                <Badge variant={lot.isPublic ? "accent" : "outline"}>{lot.isPublic ? "Public story" : "Private"}</Badge>
+                <div className="flex flex-wrap justify-end gap-1">
+                  <Badge variant={lot.isPublic ? "accent" : "outline"}>{lot.isPublic ? "Public story" : "Private"}</Badge>
+                  {lot.lockout?.locked && <Badge variant="destructive">Locked</Badge>}
+                </div>
               </CardHeader>
               <CardContent className="grid gap-4">
                 <div className="grid grid-cols-[88px_1fr] gap-3">
@@ -96,6 +99,17 @@ export function LotsTab() {
                     <p className="text-xs text-muted-foreground">
                       {lot.apiaryRegion ?? (lot.sourceApiaries.join(", ") || "Region not published")}
                     </p>
+                    {(lot.moisturePct != null || lot.bottlingMoisturePct != null) && (
+                      <p className="text-xs text-muted-foreground">
+                        {lot.moisturePct != null ? `Extracted ${lot.moisturePct}%` : "Extraction moisture not recorded"}
+                        {lot.bottlingMoisturePct != null ? ` · Bottled ${lot.bottlingMoisturePct}%` : ""}
+                      </p>
+                    )}
+                    {lot.lockout?.locked && (
+                      <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                        {lot.lockout.message}
+                      </p>
+                    )}
                     <Link href={`/honey/${lot.publicSlug}`} target="_blank" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
                       Open Honey Story <ExternalLink className="size-3" />
                     </Link>
@@ -178,6 +192,12 @@ function LotFormDialog({
   const [photoIds, setPhotoIds] = React.useState(
     () => lot?.photos.map((photo) => photo.id).join(", ") ?? "",
   );
+  const [moisture, setMoisture] = React.useState(
+    () => (lot?.moisturePct != null ? String(lot.moisturePct) : ""),
+  );
+  const [bottlingMoisture, setBottlingMoisture] = React.useState(
+    () => (lot?.bottlingMoisturePct != null ? String(lot.bottlingMoisturePct) : ""),
+  );
 
   function resetDraft() {
     setLotCode("");
@@ -191,6 +211,8 @@ function LotFormDialog({
     setReorder("");
     setHarvestIds([]);
     setPhotoIds("");
+    setMoisture("");
+    setBottlingMoisture("");
   }
 
   function submit(resetAfter = false) {
@@ -209,6 +231,8 @@ function LotFormDialog({
       isPublic: lot?.isPublic ?? true,
       harvestIds,
       photoIds: photoIds.split(",").map((id) => id.trim()).filter(Boolean),
+      moisturePct: moisture.trim() ? Number(moisture) : null,
+      bottlingMoisturePct: bottlingMoisture.trim() ? Number(bottlingMoisture) : null,
     };
     if (lot) {
       // Keep the published slug stable so printed QR labels keep resolving.
@@ -243,6 +267,16 @@ function LotFormDialog({
             <div className="grid gap-1.5"><Label htmlFor="lot-code">Lot code</Label><Input id="lot-code" value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label htmlFor="lot-weight">Extracted lb</Label><Input id="lot-weight" type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} /></div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-moisture">Extraction moisture %</Label>
+              <Input id="lot-moisture" type="number" min="0" max="100" step="0.1" value={moisture} onChange={(e) => setMoisture(e.target.value)} placeholder="17.8" />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-bottle-moisture">Bottling moisture % (optional)</Label>
+              <Input id="lot-bottle-moisture" type="number" min="0" max="100" step="0.1" value={bottlingMoisture} onChange={(e) => setBottlingMoisture(e.target.value)} />
+            </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} placeholder="Wildflower" /></div>
@@ -281,6 +315,9 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
   const [quantity, setQuantity] = React.useState("");
   const [pounds, setPounds] = React.useState("");
   const [serialize, setSerialize] = React.useState(false);
+  const [moisture, setMoisture] = React.useState(
+    lot.bottlingMoisturePct != null ? String(lot.bottlingMoisturePct) : "",
+  );
 
   function resetDraft() {
     setDate(todayISO());
@@ -288,6 +325,7 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
     setQuantity("");
     setPounds("");
     setSerialize(false);
+    setMoisture(lot.bottlingMoisturePct != null ? String(lot.bottlingMoisturePct) : "");
   }
 
   function submit(resetAfter = false) {
@@ -304,6 +342,7 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
       quantity: qty,
       honeyLbs: pounds.trim() ? Number(pounds) : undefined,
       serialize,
+      moisturePct: moisture.trim() ? Number(moisture) : undefined,
     }, {
       onSuccess: () => {
         if (resetAfter) resetDraft();
@@ -331,6 +370,10 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5"><Label>Jars</Label><Input type="number" min="1" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label>Honey used (lb)</Label><Input type="number" min="0" step="0.1" value={pounds} onChange={(e) => setPounds(e.target.value)} /></div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Bottling moisture % (optional)</Label>
+            <Input type="number" min="0" max="100" step="0.1" value={moisture} onChange={(e) => setMoisture(e.target.value)} />
           </div>
           <label className="flex items-center gap-2 text-sm"><Checkbox checked={serialize} onCheckedChange={(value) => setSerialize(value === true)} />Generate an individual serial number for every jar</label>
           <DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={create.isPending}>{create.isPending ? "Saving…" : "Record bottling run"}</Button></DialogFooter>

@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useHiveFeedings } from "@/features/feedings/hooks";
 import { useHiveInspections } from "@/features/inspections/hooks";
 import { usePhotos } from "@/features/photos/hooks";
-import { useHiveDeployments, useHiveQueens } from "./hooks";
+import { useHive, useHiveDeployments, useHiveQueens } from "./hooks";
 import { miteDisplay, useVarroaAnalytics } from "@/features/operations/hooks";
 import { formatDate } from "./lib";
 
@@ -56,6 +56,7 @@ function SummaryCard({
 }
 
 export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
+  const hive = useHive(hiveId);
   const inspections = useHiveInspections(hiveId);
   const varroa = useVarroaAnalytics(hiveId);
   const feedings = useHiveFeedings(hiveId);
@@ -85,8 +86,33 @@ export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
   const latestMite = varroa.data?.latest ?? null;
   const mite = latestMite ? miteDisplay(latestMite) : null;
 
+  const lockout = hive.data?.lockout;
+
   return (
     <div className="grid gap-4">
+      {lockout?.locked && (
+        <Card className="border-amber-500/40 bg-amber-500/10">
+          <CardContent className="p-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-amber-800 dark:text-amber-200">
+              Harvest lockout
+            </p>
+            <p className="mt-1 text-sm font-medium text-amber-950 dark:text-amber-50">
+              {lockout.message}
+            </p>
+            {lockout.product && (
+              <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-100/80">
+                {lockout.product}
+                {lockout.dateApplied ? ` on ${formatDate(lockout.dateApplied)}` : ""}
+                {lockout.treatmentOn
+                  ? " · still on"
+                  : lockout.dateRemoved
+                    ? ` · off ${formatDate(lockout.dateRemoved)}`
+                    : ""}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <SummaryCard
           icon={HeartPulse}

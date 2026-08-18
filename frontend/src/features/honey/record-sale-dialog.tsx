@@ -512,15 +512,28 @@ export function RecordSaleDialog({
               <SelectContent>
                 <SelectItem value="none">Unassigned</SelectItem>
                 {(lots.data ?? []).map((lot) => (
-                  <SelectItem key={lot.id} value={lot.id}>
+                  <SelectItem key={lot.id} value={lot.id} disabled={lot.lockout?.locked}>
                     {lot.lotCode}{lot.season ? ` · ${lot.season}` : ""}
+                    {lot.lockout?.locked ? " · locked" : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">
-              Assigning a lot enables batch and season profitability.
-            </p>
+            {(() => {
+              const selected = (lots.data ?? []).find((lot) => lot.id === form.watch("harvestLotId"));
+              if (!selected?.lockout?.locked) {
+                return (
+                  <p className="text-xs text-muted-foreground">
+                    Assigning a lot enables batch and season profitability.
+                  </p>
+                );
+              }
+              return (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  {selected.lockout.message}
+                </p>
+              );
+            })()}
           </div>
           {form.watch("channel") === "wholesale" && (
             <div className="grid gap-1.5">

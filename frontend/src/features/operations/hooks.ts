@@ -140,6 +140,35 @@ export interface EconomicsReport {
   }[];
 }
 
+export interface YardQueueItem {
+  kind: "lockout" | "recommendation" | "feeding" | "harvest_ready";
+  hiveId: string | null;
+  hiveName: string | null;
+  title: string;
+  detail: string;
+  priority: string;
+  href: string;
+  lockoutUntil?: string | null;
+}
+
+export interface YardQueueYard {
+  apiaryId: string;
+  apiaryName: string;
+  items: YardQueueItem[];
+}
+
+export interface YardQueue {
+  asOf: string;
+  yards: YardQueueYard[];
+}
+
+export function useYardQueue() {
+  return useQuery({
+    queryKey: ["operations", "yard-queue"],
+    queryFn: () => api.get<YardQueue>("/operations/yard-queue"),
+  });
+}
+
 export function useHiveTimeline(hiveId: string) {
   return useQuery({
     queryKey: ["hives", "detail", hiveId, "timeline"],
