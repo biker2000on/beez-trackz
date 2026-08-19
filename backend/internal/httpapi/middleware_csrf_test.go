@@ -55,8 +55,11 @@ func TestCSRFOriginCheck(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// A path with no handler: the middleware verdict is the only
+			// thing that can produce a 403 here, and GET falls through to
+			// chi's 404 instead of a pool-less handler.
 			request := httptest.NewRequest(tc.method,
-				"/api/v1/auth/status", strings.NewReader("{}"))
+				"/api/v1/csrf-probe", strings.NewReader("{}"))
 			if tc.origin != "" {
 				request.Header.Set("Origin", tc.origin)
 			}

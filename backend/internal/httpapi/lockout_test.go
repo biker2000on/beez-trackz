@@ -60,7 +60,7 @@ func TestEvaluateTreatmentWithdrawalWindow(t *testing.T) {
 	if !inside.Locked {
 		t.Fatal("expected lockout on the day before the until date")
 	}
-	if inside.Until == nil || calendarDate(*inside.Until) != testDay("2026-08-24") {
+	if inside.Until == nil || !calendarDate(*inside.Until).Equal(testDay("2026-08-24")) {
 		t.Fatalf("until = %v, want 2026-08-24", inside.Until)
 	}
 	if got := lockoutMessage(inside); got != "This honey cannot be extracted/sold until 2026-08-24" {
