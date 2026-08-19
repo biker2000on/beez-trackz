@@ -203,6 +203,29 @@ test("report navigation fits tablet width and the report home has no duplicate s
   }
 });
 
+// Record tab strips and wide comparison tables are allowed to scroll
+// sideways inside their own container; the page itself never may.
+test("phone-width pages never scroll the document sideways", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const path of [
+    "/apiaries/a1",
+    "/hives/h1",
+    "/hives/h1?tab=timeline",
+    "/reports/finance",
+  ]) {
+    await page.goto(path);
+    await expect(page.locator("main")).toBeVisible();
+    const overflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    expect(overflow, `${path} overflows the viewport`).toBeLessThanOrEqual(0);
+  }
+});
+
 test("Home remains pinned in the mobile bottom bar", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/harvest/activity");

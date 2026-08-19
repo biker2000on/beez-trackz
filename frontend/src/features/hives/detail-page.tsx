@@ -324,11 +324,19 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
       ) : null}
 
       <Tabs value={tab} onValueChange={setTab}>
-        <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
+        {/* Record tabs stay a scroll strip on mobile (DESIGN.md). `py-1 -my-1`
+            keeps the focus ring from being clipped by the scroll container. */}
+        <div className="-my-1 -mx-4 snap-x scroll-px-4 overflow-x-auto px-4 py-1 md:mx-0 md:px-0">
           <TabsList className="min-w-max">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="timeline">Timeline</TabsTrigger>
-            <TabsTrigger value="health">Health</TabsTrigger>
+            <TabsTrigger value="overview" className="snap-start">
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="timeline" className="snap-start">
+              Timeline
+            </TabsTrigger>
+            <TabsTrigger value="health" className="snap-start">
+              Health
+            </TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="overview" className="pt-4">
@@ -337,7 +345,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         <TabsContent value="timeline" className="grid gap-4 pt-4">
           <div className="relative -mx-4 md:mx-0">
             <div
-              className="flex gap-1.5 overflow-x-auto px-4 md:flex-wrap md:px-0"
+              className="-my-1 flex snap-x scroll-px-4 gap-1.5 overflow-x-auto px-4 py-1 md:flex-wrap md:px-0"
               role="group"
               aria-label="Filter the timeline"
             >
@@ -348,7 +356,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
                   aria-pressed={entry.value === activeFilter.value}
                   onClick={() => setFilter(entry.value)}
                   className={cn(
-                    "shrink-0 rounded-full border px-3 py-1 text-sm font-medium transition-colors",
+                    "shrink-0 snap-start rounded-full border px-3 py-1 text-sm font-medium transition-colors",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     entry.value === activeFilter.value
                       ? "border-primary bg-primary/12 text-primary"

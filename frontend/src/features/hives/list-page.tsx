@@ -180,7 +180,7 @@ export function HivesListPage() {
             </SelectContent>
           </Select>
         </div>
-        <label className="flex h-9 items-center gap-2 text-sm">
+        <label className="flex min-h-9 items-center gap-2 text-sm">
           <Checkbox
             checked={showArchived}
             onCheckedChange={(checked) => setArchivedParam(checked === true)}
