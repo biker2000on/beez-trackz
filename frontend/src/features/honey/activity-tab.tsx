@@ -105,7 +105,7 @@ export function ActivityTab() {
     setSelected,
     toggle: toggleSelected,
     toggleMode,
-    exit: exitBulkMode,
+    finish: finishBulk,
   } = useBulkSelect(
     entries.map((entry) => entry.id),
     { mode: "Bulk-select activity rows", selectAll: "Select all activity rows" },
@@ -122,7 +122,7 @@ export function ActivityTab() {
     setConfirmTarget(null);
     if (targets.length === 0) return;
     deleteEntries.mutate(targets, {
-      onSettled: () => exitBulkMode(),
+      onSettled: () => finishBulk(),
     });
   }
 
