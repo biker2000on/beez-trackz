@@ -43,7 +43,7 @@ func TestHiveProductsKindCheckAcceptsNewKinds(t *testing.T) {
 		t.Fatal("mead kind was accepted before 00020")
 	}
 
-	if err := migrate(pool); err != nil {
+	if err := migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate forward: %v", err)
 	}
 

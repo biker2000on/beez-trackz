@@ -1,23 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const honeyCommercePaths = [
-  "/api/v1/harvests",
-  "/api/v1/honey/jarring",
-  "/api/v1/honey/bulk-movements",
-  "/api/v1/honey/give-away",
-  "/api/v1/honey/jar-adjustments",
-  "/api/v1/honey/movements/",
-  "/api/v1/honey/sales",
-  "/api/v1/sales",
-  "/api/v1/jar-sizes",
-  "/api/v1/expenses",
-  "/api/v1/customers",
-  "/api/v1/harvest-lots",
-  "/api/v1/wholesale-price-lists",
-  "/api/v1/products",
-  "/api/v1/propolis-harvests",
-  "/api/v1/product-batches",
-];
+import { OFFLINE_ROUTE_MANIFEST } from "../../src/lib/offline-routes.generated";
 
 test("service worker source encodes offline queue contracts", async ({
   request,
@@ -51,12 +34,14 @@ test("service worker source encodes offline queue contracts", async ({
   expect(logout).toContain("caches.delete(DATA_CACHE)");
   expect(logout).not.toContain("clearQueue");
 
-  for (const path of honeyCommercePaths) {
-    expect(sw).toContain('"' + path + '"');
-  }
-  expect(sw).toContain('"/api/v1/canvas/hives"');
-  expect(sw).toContain('"/api/v1/harvest-sessions"');
-  expect(sw).toContain('"/api/v1/recommendations/run"');
+  // The queueable route list is generated from the Go middleware's manifest
+  // (backend/internal/httpapi/offline_routes.go). Assert the served worker
+  // carries that exact manifest, so a route added on one side of the seam
+  // cannot silently miss the other.
+  expect(sw).toContain(
+    "const OFFLINE_ROUTES = " + JSON.stringify(OFFLINE_ROUTE_MANIFEST) + ";",
+  );
+  expect(sw).toContain("function offlineRouteSupported");
 
   const retry = sw.slice(
     sw.indexOf('event.data?.type === "RETRY_OFFLINE_MUTATION"'),

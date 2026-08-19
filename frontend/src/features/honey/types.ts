@@ -158,11 +158,15 @@ export interface HoneySale {
   totalAmount: number;
   discountAmount: number;
   amountPaid: number;
+  /** Sales tax collected. Recorded alongside the sale, not folded into totalAmount. */
+  tax: number | null;
   orderStatus: "draft" | "pending" | "paid" | "fulfilled" | "cancelled";
   orderNumber: string | null;
   dueDate: string | null;
   notes: string | null;
   createdAt: string;
+  updatedAt: string;
+  cancelledAt: string | null;
   lineItems: SaleLineItem[];
 }
 

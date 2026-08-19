@@ -33,8 +33,26 @@ type HoneyStory = {
   reorderUrl?: string | null;
 };
 
+let warnedAboutLegacyAPIURL = false;
+
+// Server-only: the API host must not be inlined into the public bundle, so
+// this reads API_URL. NEXT_PUBLIC_API_URL stays as a fallback for one release
+// so an un-migrated deployment keeps working, with a warning (SEAM-022).
 function apiOrigin() {
-  return process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+  const configured = process.env.API_URL;
+  if (configured) return configured;
+  const legacy = process.env.NEXT_PUBLIC_API_URL;
+  if (legacy) {
+    if (!warnedAboutLegacyAPIURL) {
+      warnedAboutLegacyAPIURL = true;
+      console.warn(
+        "NEXT_PUBLIC_API_URL is deprecated and inlines the API host into the " +
+          "public bundle; set API_URL instead. Support will be removed next release.",
+      );
+    }
+    return legacy;
+  }
+  return "http://localhost:8080";
 }
 
 // This is the one public page, so a stored value landing in an href must be
@@ -43,14 +61,18 @@ function safeReorderUrl(raw: string | null | undefined): string | null {
   return raw && /^https?:\/\//i.test(raw) ? raw : null;
 }
 
-// Date-only values ("2026-07-01") parse as UTC midnight; formatting them in
-// the server's timezone shows the previous day anywhere west of UTC. Pin to
-// UTC like the rest of the app's date formatters.
-function formatStoryDate(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "long",
-    timeZone: "UTC",
-  }).format(new Date(iso));
+// Same rule as parseApiDate (features/hives/lib.ts): the leading YYYY-MM-DD
+// of an API date IS the calendar date the beekeeper recorded. Reading the
+// string is correct whatever offset the value carries; converting the instant
+// through a timezone (even a pinned UTC) shifts dates the server wrote at a
+// non-UTC offset.
+function formatStoryDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  const date = match
+    ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+    : new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "long" }).format(date);
 }
 
 async function getStory(slug: string): Promise<HoneyStory | null> {

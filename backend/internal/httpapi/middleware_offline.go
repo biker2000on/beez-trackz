@@ -63,66 +63,11 @@ func mutationMethod(method string) bool {
 	}
 }
 
+// offlineMutationSupported reports whether a mutation may be queued offline
+// and replayed. The rules live in offline_routes.go so the service worker's
+// copy can be generated from them.
 func offlineMutationSupported(method, path string) bool {
-	prefixes := []string{
-		"/api/v1/inspections",
-		"/api/v1/feedings",
-		"/api/v1/bloom-observations",
-		"/api/v1/mite-counts",
-		"/api/v1/treatment-events",
-		"/api/v1/queen-events",
-		"/api/v1/queens",
-		"/api/v1/photos/",
-		"/api/v1/canvas/",
-		"/api/v1/harvest-sessions/",
-		"/api/v1/harvest-entries/",
-		"/api/v1/recommendations/",
-		// Honey and commerce writes. Market day is the most offline-prone
-		// surface in the product — a farmers' market with no signal — and
-		// every one of these routes was previously excluded, so a replayed
-		// queue could book the same sale twice.
-		"/api/v1/harvests",
-		"/api/v1/honey/jarring",
-		"/api/v1/honey/bulk-movements",
-		"/api/v1/honey/give-away",
-		"/api/v1/honey/jar-adjustments",
-		"/api/v1/honey/movements/",
-		"/api/v1/honey/sales",
-		"/api/v1/sales",
-		"/api/v1/jar-sizes",
-		"/api/v1/expenses",
-		"/api/v1/customers",
-		"/api/v1/harvest-lots",
-		"/api/v1/wholesale-price-lists",
-		"/api/v1/products",
-		"/api/v1/propolis-harvests",
-		"/api/v1/product-batches",
-	}
-	supported := false
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(path, prefix) {
-			supported = true
-			break
-		}
-	}
-	supported = supported ||
-		(path == "/api/v1/hives/bulk" ||
-			(strings.HasPrefix(path, "/api/v1/hives/") && method != http.MethodDelete)) ||
-		(strings.HasPrefix(path, "/api/v1/apiaries/") && method == http.MethodPut) ||
-		(strings.HasPrefix(path, "/api/v1/splits/") && method == http.MethodDelete)
-	if !supported {
-		return false
-	}
-	if method != http.MethodPost {
-		return true
-	}
-	switch path {
-	case "/api/v1/canvas/hives", "/api/v1/harvest-sessions",
-		"/api/v1/recommendations/run":
-		return false
-	default:
-		return true
-	}
+	return offlineRoutes.supports(method, path)
 }
 
 func (s *Server) offlineResourceUpdatedAt(r *http.Request) (*time.Time, error) {

@@ -52,6 +52,14 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, que
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(limitAPIBody)
+		// Cross-site write protection for the whole REST surface. It runs
+		// before authentication so a forged request is rejected without
+		// touching the database. See requireSameOrigin in middleware.go.
+		//
+		// INVARIANT: this only inspects POST/PUT/PATCH/DELETE, so no GET or
+		// HEAD route may change state. TestNoMutatingGetRoutes walks the
+		// router and enforces that naming convention.
+		r.Use(s.requireSameOrigin)
 		s.mountAuth(r)
 		s.mountPublicCommerce(r)
 		// Authenticated API routes are mounted by domain in routes_*.go files.

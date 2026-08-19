@@ -960,6 +960,15 @@ func (s *Server) publicHoneyStoryPhoto(w http.ResponseWriter, r *http.Request) {
 	s.servePhotoPreferred(w, r, backend, ref, originalKey, mediumKey, thumbKey)
 }
 
+// honeyStorySignupThrottle caps anonymous customer creation per Honey Story
+// slug (SEAM-024). The 5/min/IP throttle in front of this route stops one
+// noisy client; it does nothing about a botnet, and every accepted signup
+// writes a row to the customer list a beekeeper has to look at. A jar's QR
+// code realistically produces a handful of signups a day, so 50 a day per lot
+// is far above real use and far below a useful spam run. Process-local and
+// fixed-window, like the other throttles.
+var honeyStorySignupThrottle = newIPThrottle(50, 24*time.Hour)
+
 func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 	var exists bool
@@ -990,6 +999,14 @@ func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Reques
 	}
 	if len(name) > 200 || (req.ReferredBy != nil && len(strings.TrimSpace(*req.ReferredBy)) > 200) {
 		writeError(w, http.StatusBadRequest, "name or referral is too long")
+		return
+	}
+	// Charged only once the payload is known good, so malformed spam cannot
+	// burn a real visitor's budget for the day.
+	if allowed, wait := honeyStorySignupThrottle.take(slug); !allowed {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests,
+			"this Honey Story has taken too many signups today; try again tomorrow")
 		return
 	}
 	var id uuid.UUID

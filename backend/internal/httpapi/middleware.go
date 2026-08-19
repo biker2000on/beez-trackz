@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/auth"
@@ -136,6 +137,88 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), sessionKey, session)
 		ctx = context.WithValue(ctx, principalKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// --- CSRF (SEAM-021) ---------------------------------------------------
+//
+// The session cookie is ambient authority: a browser attaches it to any
+// cross-site form post or fetch. Every mutating REST route is therefore
+// gated on the request proving it came from this app's own origin.
+//
+// The frontend calls the API through the Next.js proxy, which forwards the
+// browser's Origin (APP_URL), and the service worker's replayed
+// mutations are same-origin fetches that also carry Origin. Non-browser
+// clients authenticate with a Bearer API token, which is not ambient and so
+// needs no origin proof.
+
+// originAllowed reports whether raw (an Origin header value, or the origin
+// half of a Referer) is this deployment's own origin, i.e. APP_URL. The
+// request's own Host header is deliberately NOT accepted as a second
+// allowlist entry: an attacker controls Host as easily as Origin, so trusting
+// it would give away both the CSRF and the MCP DNS-rebinding guarantee.
+func (s *Server) originAllowed(raw string) bool {
+	if s.cfg == nil {
+		return false
+	}
+	requestOrigin, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || requestOrigin.Host == "" {
+		return false
+	}
+	appOrigin, err := url.Parse(s.cfg.AppURL)
+	if err != nil || appOrigin.Host == "" {
+		return false
+	}
+	return strings.EqualFold(requestOrigin.Scheme, appOrigin.Scheme) &&
+		strings.EqualFold(requestOrigin.Host, appOrigin.Host)
+}
+
+// requestOrigin returns the Origin header, falling back to the origin of the
+// Referer. An empty result means the client sent neither.
+func requestOrigin(r *http.Request) string {
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" &&
+		origin != "null" {
+		return origin
+	}
+	referer := strings.TrimSpace(r.Header.Get("Referer"))
+	if referer == "" {
+		return ""
+	}
+	parsed, err := url.Parse(referer)
+	if err != nil || parsed.Host == "" {
+		// A malformed Referer is not "absent" — fail closed with a value
+		// that cannot match any allowed origin.
+		return "invalid://referer"
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+// requireSameOrigin 403s cross-site mutating requests that rely on the
+// session cookie.
+func (s *Server) requireSameOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !mutationMethod(r.Method) || strings.HasPrefix(bearerValue(r), "bt_") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin := requestOrigin(r)
+		if origin == "" {
+			// No Origin and no Referer. Browsers always send Origin on
+			// mutating requests, so this is a non-browser client; it is only
+			// a CSRF vector if it also presented the ambient cookie.
+			if _, err := r.Cookie(auth.SessionCookieName); err != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeError(w, http.StatusForbidden,
+				"cookie-authenticated writes must send an Origin header")
+			return
+		}
+		if !s.originAllowed(origin) {
+			writeError(w, http.StatusForbidden, "untrusted request origin")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
