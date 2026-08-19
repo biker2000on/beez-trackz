@@ -344,7 +344,7 @@ export function InspectionFormDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[90dvh] max-w-xl overflow-y-auto">
+      <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>
             {isEdit ? "Edit inspection" : "New inspection"}

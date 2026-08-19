@@ -4,10 +4,43 @@ import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 
+import { useDialogHistory } from "@/lib/use-dialog-history";
 import { cn } from "@/lib/utils";
 
-function Dialog(props: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+/**
+ * Every dialog in the app owns a history entry while it is open, so Android's
+ * Back button closes the dialog instead of leaving the route behind it.
+ * Controlled and uncontrolled usage both work; the open state is mirrored here
+ * so the hook sees it either way.
+ */
+function Dialog({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  const [internalOpen, setInternalOpen] = React.useState(defaultOpen ?? false);
+  const isControlled = open !== undefined;
+  const isOpen = isControlled ? open : internalOpen;
+
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      if (!isControlled) setInternalOpen(next);
+      onOpenChange?.(next);
+    },
+    [isControlled, onOpenChange],
+  );
+
+  useDialogHistory(isOpen, handleOpenChange);
+
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      open={isOpen}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  );
 }
 
 function DialogTrigger(
@@ -59,8 +92,11 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4",
-          "max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-xl border bg-card p-6 shadow-lg",
+          "fixed left-1/2 top-1/2 z-50 flex w-full max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4",
+          // `dvh` runs under the home indicator with viewport-fit=cover, and the
+          // centred box has a symmetric margin, so both insets come off the height.
+          "max-h-[calc(100dvh-2rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))]",
+          "overflow-y-auto rounded-xl border bg-card p-6 shadow-lg",
           "max-sm:max-w-[calc(100%-2rem)]",
           "data-[state=open]:animate-dialog-in data-[state=closed]:animate-dialog-out",
           className,
@@ -95,12 +131,20 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
+/**
+ * Pinned to the bottom of the dialog's scroll area so the submit button of a
+ * long form is reachable one-handed without scrolling to the end. It bleeds
+ * into the dialog's horizontal padding and carries the home-indicator inset as
+ * its own bottom padding. Works at any nesting depth, because `DialogContent`
+ * is the scroll container.
+ */
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-footer"
       className={cn(
-        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        "sticky bottom-0 z-10 -mx-6 flex flex-col-reverse gap-2 border-t bg-card px-6 pt-3",
+        "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] sm:flex-row sm:justify-end",
         className,
       )}
       {...props}

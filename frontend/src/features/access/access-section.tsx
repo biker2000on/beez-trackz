@@ -4,6 +4,16 @@ import { Copy, KeyRound, Pencil, Plus, Trash2, UserRound } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -35,6 +45,7 @@ import {
   useDeactivateAccessUser,
   useDeleteAccessToken,
   useUpdateAccessUser,
+  type AccessToken,
   type AccessUser,
   type AccessUserPayload,
   type ApiaryRole,
@@ -95,7 +106,7 @@ function UserDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{user ? "Edit collaborator" : "Add collaborator"}</DialogTitle>
           <DialogDescription>
@@ -189,6 +200,7 @@ function TokenManager() {
   const remove = useDeleteAccessToken();
   const [name, setName] = React.useState("");
   const [newToken, setNewToken] = React.useState<string | null>(null);
+  const [revoking, setRevoking] = React.useState<AccessToken | null>(null);
 
   async function createToken() {
     try {
@@ -272,7 +284,7 @@ function TokenManager() {
               size="icon"
               variant="ghost"
               aria-label={`Delete ${token.name}`}
-              onClick={() => remove.mutate(token.id)}
+              onClick={() => setRevoking(token)}
             >
               <Trash2 />
             </Button>
@@ -282,7 +294,91 @@ function TokenManager() {
           <p className="p-3 text-sm text-muted-foreground">No API tokens yet.</p>
         ) : null}
       </div>
+      <RevokeTokenDialog
+        token={revoking}
+        onOpenChange={(open) => {
+          if (!open) setRevoking(null);
+        }}
+        onConfirm={async (token) => {
+          try {
+            await remove.mutateAsync(token.id);
+            toast.success(`Revoked ${token.name}`);
+          } catch (error) {
+            toast.error(
+              error instanceof Error ? error.message : "Could not revoke token",
+            );
+          }
+          setRevoking(null);
+        }}
+        isPending={remove.isPending}
+      />
     </div>
+  );
+}
+
+/**
+ * Revoking a token breaks every integration still using it, and the token
+ * itself can never be shown again — so this asks for the token's name to be
+ * typed, not just a click.
+ */
+function RevokeTokenDialog({
+  token,
+  onOpenChange,
+  onConfirm,
+  isPending,
+}: {
+  token: AccessToken | null;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (token: AccessToken) => void;
+  isPending: boolean;
+}) {
+  const [typed, setTyped] = React.useState("");
+  const confirmed = token !== null && typed.trim() === token.name;
+
+  return (
+    <AlertDialog
+      open={token !== null}
+      onOpenChange={(open) => {
+        if (!open) setTyped("");
+        onOpenChange(open);
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Revoke {token?.name}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Anything still authenticating with this token — MCP clients,
+            scripts — stops working immediately. The token cannot be restored.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="grid gap-1.5">
+          <Label htmlFor="revoke-token-name">
+            Type <span className="font-medium">{token?.name}</span> to confirm
+          </Label>
+          <Input
+            id="revoke-token-name"
+            autoComplete="off"
+            value={typed}
+            onChange={(event) => setTyped(event.target.value)}
+          />
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep token</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            disabled={!confirmed || isPending}
+            onClick={(event) => {
+              event.preventDefault();
+              if (!token || !confirmed) return;
+              setTyped("");
+              onConfirm(token);
+            }}
+          >
+            {isPending ? "Revoking…" : "Revoke token"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
