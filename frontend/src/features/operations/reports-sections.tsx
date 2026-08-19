@@ -142,7 +142,7 @@ export function ReportHighlights({ year }: { year: number }) {
 export function VarroaFleetSection() {
   const fleet = useVarroaFleet();
   if (fleet.isPending) return <Skeleton className="h-40" />;
-  if (!fleet.data) return <ErrorText />;
+  if (!fleet.data || !Array.isArray(fleet.data.hives)) return <ErrorText />;
   const rows = [...fleet.data.hives]
     .filter((row) => row.lastCount)
     .sort((a, b) => {

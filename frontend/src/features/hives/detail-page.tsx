@@ -215,7 +215,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   }
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <div className="grid gap-2">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold tracking-tight">
@@ -342,8 +342,8 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         <TabsContent value="overview" className="pt-4">
           <HiveOverviewTab hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
-        <TabsContent value="timeline" className="grid gap-4 pt-4">
-          <div className="relative -mx-4 md:mx-0">
+        <TabsContent value="timeline" className="flex min-w-0 flex-col gap-4 pt-4">
+          <div className="relative -mx-4 min-w-0 md:mx-0">
             <div
               className="-my-1 flex snap-x scroll-px-4 gap-1.5 overflow-x-auto px-4 py-1 md:flex-wrap md:px-0"
               role="group"

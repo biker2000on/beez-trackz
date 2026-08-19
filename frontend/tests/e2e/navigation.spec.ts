@@ -132,6 +132,18 @@ async function mockApp(page: Page) {
     if (path.endsWith("/analytics/yield")) {
       return route.fulfill({ json: { totalPounds: 0, byHive: [], byYear: [] } });
     }
+    if (path.endsWith("/analytics/varroa")) {
+      return route.fulfill({
+        json: {
+          hives: [],
+          overThresholdCount: 0,
+          treatments: [],
+          thresholdPer100: 3,
+          thresholdPerDay: 9,
+          checkIntervalDays: 30,
+        },
+      });
+    }
     if (path.endsWith("/analytics/economics")) {
       return route.fulfill({ json: { apiaries: [] } });
     }

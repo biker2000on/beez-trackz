@@ -57,7 +57,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
 
   if (apiary.isPending) {
     return (
-      <div className="grid gap-5">
+      <div className="grid grid-cols-1 gap-5">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-11 w-full max-w-xl" />
         <Skeleton className="h-[430px] rounded-xl" />
@@ -86,7 +86,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
 
   const detail = apiary.data;
   return (
-    <div className="grid gap-5">
+    <div className="grid grid-cols-1 gap-5">
       <header className="grid gap-3">
         <Button
           asChild

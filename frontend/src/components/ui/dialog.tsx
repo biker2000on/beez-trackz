@@ -95,7 +95,7 @@ function DialogContent({
           "fixed left-1/2 top-1/2 z-50 flex w-full max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col gap-4",
           // `dvh` runs under the home indicator with viewport-fit=cover, and the
           // centred box has a symmetric margin, so both insets come off the height.
-          "max-h-[calc(100dvh-2rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))]",
+          "max-h-[calc(100dvh-2rem-var(--safe-top)-var(--safe-bottom))]",
           "overflow-y-auto rounded-xl border bg-card p-6 shadow-lg",
           "max-sm:max-w-[calc(100%-2rem)]",
           "data-[state=open]:animate-dialog-in data-[state=closed]:animate-dialog-out",
@@ -144,7 +144,7 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="dialog-footer"
       className={cn(
         "sticky bottom-0 z-10 -mx-6 flex flex-col-reverse gap-2 border-t bg-card px-6 pt-3",
-        "pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] sm:flex-row sm:justify-end",
+        "pb-[calc(0.75rem+var(--safe-bottom))] sm:flex-row sm:justify-end",
         className,
       )}
       {...props}
