@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -53,21 +52,16 @@ func (s *Server) mcpGet(w http.ResponseWriter, _ *http.Request) {
 		"this MCP endpoint uses immediate JSON responses over Streamable HTTP")
 }
 
+// validMCPOrigin guards the MCP endpoint against DNS-rebinding browsers. It
+// shares originAllowed with the REST CSRF middleware (middleware.go) so both
+// seams agree on what "first-party" means; an absent Origin stays allowed
+// here because MCP clients are not browsers.
 func (s *Server) validMCPOrigin(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
 		return true
 	}
-	requestOrigin, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	appOrigin, err := url.Parse(s.cfg.AppURL)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(requestOrigin.Scheme, appOrigin.Scheme) &&
-		strings.EqualFold(requestOrigin.Host, appOrigin.Host)
+	return s.originAllowed(origin)
 }
 
 func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request) {
