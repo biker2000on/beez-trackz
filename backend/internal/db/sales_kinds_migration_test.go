@@ -37,7 +37,7 @@ func TestSalesKindsMigrationCarriesJarRows(t *testing.T) {
 		INSERT INTO honey_sale_items (sale_id,jar_size_id,quantity,unit_price_cents)
 		VALUES ($1,$2,2,1200)`, saleID, jarSizeID)
 
-	if err := migrate(pool); err != nil {
+	if err := migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate forward: %v", err)
 	}
 

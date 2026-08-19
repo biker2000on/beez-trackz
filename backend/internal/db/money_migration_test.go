@@ -60,7 +60,7 @@ func TestMoneyMigrationConvertsExistingRows(t *testing.T) {
 		INSERT INTO wholesale_price_list_items (price_list_id,jar_size_id,unit_price)
 		VALUES ($1,$2,9.75)`, priceListID, jarSizeID)
 
-	if err := migrate(pool); err != nil {
+	if err := migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate forward: %v", err)
 	}
 
@@ -137,7 +137,7 @@ func TestLedgerMigrationBackfillsJarringPounds(t *testing.T) {
 		INSERT INTO honey_movements (date,kind,jar_size_id,quantity)
 		VALUES (now(),'jarring',$1,10), (now(),'jarring',$2,4)`, withOz, withoutOz)
 
-	if err := migrate(pool); err != nil {
+	if err := migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate forward: %v", err)
 	}
 
