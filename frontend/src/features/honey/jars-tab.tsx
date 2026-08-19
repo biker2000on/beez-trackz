@@ -50,7 +50,9 @@ export function JarsTab() {
 
   return (
     <div className="rounded-lg border">
-      <Table>
+      {/* Sits on the page background, not a card, so the pinned column has to
+          match that surface. */}
+      <Table pinFirstColumn className="[--table-pin-bg:var(--background)]">
         <TableHeader>
           <TableRow>
             <TableHead>Size</TableHead>

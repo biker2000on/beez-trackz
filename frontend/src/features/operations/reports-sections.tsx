@@ -256,7 +256,7 @@ export function EconomicsReport({ year }: { year: number }) {
   return (
     <Card>
       <CardContent className="overflow-x-auto p-0">
-        <Table>
+        <Table pinFirstColumn>
           <TableHeader><TableRow>
             <TableHead>Apiary</TableHead><TableHead className="text-right">lb/hive</TableHead>
             <TableHead className="text-right">Revenue (invoiced)</TableHead><TableHead className="text-right">Expenses</TableHead>

@@ -26,7 +26,9 @@ function TabsList({
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        "inline-flex h-9 w-fit items-center justify-center gap-1 rounded-lg bg-muted p-1 text-muted-foreground",
+        // `min-h-9`, not `h-9`: triggers grow to the 44px touch target on
+        // coarse pointers and the list has to grow with them.
+        "inline-flex min-h-9 w-fit items-center justify-center gap-1 rounded-lg bg-muted p-1 text-muted-foreground",
         className,
       )}
       {...props}

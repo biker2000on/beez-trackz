@@ -176,13 +176,15 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
       </header>
 
       <Tabs value={tab} onValueChange={setTab} className="min-w-0">
-        <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
-          <TabsList className="h-11 min-w-max">
-            <TabsTrigger value="overview" className="h-9">
+        {/* Record tabs stay a scroll strip on mobile (DESIGN.md). `py-1 -my-1`
+            keeps the focus ring from being clipped by the scroll container. */}
+        <div className="-my-1 -mx-4 snap-x scroll-px-4 overflow-x-auto px-4 py-1 md:mx-0 md:px-0">
+          <TabsList className="min-h-11 min-w-max">
+            <TabsTrigger value="overview" className="min-h-9 snap-start">
               <LayoutDashboard />
               Overview
             </TabsTrigger>
-            <TabsTrigger value="layout" className="h-9">
+            <TabsTrigger value="layout" className="min-h-9 snap-start">
               <Map />
               Layout
             </TabsTrigger>

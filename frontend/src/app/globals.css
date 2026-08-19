@@ -2,6 +2,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* `touch:` targets coarse-pointer devices so components can state their own
+   44px field size instead of relying only on the blanket rules below. */
+@custom-variant touch (@media (pointer: coarse));
+
 :root {
   /* Warm honey light theme */
   --background: oklch(0.985 0.012 85);
@@ -235,7 +239,11 @@
   button,
   [role="button"],
   [role="tab"],
-  [role="menuitem"] {
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"],
+  summary {
     min-height: 44px;
   }
 
@@ -250,6 +258,37 @@
   a[data-slot="button"][aria-label] {
     min-width: 44px;
   }
+
+  /* A checkbox is a `button` but must keep its square box: stretching it to
+     44px tall turned it into a sliver. It grows a transparent hit area
+     instead — see `components/ui/checkbox.tsx`. */
+  [role="checkbox"] {
+    min-height: 0;
+  }
+
+  /* A label wrapping a checkbox is the control users actually hit. */
+  label:has([role="checkbox"]) {
+    min-height: 44px;
+  }
+}
+
+/* Wide comparison tables scroll sideways rather than crush their columns
+   (DESIGN.md). Pinning the identifier column keeps a scrolled-away row from
+   becoming anonymous. `--table-pin-bg` defaults to the card surface these
+   tables sit on; set it when a table sits on the page background instead. */
+[data-slot="table"][data-pin-first-column] :is(th, td):first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--table-pin-bg, var(--card));
+}
+[data-slot="table"][data-pin-first-column] :is(th, td):first-child::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  width: 1px;
+  background: var(--border);
 }
 
 @media (prefers-reduced-motion: reduce) {

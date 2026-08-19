@@ -22,12 +22,15 @@ const buttonVariants = cva(
         accent:
           "bg-accent text-accent-foreground shadow-sm hover:bg-accent/90",
       },
+      // Desktop keeps the compact density; `touch:` restates the 44px field
+      // size so icon-only buttons get the width too, not just the height the
+      // coarse-pointer rules in globals.css already guarantee.
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-6",
-        icon: "size-9",
-        "icon-sm": "size-8",
+        default: "h-9 px-4 py-2 touch:min-h-11",
+        sm: "h-8 rounded-md px-3 text-xs touch:min-h-11",
+        lg: "h-10 rounded-md px-6 touch:min-h-11",
+        icon: "size-9 touch:size-11",
+        "icon-sm": "size-8 touch:size-11",
       },
     },
     defaultVariants: {
