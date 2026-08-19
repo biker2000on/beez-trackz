@@ -15,14 +15,15 @@ export default function OfflinePage() {
           <CloudOff className="size-7 text-muted-foreground" />
           <h1 className="text-2xl font-bold tracking-tight">You’re offline</h1>
           <p className="text-sm leading-6 text-muted-foreground">
-            Your records are safe. Reconnect before viewing data or saving
-            changes so nothing is recorded out of order.
+            This page was never cached, so there is nothing to show yet. Your
+            records are safe, and the field pages you already opened still work
+            offline.
           </p>
         </div>
         <Button asChild>
           <Link href="/dashboard">
             <RefreshCw />
-            Try again
+            Go to the cached dashboard
           </Link>
         </Button>
       </div>

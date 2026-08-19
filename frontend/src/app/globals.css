@@ -33,7 +33,7 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
-  --bottom-nav-h: calc(3.25rem + env(safe-area-inset-bottom, 0px));
+  --bottom-nav-h: calc(3.25rem + var(--safe-bottom));
 }
 
 .dark {
@@ -212,7 +212,10 @@
   animation: zoom-out 0.15s ease-in;
 }
 
-/* iOS safe-area helpers. Bottom nav height includes the home-indicator inset. */
+/* iOS safe-area helpers — the single source of safe-area handling. Every
+   component reaches insets through `--safe-*` (or these utilities); no other
+   file calls `env(safe-area-inset-*)` directly, so the fallbacks and the
+   bottom-nav height stay defined in one place. See DESIGN.md. */
 .pt-safe {
   padding-top: var(--safe-top);
 }

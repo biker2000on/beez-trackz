@@ -25,13 +25,22 @@ hand, and dense only where comparison helps a decision.
 - Icons clarify actions but never replace text for a primary workflow.
 - Status colors are semantic and always paired with text.
 - Controls are at least 44px on coarse-pointer devices and respect safe areas.
+  Safe-area insets live in one place: `globals.css` defines `--safe-top`,
+  `--safe-right`, `--safe-bottom`, `--safe-left` and the `.pt-safe`/`.pr-safe`/
+  `.pb-safe`/`.pl-safe` utilities, plus `--bottom-nav-h` for the mobile bar.
+  Components use those tokens; nothing else calls `env(safe-area-inset-*)`.
 - Motion is brief, functional, and disabled when reduced motion is preferred.
 
 ## Layout and responsive behavior
 
 - Desktop uses a persistent sidebar and compact comparison tables.
-- Mobile uses a five-item bottom bar, horizontally scrollable tabs, card views,
-  sticky bulk toolbars, and safe-area padding.
+- Mobile uses a five-item bottom bar, card views, sticky bulk toolbars, and
+  safe-area padding.
+- Record tabs within one page (apiary, hive) stay a horizontally scrollable
+  strip on mobile. Route-level section navigation (Honey, Reports) collapses to
+  a `<Select>` instead: those lists are long enough that a scroll strip hid
+  whichever sections did not fit, and the select also flattens report-to-report
+  jumps. `SectionNav` is the single implementation of that rule.
 - Tables that must preserve column comparison scroll horizontally rather than
   crushing content.
 - Empty, loading, error, and offline states always include a useful next step.
