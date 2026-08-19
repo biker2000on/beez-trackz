@@ -14,7 +14,7 @@
 #   ANTHROPIC_API_KEY / GOOGLE_AI_API_KEY / OLLAMA_URL (AI fallback keys)
 #   PHOTO_STORAGE_BACKEND / IMMICH_BASE_URL / IMMICH_API_KEY
 #     (photo originals; empty = MinIO. Set URL+key together — URL alone
-#     fails startup. Local Immich is https://immich.adventureintandem.com)
+#     fails startup; put the Immich URL in .env, not here)
 
 x-api-env: &api-env
   DATABASE_URL: postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}

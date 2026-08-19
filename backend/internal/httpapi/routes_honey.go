@@ -747,27 +747,30 @@ type honeySaleItemRow struct {
 }
 
 type honeySaleRow struct {
-	ID             uuid.UUID          `json:"id"`
-	Date           time.Time          `json:"date"`
-	CustomerID     *uuid.UUID         `json:"customerId"`
-	HarvestLotID   *uuid.UUID         `json:"harvestLotId"`
-	HarvestLotCode *string            `json:"harvestLotCode"`
-	CustomerName   *string            `json:"customerName"`
-	Location       *string            `json:"location"`
-	Channel        string             `json:"channel"`
-	PaymentMethod  string             `json:"paymentMethod"`
-	TotalAmount    money              `json:"totalAmount"`
-	DiscountAmount money              `json:"discountAmount"`
-	AmountPaid     money              `json:"amountPaid"`
-	Tax            *money             `json:"tax"`
-	OrderStatus    string             `json:"orderStatus"`
-	OrderNumber    *string            `json:"orderNumber"`
-	DueDate        *time.Time         `json:"dueDate"`
-	Notes          *string            `json:"notes"`
-	CreatedAt      time.Time          `json:"createdAt"`
-	UpdatedAt      time.Time          `json:"updatedAt"`
-	CancelledAt    *time.Time         `json:"cancelledAt"`
-	LineItems      []honeySaleItemRow `json:"lineItems"`
+	ID             uuid.UUID  `json:"id"`
+	Date           time.Time  `json:"date"`
+	CustomerID     *uuid.UUID `json:"customerId"`
+	HarvestLotID   *uuid.UUID `json:"harvestLotId"`
+	HarvestLotCode *string    `json:"harvestLotCode"`
+	CustomerName   *string    `json:"customerName"`
+	Location       *string    `json:"location"`
+	Channel        string     `json:"channel"`
+	PaymentMethod  string     `json:"paymentMethod"`
+	TotalAmount    money      `json:"totalAmount"`
+	DiscountAmount money      `json:"discountAmount"`
+	AmountPaid     money      `json:"amountPaid"`
+	Tax            *money     `json:"tax"`
+	OrderStatus    string     `json:"orderStatus"`
+	OrderNumber    *string    `json:"orderNumber"`
+	DueDate        *time.Time `json:"dueDate"`
+	Notes          *string    `json:"notes"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	CancelledAt    *time.Time `json:"cancelledAt"`
+	// PhysicalAppliedAt is set once the colony/feeder/equipment effects of
+	// the sale have been applied (paid/fulfilled); nil for open drafts.
+	PhysicalAppliedAt *time.Time         `json:"physicalAppliedAt"`
+	LineItems         []honeySaleItemRow `json:"lineItems"`
 }
 
 func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
@@ -777,7 +780,8 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 			s.location, s.channel, s.payment_method, s.total_amount_cents,
 			s.discount_amount_cents, s.amount_paid_cents, s.tax_cents,
 			s.order_status, s.order_number,
-			s.due_date, s.notes, s.created_at, s.updated_at, s.cancelled_at
+			s.due_date, s.notes, s.created_at, s.updated_at, s.cancelled_at,
+			s.physical_applied_at
 		FROM sales s
 		LEFT JOIN customers c ON c.id=s.customer_id
 		LEFT JOIN harvest_lots lot ON lot.id=s.harvest_lot_id
@@ -793,7 +797,7 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 			&sale.Location, &sale.Channel, &sale.PaymentMethod, &sale.TotalAmount,
 			&sale.DiscountAmount, &sale.AmountPaid, &sale.Tax, &sale.OrderStatus,
 			&sale.OrderNumber, &sale.DueDate, &sale.Notes, &sale.CreatedAt,
-			&sale.UpdatedAt, &sale.CancelledAt); err != nil {
+			&sale.UpdatedAt, &sale.CancelledAt, &sale.PhysicalAppliedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -866,6 +870,13 @@ var honeyPaymentMethods = map[string]bool{
 
 var honeyOrderStatuses = map[string]bool{
 	"draft": true, "pending": true, "paid": true, "fulfilled": true, "cancelled": true,
+}
+
+// saleStatusAppliesPhysical reports whether a sale in this status has taken
+// its colony, feeders, and equipment (hive marked sold, feeders closed, stock
+// disposed). Drafts and pending orders have not.
+func saleStatusAppliesPhysical(status string) bool {
+	return status == "paid" || status == "fulfilled"
 }
 
 // UnitPrice arrives in dollars and is stored in cents; money's UnmarshalJSON
@@ -1076,6 +1087,14 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid channel, payment method, order status, or discount")
 		return
 	}
+	// A sale born cancelled would still run saleApplyPhysical (selling the
+	// hive / equipment) while a later cancel sees prev status 'cancelled' and
+	// skips the restore. Create it live and cancel it through the cancel path.
+	if req.OrderStatus == "cancelled" {
+		writeError(w, http.StatusBadRequest,
+			"a sale cannot be created as cancelled; create it and then cancel it")
+		return
+	}
 	var dueDate *time.Time
 	if req.DueDate != nil && *req.DueDate != "" {
 		v, err := parseDate(*req.DueDate)
@@ -1133,7 +1152,8 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		neededProducts[line.ProductID] += line.Quantity
 	}
 	if len(productIDs) > 0 {
-		onHand, labels, kinds, unknown, err := productLockCatalog(ctx, tx, productIDs)
+		catalog, unknown, err := productLockCatalogInfo(ctx, tx, productIDs)
+		onHand, labels, kinds := catalog.OnHand, catalog.Labels, catalog.Kinds
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -1154,7 +1174,18 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if message := productCheckAvailability(onHand, labels, kinds, neededProducts); message != "" {
+		propolisGrams := 0.0
+		for id := range neededProducts {
+			if kinds[id] == saleKindPropolis {
+				propolisGrams, err = propolisOnHandGrams(ctx, tx)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "database error")
+					return
+				}
+				break
+			}
+		}
+		if message := productCheckAvailabilityGrams(onHand, labels, kinds, catalog.NetGrams, neededProducts, propolisGrams); message != "" {
 			writeError(w, http.StatusBadRequest, message)
 			return
 		}
@@ -1312,7 +1343,21 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := saleApplyPhysical(ctx, tx, saleID, date, actor, lines); err != nil {
+	// Drafts and pending orders do not move the hive, feeders, or equipment
+	// yet; that happens when the sale becomes paid/fulfilled (see
+	// honeyUpdateSale). They are still refused for a hive that is already
+	// gone, but two open drafts may name the same hive (no reservation).
+	if saleStatusAppliesPhysical(req.OrderStatus) {
+		if err := saleApplyPhysical(ctx, tx, saleID, date, actor, lines); err != nil {
+			equipWriteError(w, err)
+			return
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE sales SET physical_applied_at=now() WHERE id=$1`, saleID); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	} else if err := saleCheckHivesSellable(ctx, tx, lines); err != nil {
 		equipWriteError(w, err)
 		return
 	}
@@ -1388,10 +1433,13 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	var totalAmount, currentPaid money
 	var currentPayment string
+	var saleDate time.Time
+	var physicalAppliedAt *time.Time
 	if err := tx.QueryRow(r.Context(), `
-		SELECT total_amount_cents, amount_paid_cents, payment_method
+		SELECT total_amount_cents, amount_paid_cents, payment_method, date, physical_applied_at
 		FROM sales WHERE id=$1 AND order_status <> 'cancelled'
-		FOR UPDATE`, id).Scan(&totalAmount, &currentPaid, &currentPayment); err != nil {
+		FOR UPDATE`, id).Scan(&totalAmount, &currentPaid, &currentPayment,
+		&saleDate, &physicalAppliedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "sale not found")
 			return
@@ -1423,6 +1471,37 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 		req.Tax, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
+	}
+	// Physical effects follow the status: moving into paid/fulfilled applies
+	// them once (409 if another sale took the hive meanwhile); moving back to
+	// draft/pending puts the hive, feeders, and equipment back.
+	actor := actorID(r)
+	switch {
+	case saleStatusAppliesPhysical(req.OrderStatus) && physicalAppliedAt == nil:
+		lines, err := saleLoadLines(r.Context(), tx, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if err := saleApplyPhysical(r.Context(), tx, id, saleDate, actor, lines); err != nil {
+			equipWriteError(w, err)
+			return
+		}
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE sales SET physical_applied_at=now() WHERE id=$1`, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	case !saleStatusAppliesPhysical(req.OrderStatus) && physicalAppliedAt != nil:
+		if err := saleUnapplyPhysical(r.Context(), tx, id, actor); err != nil {
+			equipWriteError(w, err)
+			return
+		}
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE sales SET physical_applied_at=NULL WHERE id=$1`, id); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -1473,8 +1552,10 @@ func (s *Server) honeyCancelSaleByID(
 	}
 	defer tx.Rollback(ctx)
 	var prevStatus string
+	var physicalAppliedAt *time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT order_status FROM sales WHERE id=$1 FOR UPDATE`, id).Scan(&prevStatus)
+		SELECT order_status, physical_applied_at FROM sales WHERE id=$1 FOR UPDATE`, id).
+		Scan(&prevStatus, &physicalAppliedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "sale not found")
 		return
@@ -1485,7 +1566,9 @@ func (s *Server) honeyCancelSaleByID(
 	}
 	alreadyCancelled := prevStatus == "cancelled"
 	actor := actorID(r)
-	if !alreadyCancelled {
+	// A draft/pending sale never moved the hive or equipment, so there is
+	// nothing to put back; only an applied sale is restored.
+	if !alreadyCancelled && physicalAppliedAt != nil {
 		if err := saleRestorePhysical(ctx, tx, id, actor); err != nil {
 			equipWriteError(w, err)
 			return
@@ -1495,6 +1578,7 @@ func (s *Server) honeyCancelSaleByID(
 	err = tx.QueryRow(ctx, `
 		UPDATE sales
 		SET order_status='cancelled',
+			physical_applied_at=NULL,
 			cancelled_at=COALESCE(cancelled_at, now()),
 			cancelled_by=COALESCE(cancelled_by, $2),
 			cancellation_reason=COALESCE($3, cancellation_reason)

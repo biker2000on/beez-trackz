@@ -10,7 +10,10 @@
  * shareable.
  */
 
+import Link from "next/link";
 import { DollarSign, HeartPulse, Scale, TrendingUp } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,14 +27,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatDate } from "@/features/hives/lib";
 import { formatLbs, formatMoney } from "@/features/honey/format";
 import { useNumberParam } from "@/lib/url-state";
 import {
+  miteDisplay,
   useEconomicsReport,
   useSurvivalReport,
+  useVarroaFleet,
   useYieldReport,
   type SurvivalGroup,
 } from "./hooks";
+import { METHOD_LABELS } from "./varroa-panel";
 
 export function currentYear(): number {
   return new Date().getFullYear();
@@ -128,6 +135,61 @@ export function ReportHighlights({ year }: { year: number }) {
         loading={economics.isPending}
       />
     </div>
+  );
+}
+
+/** Apiary-wide varroa standing: hives over the action threshold first. */
+export function VarroaFleetSection() {
+  const fleet = useVarroaFleet();
+  if (fleet.isPending) return <Skeleton className="h-40" />;
+  if (!fleet.data) return <ErrorText />;
+  const rows = [...fleet.data.hives]
+    .filter((row) => row.lastCount)
+    .sort((a, b) => {
+      if (a.overThreshold !== b.overThreshold) return a.overThreshold ? -1 : 1;
+      return (b.lastCount?.date ?? "").localeCompare(a.lastCount?.date ?? "");
+    });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Varroa across the fleet</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          {fleet.data.overThresholdCount === 0
+            ? "No hives over the action level"
+            : `${fleet.data.overThresholdCount} ${fleet.data.overThresholdCount === 1 ? "hive" : "hives"} over the action level`}
+          {" · "}action at {fleet.data.thresholdPer100}/100 bees or {fleet.data.thresholdPerDay}/day
+        </p>
+      </CardHeader>
+      <CardContent className="p-0">
+        {rows.length === 0 ? (
+          <p className="px-4 pb-4 text-sm text-muted-foreground">No mite counts recorded yet.</p>
+        ) : (
+          <Table>
+            <TableHeader><TableRow><TableHead>Hive</TableHead><TableHead>Apiary</TableHead><TableHead className="text-right">Latest</TableHead><TableHead>Method</TableHead><TableHead>Date</TableHead><TableHead /></TableRow></TableHeader>
+            <TableBody>
+              {rows.map((row) => {
+                const latest = row.lastCount!;
+                const display = miteDisplay(latest);
+                return (
+                  <TableRow key={row.hiveId}>
+                    <TableCell className="font-medium">
+                      <Link href={`/hives/${row.hiveId}?tab=health`} className="hover:underline">{row.hiveName}</Link>
+                    </TableCell>
+                    <TableCell>{row.apiaryName}</TableCell>
+                    <TableCell className="text-right tabular-nums">{display ? display.label : `${latest.mitesCount} mites`}</TableCell>
+                    <TableCell>{METHOD_LABELS[latest.method] ?? latest.method}</TableCell>
+                    <TableCell>{formatDate(latest.date)}</TableCell>
+                    <TableCell className="text-right">
+                      {row.overThreshold && <Badge variant="destructive">Over threshold</Badge>}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

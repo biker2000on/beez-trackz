@@ -61,7 +61,7 @@ func TestResolverUploadFallsBackToMinioWhenImmichDown(t *testing.T) {
 		immich: NewImmich(immich.URL, "key"),
 		prefer: BackendImmich,
 	}
-	backend, ref, fallback, err := r.Upload(context.Background(), "hive.jpg", "image/jpeg",
+	backend, ref, fallback, _, err := r.Upload(context.Background(), "hive.jpg", "image/jpeg",
 		bytes.NewReader([]byte("abc")), 3, "photos/hive/1.jpg")
 	if err != nil {
 		t.Fatalf("upload: %v", err)

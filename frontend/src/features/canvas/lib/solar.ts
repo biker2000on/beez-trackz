@@ -42,10 +42,14 @@ function julianDayFromParts(
   day: number,
   tzHours: number,
 ): number {
+  // Meeus Gregorian correction; NOAA subtracts the UTC offset to land on UT.
+  const a = Math.floor(year / 100);
+  const b = 2 - a + Math.floor(a / 4);
   return (
     Math.floor(365.25 * (year + 4716)) +
     Math.floor(30.6001 * (month + 1)) +
     day +
+    b -
     tzHours / 24 -
     1524.5
   );

@@ -27,6 +27,9 @@ type principal struct {
 	DisplayName string    `json:"displayName"`
 	Email       *string   `json:"email"`
 	IsAdmin     bool      `json:"isAdmin"`
+	// FromAPIToken is set when the principal was resolved from a bt_ API
+	// token rather than a browser session; credential changes refuse it.
+	FromAPIToken bool `json:"-"`
 }
 
 func sessionFrom(r *http.Request) *auth.Session {
@@ -113,6 +116,7 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		if strings.HasPrefix(bearer, "bt_") {
 			user, err = s.principalFromAPIToken(r, bearer)
 			if err == nil {
+				user.FromAPIToken = true
 				session = &auth.Session{Sub: user.AuthSubject, Name: user.DisplayName}
 			}
 		} else {

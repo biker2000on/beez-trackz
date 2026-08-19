@@ -166,6 +166,10 @@ func (s *Server) handleApiaryCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Apiary name is required")
 		return
 	}
+	if !canvasValidLatLng(req.Latitude, req.Longitude) {
+		writeError(w, http.StatusBadRequest, "latitude/longitude out of range")
+		return
+	}
 	elev, elevSrc, err := apiaryNormalizeElevation(req.ElevationM, req.ElevationSource)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -223,6 +227,10 @@ func (s *Server) handleApiaryUpdate(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "Apiary name is required")
+		return
+	}
+	if !canvasValidLatLng(req.Latitude, req.Longitude) {
+		writeError(w, http.StatusBadRequest, "latitude/longitude out of range")
 		return
 	}
 	elev, elevSrc, elevErr := apiaryNormalizeElevation(req.ElevationM, req.ElevationSource)

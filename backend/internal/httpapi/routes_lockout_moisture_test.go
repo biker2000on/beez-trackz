@@ -273,3 +273,55 @@ func TestMoistureThresholdSettingOverride(t *testing.T) {
 		t.Fatalf("19.5 under a 20%% threshold = %d %v", ok.Code, body)
 	}
 }
+
+func TestProductBatchRefusedWhileLotLocked(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	applied, removed := "2026-08-01", "2026-08-10"
+	insertLockoutTreatment(t, server, hiveID, &applied, &removed, 14)
+
+	ctx := context.Background()
+	var harvestID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO honey_harvests
+			(hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight)
+		VALUES ($1,'2026-08-15',20,0,20) RETURNING id`, hiveID).Scan(&harvestID); err != nil {
+		t.Fatalf("seed tainted harvest: %v", err)
+	}
+	created, createdBody := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/harvest-lots", map[string]any{
+			"lotCode":        "LOCK-BATCH",
+			"extractionDate": "2026-08-15",
+			"honeyWeightLbs": 20,
+			"harvestIds":     []string{harvestID.String()},
+		}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", created.Code, createdBody)
+	}
+	lotID, _ := createdBody["id"].(string)
+
+	createProduct, productBody := call(t, server.productCreate, adminRequest(
+		http.MethodPost, "/api/v1/products", map[string]any{
+			"name": "Creamed locked", "kind": "creamed_honey", "unit": "jar",
+			"defaultPrice": 14, "sizeLabel": "8 oz",
+		}))
+	if createProduct.Code != http.StatusCreated {
+		t.Fatalf("create product = %d %v", createProduct.Code, productBody)
+	}
+	productID, _ := productBody["id"].(string)
+
+	batch := func(startedAt string) (int, map[string]any) {
+		response, body := call(t, server.productBatchCreate, adminRequest(
+			http.MethodPost, "/api/v1/product-batches", map[string]any{
+				"kind": "creamed_honey", "productId": productID, "harvestLotId": lotID,
+				"startedAt": startedAt, "honeyLbs": 5, "quantityOut": 8,
+			}))
+		return response.Code, body
+	}
+	if code, body := batch("2026-08-16"); code != http.StatusConflict {
+		t.Fatalf("batch from locked lot = %d %v, want 409", code, body)
+	}
+	if code, body := batch("2026-08-24"); code != http.StatusCreated {
+		t.Fatalf("batch after lockout = %d %v, want 201", code, body)
+	}
+}

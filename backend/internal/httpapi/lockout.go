@@ -30,9 +30,13 @@ type hiveLockoutJSON struct {
 	DateRemoved    *time.Time `json:"dateRemoved"`
 	WithdrawalDays int        `json:"withdrawalDays"`
 	Message        string     `json:"message"`
+	// TreatmentEventID is the treatment driving the lockout so the UI can
+	// end it via PATCH /treatment-events/{id}.
+	TreatmentEventID *string `json:"treatmentEventId"`
 }
 
 type treatmentLockoutRow struct {
+	ID             uuid.UUID
 	HiveID         uuid.UUID
 	Product        string
 	DateApplied    time.Time
@@ -41,6 +45,7 @@ type treatmentLockoutRow struct {
 }
 
 type lockoutStatus struct {
+	TreatmentID    uuid.UUID
 	Locked         bool
 	TreatmentOn    bool
 	Until          *time.Time
@@ -70,6 +75,7 @@ func lockoutEndDate(removed time.Time, days int) time.Time {
 
 func evaluateTreatment(row treatmentLockoutRow, asOf time.Time) lockoutStatus {
 	st := lockoutStatus{
+		TreatmentID:    row.ID,
 		Product:        row.Product,
 		DateApplied:    row.DateApplied,
 		DateRemoved:    row.DateRemoved,
@@ -155,6 +161,10 @@ func (st lockoutStatus) toJSON() *hiveLockoutJSON {
 		out.DateApplied = &applied
 	}
 	out.DateRemoved = st.DateRemoved
+	if st.TreatmentID != uuid.Nil {
+		tid := st.TreatmentID.String()
+		out.TreatmentEventID = &tid
+	}
 	return out
 }
 
@@ -163,7 +173,7 @@ func loadTreatmentsAsOf(ctx context.Context, q queryRower, hiveIDs []uuid.UUID, 
 		return nil, nil
 	}
 	rows, err := q.Query(ctx, `
-		SELECT hive_id, product, date_applied, date_removed, withdrawal_days
+		SELECT id, hive_id, product, date_applied, date_removed, withdrawal_days
 		FROM treatment_events
 		WHERE hive_id = ANY($1) AND date_applied::date <= $2::date
 		ORDER BY date_applied DESC`, hiveIDs, calendarDate(asOf))
@@ -174,7 +184,7 @@ func loadTreatmentsAsOf(ctx context.Context, q queryRower, hiveIDs []uuid.UUID, 
 	out := make([]treatmentLockoutRow, 0)
 	for rows.Next() {
 		var row treatmentLockoutRow
-		if err := rows.Scan(&row.HiveID, &row.Product, &row.DateApplied,
+		if err := rows.Scan(&row.ID, &row.HiveID, &row.Product, &row.DateApplied,
 			&row.DateRemoved, &row.WithdrawalDays); err != nil {
 			return nil, err
 		}

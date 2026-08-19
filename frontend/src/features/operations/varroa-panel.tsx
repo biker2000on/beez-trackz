@@ -49,7 +49,7 @@ import {
   type MiteMethod,
 } from "./hooks";
 
-const METHOD_LABELS: Record<string, string> = {
+export const METHOD_LABELS: Record<string, string> = {
   alcohol_wash: "Alcohol wash",
   sugar_roll: "Sugar roll",
   sticky_board: "Sticky board",

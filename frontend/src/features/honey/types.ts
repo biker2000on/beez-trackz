@@ -94,6 +94,8 @@ export interface CatalogProduct {
   unit: string;
   defaultPrice: number;
   sizeLabel: string | null;
+  /** Net propolis grams per unit; required for propolis, optional for tincture. */
+  netGrams: number | null;
   isActive: boolean;
   made: number;
   sold: number;

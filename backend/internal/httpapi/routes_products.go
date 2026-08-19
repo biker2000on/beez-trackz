@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +71,7 @@ type productInventoryRow struct {
 	Unit         string    `json:"unit"`
 	DefaultPrice money     `json:"defaultPrice"`
 	SizeLabel    *string   `json:"sizeLabel"`
+	NetGrams     *float64  `json:"netGrams"`
 	IsActive     bool      `json:"isActive"`
 	Made         int       `json:"made"`
 	Sold         int       `json:"sold"`
@@ -80,7 +83,7 @@ type productInventoryRow struct {
 
 func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productInventoryRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT p.id, p.name, p.kind, p.unit, p.default_price_cents, p.size_label,
+		SELECT p.id, p.name, p.kind, p.unit, p.default_price_cents, p.size_label, p.net_grams,
 		       p.is_active, p.created_at, p.updated_at,
 		       COALESCE(b.made, 0), COALESCE(s.sold, 0)
 		FROM product_catalog p
@@ -105,7 +108,7 @@ func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productI
 	for rows.Next() {
 		var row productInventoryRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.Kind, &row.Unit, &row.DefaultPrice,
-			&row.SizeLabel, &row.IsActive, &row.CreatedAt, &row.UpdatedAt,
+			&row.SizeLabel, &row.NetGrams, &row.IsActive, &row.CreatedAt, &row.UpdatedAt,
 			&row.Made, &row.Sold); err != nil {
 			return nil, err
 		}
@@ -116,11 +119,33 @@ func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productI
 	return out, rows.Err()
 }
 
+// productCatalogLock is what productLockCatalogInfo reads under row locks:
+// per-SKU inventory plus the propolis net weight each SKU carries.
+type productCatalogLock struct {
+	OnHand   map[uuid.UUID]int
+	Labels   map[uuid.UUID]string
+	Kinds    map[uuid.UUID]string
+	NetGrams map[uuid.UUID]float64
+}
+
+// productLockCatalog is the legacy wrapper around productLockCatalogInfo.
 func productLockCatalog(
 	ctx context.Context,
 	tx inspectionQuerier,
 	ids []uuid.UUID,
 ) (onHand map[uuid.UUID]int, labels map[uuid.UUID]string, kinds map[uuid.UUID]string, unknown bool, err error) {
+	info, unknown, err := productLockCatalogInfo(ctx, tx, ids)
+	if err != nil || unknown {
+		return nil, nil, nil, unknown, err
+	}
+	return info.OnHand, info.Labels, info.Kinds, false, nil
+}
+
+func productLockCatalogInfo(
+	ctx context.Context,
+	tx inspectionQuerier,
+	ids []uuid.UUID,
+) (info productCatalogLock, unknown bool, err error) {
 	sorted := append([]uuid.UUID(nil), ids...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
 	unique := make([]uuid.UUID, 0, len(sorted))
@@ -132,7 +157,7 @@ func productLockCatalog(
 	rows, err := tx.Query(ctx, `
 		SELECT id FROM product_catalog WHERE id = ANY($1) ORDER BY id FOR UPDATE`, unique)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return info, false, err
 	}
 	locked := 0
 	for rows.Next() {
@@ -141,44 +166,90 @@ func productLockCatalog(
 	lockErr := rows.Err()
 	rows.Close()
 	if lockErr != nil {
-		return nil, nil, nil, false, lockErr
+		return info, false, lockErr
 	}
 	if locked != len(unique) {
-		return nil, nil, nil, true, nil
+		return info, true, nil
 	}
 	inventory, err := productInventoryQuery(ctx, tx)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return info, false, err
 	}
-	onHand = make(map[uuid.UUID]int, len(inventory))
-	labels = make(map[uuid.UUID]string, len(inventory))
-	kinds = make(map[uuid.UUID]string, len(inventory))
+	info.OnHand = make(map[uuid.UUID]int, len(inventory))
+	info.Labels = make(map[uuid.UUID]string, len(inventory))
+	info.Kinds = make(map[uuid.UUID]string, len(inventory))
+	info.NetGrams = make(map[uuid.UUID]float64, len(inventory))
 	for _, row := range inventory {
-		onHand[row.ID] = row.OnHand
+		info.OnHand[row.ID] = row.OnHand
 		label := row.Name
 		if row.SizeLabel != nil && *row.SizeLabel != "" {
 			label = row.Name + " · " + *row.SizeLabel
 		}
-		labels[row.ID] = label
-		kinds[row.ID] = row.Kind
+		info.Labels[row.ID] = label
+		info.Kinds[row.ID] = row.Kind
+		if row.NetGrams != nil {
+			info.NetGrams[row.ID] = *row.NetGrams
+		}
 	}
-	return onHand, labels, kinds, false, nil
+	return info, false, nil
 }
 
+// productCheckAvailability refuses lines that exceed what is on hand.
+//
+// Raw propolis SKUs are sold straight off propolis_harvests, not out of a
+// packaged batch, so their per-SKU onHand (made - sold) is meaningless. Since
+// migration 00022 product_catalog.net_grams records the grams each propolis
+// unit carries (required for kind=propolis), so a propolis line needs
+// quantity × net_grams of harvested propolis — counted after every earlier
+// propolis line in the same sale — against propolisGrams (harvested minus
+// tincture batches minus already-sold propolis lines). A propolis SKU with no
+// net weight falls back to "any harvest remains at all".
+//
+// The legacy five-argument form has no per-SKU weights; callers that know them
+// should use productCheckAvailabilityGrams.
 func productCheckAvailability(
 	onHand map[uuid.UUID]int,
 	labels map[uuid.UUID]string,
 	kinds map[uuid.UUID]string,
 	needed map[uuid.UUID]int,
+	propolisGrams float64,
+) string {
+	return productCheckAvailabilityGrams(onHand, labels, kinds, nil, needed, propolisGrams)
+}
+
+func productCheckAvailabilityGrams(
+	onHand map[uuid.UUID]int,
+	labels map[uuid.UUID]string,
+	kinds map[uuid.UUID]string,
+	netGrams map[uuid.UUID]float64,
+	needed map[uuid.UUID]int,
+	propolisGrams float64,
 ) string {
 	ids := make([]uuid.UUID, 0, len(needed))
 	for id := range needed {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
+	remaining := propolisGrams
 	for _, id := range ids {
 		if kinds[id] == saleKindPropolis && onHand[id] <= 0 {
-			// Raw propolis is a SKU off the harvest, not a packaged batch.
+			label := labels[id]
+			if label == "" {
+				label = "propolis"
+			}
+			grams := netGrams[id]
+			if grams <= 0 {
+				if remaining <= honeyPoundTolerance {
+					return fmt.Sprintf("No propolis on hand for %s", label)
+				}
+				continue
+			}
+			want := float64(needed[id]) * grams
+			if want > remaining+honeyPoundTolerance {
+				return fmt.Sprintf("Not enough propolis for %s: need %s g, have %s g",
+					label, formatGrams(want), formatGrams(math.Max(remaining, 0)))
+			}
+			remaining -= want
 			continue
 		}
 		if needed[id] > onHand[id] {
@@ -192,6 +263,10 @@ func productCheckAvailability(
 	return ""
 }
 
+func formatGrams(g float64) string {
+	return strconv.FormatFloat(math.Round(g*100)/100, 'f', -1, 64)
+}
+
 func (s *Server) productList(w http.ResponseWriter, r *http.Request) {
 	items, err := productInventoryQuery(r.Context(), s.pool)
 	if err != nil {
@@ -203,13 +278,19 @@ func (s *Server) productList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	// Raw propolis SKUs are sellable whenever harvest remains, even with no
-	// packaging batch. Market day uses inStock to grow product buttons.
-	if grams > honeyPoundTolerance {
-		for i := range items {
-			if items[i].Kind == saleKindPropolis && items[i].IsActive {
-				items[i].InStock = true
-			}
+	// Raw propolis SKUs are sellable whenever enough harvest remains for one
+	// unit (net_grams), even with no packaging batch. Market day uses inStock
+	// to grow product buttons.
+	for i := range items {
+		if items[i].Kind != saleKindPropolis || !items[i].IsActive {
+			continue
+		}
+		need := 0.0
+		if items[i].NetGrams != nil {
+			need = *items[i].NetGrams
+		}
+		if grams > honeyPoundTolerance && grams+honeyPoundTolerance >= need {
+			items[i].InStock = true
 		}
 	}
 	inStockOnly := r.URL.Query().Get("inStock") == "1" || r.URL.Query().Get("inStock") == "true"
@@ -230,11 +311,12 @@ func (s *Server) productList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) productCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name         string  `json:"name"`
-		Kind         string  `json:"kind"`
-		Unit         string  `json:"unit"`
-		DefaultPrice money   `json:"defaultPrice"`
-		SizeLabel    *string `json:"sizeLabel"`
+		Name         string   `json:"name"`
+		Kind         string   `json:"kind"`
+		Unit         string   `json:"unit"`
+		DefaultPrice money    `json:"defaultPrice"`
+		SizeLabel    *string  `json:"sizeLabel"`
+		NetGrams     *float64 `json:"netGrams"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -259,18 +341,41 @@ func (s *Server) productCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "defaultPrice must be non-negative")
 		return
 	}
+	if msg := productValidateNetGrams(kind, req.NetGrams); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	var id uuid.UUID
 	err := s.pool.QueryRow(r.Context(), `
 		INSERT INTO product_catalog
-			(name, kind, unit, default_price_cents, size_label, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		name, kind, unit, req.DefaultPrice, honeyTrimPtr(req.SizeLabel), actorID(r)).Scan(&id)
+			(name, kind, unit, default_price_cents, size_label, net_grams, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		name, kind, unit, req.DefaultPrice, honeyTrimPtr(req.SizeLabel), req.NetGrams, actorID(r)).Scan(&id)
 	if err != nil {
 		writeDBError(w, err, "a product with that name, kind, and size already exists",
 			"database error")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+// productValidateNetGrams enforces the net weight rule: propolis SKUs must
+// carry a positive net_grams (sales decrement the harvest ledger by it);
+// tincture may; other kinds must not.
+func productValidateNetGrams(kind string, netGrams *float64) string {
+	if netGrams != nil {
+		if math.IsNaN(*netGrams) || math.IsInf(*netGrams, 0) || *netGrams <= 0 {
+			return "netGrams must be greater than zero"
+		}
+		if kind != saleKindPropolis && kind != saleKindTincture {
+			return "netGrams only applies to propolis and tincture products"
+		}
+		return ""
+	}
+	if kind == saleKindPropolis {
+		return "netGrams is required for propolis products"
+	}
+	return ""
 }
 
 func (s *Server) productUpdate(w http.ResponseWriter, r *http.Request) {
@@ -280,18 +385,21 @@ func (s *Server) productUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name         *string `json:"name"`
-		Unit         *string `json:"unit"`
-		DefaultPrice *money  `json:"defaultPrice"`
-		SizeLabel    *string `json:"sizeLabel"`
-		IsActive     *bool   `json:"isActive"`
+		Name         *string  `json:"name"`
+		Unit         *string  `json:"unit"`
+		DefaultPrice *money   `json:"defaultPrice"`
+		SizeLabel    *string  `json:"sizeLabel"`
+		IsActive     *bool    `json:"isActive"`
+		NetGrams     *float64 `json:"netGrams"`
+		// ClearNetGrams drops the weight (tincture only; propolis must keep one).
+		ClearNetGrams bool `json:"clearNetGrams"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	sets := make([]string, 0, 5)
-	args := make([]any, 0, 6)
+	sets := make([]string, 0, 6)
+	args := make([]any, 0, 7)
 	n := 1
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
@@ -330,6 +438,25 @@ func (s *Server) productUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.IsActive != nil {
 		sets = append(sets, fmt.Sprintf("is_active=$%d", n))
 		args = append(args, *req.IsActive)
+		n++
+	}
+	if req.NetGrams != nil || req.ClearNetGrams {
+		var kind string
+		if err := s.pool.QueryRow(r.Context(),
+			`SELECT kind FROM product_catalog WHERE id=$1`, id).Scan(&kind); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "product not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if msg := productValidateNetGrams(kind, req.NetGrams); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		sets = append(sets, fmt.Sprintf("net_grams=$%d", n))
+		args = append(args, req.NetGrams)
 		n++
 	}
 	if len(sets) == 0 {
@@ -374,8 +501,11 @@ func propolisToGrams(amount float64, unit string) float64 {
 	return amount
 }
 
+// propolisOnHandGrams is harvested propolis minus what tincture batches
+// consumed minus raw propolis sold (sale_items kind=propolis on non-cancelled
+// sales, quantity × product_catalog.net_grams).
 func propolisOnHandGrams(ctx context.Context, q inspectionQuerier) (float64, error) {
-	var harvested, consumed float64
+	var harvested, consumed, sold float64
 	err := q.QueryRow(ctx, `
 		SELECT
 			COALESCE((
@@ -385,11 +515,19 @@ func propolisOnHandGrams(ctx context.Context, q inspectionQuerier) (float64, err
 			COALESCE((
 				SELECT SUM(CASE WHEN propolis_unit='ounces' THEN propolis_amount * $1 ELSE propolis_amount END)
 				FROM product_batches WHERE kind='tincture'
-			), 0)`, gramsPerOunce).Scan(&harvested, &consumed)
+			), 0),
+			COALESCE((
+				SELECT SUM(si.quantity * p.net_grams)
+				FROM sale_items si
+				JOIN sales sale ON sale.id = si.sale_id
+				JOIN product_catalog p ON p.id = si.product_id
+				WHERE si.kind = 'propolis' AND p.net_grams IS NOT NULL
+				  AND sale.order_status <> 'cancelled'
+			), 0)`, gramsPerOunce).Scan(&harvested, &consumed, &sold)
 	if err != nil {
 		return 0, err
 	}
-	return harvested - consumed, nil
+	return harvested - consumed - sold, nil
 }
 
 func propolisHarvestRemainingGrams(ctx context.Context, q inspectionQuerier, harvestID uuid.UUID) (float64, error) {
@@ -777,6 +915,15 @@ func (s *Server) productBatchCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		// Same treatment lockout as a jar sale off the lot: honey from a lot
+		// still inside a withdrawal window cannot be converted either.
+		if msg, err := refuseLotSale(ctx, tx, *req.HarvestLotID, startedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		} else if msg != "" {
+			writeError(w, http.StatusConflict, msg)
 			return
 		}
 	}

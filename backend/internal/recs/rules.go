@@ -55,7 +55,7 @@ func estimateTreatmentDurationDays(method string) int {
 	case has("oxalic") && has("vapor"):
 		return 7
 	case has("oxalic"):
-		return 1 // oxalic acid dribble — single application
+		return 1 // oxalic acid dribble â€” single application
 	case has("apivar"), has("amitraz"):
 		return 42
 	case has("apiguard"), has("thymol"):
@@ -402,19 +402,31 @@ func checkSeasonalPrep(ctx context.Context, pool *pgxpool.Pool, now time.Time) (
 // Rule: treat_now
 // ---------------------------------------------------------------------------
 
+// treatNowMaxCountAgeDays bounds how old a mite count may be and still drive
+// a treat_now recommendation.
+const treatNowMaxCountAgeDays = 45
+
 func checkTreatNow(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]Result, error) {
 	settings, err := LoadVarroaSettings(ctx, pool, now)
 	if err != nil {
 		return nil, err
 	}
 
+	// Latest count per hive, but only if it is recent and post-dates the
+	// hive's latest treatment (applied or removed) — otherwise the rec would
+	// never clear after treating.
 	rows, err := pool.Query(ctx, `
 		SELECT DISTINCT ON (m.hive_id)
 			m.hive_id, h.position_label, m.method, m.mites_per_100, m.mites_per_day
 		FROM mite_counts m
 		JOIN hives h ON h.id = m.hive_id
 		WHERE h.status = 'active' AND h.is_archived = false
-		ORDER BY m.hive_id, m.date DESC`)
+		  AND m.date >= $1::timestamptz - make_interval(days => $2)
+		  AND m.date > COALESCE((
+			SELECT max(GREATEST(t.date_applied, COALESCE(t.date_removed, t.date_applied)))
+			FROM treatment_events t WHERE t.hive_id = m.hive_id
+		  ), '-infinity'::timestamptz)
+		ORDER BY m.hive_id, m.date DESC`, now, treatNowMaxCountAgeDays)
 	if err != nil {
 		return nil, err
 	}

@@ -48,7 +48,7 @@ func (s *Server) yardQueue(w http.ResponseWriter, r *http.Request) {
 		SELECT h.id, h.position_label, a.id, a.name
 		FROM hives h
 		JOIN apiaries a ON a.id = h.apiary_id
-		WHERE h.is_archived = false
+		WHERE h.is_archived = false AND h.status = 'active'
 		  AND ($1::boolean OR EXISTS (
 			SELECT 1 FROM apiary_memberships membership
 			WHERE membership.user_id = $2 AND membership.apiary_id = a.id
@@ -213,18 +213,30 @@ func (s *Server) yardQueue(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Latest inspection per hive first, then judge its stores; an old
+	// full-stores reading must not flag a hive forever. Bounded to recent
+	// inspections and cleared by any harvest recorded since.
 	readyRows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT ON (h.id)
-			h.id, i.stores_honey, i.date
+		WITH latest AS (
+			SELECT DISTINCT ON (i.hive_id) i.hive_id, i.stores_honey, i.date
+			FROM inspections i
+			ORDER BY i.hive_id, i.date DESC
+		)
+		SELECT h.id, latest.stores_honey, latest.date
 		FROM hives h
-		JOIN inspections i ON i.hive_id = h.id
+		JOIN latest ON latest.hive_id = h.id
 		WHERE h.is_archived = false AND h.status = 'active'
-		  AND i.stores_honey IS NOT NULL AND i.stores_honey >= $1
+		  AND latest.stores_honey IS NOT NULL AND latest.stores_honey >= $1
+		  AND latest.date >= now() - interval '60 days'
+		  AND NOT EXISTS (
+			SELECT 1 FROM honey_harvests hh
+			WHERE hh.hive_id = h.id AND hh.deleted_at IS NULL
+			  AND hh.date >= latest.date
+		  )
 		  AND ($2::boolean OR EXISTS (
 			SELECT 1 FROM apiary_memberships membership
 			WHERE membership.user_id = $3 AND membership.apiary_id = h.apiary_id
-		  ))
-		ORDER BY h.id, i.date DESC`, harvestReadyStores, user.IsAdmin, user.ID)
+		  ))`, harvestReadyStores, user.IsAdmin, user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

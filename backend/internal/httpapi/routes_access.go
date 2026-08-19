@@ -310,6 +310,10 @@ func (s *Server) accessSetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if user.FromAPIToken {
+		writeError(w, http.StatusForbidden, "API tokens cannot change the account password")
+		return
+	}
 	var req struct {
 		Username        string `json:"username"`
 		CurrentPassword string `json:"currentPassword"`
@@ -331,8 +335,8 @@ func (s *Server) accessSetPassword(w http.ResponseWriter, r *http.Request) {
 	case email == "" && req.Username == "":
 		writeError(w, http.StatusBadRequest, "Choose a username so you can sign in without SSO")
 		return
-	case req.Username != "" && (strings.ContainsAny(req.Username, " \t") || len(req.Username) < 3 || len(req.Username) > 64):
-		writeError(w, http.StatusBadRequest, "Username must be 3–64 characters with no spaces")
+	case req.Username != "" && (strings.ContainsAny(req.Username, " \t@") || len(req.Username) < 3 || len(req.Username) > 64):
+		writeError(w, http.StatusBadRequest, "Username must be 3–64 characters with no spaces or @")
 		return
 	case req.Password == "":
 		writeError(w, http.StatusBadRequest, "Password is required")
@@ -380,7 +384,7 @@ func (s *Server) accessSetPassword(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.pool.Exec(r.Context(),
 			`UPDATE app_users SET password_hash=$1, username=$2 WHERE id=$3`,
 			string(next), req.Username, user.ID); err != nil {
-			writeError(w, http.StatusConflict, "That username is already in use")
+			writeDBError(w, err, "That username is already in use", "database error")
 			return
 		}
 	} else if _, err := s.pool.Exec(r.Context(),

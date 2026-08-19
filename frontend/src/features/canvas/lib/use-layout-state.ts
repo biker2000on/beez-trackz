@@ -144,13 +144,25 @@ function reducer(state: LayoutState, action: LayoutAction): LayoutState {
         dirty: true,
         generation: state.generation + 1,
       };
-    case "setMapView":
+    case "setMapView": {
+      // Leaflet's moveend republishes a pixel-rounded centre on mount; don't
+      // mark the layout dirty for sub-centimetre drift.
+      const prev = state.mapView;
+      if (
+        prev &&
+        prev.zoom === action.mapView.zoom &&
+        Math.abs(prev.centerLat - action.mapView.centerLat) < 1e-7 &&
+        Math.abs(prev.centerLng - action.mapView.centerLng) < 1e-7
+      ) {
+        return state;
+      }
       return {
         ...state,
         mapView: action.mapView,
         dirty: true,
         generation: state.generation + 1,
       };
+    }
     case "markViewportDirty":
       // Zoom/pan is part of the saved blob; persist it via the same
       // dirty/autosave path as geometry edits.

@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -11,14 +12,95 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHiveFeedings } from "@/features/feedings/hooks";
 import { useHiveInspections } from "@/features/inspections/hooks";
 import { usePhotos } from "@/features/photos/hooks";
 import { useHive, useHiveDeployments, useHiveQueens } from "./hooks";
-import { miteDisplay, useVarroaAnalytics } from "@/features/operations/hooks";
-import { formatDate } from "./lib";
+import {
+  miteDisplay,
+  useEndTreatment,
+  useVarroaAnalytics,
+} from "@/features/operations/hooks";
+import { formatDate, todayInput } from "./lib";
+
+/** "Mark removed" for the treatment behind a harvest lockout. */
+function EndTreatmentButton({
+  hiveId,
+  treatmentEventId,
+}: {
+  hiveId: string;
+  treatmentEventId: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [date, setDate] = React.useState(todayInput());
+  const endTreatment = useEndTreatment();
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!date) {
+      toast.error("Pick the removal date.");
+      return;
+    }
+    try {
+      await endTreatment.mutateAsync({
+        id: treatmentEventId,
+        hiveId,
+        dateRemoved: date,
+      });
+      toast.success("Treatment marked removed");
+      setOpen(false);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not end treatment",
+      );
+    }
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) setDate(todayInput());
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline" className="mt-2">
+          Mark removed
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64">
+        <form onSubmit={submit} className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="treatment-removed-date">Removed on</Label>
+            <Input
+              id="treatment-removed-date"
+              type="date"
+              value={date}
+              max={todayInput()}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </div>
+          <Button type="submit" size="sm" disabled={endTreatment.isPending}>
+            {endTreatment.isPending ? "Saving…" : "End treatment"}
+          </Button>
+        </form>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function SummaryCard({
   icon: Icon,
@@ -55,7 +137,13 @@ function SummaryCard({
   );
 }
 
-export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
+export function HiveOverviewTab({
+  hiveId,
+  canEdit = false,
+}: {
+  hiveId: string;
+  canEdit?: boolean;
+}) {
   const hive = useHive(hiveId);
   const inspections = useHiveInspections(hiveId);
   const varroa = useVarroaAnalytics(hiveId);
@@ -109,6 +197,12 @@ export function HiveOverviewTab({ hiveId }: { hiveId: string }) {
                     ? ` · off ${formatDate(lockout.dateRemoved)}`
                     : ""}
               </p>
+            )}
+            {canEdit && lockout.treatmentOn && lockout.treatmentEventId && (
+              <EndTreatmentButton
+                hiveId={hiveId}
+                treatmentEventId={lockout.treatmentEventId}
+              />
             )}
           </CardContent>
         </Card>

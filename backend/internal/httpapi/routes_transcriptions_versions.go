@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -538,6 +539,22 @@ type reparseApplyItem struct {
 	Fields     json.RawMessage `json:"fields"`
 }
 
+// reparseCreateHive resolves the target hive for a "create" proposal: an
+// explicit hiveId, else the media owner when it is a hive (mirrors the
+// single-mode fallback in confirm). It then requires edit access to that hive,
+// writing the error response and returning false otherwise.
+func (s *Server) reparseCreateHive(w http.ResponseWriter, r *http.Request, row *transcriptionRow, item *reparseApplyItem, what string) bool {
+	if item.HiveID == nil && row.OwnerType == "hive" {
+		ownerID := row.OwnerID
+		item.HiveID = &ownerID
+	}
+	if item.HiveID == nil {
+		writeError(w, http.StatusBadRequest, "hiveId is required to create "+what)
+		return false
+	}
+	return s.requireHiveRole(w, r, *item.HiveID, true)
+}
+
 // POST /transcriptions/{id}/apply-reparse — apply only the accepted proposals.
 // Unmentioned confirmed rows stay as they are.
 func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.Request) {
@@ -581,6 +598,7 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 	}
 	defer tx.Rollback(ctx)
 
+	now := time.Now()
 	updated, created := 0, 0
 	for _, item := range req.Accept {
 		switch item.Kind {
@@ -625,11 +643,7 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				updated++
 				continue
 			}
-			if item.HiveID == nil {
-				writeError(w, http.StatusBadRequest, "hiveId is required to create an inspection")
-				return
-			}
-			if !s.requireHiveRole(w, r, *item.HiveID, true) {
+			if !s.reparseCreateHive(w, r, row, &item, "an inspection") {
 				return
 			}
 			sourceMedia, err := json.Marshal(struct {
@@ -678,13 +692,12 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				updated++
 				continue
 			}
-			if item.HiveID == nil {
-				writeError(w, http.StatusBadRequest, "hiveId is required to create a feeding")
+			if !s.reparseCreateHive(w, r, row, &item, "a feeding") {
 				return
 			}
 			if _, err := feedingInsert(ctx, tx, feedingFields{
 				HiveID:                    *item.HiveID,
-				DateFed:                   row.UpdatedAt,
+				DateFed:                   now,
 				Type:                      fields.Type,
 				Quantity:                  fields.Quantity,
 				QuantityUnit:              fields.QuantityUnit,
@@ -703,11 +716,19 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				writeError(w, http.StatusBadRequest, "invalid treatment fields")
 				return
 			}
+			// Product changes move the lockout, so resolve withdrawal_days
+			// exactly as the confirm path does on both update and insert.
+			days, resolveErr := s.resolveWithdrawalDays(ctx, fields.Product)
+			if resolveErr != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
 			if item.ExistingID != nil {
 				tag, err := tx.Exec(ctx, `
-					UPDATE treatment_events SET product = $2, method = $3, source_transcript_version_id = $4
-					WHERE id = $1 AND source_media_file_id = $5`,
-					*item.ExistingID, fields.Product, fields.Method, versionID, row.ID)
+					UPDATE treatment_events SET product = $2, method = $3, withdrawal_days = $4,
+						source_transcript_version_id = $5
+					WHERE id = $1 AND source_media_file_id = $6`,
+					*item.ExistingID, fields.Product, fields.Method, days, versionID, row.ID)
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "database error")
 					return
@@ -719,15 +740,15 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				updated++
 				continue
 			}
-			if item.HiveID == nil {
-				writeError(w, http.StatusBadRequest, "hiveId is required to create a treatment")
+			if !s.reparseCreateHive(w, r, row, &item, "a treatment") {
 				return
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO treatment_events
-					(hive_id, date_applied, product, method, source_media_file_id, source_transcript_version_id)
-				VALUES ($1, now(), $2, $3, $4, $5)`,
-				*item.HiveID, fields.Product, fields.Method, row.ID, versionID); err != nil {
+					(hive_id, date_applied, product, method, withdrawal_days,
+					 source_media_file_id, source_transcript_version_id)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				*item.HiveID, now, fields.Product, fields.Method, days, row.ID, versionID); err != nil {
 				writeError(w, http.StatusBadRequest, "invalid treatment extracted from transcript")
 				return
 			}
@@ -757,8 +778,7 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				updated++
 				continue
 			}
-			if item.HiveID == nil {
-				writeError(w, http.StatusBadRequest, "hiveId is required to create a mite count")
+			if !s.reparseCreateHive(w, r, row, &item, "a mite count") {
 				return
 			}
 			if _, err := tx.Exec(ctx, `

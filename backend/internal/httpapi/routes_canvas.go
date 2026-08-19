@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -103,6 +104,12 @@ func (s *Server) handleCanvasSaveLayout(w http.ResponseWriter, r *http.Request) 
 	if layout.Stands == nil {
 		layout.Stands = []canvasStand{}
 	}
+	for _, stand := range layout.Stands {
+		if !canvasValidLatLng(stand.Latitude, stand.Longitude) {
+			writeError(w, http.StatusBadRequest, "stand latitude/longitude out of range")
+			return
+		}
+	}
 	blob, err := json.Marshal(layout)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid layout")
@@ -171,17 +178,51 @@ func canvasYardCentroid(stands []canvasStand) (lat, lng float64, ok bool) {
 	return lat / float64(n), lng / float64(n), true
 }
 
+// canvasDB is the slice of pgx shared by *pgxpool.Pool and pgx.Tx that the
+// GPS sync needs, so it can run inside a caller's transaction.
+type canvasDB interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// canvasValidLatLng reports whether an optional lat/lng pair is usable: both
+// present or both absent, finite, and inside the WGS84 range.
+func canvasValidLatLng(lat, lng *float64) bool {
+	if lat == nil && lng == nil {
+		return true
+	}
+	if lat == nil || lng == nil {
+		return false
+	}
+	if math.IsNaN(*lat) || math.IsInf(*lat, 0) || math.IsNaN(*lng) || math.IsInf(*lng, 0) {
+		return false
+	}
+	return *lat >= -90 && *lat <= 90 && *lng >= -180 && *lng <= 180
+}
+
+// syncYardGps recomputes every placed hive's lat/lng in the apiary from the
+// stand geometry, inside one transaction. Unplaced hives and hives on stands
+// without GPS get NULL — no invented coordinates. The apiary pin itself is
+// operator-set (apiary form / SetLocationDialog) and is never touched here.
 func (s *Server) syncYardGps(ctx context.Context, apiaryID uuid.UUID, stands []canvasStand) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := canvasSyncYardGps(ctx, tx, apiaryID, stands); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func canvasSyncYardGps(ctx context.Context, db canvasDB, apiaryID uuid.UUID, stands []canvasStand) error {
 	byID := make(map[string]canvasStand, len(stands))
 	for _, stand := range stands {
 		byID[stand.ID] = stand
 	}
-	if _, err := s.pool.Exec(ctx, `
-		UPDATE hives SET latitude = NULL, longitude = NULL
-		WHERE apiary_id = $1`, apiaryID); err != nil {
-		return err
-	}
-	rows, err := s.pool.Query(ctx, `
+	rows, err := db.Query(ctx, `
 		SELECT id, stand_id, slot_row, slot_col
 		FROM hives
 		WHERE apiary_id = $1 AND stand_id IS NOT NULL
@@ -189,7 +230,11 @@ func (s *Server) syncYardGps(ctx context.Context, apiaryID uuid.UUID, stands []c
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type placed struct {
+		id       uuid.UUID
+		lat, lng float64
+	}
+	var updates []placed
 	for rows.Next() {
 		var (
 			hiveID           uuid.UUID
@@ -197,33 +242,69 @@ func (s *Server) syncYardGps(ctx context.Context, apiaryID uuid.UUID, stands []c
 			slotRow, slotCol int
 		)
 		if err := rows.Scan(&hiveID, &standID, &slotRow, &slotCol); err != nil {
+			rows.Close()
 			return err
 		}
 		stand, ok := byID[standID]
 		if !ok {
 			continue
 		}
-		lat, lng, ok := canvasSlotGPS(stand, slotRow, slotCol)
-		if !ok {
-			continue
-		}
-		if _, err := s.pool.Exec(ctx, `
-			UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`,
-			lat, lng, hiveID); err != nil {
-			return err
+		if lat, lng, ok := canvasSlotGPS(stand, slotRow, slotCol); ok {
+			updates = append(updates, placed{hiveID, lat, lng})
 		}
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if lat, lng, ok := canvasYardCentroid(stands); ok {
-		if _, err := s.pool.Exec(ctx, `
-			UPDATE apiaries SET latitude = $1, longitude = $2 WHERE id = $3`,
-			lat, lng, apiaryID); err != nil {
+	if _, err := db.Exec(ctx, `
+		UPDATE hives SET latitude = NULL, longitude = NULL
+		WHERE apiary_id = $1`, apiaryID); err != nil {
+		return err
+	}
+	for _, u := range updates {
+		if _, err := db.Exec(ctx, `
+			UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`,
+			u.lat, u.lng, u.id); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// canvasSyncHiveGps derives one hive's lat/lng from its current slot and the
+// apiary's stored stand geometry. Call after the slot columns are written,
+// in the same transaction.
+func canvasSyncHiveGps(ctx context.Context, db canvasDB, hiveID uuid.UUID) error {
+	var (
+		standID          *string
+		slotRow, slotCol *int
+		blob             []byte
+	)
+	if err := db.QueryRow(ctx, `
+		SELECT h.stand_id, h.slot_row, h.slot_col, a.canvas_layout
+		FROM hives h JOIN apiaries a ON a.id = h.apiary_id
+		WHERE h.id = $1`, hiveID).Scan(&standID, &slotRow, &slotCol, &blob); err != nil {
+		return err
+	}
+	var lat, lng *float64
+	if standID != nil && slotRow != nil && slotCol != nil && len(blob) > 0 {
+		var layout canvasLayoutJSON
+		if err := json.Unmarshal(blob, &layout); err == nil {
+			for _, stand := range layout.Stands {
+				if stand.ID != *standID {
+					continue
+				}
+				if la, ln, ok := canvasSlotGPS(stand, *slotRow, *slotCol); ok {
+					lat, lng = &la, &ln
+				}
+				break
+			}
+		}
+	}
+	_, err := db.Exec(ctx, `
+		UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`, lat, lng, hiveID)
+	return err
 }
 
 // POST /canvas/hives — create a hive directly in a stand slot.
@@ -297,6 +378,10 @@ func (s *Server) handleCanvasCreateHive(w http.ResponseWriter, r *http.Request) 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO hive_location_history (hive_id, apiary_id, position_label, date_from)
 		VALUES ($1, $2, $3, $4)`, id, req.ApiaryID, label, time.Now()); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := canvasSyncHiveGps(ctx, tx, uuid.MustParse(id)); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -492,6 +577,10 @@ func (s *Server) handleCanvasAssignSlot(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	if err := canvasSyncHiveGps(ctx, tx, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -538,7 +627,8 @@ func (s *Server) handleCanvasRemoveSlot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE hives SET stand_id = NULL, slot_row = NULL, slot_col = NULL, placement = 'full'
+		UPDATE hives SET stand_id = NULL, slot_row = NULL, slot_col = NULL, placement = 'full',
+			latitude = NULL, longitude = NULL
 		WHERE id = $1`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")

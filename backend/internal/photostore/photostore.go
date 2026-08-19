@@ -100,31 +100,33 @@ func (r *Resolver) OpenOriginal(ctx context.Context, backend, ref string) (io.Re
 }
 
 // Upload tries preferred, then MinIO. fallback is true when Immich was
-// preferred but the bytes landed in MinIO.
-func (r *Resolver) Upload(ctx context.Context, name, contentType string, body io.Reader, size int64, minioKey string) (backend, ref string, fallback bool, err error) {
+// preferred but the bytes landed in MinIO. external is true when Immich
+// reported a checksum duplicate: the ref points at an asset that already lived
+// in the user's library, so it must be treated as linked (never force-deleted).
+func (r *Resolver) Upload(ctx context.Context, name, contentType string, body io.Reader, size int64, minioKey string) (backend, ref string, fallback, external bool, err error) {
 	if r == nil {
-		return "", "", false, fmt.Errorf("photo store is not configured")
+		return "", "", false, false, fmt.Errorf("photo store is not configured")
 	}
 	if r.minio == nil {
-		return "", "", false, fmt.Errorf("minio is not configured")
+		return "", "", false, false, fmt.Errorf("minio is not configured")
 	}
 	if r.Preferred() == BackendImmich && r.immich != nil {
-		ref, err := r.immich.Upload(ctx, name, contentType, body, size)
+		ref, duplicate, err := r.immich.UploadAsset(ctx, name, contentType, body, size)
 		if err == nil {
-			return BackendImmich, ref, false, nil
+			return BackendImmich, ref, false, duplicate, nil
 		}
 		if body, err = rewindUpload(body); err != nil {
-			return "", "", true, fmt.Errorf("immich upload failed and the file could not be retried: %w", err)
+			return "", "", true, false, fmt.Errorf("immich upload failed and the file could not be retried: %w", err)
 		}
 		if _, err := r.minio.Upload(ctx, minioKey, contentType, body, size); err != nil {
-			return "", "", true, fmt.Errorf("immich upload failed and minio fallback failed: %w", err)
+			return "", "", true, false, fmt.Errorf("immich upload failed and minio fallback failed: %w", err)
 		}
-		return BackendMinio, minioKey, true, nil
+		return BackendMinio, minioKey, true, false, nil
 	}
 	if _, err := r.minio.Upload(ctx, minioKey, contentType, body, size); err != nil {
-		return "", "", false, err
+		return "", "", false, false, err
 	}
-	return BackendMinio, minioKey, false, nil
+	return BackendMinio, minioKey, false, false, nil
 }
 
 // DeleteOriginal removes a Beez-owned original. Link-from-library rows must

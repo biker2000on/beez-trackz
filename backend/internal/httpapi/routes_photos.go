@@ -77,15 +77,48 @@ func (s *Server) mountPhotos(r chi.Router) {
 	r.Route("/photos", func(r chi.Router) {
 		r.Post("/", s.handlePhotoUpload)
 		r.Get("/", s.handlePhotoList)
-		r.Get("/storage", s.handlePhotoStorageInfo)
-		r.Get("/library", s.handlePhotoLibrary)
-		r.Get("/library/{assetId}/thumb", s.handlePhotoLibraryThumb)
+		// The Immich library and storage summary are not scoped to any
+		// apiary, so gate them the way linking effectively is: only users
+		// who can edit somewhere (or admins) may browse the library.
+		r.With(s.requireAnyEditor).Get("/storage", s.handlePhotoStorageInfo)
+		r.With(s.requireAnyEditor).Get("/library", s.handlePhotoLibrary)
+		r.With(s.requireAnyEditor).Get("/library/{assetId}/thumb", s.handlePhotoLibraryThumb)
 		r.Post("/link", s.handlePhotoLink)
 		r.Get("/file/*", s.handlePhotoFile)
 		r.With(s.requireEntityParamRole("photo", false)).Get("/{id}/original", s.handlePhotoOriginal)
 		r.With(s.requireEntityParamRole("photo", true)).Post("/{id}/reprocess", s.handlePhotoReprocess)
 		r.With(s.requireEntityParamRole("photo", true)).Patch("/{id}", s.handlePhotoUpdate)
 		r.With(s.requireEntityParamRole("photo", true)).Delete("/{id}", s.handlePhotoDelete)
+	})
+}
+
+// requireAnyEditor admits admins and users holding an editor membership on at
+// least one apiary. There is no per-apiary scope for the Immich library, and
+// linking an asset already requires editor on the target owner, so this is the
+// narrowest existing role that makes browsing the library meaningful.
+func (s *Server) requireAnyEditor(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := principalFrom(r)
+		if user == nil {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if !user.IsAdmin {
+			var ok bool
+			if err := s.pool.QueryRow(r.Context(), `
+				SELECT EXISTS (
+					SELECT 1 FROM apiary_memberships
+					WHERE user_id=$1 AND role='editor'
+				)`, user.ID).Scan(&ok); err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			if !ok {
+				writeError(w, http.StatusForbidden, "editor access required")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -203,7 +236,7 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 	originalExternal := false
 	fellBack := false
 	if s.photos != nil {
-		backend, ref, fellBack, err = s.photos.Upload(ctx, filename, contentType,
+		backend, ref, fellBack, originalExternal, err = s.photos.Upload(ctx, filename, contentType,
 			bytes.NewReader(data), int64(len(data)), key)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to store photo")

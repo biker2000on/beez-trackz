@@ -265,3 +265,108 @@ func TestSetPasswordOnSSOUserThenLogin(t *testing.T) {
 		t.Fatalf("change without current = %d, want 400", blocked.Code)
 	}
 }
+
+func TestSetPasswordRefusesAPITokenPrincipal(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	email := "apitok-" + suffix + "@example.com"
+	subject := "oidc:https://idp.example/" + suffix
+	var userID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO app_users (auth_subject, display_name, email, is_admin)
+		VALUES ($1, 'Token Owner', $2, false)
+		RETURNING id`, subject, email).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = server.pool.Exec(context.Background(), `DELETE FROM app_users WHERE id=$1`, userID)
+	})
+	const body = `{"password":"new-password","confirmPassword":"new-password"}`
+
+	viaToken := httptest.NewRequest(http.MethodPost, "/api/v1/access/me/password", strings.NewReader(body))
+	viaToken = viaToken.WithContext(context.WithValue(viaToken.Context(), principalKey, &principal{
+		ID: userID, DisplayName: "Token Owner", Email: &email, AuthSubject: subject, FromAPIToken: true,
+	}))
+	denied := httptest.NewRecorder()
+	server.accessSetPassword(denied, viaToken)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("API-token set password = %d, want 403: %s", denied.Code, denied.Body.String())
+	}
+	var hash *string
+	if err := server.pool.QueryRow(ctx, `SELECT password_hash FROM app_users WHERE id=$1`, userID).Scan(&hash); err != nil {
+		t.Fatalf("read hash: %v", err)
+	}
+	if hash != nil {
+		t.Fatal("API-token request still set a password")
+	}
+
+	viaSession := httptest.NewRequest(http.MethodPost, "/api/v1/access/me/password", strings.NewReader(body))
+	viaSession = viaSession.WithContext(context.WithValue(viaSession.Context(), principalKey, &principal{
+		ID: userID, DisplayName: "Token Owner", Email: &email, AuthSubject: subject,
+	}))
+	allowed := httptest.NewRecorder()
+	server.accessSetPassword(allowed, viaSession)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("session set password = %d, want 200: %s", allowed.Code, allowed.Body.String())
+	}
+}
+
+func TestSetPasswordRejectsUsernameWithAt(t *testing.T) {
+	server := honeyTestServer(t)
+	userID := uuid.New()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/access/me/password",
+		strings.NewReader(`{"username":"victim@example.com","password":"new-password","confirmPassword":"new-password"}`))
+	request = request.WithContext(context.WithValue(request.Context(), principalKey, &principal{
+		ID: userID, DisplayName: "Nameless", AuthSubject: "oidc:x",
+	}))
+	response := httptest.NewRecorder()
+	server.accessSetPassword(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("username with @ = %d, want 400: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPasswordLoginPrefersEmailOverShadowingUsername(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	suffix := uuid.NewString()
+	email := "victim-" + suffix + "@example.com"
+	victimHash, _ := bcrypt.GenerateFromPassword([]byte("victim-pass"), bcrypt.MinCost)
+	attackerHash, _ := bcrypt.GenerateFromPassword([]byte("attacker-pass"), bcrypt.MinCost)
+	var victimID, attackerID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO app_users (auth_subject, display_name, email, is_admin, password_hash)
+		VALUES ($1, 'Victim', $2, false, $3) RETURNING id`,
+		"oidc:victim-"+suffix, email, string(victimHash)).Scan(&victimID); err != nil {
+		t.Fatalf("insert victim: %v", err)
+	}
+	// Inserted directly: the API now refuses '@' in usernames, but legacy rows may exist.
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO app_users (auth_subject, display_name, username, is_admin, password_hash)
+		VALUES ($1, 'Attacker', $2, false, $3) RETURNING id`,
+		"oidc:attacker-"+suffix, email, string(attackerHash)).Scan(&attackerID); err != nil {
+		t.Fatalf("insert attacker: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = server.pool.Exec(context.Background(), `DELETE FROM app_users WHERE id = ANY($1)`, []uuid.UUID{victimID, attackerID})
+	})
+
+	login := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"`+email+`","password":"attacker-pass"}`))
+	login.RemoteAddr = "198.51.100.93:1"
+	response := httptest.NewRecorder()
+	server.handleLogin(response, login)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("shadowing username login = %d, want 401: %s", response.Code, response.Body.String())
+	}
+
+	login = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"`+email+`","password":"victim-pass"}`))
+	login.RemoteAddr = "198.51.100.94:1"
+	response = httptest.NewRecorder()
+	server.handleLogin(response, login)
+	if response.Code != http.StatusOK {
+		t.Fatalf("email owner login = %d, want 200: %s", response.Code, response.Body.String())
+	}
+}

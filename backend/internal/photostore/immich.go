@@ -55,7 +55,13 @@ func (c *Immich) do(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
+// immichHealthTimeout bounds the ping so a stalled Immich cannot hold a
+// settings/status request for the full 60s client timeout used for originals.
+const immichHealthTimeout = 5 * time.Second
+
 func (c *Immich) Health(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, immichHealthTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url("/api/server/ping"), nil)
 	if err != nil {
 		return err
@@ -72,6 +78,15 @@ func (c *Immich) Health(ctx context.Context) error {
 }
 
 func (c *Immich) Upload(ctx context.Context, name, contentType string, r io.Reader, size int64) (string, error) {
+	id, _, err := c.UploadAsset(ctx, name, contentType, r, size)
+	return id, err
+}
+
+// UploadAsset uploads and reports whether Immich matched an existing asset by
+// checksum (HTTP 200 {status:"duplicate"}) instead of creating one. A
+// duplicate is the user's own library asset, so callers must treat it like a
+// linked asset and never force-delete it.
+func (c *Immich) UploadAsset(ctx context.Context, name, contentType string, r io.Reader, size int64) (string, bool, error) {
 	if name == "" {
 		name = "photo.jpg"
 	}
@@ -85,48 +100,49 @@ func (c *Immich) Upload(ctx context.Context, name, contentType string, r io.Read
 		{"fileModifiedAt", now},
 	} {
 		if err := writer.WriteField(field[0], field[1]); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 	part, err := writer.CreatePart(mapHeader(name, contentType))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if size >= 0 {
 		if _, err := io.CopyN(part, r, size); err != nil && err != io.EOF {
-			return "", err
+			return "", false, err
 		}
 	} else if _, err := io.Copy(part, r); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := writer.Close(); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url("/api/assets"), &body)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	resp, err := c.do(req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer resp.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("immich upload: HTTP %d: %s", resp.StatusCode, truncate(string(payload), 200))
+		return "", false, fmt.Errorf("immich upload: HTTP %d: %s", resp.StatusCode, truncate(string(payload), 200))
 	}
 	var out struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Status string `json:"status"`
 	}
 	if err := json.Unmarshal(payload, &out); err != nil || out.ID == "" {
-		return "", fmt.Errorf("immich upload: missing asset id")
+		return "", false, fmt.Errorf("immich upload: missing asset id")
 	}
-	return out.ID, nil
+	return out.ID, strings.EqualFold(out.Status, "duplicate"), nil
 }
 
 func mapHeader(name, contentType string) map[string][]string {
@@ -149,6 +165,12 @@ func (c *Immich) Open(ctx context.Context, ref string) (io.ReadCloser, int64, st
 
 func (c *Immich) OpenThumbnail(ctx context.Context, ref string) (io.ReadCloser, int64, string, error) {
 	return c.openPath(ctx, "/api/assets/"+url.PathEscape(ref)+"/thumbnail")
+}
+
+// OpenPreview streams Immich's server-generated preview (JPEG, ~1440px). It is
+// the rendition source for originals Go cannot decode, such as HEIC.
+func (c *Immich) OpenPreview(ctx context.Context, ref string) (io.ReadCloser, int64, string, error) {
+	return c.openPath(ctx, "/api/assets/"+url.PathEscape(ref)+"/thumbnail?size=preview")
 }
 
 func (c *Immich) openPath(ctx context.Context, p string) (io.ReadCloser, int64, string, error) {

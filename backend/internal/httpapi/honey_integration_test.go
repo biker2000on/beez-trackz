@@ -1441,6 +1441,162 @@ func TestRecordMixedSaleAndCancelRestores(t *testing.T) {
 	}
 }
 
+func TestDraftSaleDefersPhysicalUntilPaid(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedMixedSaleWorld(t, server)
+	ctx := context.Background()
+
+	readWorld := func(label string) (hiveStatus, feederStatus string, owned, deployed int, applied *time.Time, saleID string) {
+		t.Helper()
+		if err := server.pool.QueryRow(ctx,
+			`SELECT status::text FROM hives WHERE id=$1`, w.hiveID).Scan(&hiveStatus); err != nil {
+			t.Fatalf("%s read hive: %v", label, err)
+		}
+		if err := server.pool.QueryRow(ctx,
+			`SELECT status::text FROM feedings WHERE id=$1`, w.feederID).Scan(&feederStatus); err != nil {
+			t.Fatalf("%s read feeder: %v", label, err)
+		}
+		if err := server.pool.QueryRow(ctx, `
+			SELECT total_owned, deployed FROM equipment_stock_status WHERE stock_id=$1`,
+			w.stockID).Scan(&owned, &deployed); err != nil {
+			t.Fatalf("%s read stock: %v", label, err)
+		}
+		return
+	}
+	readApplied := func(saleID string) *time.Time {
+		t.Helper()
+		var applied *time.Time
+		if err := server.pool.QueryRow(ctx,
+			`SELECT physical_applied_at FROM sales WHERE id=$1`, saleID).Scan(&applied); err != nil {
+			t.Fatalf("read applied: %v", err)
+		}
+		return applied
+	}
+
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date":        time.Now().Format("2006-01-02"),
+			"orderStatus": "draft",
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+				{"kind": "equipment", "equipmentStockId": w.stockID.String(), "quantity": 2, "unitPrice": 40},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("draft sale = %d %v", response.Code, body)
+	}
+	saleID, _ := body["id"].(string)
+
+	hive, feeder, owned, deployed, _, _ := readWorld("after draft")
+	if hive != "active" || feeder != "open" || owned != 5 || deployed != 2 {
+		t.Errorf("after draft = hive %s feeder %s stock %d/%d, want active/open/5/2",
+			hive, feeder, owned, deployed)
+	}
+	if readApplied(saleID) != nil {
+		t.Errorf("draft sale has physical_applied_at set")
+	}
+
+	// A second open draft may name the same hive: drafts do not reserve it.
+	second, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date":        time.Now().Format("2006-01-02"),
+			"orderStatus": "pending",
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+			},
+		}))
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second draft on same hive = %d %v, want 201", second.Code, body)
+	}
+	secondID, _ := body["id"].(string)
+
+	response, body = call(t, server.honeyUpdateSale, adminRequest(
+		http.MethodPatch, "/api/v1/sales/"+saleID, map[string]any{"orderStatus": "paid"},
+		"id", saleID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("draft -> paid = %d %v", response.Code, body)
+	}
+	hive, feeder, owned, deployed, _, _ = readWorld("after paid")
+	if hive != "sold" || feeder != "closed" || owned != 3 || deployed != 0 {
+		t.Errorf("after paid = hive %s feeder %s stock %d/%d, want sold/closed/3/0",
+			hive, feeder, owned, deployed)
+	}
+	if readApplied(saleID) == nil {
+		t.Errorf("paid sale has no physical_applied_at")
+	}
+
+	// The other draft can no longer be paid: the hive went with the first sale.
+	response, body = call(t, server.honeyUpdateSale, adminRequest(
+		http.MethodPatch, "/api/v1/sales/"+secondID, map[string]any{"orderStatus": "paid"},
+		"id", secondID))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("second draft -> paid = %d %v, want 409", response.Code, body)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "BT-") {
+		t.Errorf("409 should name the sale, got %v", body)
+	}
+	// A fresh draft for an already-sold hive is refused outright.
+	response, body = call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date":        time.Now().Format("2006-01-02"),
+			"orderStatus": "draft",
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+			},
+		}))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("draft for sold hive = %d %v, want 400", response.Code, body)
+	}
+
+	response, body = call(t, server.honeyUpdateSale, adminRequest(
+		http.MethodPatch, "/api/v1/sales/"+saleID, map[string]any{"orderStatus": "pending"},
+		"id", saleID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("paid -> pending = %d %v", response.Code, body)
+	}
+	hive, feeder, owned, deployed, _, _ = readWorld("after pending")
+	if hive != "active" || feeder != "open" || owned != 5 || deployed != 2 {
+		t.Errorf("after pending = hive %s feeder %s stock %d/%d, want active/open/5/2",
+			hive, feeder, owned, deployed)
+	}
+	if readApplied(saleID) != nil {
+		t.Errorf("pending sale still has physical_applied_at")
+	}
+
+	// Cancelling a draft runs no restore and leaves the world untouched.
+	response, body = call(t, server.honeyCancelSale, adminRequest(
+		http.MethodDelete, "/api/v1/sales/"+saleID, nil, "id", saleID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("cancel draft = %d %v", response.Code, body)
+	}
+	hive, feeder, owned, deployed, _, _ = readWorld("after cancel")
+	if hive != "active" || feeder != "open" || owned != 5 || deployed != 2 {
+		t.Errorf("after cancel = hive %s feeder %s stock %d/%d, want active/open/5/2",
+			hive, feeder, owned, deployed)
+	}
+	var reversals int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM equipment_stock_adjustments
+		WHERE stock_id=$1 AND notes='sale cancelled'`, w.stockID).Scan(&reversals); err != nil {
+		t.Fatalf("count reversals: %v", err)
+	}
+	if reversals != 0 {
+		t.Errorf("cancelling an unapplied sale wrote %d reversal adjustments", reversals)
+	}
+
+	// The hive is free again, so the second draft can now be paid.
+	response, body = call(t, server.honeyUpdateSale, adminRequest(
+		http.MethodPatch, "/api/v1/sales/"+secondID, map[string]any{"orderStatus": "paid"},
+		"id", secondID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("second draft -> paid after release = %d %v", response.Code, body)
+	}
+	hive, _, _, _, _, _ = readWorld("after second paid")
+	if hive != "sold" {
+		t.Errorf("hive after second paid = %s, want sold", hive)
+	}
+}
+
 func TestRejectDoubleSellHive(t *testing.T) {
 	server := honeyTestServer(t)
 	w := seedMixedSaleWorld(t, server)
@@ -1462,8 +1618,8 @@ func TestRejectDoubleSellHive(t *testing.T) {
 				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
 			},
 		}))
-	if second.Code != http.StatusBadRequest {
-		t.Fatalf("second hive sale = %d %v, want 400", second.Code, body)
+	if second.Code != http.StatusConflict {
+		t.Fatalf("second hive sale = %d %v, want 409", second.Code, body)
 	}
 }
 
@@ -1634,5 +1790,88 @@ func TestMixedSaleWithCatalogSKU(t *testing.T) {
 		}))
 	if over.Code != http.StatusBadRequest {
 		t.Fatalf("oversell catalog SKU = %d %v, want 400", over.Code, overBody)
+	}
+}
+
+func TestSaleCannotBeCreatedCancelled(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedMixedSaleWorld(t, server)
+	ctx := context.Background()
+
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date":        time.Now().Format("2006-01-02"),
+			"orderStatus": "cancelled",
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
+				{"kind": "equipment", "equipmentStockId": w.stockID.String(), "quantity": 1, "unitPrice": 40},
+			},
+		}))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("sale created as cancelled = %d %v, want 400", response.Code, body)
+	}
+	var hiveStatus string
+	if err := server.pool.QueryRow(ctx,
+		`SELECT status::text FROM hives WHERE id=$1`, w.hiveID).Scan(&hiveStatus); err != nil {
+		t.Fatalf("read hive: %v", err)
+	}
+	if hiveStatus != "active" {
+		t.Errorf("hive status = %s, want active (nothing should have been sold)", hiveStatus)
+	}
+	var owned int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT total_owned FROM equipment_stock_status WHERE stock_id=$1`, w.stockID).
+		Scan(&owned); err != nil {
+		t.Fatalf("read stock: %v", err)
+	}
+	if owned != 5 {
+		t.Errorf("stock owned = %d, want 5", owned)
+	}
+}
+
+// An equipment line on a sale that does not include the hive must come out
+// of free stock; deployments on hives that stay with the operator are
+// never consumed.
+func TestEquipmentSaleLeavesKeptHiveDeployments(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedMixedSaleWorld(t, server)
+	ctx := context.Background()
+
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"kind": "equipment", "equipmentStockId": w.stockID.String(), "quantity": 2, "unitPrice": 40},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("equipment sale = %d %v", response.Code, body)
+	}
+	var returned int
+	var removed *time.Time
+	if err := server.pool.QueryRow(ctx,
+		`SELECT quantity_returned, date_removed FROM equipment_deployments WHERE id=$1`,
+		w.deployID).Scan(&returned, &removed); err != nil {
+		t.Fatalf("read deployment: %v", err)
+	}
+	if returned != 0 || removed != nil {
+		t.Errorf("kept hive deployment returned/removed = %d/%v, want 0/nil", returned, removed)
+	}
+	var owned, deployed, available int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT total_owned, deployed, available FROM equipment_stock_status WHERE stock_id=$1`,
+		w.stockID).Scan(&owned, &deployed, &available); err != nil {
+		t.Fatalf("read stock: %v", err)
+	}
+	if owned != 3 || deployed != 2 || available != 1 {
+		t.Errorf("stock owned/deployed/available = %d/%d/%d, want 3/2/1", owned, deployed, available)
+	}
+	var hiveStatus string
+	if err := server.pool.QueryRow(ctx,
+		`SELECT status::text FROM hives WHERE id=$1`, w.hiveID).Scan(&hiveStatus); err != nil {
+		t.Fatalf("read hive: %v", err)
+	}
+	if hiveStatus != "active" {
+		t.Errorf("hive status = %s, want active", hiveStatus)
 	}
 }

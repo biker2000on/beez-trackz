@@ -56,6 +56,12 @@ const PRODUCT_KINDS: { value: CatalogProductKind; label: string }[] = [
 
 const BATCH_KINDS = PRODUCT_KINDS.filter((kind) => kind.value !== "propolis");
 
+/** Raw propolis is sold off the harvest ledger: whole units that fit in grams on hand. */
+function propolisUnitsLeft(gramsOnHand: number, netGrams: number) {
+  if (netGrams <= 0) return 0;
+  return Math.max(0, Math.floor((gramsOnHand + 1e-9) / netGrams));
+}
+
 function kindLabel(kind: string) {
   return PRODUCT_KINDS.find((item) => item.value === kind)?.label ?? kind.replaceAll("_", " ");
 }
@@ -98,6 +104,7 @@ export function HiveProductsPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Kind</TableHead>
                   <TableHead>Size</TableHead>
+                  <TableHead className="text-right">Net g</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
                 </TableRow>
@@ -108,8 +115,13 @@ export function HiveProductsPage() {
                     <TableCell className="font-medium">{item.name}</TableCell>
                     <TableCell className="capitalize">{kindLabel(item.kind)}</TableCell>
                     <TableCell>{item.sizeLabel ?? item.unit}</TableCell>
+                    <TableCell className="text-right tabular-nums">{item.netGrams != null ? `${item.netGrams} g` : "—"}</TableCell>
                     <TableCell>{formatMoney(item.defaultPrice)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{item.onHand}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {item.kind === "propolis" && item.netGrams
+                        ? propolisUnitsLeft(catalog.data?.propolisOnHandGrams ?? 0, item.netGrams)
+                        : item.onHand}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -226,6 +238,14 @@ function AddProductDialog() {
   const [unit, setUnit] = React.useState("jar");
   const [price, setPrice] = React.useState("");
   const [sizeLabel, setSizeLabel] = React.useState("");
+  const [netGrams, setNetGrams] = React.useState("");
+  const showNetGrams = kind === "propolis" || kind === "tincture";
+  const parsedNetGrams = parseNum(netGrams);
+  const netGramsInvalid =
+    showNetGrams &&
+    (kind === "propolis"
+      ? parsedNetGrams === null || parsedNetGrams <= 0
+      : netGrams.trim() !== "" && (parsedNetGrams === null || parsedNetGrams <= 0));
 
   function reset() {
     setName("");
@@ -233,11 +253,13 @@ function AddProductDialog() {
     setUnit("jar");
     setPrice("");
     setSizeLabel("");
+    setNetGrams("");
   }
 
   function submit() {
     const defaultPrice = parseNum(price);
     if (!name.trim() || defaultPrice === null || defaultPrice < 0) return;
+    if (netGramsInvalid) return;
     create.mutate(
       {
         name: name.trim(),
@@ -245,6 +267,7 @@ function AddProductDialog() {
         unit,
         defaultPrice,
         sizeLabel: sizeLabel.trim() || undefined,
+        netGrams: showNetGrams && parsedNetGrams !== null && parsedNetGrams > 0 ? parsedNetGrams : undefined,
       },
       {
         onSuccess: () => {
@@ -313,8 +336,29 @@ function AddProductDialog() {
                 <Input value={sizeLabel} onChange={(event) => setSizeLabel(event.target.value)} placeholder="750ml, 8 oz" />
               </div>
             </div>
+            {showNetGrams && (
+              <div className="grid gap-1.5">
+                <Label>Net grams {kind === "propolis" ? "" : "(optional)"}</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  inputMode="decimal"
+                  required={kind === "propolis"}
+                  value={netGrams}
+                  onChange={(event) => setNetGrams(event.target.value)}
+                  placeholder="10"
+                  aria-invalid={netGramsInvalid || undefined}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {kind === "propolis"
+                    ? "Grams of raw propolis per unit sold; each sale takes this much off propolis on hand."
+                    : "Grams of propolis per bottle, for reference."}
+                </p>
+              </div>
+            )}
             <DialogFooter>
-              <Button type="submit" disabled={create.isPending}>Save product</Button>
+              <Button type="submit" disabled={create.isPending || netGramsInvalid}>Save product</Button>
             </DialogFooter>
           </ShortcutForm>
         </DialogContent>

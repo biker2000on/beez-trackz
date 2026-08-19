@@ -124,3 +124,31 @@ func TestImmichUploadErrorDoesNotLookLikeSuccess(t *testing.T) {
 		t.Fatal("expected upload error")
 	}
 }
+
+func TestImmichUploadDuplicateIsReportedAsExternal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/assets" {
+			// Immich answers 200 (not 201) with status=duplicate when the
+			// checksum already exists in the user's library.
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "lib-asset", "status": "duplicate"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	r := &Resolver{
+		minio:  &memStore{},
+		immich: NewImmich(server.URL, "key"),
+		prefer: BackendImmich,
+	}
+	backend, ref, fallback, external, err := r.Upload(context.Background(), "hive.jpg", "image/jpeg",
+		bytes.NewReader([]byte("abc")), 3, "photos/hive/1.jpg")
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if backend != BackendImmich || ref != "lib-asset" || fallback || !external {
+		t.Fatalf("backend=%s ref=%s fallback=%v external=%v, want immich duplicate marked external",
+			backend, ref, fallback, external)
+	}
+}

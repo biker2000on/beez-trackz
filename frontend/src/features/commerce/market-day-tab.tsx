@@ -71,6 +71,7 @@ export function MarketDayTab({
   if (inventory.isError) return <p className="py-8 text-center text-sm text-muted-foreground">Could not load market inventory.</p>;
 
   const products = catalog.data?.items ?? [];
+  const propolisGrams = catalog.data?.propolisOnHandGrams ?? 0;
   const jarLines = inventory.data
     .map((row) => ({
       kind: "jar" as const,
@@ -181,6 +182,7 @@ export function MarketDayTab({
             <ProductButton
               key={productKey(row.id)}
               product={row}
+              propolisGrams={propolisGrams}
               quantity={cart[productKey(row.id)] ?? 0}
               onAdjust={adjust}
             />
@@ -270,15 +272,28 @@ export function MarketDayTab({
 
 function ProductButton({
   product,
+  propolisGrams,
   quantity,
   onAdjust,
 }: {
   product: CatalogProduct;
+  propolisGrams: number;
   quantity: number;
   onAdjust: (id: string, delta: number, onHand: number) => void;
 }) {
   const key = productKey(product.id);
-  const cap = product.onHand > 0 ? product.onHand : 99;
+  // Raw propolis sells off the harvest ledger: units that fit in grams on hand.
+  const propolisUnits =
+    product.kind === "propolis" && product.netGrams && product.netGrams > 0
+      ? Math.max(0, Math.floor((propolisGrams + 1e-9) / product.netGrams))
+      : null;
+  const cap = propolisUnits !== null ? propolisUnits : product.onHand > 0 ? product.onHand : 99;
+  const stockText =
+    propolisUnits !== null
+      ? `${propolisUnits} left (${propolisGrams.toFixed(1)} g)`
+      : product.onHand > 0
+        ? `${product.onHand} left`
+        : product.kind.replaceAll("_", " ");
   const label = product.sizeLabel ? `${product.name} · ${product.sizeLabel}` : product.name;
   return (
     <Card className={quantity > 0 ? "border-primary" : ""}>
@@ -294,7 +309,7 @@ function ProductButton({
             <span className="text-sm text-muted-foreground">
               {product.defaultPrice > 0 ? formatMoney(product.defaultPrice) : "No price"}
               {" · "}
-              {product.onHand > 0 ? `${product.onHand} left` : product.kind.replaceAll("_", " ")}
+              {stockText}
             </span>
           </span>
         </button>

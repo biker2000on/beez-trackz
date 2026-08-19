@@ -261,6 +261,14 @@ export interface MiteCountInput {
   notes?: string;
 }
 
+/** `hiveId` only targets cache invalidation; the backend rejects unknown
+ * fields on PATCH, so drop it from the body before sending. */
+function withoutHiveId<T extends { hiveId?: string }>(input: T): Omit<T, "hiveId"> {
+  const body = { ...input };
+  delete body.hiveId;
+  return body;
+}
+
 function invalidateMiteQueries(
   client: ReturnType<typeof useQueryClient>,
   hiveId?: string,
@@ -288,8 +296,40 @@ export function useUpdateMiteCount() {
       id,
       ...body
     }: Partial<MiteCountInput> & { id: string; hiveId?: string }) =>
-      api.patch(`/mite-counts/${id}`, body),
+      api.patch(`/mite-counts/${id}`, withoutHiveId(body)),
     onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
+  });
+}
+
+export interface EndTreatmentInput {
+  id: string;
+  hiveId?: string;
+  dateRemoved: string | null;
+  notes?: string;
+}
+
+/** Mark a treatment removed (or clear the removal) so the harvest lockout
+ * countdown can start. */
+export function useEndTreatment() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: EndTreatmentInput) =>
+      api.patch<TreatmentEffect>(
+        `/treatment-events/${id}`,
+        withoutHiveId(body),
+      ),
+    onSuccess: (_data, input) => {
+      void client.invalidateQueries({ queryKey: ["hives"] });
+      void client.invalidateQueries({ queryKey: ["operations", "yard-queue"] });
+      void client.invalidateQueries({ queryKey: ["analytics", "varroa"] });
+      void client.invalidateQueries({ queryKey: ["inspections"] });
+      void client.invalidateQueries({ queryKey: ["recommendations"] });
+      if (input.hiveId) {
+        void client.invalidateQueries({
+          queryKey: ["hives", "detail", input.hiveId],
+        });
+      }
+    },
   });
 }
 

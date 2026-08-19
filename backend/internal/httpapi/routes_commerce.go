@@ -1225,7 +1225,9 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 			SELECT si.jar_size_id, js.label, js.honey_oz, si.quantity,
 				si.quantity * si.unit_price_cents AS gross_cents,
 				s.discount_amount_cents,
-				SUM(si.quantity * si.unit_price_cents) OVER (PARTITION BY s.id) AS subtotal_cents
+				-- Discount is allocated by each jar line's share of the whole
+				-- sale subtotal (all kinds), not just its share of jar lines.
+				s.total_amount_cents + s.discount_amount_cents AS subtotal_cents
 			FROM sale_items si
 			JOIN sales s ON s.id=si.sale_id
 			JOIN jar_sizes js ON js.id=si.jar_size_id

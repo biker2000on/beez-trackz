@@ -96,4 +96,39 @@ func TestTreatNowAndMiteCheckDue(t *testing.T) {
 	if !foundCold {
 		t.Fatalf("mite_check_due missed the never-sampled hive: %#v", due)
 	}
+
+	// A treatment applied after the hot count clears treat_now.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO treatment_events (hive_id, date_applied, product)
+		VALUES ($1,$2,'Apivar')`, hotHive, now.AddDate(0, 0, -1)); err != nil {
+		t.Fatalf("insert treatment: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM treatment_events WHERE hive_id=$1`, hotHive)
+	})
+	treat, err = checkTreatNow(ctx, pool, now)
+	if err != nil {
+		t.Fatalf("treat_now after treatment: %v", err)
+	}
+	for _, rec := range treat {
+		if rec.HiveID != nil && *rec.HiveID == hotHive.String() {
+			t.Fatal("treat_now should clear once a treatment post-dates the count")
+		}
+	}
+
+	// A count newer than the treatment but stale (>45 days at eval time) does not fire.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO mite_counts (hive_id, date, method, mites_count, sample_size)
+		VALUES ($1,$2,'alcohol_wash',15,300)`, hotHive, now); err != nil {
+		t.Fatalf("insert new count: %v", err)
+	}
+	treat, err = checkTreatNow(ctx, pool, now.AddDate(0, 0, 60))
+	if err != nil {
+		t.Fatalf("treat_now stale: %v", err)
+	}
+	for _, rec := range treat {
+		if rec.HiveID != nil && *rec.HiveID == hotHive.String() {
+			t.Fatal("treat_now should ignore a count older than 45 days")
+		}
+	}
 }

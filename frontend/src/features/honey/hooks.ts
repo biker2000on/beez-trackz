@@ -277,6 +277,7 @@ export function useCreateProduct() {
       unit: string;
       defaultPrice: number;
       sizeLabel?: string;
+      netGrams?: number;
     }) => api.post("/products", body),
     successMessage: "Product saved",
     invalidate: [["products"]],

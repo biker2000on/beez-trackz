@@ -319,7 +319,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
           </TabsList>
         </div>
         <TabsContent value="overview" className="pt-4">
-          <HiveOverviewTab hiveId={data.id} />
+          <HiveOverviewTab hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="timeline" className="grid gap-4 pt-4">
           <div className="relative -mx-4 md:mx-0">

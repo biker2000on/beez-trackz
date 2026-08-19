@@ -230,8 +230,17 @@ func replaceInspectionMiteCounts(
 	date time.Time,
 	counts []miteCountPayload,
 ) error {
+	// Rows are matched by (inspection_id, method): resubmitted methods are
+	// updated in place by the upsert (which leaves source_media_file_id /
+	// source_transcript_version_id untouched); only methods dropped from
+	// the submission are deleted.
+	methods := make([]string, 0, len(counts))
+	for _, count := range counts {
+		methods = append(methods, count.Method)
+	}
 	if _, err := q.Exec(ctx,
-		`DELETE FROM mite_counts WHERE inspection_id = $1`, inspectionID); err != nil {
+		`DELETE FROM mite_counts WHERE inspection_id = $1 AND method <> ALL($2)`,
+		inspectionID, methods); err != nil {
 		return err
 	}
 	for _, count := range counts {

@@ -174,44 +174,58 @@ export function PhotoUpload({
             </p>
           ) : (
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-              {(library.data?.items ?? []).map((asset) => (
-                <button
-                  key={asset.id}
-                  type="button"
-                  className="overflow-hidden rounded-md border text-left"
-                  disabled={linkPhoto.isPending}
-                  onClick={async () => {
-                    try {
-                      await linkPhoto.mutateAsync({
-                        assetId: asset.id,
-                        ownerType,
-                        ownerId,
-                      });
-                      toast.success("Photo linked from library");
-                      setLibraryOpen(false);
-                      onUploaded?.();
-                    } catch (error) {
-                      toast.error(
-                        error instanceof ApiError
-                          ? error.message
-                          : "Could not link photo",
-                      );
-                    }
-                  }}
-                >
-                  {/* Immich thumbs are proxied by the API. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={asset.thumbnailUrl}
-                    alt={asset.originalFileName}
-                    className="aspect-square w-full object-cover"
-                  />
-                  <span className="block truncate px-1 py-0.5 text-[11px] text-muted-foreground">
-                    {asset.originalFileName}
-                  </span>
-                </button>
-              ))}
+              {(library.data?.pages ?? [])
+                .flatMap((page) => page.items)
+                .map((asset) => (
+                  <button
+                    key={asset.id}
+                    type="button"
+                    className="overflow-hidden rounded-md border text-left"
+                    disabled={linkPhoto.isPending}
+                    onClick={async () => {
+                      try {
+                        await linkPhoto.mutateAsync({
+                          assetId: asset.id,
+                          ownerType,
+                          ownerId,
+                        });
+                        toast.success("Photo linked from library");
+                        setLibraryOpen(false);
+                        onUploaded?.();
+                      } catch (error) {
+                        toast.error(
+                          error instanceof ApiError
+                            ? error.message
+                            : "Could not link photo",
+                        );
+                      }
+                    }}
+                  >
+                    {/* Immich thumbs are proxied by the API. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={asset.thumbnailUrl}
+                      alt={asset.originalFileName}
+                      className="aspect-square w-full object-cover"
+                    />
+                    <span className="block truncate px-1 py-0.5 text-[11px] text-muted-foreground">
+                      {asset.originalFileName}
+                    </span>
+                  </button>
+                ))}
             </div>
+          )}
+          {library.hasNextPage && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="justify-self-start"
+              disabled={library.isFetchingNextPage}
+              onClick={() => void library.fetchNextPage()}
+            >
+              {library.isFetchingNextPage ? "Loading…" : "Load more"}
+            </Button>
           )}
         </div>
       )}

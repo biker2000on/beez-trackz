@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -209,5 +210,60 @@ func TestNormalizeHoneySaleLinesRejectsConflictingOrNegativePrices(t *testing.T)
 				t.Fatal("normalizeHoneySaleLines returned nil error")
 			}
 		})
+	}
+}
+
+func TestProductCheckAvailabilityPropolisNeedsHarvest(t *testing.T) {
+	id := uuid.New()
+	onHand := map[uuid.UUID]int{id: 0}
+	labels := map[uuid.UUID]string{id: "Raw propolis · 10 g"}
+	kinds := map[uuid.UUID]string{id: saleKindPropolis}
+	needed := map[uuid.UUID]int{id: 1}
+	if msg := productCheckAvailability(onHand, labels, kinds, needed, 0); msg == "" {
+		t.Fatal("propolis sold with no harvest on hand was accepted")
+	}
+	if msg := productCheckAvailability(onHand, labels, kinds, needed, 12.5); msg != "" {
+		t.Fatalf("propolis with harvest on hand refused: %q", msg)
+	}
+	// With a net weight the line must fit in grams, not merely "some harvest".
+	netGrams := map[uuid.UUID]float64{id: 10}
+	if msg := productCheckAvailabilityGrams(onHand, labels, kinds, netGrams, needed, 9.99); msg == "" {
+		t.Fatal("10 g tin sold against 9.99 g on hand was accepted")
+	}
+	if msg := productCheckAvailabilityGrams(onHand, labels, kinds, netGrams, needed, 10); msg != "" {
+		t.Fatalf("10 g tin against exactly 10 g on hand refused: %q", msg)
+	}
+}
+
+func TestProductCheckAvailabilityPropolisGramsMath(t *testing.T) {
+	tin := uuid.New()   // 10 g tins
+	jar := uuid.New()   // 25 g jars
+	cream := uuid.New() // packaged creamed honey, counted per unit
+	onHand := map[uuid.UUID]int{tin: 0, jar: 0, cream: 3}
+	labels := map[uuid.UUID]string{tin: "Raw propolis · 10 g", jar: "Raw propolis · 25 g", cream: "Creamed honey"}
+	kinds := map[uuid.UUID]string{tin: saleKindPropolis, jar: saleKindPropolis, cream: saleKindCreamedHoney}
+	netGrams := map[uuid.UUID]float64{tin: 10, jar: 25}
+
+	// 3 tins (30 g) + 2 jars (50 g) = 80 g: fits in 80, not in 79.
+	needed := map[uuid.UUID]int{tin: 3, jar: 2, cream: 1}
+	if msg := productCheckAvailabilityGrams(onHand, labels, kinds, netGrams, needed, 80); msg != "" {
+		t.Fatalf("80 g of propolis lines against 80 g on hand refused: %q", msg)
+	}
+	msg := productCheckAvailabilityGrams(onHand, labels, kinds, netGrams, needed, 79)
+	if msg == "" {
+		t.Fatal("80 g of propolis lines against 79 g on hand was accepted")
+	}
+	if !strings.Contains(msg, "Not enough propolis for Raw propolis") || !strings.Contains(msg, " g") {
+		t.Fatalf("message should name the SKU and grams: %q", msg)
+	}
+	// Non-propolis lines are still checked per unit.
+	needed[cream] = 4
+	if msg := productCheckAvailabilityGrams(onHand, labels, kinds, netGrams, needed, 1000); msg != "Not enough Creamed honey: need 4, have 3" {
+		t.Fatalf("unexpected message: %q", msg)
+	}
+	// Legacy form (no weights) keeps the any-harvest rule.
+	delete(needed, cream)
+	if msg := productCheckAvailability(onHand, labels, kinds, needed, 0.5); msg != "" {
+		t.Fatalf("legacy check refused: %q", msg)
 	}
 }

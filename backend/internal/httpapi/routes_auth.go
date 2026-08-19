@@ -318,7 +318,9 @@ func (s *Server) handleUserPasswordLogin(
 		WHERE is_active AND password_hash IS NOT NULL AND (
 			(email IS NOT NULL AND lower(email)=lower($1))
 			OR (username IS NOT NULL AND lower(username)=lower($1))
-		)`,
+		)
+		ORDER BY (email IS NOT NULL AND lower(email)=lower($1)) DESC
+		LIMIT 1`,
 		identifier).Scan(&subject, &name, &hash)
 	if err != nil || hash == nil || subject == "" {
 		_ = bcrypt.CompareHashAndPassword([]byte(dummyPasswordHash), []byte(password))

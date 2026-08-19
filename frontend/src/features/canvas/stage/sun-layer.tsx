@@ -92,7 +92,7 @@ export function SunLayer({ origin, solar, hives, usingPin }: SunLayerProps) {
         <Text
           x={origin.x + 8}
           y={origin.y - 2}
-          text="Using yard pin — register stands for per-hive sun"
+          text="Using yard pin — give stands GPS for per-hive sun"
           fontSize={11}
           fill="#78716c"
         />

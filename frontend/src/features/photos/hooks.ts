@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -59,14 +60,19 @@ export function usePhotoStorage() {
   });
 }
 
-export function usePhotoLibrary(enabled: boolean, page = 1) {
-  return useQuery({
-    queryKey: ["photos", "library", page],
-    queryFn: () =>
-      api.get<{ items: LibraryAsset[]; nextPage: string }>(
-        "/photos/library",
-        { params: { page, size: 24 } },
-      ),
+/** Pages through the Immich library; `nextPage` from the API drives "load more". */
+export function usePhotoLibrary(enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ["photos", "library"],
+    queryFn: ({ pageParam }) =>
+      api.get<{ items: LibraryAsset[]; nextPage: string }>("/photos/library", {
+        params: { page: pageParam, size: 24 },
+      }),
+    initialPageParam: 1,
+    getNextPageParam: (last) => {
+      const next = Number.parseInt(last.nextPage, 10);
+      return Number.isFinite(next) && next > 0 ? next : undefined;
+    },
     enabled,
   });
 }
@@ -131,7 +137,8 @@ export function useLinkPhoto() {
       ownerType: PhotoOwnerType;
       ownerId: string;
       caption?: string;
-    }) => api.post<{ success: boolean; photoId: string }>("/photos/link", input),
+    }) =>
+      api.post<{ success: boolean; photoId: string }>("/photos/link", input),
     onSuccess: (_data, variables) => {
       invalidate(variables.ownerType, variables.ownerId);
     },
@@ -186,7 +193,9 @@ export function useBulkDeletePhotos(
         (result) => result.status === "rejected",
       ).length;
       if (failed > 0) {
-        throw new Error(`${failed} of ${ids.length} photos could not be deleted`);
+        throw new Error(
+          `${failed} of ${ids.length} photos could not be deleted`,
+        );
       }
       return ids.length;
     },

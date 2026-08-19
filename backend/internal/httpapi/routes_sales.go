@@ -76,7 +76,23 @@ func saleSellHive(
 	if err != nil {
 		return err
 	}
-	if status == "sold" || status == "dead" || status == "combined" {
+	if status == "sold" {
+		// Another sale took this hive between the draft and the payment:
+		// name it so the operator can find it, and use 409 so the client
+		// does not treat it as a malformed request.
+		var orderNumber *string
+		if err := tx.QueryRow(ctx, `
+			SELECT s.order_number FROM hives h LEFT JOIN sales s ON s.id=h.sale_id
+			WHERE h.id=$1`, hiveID).Scan(&orderNumber); err != nil {
+			return err
+		}
+		if orderNumber != nil {
+			return equipFail(http.StatusConflict,
+				"hive was already sold on sale %s", *orderNumber)
+		}
+		return equipFail(http.StatusConflict, "hive was already sold on another sale")
+	}
+	if status == "dead" || status == "combined" {
 		return saleBadRequest("cannot sell a hive that is already %s", status)
 	}
 
@@ -218,13 +234,105 @@ func saleInsertSoldAdjustment(
 	return err
 }
 
-// saleRestorePhysical undoes the first cancel of a mixed sale. Idempotent
-// replays must not call this after the sale is already cancelled.
+// saleCheckHivesSellable refuses colony lines whose hive is already sold,
+// dead, or combined without selling anything. Draft/pending sales run this
+// instead of saleApplyPhysical: the hive is not reserved (two open drafts may
+// name it) but a hive that is already gone cannot be drafted either.
+func saleCheckHivesSellable(ctx context.Context, tx pgx.Tx, lines []honeySaleLine) error {
+	seen := make(map[uuid.UUID]bool, len(lines))
+	for _, line := range lines {
+		if line.Kind != saleKindColony {
+			continue
+		}
+		if seen[line.HiveID] {
+			return saleBadRequest("a hive can only appear once on a sale")
+		}
+		seen[line.HiveID] = true
+		var status string
+		err := tx.QueryRow(ctx,
+			`SELECT status::text FROM hives WHERE id=$1`, line.HiveID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return saleBadRequest("invalid hiveId")
+		}
+		if err != nil {
+			return err
+		}
+		if status == "sold" || status == "dead" || status == "combined" {
+			return saleBadRequest("cannot sell a hive that is already %s", status)
+		}
+	}
+	return nil
+}
+
+// saleLoadLines reads a sale's stored line items back in the shape
+// saleApplyPhysical expects, for sales whose physical effects are applied
+// after creation (draft/pending -> paid).
+func saleLoadLines(ctx context.Context, tx pgx.Tx, saleID uuid.UUID) ([]honeySaleLine, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT kind, jar_size_id, hive_id, equipment_stock_id, product_id,
+		       quantity, unit_price_cents
+		FROM sale_items WHERE sale_id=$1 ORDER BY id`, saleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	lines := make([]honeySaleLine, 0)
+	for rows.Next() {
+		var line honeySaleLine
+		var jarSizeID, hiveID, stockID, productID *uuid.UUID
+		if err := rows.Scan(&line.Kind, &jarSizeID, &hiveID, &stockID, &productID,
+			&line.Quantity, &line.UnitPrice); err != nil {
+			return nil, err
+		}
+		if jarSizeID != nil {
+			line.JarSizeID = *jarSizeID
+		}
+		if hiveID != nil {
+			line.HiveID = *hiveID
+		}
+		if stockID != nil {
+			line.EquipmentStockID = *stockID
+		}
+		if productID != nil {
+			line.ProductID = *productID
+		}
+		lines = append(lines, line)
+	}
+	return lines, rows.Err()
+}
+
+// saleRestorePhysical undoes the physical effects of a cancelled sale that
+// had them applied (physical_applied_at IS NOT NULL). Sold stock comes back
+// as a reversing 'other' adjustment so the ledger keeps both movements.
 func saleRestorePhysical(
 	ctx context.Context,
 	tx pgx.Tx,
 	saleID uuid.UUID,
 	actor *uuid.UUID,
+) error {
+	return saleRevertPhysical(ctx, tx, saleID, actor, false)
+}
+
+// saleUnapplyPhysical undoes the physical effects of a sale that moves from
+// paid/fulfilled back to draft/pending. Unlike a cancel it may be applied
+// again later, so the sold adjustments are removed outright rather than
+// reversed: a later apply writes fresh ones, and a later restore or unapply
+// only ever sees the rows from the most recent apply.
+func saleUnapplyPhysical(
+	ctx context.Context,
+	tx pgx.Tx,
+	saleID uuid.UUID,
+	actor *uuid.UUID,
+) error {
+	return saleRevertPhysical(ctx, tx, saleID, actor, true)
+}
+
+func saleRevertPhysical(
+	ctx context.Context,
+	tx pgx.Tx,
+	saleID uuid.UUID,
+	actor *uuid.UUID,
+	deleteSold bool,
 ) error {
 	// Reverse sold adjustments first so owned is restored before deployments
 	// go back on the hive (available never goes negative in between).
@@ -257,11 +365,21 @@ func saleRestorePhysical(
 		if _, err := equipLockStock(ctx, tx, a.StockID); err != nil {
 			return err
 		}
+		if deleteSold {
+			continue
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO equipment_stock_adjustments
 				(stock_id, quantity, reason, notes, date, created_by)
 			VALUES ($1, $2, 'other', 'sale cancelled', now(), $3)`,
 			a.StockID, a.Qty, actor); err != nil {
+			return err
+		}
+	}
+	if deleteSold {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM equipment_stock_adjustments
+			WHERE sale_id=$1 AND quantity < 0 AND reason='sold'`, saleID); err != nil {
 			return err
 		}
 	}

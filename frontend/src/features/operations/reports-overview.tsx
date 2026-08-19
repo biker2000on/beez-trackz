@@ -11,6 +11,7 @@ import { REPORT_PAGES } from "./reports-nav";
 import {
   ReportHeader,
   ReportHighlights,
+  VarroaFleetSection,
   useReportYear,
 } from "./reports-sections";
 
@@ -30,6 +31,8 @@ export function ReportsOverview() {
       />
 
       <ReportHighlights year={year} />
+
+      <VarroaFleetSection />
 
       <ul className="grid gap-3 sm:grid-cols-2">
         {sections.map((section) => (

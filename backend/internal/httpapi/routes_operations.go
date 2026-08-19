@@ -23,6 +23,8 @@ func (s *Server) mountOperations(r chi.Router) {
 		Delete("/mite-counts/{id}", s.miteCountDelete)
 	r.Post("/treatment-events", s.treatmentEventCreate)
 	r.With(s.requireEntityParamRole("treatment", true)).
+		Patch("/treatment-events/{id}", s.treatmentEventUpdate)
+	r.With(s.requireEntityParamRole("treatment", true)).
 		Delete("/treatment-events/{id}", s.treatmentEventDelete)
 	r.Post("/queen-events", s.queenEventCreate)
 	r.With(s.requireEntityParamRole("queen_event", true)).
@@ -73,6 +75,19 @@ func (s *Server) miteCountCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.requireHiveRole(w, r, req.HiveID, true) {
 		return
 	}
+	if req.InspectionID != nil {
+		var ok bool
+		if err := s.pool.QueryRow(r.Context(), `
+			SELECT EXISTS (SELECT 1 FROM inspections WHERE id = $1 AND hive_id = $2)`,
+			*req.InspectionID, req.HiveID).Scan(&ok); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if !ok {
+			writeError(w, http.StatusBadRequest, "inspectionId does not belong to hiveId")
+			return
+		}
+	}
 	id, per100, perDay, err := upsertMiteCount(r.Context(), s.pool, req, date)
 	if err != nil {
 		if honeyIsFKViolation(err) {
@@ -92,12 +107,14 @@ func (s *Server) miteCountUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Date        *string `json:"date"`
-		Method      *string `json:"method"`
-		MitesCount  *int    `json:"mitesCount"`
-		SampleSize  *int    `json:"sampleSize"`
-		DaysOnBoard *int    `json:"daysOnBoard"`
-		Notes       *string `json:"notes"`
+		// The UI echoes hiveId back; it is validated against the row, never changed.
+		HiveID      *uuid.UUID `json:"hiveId"`
+		Date        *string    `json:"date"`
+		Method      *string    `json:"method"`
+		MitesCount  *int       `json:"mitesCount"`
+		SampleSize  *int       `json:"sampleSize"`
+		DaysOnBoard *int       `json:"daysOnBoard"`
+		Notes       *string    `json:"notes"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -117,6 +134,10 @@ func (s *Server) miteCountUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if body.HiveID != nil && *body.HiveID != current.HiveID {
+		writeError(w, http.StatusBadRequest, "hiveId cannot be changed")
 		return
 	}
 	date := currentDate
@@ -238,6 +259,84 @@ func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+// treatmentEventUpdate ends (or re-opens) a treatment. dateRemoved omitted
+// keeps the current value; explicit null clears it and re-locks the hive.
+func (s *Server) treatmentEventUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body struct {
+		DateRemoved json.RawMessage `json:"dateRemoved"`
+		Notes       *string         `json:"notes"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var (
+		hiveID         uuid.UUID
+		applied        time.Time
+		removed        *time.Time
+		product        string
+		method, notes  *string
+		withdrawalDays int
+	)
+	err = s.pool.QueryRow(r.Context(), `
+		SELECT hive_id, date_applied, date_removed, product, method, notes, withdrawal_days
+		FROM treatment_events WHERE id = $1`, id).Scan(
+		&hiveID, &applied, &removed, &product, &method, &notes, &withdrawalDays)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "treatment event not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if len(body.DateRemoved) > 0 {
+		if string(body.DateRemoved) == "null" {
+			removed = nil
+		} else {
+			var raw string
+			if err := json.Unmarshal(body.DateRemoved, &raw); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid dateRemoved")
+				return
+			}
+			v, err := parseDate(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid dateRemoved")
+				return
+			}
+			if calendarDate(v).Before(calendarDate(applied)) {
+				writeError(w, http.StatusBadRequest, "dateRemoved must be on or after dateApplied")
+				return
+			}
+			removed = &v
+		}
+	}
+	if body.Notes != nil {
+		notes = honeyTrimPtr(body.Notes)
+	}
+	if _, err := s.pool.Exec(r.Context(), `
+		UPDATE treatment_events SET date_removed = $2, notes = $3 WHERE id = $1`,
+		id, removed, notes); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":             id,
+		"hiveId":         hiveID,
+		"dateApplied":    applied,
+		"dateRemoved":    removed,
+		"product":        product,
+		"method":         method,
+		"notes":          notes,
+		"withdrawalDays": withdrawalDays,
+	})
 }
 
 func (s *Server) treatmentEventDelete(w http.ResponseWriter, r *http.Request) {

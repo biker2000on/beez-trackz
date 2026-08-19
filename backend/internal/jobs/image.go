@@ -19,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rwcarlsen/goexif/exif"
 	"golang.org/x/image/webp"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/photostore"
 )
 
 const (
@@ -69,6 +71,16 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("process image: %s: %v: %w", sourceLabel, err, asynq.SkipRetry)
 	}
 	src, format, err := imgDecode(data)
+	if err != nil && backend == photostore.BackendImmich && h.photos != nil && h.photos.Immich() != nil {
+		// Immich accepts formats Go cannot decode (HEIC, RAW). Its preview
+		// is always JPEG, so source the renditions from that instead.
+		preview, perr := h.readImmichPreview(ctx, originalRef)
+		if perr != nil {
+			return fmt.Errorf("process image: decode %s: %v; immich preview: %w", sourceLabel, err, perr)
+		}
+		data = preview
+		src, format, err = imgDecode(data)
+	}
 	if err != nil {
 		return fmt.Errorf("process image: decode %s: %v: %w", sourceLabel, err, asynq.SkipRetry)
 	}
@@ -245,6 +257,15 @@ func imgRenditionBase(originalKey *string, ownerType, ownerID, photoID string) (
 		return imgSplitKey(*originalKey)
 	}
 	return fmt.Sprintf("photos/%s/%s/%s", ownerType, ownerID, photoID), ".jpg"
+}
+
+func (h *Handlers) readImmichPreview(ctx context.Context, ref string) ([]byte, error) {
+	obj, _, _, err := h.photos.Immich().OpenPreview(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Close()
+	return io.ReadAll(obj)
 }
 
 func (h *Handlers) readPhotoOriginal(ctx context.Context, backend, ref string, originalKey *string) ([]byte, string, error) {

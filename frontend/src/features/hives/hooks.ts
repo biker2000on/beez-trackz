@@ -19,6 +19,8 @@ export interface HiveLockout {
   dateRemoved: string | null;
   withdrawalDays: number;
   message: string;
+  /** Treatment driving the lockout, for ending it from the UI. */
+  treatmentEventId?: string | null;
 }
 
 export interface Hive {

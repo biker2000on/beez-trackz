@@ -46,6 +46,16 @@ function roundCoord(n: number): number {
  * Device location seeds lat/lng and altitude when the browser supplies it.
  * No invented coordinates — empty stays empty, no map until a pin exists.
  */
+function pinDistanceM(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+): number {
+  const k = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * 111320;
+  const dLng = (b.lng - a.lng) * 111320 * Math.cos(((a.lat + b.lat) / 2) * k);
+  return Math.hypot(dLat, dLng);
+}
+
 export function LocationPicker({
   value,
   onChange,
@@ -59,7 +69,7 @@ export function LocationPicker({
   const onChangeRef = useRef(onChange);
   const valueRef = useRef(value);
   const userClearedElevation = useRef(false);
-  const lookedUpPin = useRef<string | null>(null);
+  const lookedUpPin = useRef<{ lat: number; lng: number } | null>(null);
   const [layerId, setLayerId] = useState<TileLayerId>(DEFAULT_TILE_LAYER);
   const [locating, setLocating] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
@@ -218,43 +228,39 @@ export function LocationPicker({
     });
   }, [layerId]);
 
-  // One terrain lookup per pin so clearing elevation stays empty (never invent 0).
+  // One terrain lookup per pin so clearing elevation stays empty (never invent
+  // 0). A pin that moves more than ~25 m re-fetches terrain unless the
+  // elevation is an operator override.
   useEffect(() => {
     if (value.latitude == null || value.longitude == null) {
       lookedUpPin.current = null;
       return;
     }
-    const key = `${value.latitude.toFixed(6)},${value.longitude.toFixed(6)}`;
-    if (lookedUpPin.current === key) return;
-    if (
-      value.elevationM != null ||
-      value.elevationSource === "override" ||
-      userClearedElevation.current
-    ) {
-      lookedUpPin.current = key;
+    const lat = value.latitude;
+    const lng = value.longitude;
+    const prev = lookedUpPin.current;
+    if (prev && prev.lat === lat && prev.lng === lng) return;
+    const movedFar = prev != null && pinDistanceM(prev, { lat, lng }) > 25;
+    const keepExisting = (cur: Pick<LocationValue, "elevationM" | "elevationSource">) =>
+      cur.elevationSource === "override" ||
+      userClearedElevation.current ||
+      (cur.elevationM != null && !movedFar);
+    lookedUpPin.current = { lat, lng };
+    if (keepExisting({ elevationM: value.elevationM, elevationSource: value.elevationSource })) {
       return;
     }
-    lookedUpPin.current = key;
     const ac = new AbortController();
     const timer = window.setTimeout(() => {
-      void lookupTerrainElevation(value.latitude as number, value.longitude as number, ac.signal).then(
-        (meters) => {
-          if (meters == null) return;
-          const cur = valueRef.current;
-          if (
-            cur.elevationM != null ||
-            cur.elevationSource === "override" ||
-            userClearedElevation.current
-          ) {
-            return;
-          }
-          onChangeRef.current({
-            ...cur,
-            elevationM: Math.round(meters * 10) / 10,
-            elevationSource: "terrain",
-          });
-        },
-      );
+      void lookupTerrainElevation(lat, lng, ac.signal).then((meters) => {
+        if (meters == null) return;
+        const cur = valueRef.current;
+        if (keepExisting(cur)) return;
+        onChangeRef.current({
+          ...cur,
+          elevationM: Math.round(meters * 10) / 10,
+          elevationSource: "terrain",
+        });
+      });
     }, 400);
     return () => {
       window.clearTimeout(timer);
