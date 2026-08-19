@@ -937,6 +937,100 @@ func TestReverseBottlingRunMovementRefused(t *testing.T) {
 	}
 }
 
+// The counterpart to the refusal above: a run-linked movement cannot be
+// reversed alone, but voiding the run reverses it, drops the serials, and
+// frees the lot's capacity in one transaction.
+func TestVoidBottlingRunReversesMovementsAndFreesLot(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedHarvest(t, server, 100)
+	ctx := context.Background()
+
+	response, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots", map[string]any{
+			"lotCode":        "2026-VOID-01",
+			"extractionDate": time.Now().Format("2006-01-02"),
+			"honeyWeightLbs": 10,
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", response.Code, body)
+	}
+	lotID, _ := body["id"].(string)
+
+	response, body = call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots/"+lotID+"/bottling-runs", map[string]any{
+			"bottledDate": time.Now().Format("2006-01-02"),
+			"jarSizeId":   jarSizeID.String(),
+			"quantity":    10,
+			"serialize":   true,
+		}, "id", lotID))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create bottling run = %d %v", response.Code, body)
+	}
+	runID, _ := body["id"].(string)
+
+	// The lot is fully bottled: a second run has nowhere to draw from.
+	response, body = call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots/"+lotID+"/bottling-runs", map[string]any{
+			"bottledDate": time.Now().Format("2006-01-02"),
+			"jarSizeId":   jarSizeID.String(),
+			"quantity":    5,
+		}, "id", lotID))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("run over a fully bottled lot = %d %v, want 400", response.Code, body)
+	}
+
+	response, body = call(t, server.bottlingRunVoid, adminRequest(
+		http.MethodPost, "/api/v1/bottling-runs/"+runID+"/void",
+		map[string]any{"reason": "mislabelled jars"}, "id", runID))
+	if response.Code != http.StatusOK {
+		t.Fatalf("void run = %d %v", response.Code, body)
+	}
+	if body["reversedMovements"] != 1.0 {
+		t.Errorf("reversedMovements = %v, want 1", body["reversedMovements"])
+	}
+	if body["removedSerials"] != 10.0 {
+		t.Errorf("removedSerials = %v, want 10", body["removedSerials"])
+	}
+
+	var reversals, serials int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM honey_movements
+		WHERE bottling_run_id=$1 AND reverses_movement_id IS NOT NULL
+			AND quantity = -10`, runID).Scan(&reversals); err != nil {
+		t.Fatalf("read reversal: %v", err)
+	}
+	if reversals != 1 {
+		t.Errorf("reversing entries = %d, want 1", reversals)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM jar_serials WHERE bottling_run_id=$1`, runID).Scan(&serials); err != nil {
+		t.Fatalf("read serials: %v", err)
+	}
+	if serials != 0 {
+		t.Errorf("serials surviving a void = %d, want 0", serials)
+	}
+
+	// Voiding is not repeatable: a second call must not write a second
+	// reversal for the same movement.
+	response, body = call(t, server.bottlingRunVoid, adminRequest(
+		http.MethodPost, "/api/v1/bottling-runs/"+runID+"/void", nil, "id", runID))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("re-voiding = %d %v, want 409", response.Code, body)
+	}
+
+	// The lot's capacity came back with the pounds.
+	response, body = call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/api/v1/harvest-lots/"+lotID+"/bottling-runs", map[string]any{
+			"bottledDate": time.Now().Format("2006-01-02"),
+			"jarSizeId":   jarSizeID.String(),
+			"quantity":    5,
+		}, "id", lotID))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("run after the void = %d %v, want 201", response.Code, body)
+	}
+}
+
 // ASI-5-004: a true-up cannot take back pounds that were already jarred, and
 // a true-up of exactly 0 is rejected because the bulk formula would silently
 // treat it as unset.

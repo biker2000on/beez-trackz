@@ -97,7 +97,7 @@ export function InventoryView() {
         <>
           <section
             className="grid grid-cols-2 gap-3 xl:grid-cols-3"
-            aria-label="Inventory summary"
+            aria-label="Equipment inventory summary"
           >
             <SummaryCard icon={Boxes} label="Owned" value={owned} />
             <SummaryCard icon={Truck} label="In field" value={inField} />

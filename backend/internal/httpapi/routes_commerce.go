@@ -26,6 +26,7 @@ func (s *Server) mountCommerce(r chi.Router) {
 	admin.Get("/harvest-lots/{id}", s.harvestLotGet)
 	admin.Patch("/harvest-lots/{id}", s.harvestLotUpdate)
 	admin.Post("/harvest-lots/{id}/bottling-runs", s.bottlingRunCreate)
+	admin.Post("/bottling-runs/{id}/void", s.bottlingRunVoid)
 	admin.Get("/harvest-lots/{id}/qr", s.harvestLotQR)
 
 	admin.Get("/expenses", s.expenseList)
@@ -229,7 +230,7 @@ func (s *Server) populateHarvestLot(r *http.Request, item *harvestLotRow) error 
 		FROM bottling_runs br
 		LEFT JOIN jar_sizes js ON js.id = br.jar_size_id
 		LEFT JOIN jar_serials serial ON serial.bottling_run_id = br.id
-		WHERE br.lot_id = $1
+		WHERE br.lot_id = $1 AND br.voided_at IS NULL
 		GROUP BY br.id, js.label ORDER BY br.bottled_date DESC`, item.ID)
 	if err != nil {
 		return err
@@ -437,7 +438,7 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
 		FROM bottling_runs run
 		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-		WHERE run.lot_id = $1`, id).Scan(&alreadyBottledLbs); err != nil {
+		WHERE run.lot_id = $1 AND run.voided_at IS NULL`, id).Scan(&alreadyBottledLbs); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -586,7 +587,7 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
 		FROM bottling_runs run
 		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-		WHERE run.lot_id = $1`, lotID).Scan(&alreadyBottledLbs); err != nil {
+		WHERE run.lot_id = $1 AND run.voided_at IS NULL`, lotID).Scan(&alreadyBottledLbs); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -661,6 +662,189 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": runID, "serialNumbers": serials})
+}
+
+// POST /bottling-runs/{id}/void — undo a bottling run.
+//
+// A run-linked honey_movement refuses reversal on its own (409): reversing it
+// alone would leave the run, its serials, and the lot's bottled total claiming
+// jars the ledger no longer has. Voiding is the whole-unit operation — it
+// reverses every movement the run created, drops the run's serials, and marks
+// the run voided in one transaction, so the ledger and the lot agree at every
+// commit boundary.
+func (s *Server) bottlingRunVoid(w http.ResponseWriter, r *http.Request) {
+	runID, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Reason *string `json:"reason"`
+	}
+	_ = decodeJSON(r, &req)
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var voidedAt *time.Time
+	if err := tx.QueryRow(ctx,
+		`SELECT voided_at FROM bottling_runs WHERE id=$1 FOR UPDATE`, runID).
+		Scan(&voidedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "bottling run not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if voidedAt != nil {
+		writeError(w, http.StatusConflict, "this bottling run is already voided")
+		return
+	}
+
+	// A serial that reached a customer is provenance, not inventory: voiding
+	// the run that produced it would erase the jar's chain of custody.
+	var soldSerials int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM jar_serials
+		WHERE bottling_run_id=$1 AND sale_id IS NOT NULL`, runID).Scan(&soldSerials); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if soldSerials > 0 {
+		writeError(w, http.StatusConflict,
+			"jars from this run have already been sold; cancel those sales first")
+		return
+	}
+
+	// Only the run's own entries, never a reversal of one, and never one that
+	// somehow already carries a reversal.
+	rows, err := tx.Query(ctx, `
+		SELECT m.id, m.kind, m.amount_lbs, m.quantity, m.jar_size_id, m.reason, m.notes
+		FROM honey_movements m
+		WHERE m.bottling_run_id=$1 AND m.reverses_movement_id IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM honey_movements rev WHERE rev.reverses_movement_id = m.id)
+		ORDER BY m.id
+		FOR UPDATE OF m`, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	type runMovement struct {
+		id        uuid.UUID
+		kind      string
+		amountLbs *float64
+		quantity  *int
+		jarSizeID *uuid.UUID
+		reason    *string
+		notes     *string
+	}
+	movements := make([]runMovement, 0, 1)
+	for rows.Next() {
+		var m runMovement
+		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.quantity,
+			&m.jarSizeID, &m.reason, &m.notes); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		movements = append(movements, m)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	// Reversing a jarring entry takes those jars back off the shelf, so the
+	// removal has to clear the same availability bar as any other withdrawal.
+	needed := make(map[uuid.UUID]int)
+	for _, m := range movements {
+		if m.jarSizeID != nil && m.quantity != nil && *m.quantity > 0 {
+			needed[*m.jarSizeID] += *m.quantity
+		}
+	}
+	if len(needed) > 0 {
+		ids := make([]uuid.UUID, 0, len(needed))
+		for id := range needed {
+			ids = append(ids, id)
+		}
+		onHand, labels, unknown, lockErr := honeyLockJarSizes(ctx, tx, ids)
+		if lockErr != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if unknown {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if message := honeyCheckJarAvailability(onHand, labels, needed); message != "" {
+			writeError(w, http.StatusConflict, message)
+			return
+		}
+	}
+
+	actor := actorID(r)
+	reason := honeyTrimPtr(req.Reason)
+	for _, m := range movements {
+		reversalReason := "void of bottling run"
+		if reason != nil {
+			reversalReason = *reason
+		} else if m.reason != nil && *m.reason != "" {
+			reversalReason += " (" + *m.reason + ")"
+		}
+		var negatedLbs *float64
+		if m.amountLbs != nil {
+			v := -*m.amountLbs
+			negatedLbs = &v
+		}
+		var negatedQuantity *int
+		if m.quantity != nil {
+			v := -*m.quantity
+			negatedQuantity = &v
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO honey_movements
+				(date, kind, amount_lbs, jar_size_id, quantity, reason, notes,
+				 reverses_movement_id, bottling_run_id, created_by)
+			VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			m.kind, negatedLbs, m.jarSizeID, negatedQuantity, reversalReason,
+			m.notes, m.id, runID, actor); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	}
+
+	// Every remaining serial is unsold (sold ones refused the void above); a
+	// voided run's serials must stop resolving or a scan would tell a customer
+	// about jars that were never bottled.
+	serials, err := tx.Exec(ctx, `DELETE FROM jar_serials WHERE bottling_run_id=$1`, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE bottling_runs SET voided_at=now(), voided_by=$2, void_reason=$3
+		WHERE id=$1`, runID, actor, reason); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true, "voided": true, "id": runID,
+		"reversedMovements": len(movements),
+		"removedSerials":    serials.RowsAffected(),
+	})
 }
 
 func (s *Server) harvestLotQR(w http.ResponseWriter, r *http.Request) {

@@ -331,6 +331,37 @@ func TestJarSerialUnlinkClearsTheLinkage(t *testing.T) {
 	}
 }
 
+// ASI-1-008: cancelling a sale returns its jars to inventory, so the serials
+// must stop resolving as sold — otherwise a scanned jar sitting on the shelf
+// still reports a customer.
+func TestCancelSaleUnlinksJarSerials(t *testing.T) {
+	fixture := newSerialFixture(t)
+	serial := fixture.insertSerial(t, fixture.lotCode+"-20260705-FFFFFF-0001")
+	saleID := fixture.insertSale(t, "paid")
+	if response := fixture.link(t, saleID, serial); response.Code != http.StatusOK {
+		t.Fatalf("link: status %d: %s", response.Code, response.Body.String())
+	}
+
+	response := fixture.call(t, fixture.server.honeyCancelSale, http.MethodDelete,
+		"/honey/sales/"+saleID.String(), nil, map[string]string{"id": saleID.String()})
+	if response.Code != http.StatusOK {
+		t.Fatalf("cancel: status %d: %s", response.Code, response.Body.String())
+	}
+
+	var saleRef *uuid.UUID
+	var soldAt *time.Time
+	var linkedBy *uuid.UUID
+	if err := fixture.pool().QueryRow(fixture.ctx, `
+		SELECT sale_id, sold_at, linked_by FROM jar_serials WHERE serial_number=$1`,
+		serial).Scan(&saleRef, &soldAt, &linkedBy); err != nil {
+		t.Fatalf("read serial: %v", err)
+	}
+	if saleRef != nil || soldAt != nil || linkedBy != nil {
+		t.Fatalf("cancelled sale kept its serial: sale=%v soldAt=%v linkedBy=%v",
+			saleRef, soldAt, linkedBy)
+	}
+}
+
 func TestJarSerialLinkRejectsCancelledSales(t *testing.T) {
 	fixture := newSerialFixture(t)
 	serial := fixture.insertSerial(t, fixture.lotCode+"-20260705-EEEEEE-0001")

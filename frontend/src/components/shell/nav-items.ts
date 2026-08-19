@@ -144,13 +144,13 @@ export const NAV_ITEMS: NavItem[] = [
     ],
   },
   {
-    label: "Inventory",
+    label: "Equipment",
     shortLabel: "Gear",
     href: "/inventory",
     icon: Package,
     shortcutKey: "i",
     adminOnly: true,
-    keywords: ["equipment gear stock"],
+    keywords: ["equipment gear stock inventory"],
   },
   {
     label: "Reports",
