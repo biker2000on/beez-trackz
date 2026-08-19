@@ -177,6 +177,12 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		t.Fatalf("mites_per_100 = %v, want 2", mitesPer100)
 	}
 
+	// The suite may run against a reused database; clear our own fixture row
+	// so the uniqueness probe below tests the index, not a previous run.
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM customers WHERE lower(email)='case@example.com'`); err != nil {
+		t.Fatalf("clear customer fixture: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO customers (name,email) VALUES ('First','CASE@example.com')`); err != nil {
 		t.Fatalf("insert first customer: %v", err)
