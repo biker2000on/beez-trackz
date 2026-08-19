@@ -46,12 +46,15 @@ export function ApiariesListPage() {
     toggle: toggleSelected,
     toggleMode,
     exit: exitBulkMode,
+    finish: finishBulk,
   } = useBulkSelect(
     (apiaries.data ?? []).map((apiary) => apiary.id),
     { selectAll: "Select all apiaries", enabled: isAdmin },
   );
 
-  useShortcut("n", "New apiary", () => isAdmin && setCreateOpen(true));
+  useShortcut("n", "New apiary", () => setCreateOpen(true), {
+    enabled: isAdmin,
+  });
 
   async function deleteSelected() {
     const result = await bulkDelete.mutateAsync(Array.from(selected));
@@ -68,7 +71,7 @@ export function ApiariesListPage() {
         { description: "Apiaries containing hives are protected." },
       );
     }
-    exitBulkMode();
+    finishBulk();
     setConfirmDelete(false);
   }
 
@@ -129,6 +132,7 @@ export function ApiariesListPage() {
                 key={apiary.id}
                 type="button"
                 className="text-left"
+                aria-pressed={selected.has(apiary.id)}
                 onClick={() => toggleSelected(apiary.id)}
               >
                 <Card

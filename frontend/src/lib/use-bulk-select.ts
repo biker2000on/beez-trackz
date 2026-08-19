@@ -5,9 +5,12 @@
  * toggle, Set-of-ids selection, and `b`/`x` shortcuts; this is the one
  * implementation.
  *
- * Semantics (matching the originals): `b` toggles bulk mode and clears the
- * selection on exit; `x` — only while in bulk mode — selects every visible
- * item, or clears the selection when everything is already selected.
+ * Semantics: `b` toggles bulk mode; `x` — only while in bulk mode — selects
+ * every visible item, or clears the selection when everything is already
+ * selected. Leaving bulk mode keeps the selection so "archive the deadouts,
+ * but let me double-check that one" does not mean redoing the whole
+ * selection; only "Clear all" (or a completed bulk action, via `finish`)
+ * empties it.
  */
 
 import * as React from "react";
@@ -23,10 +26,7 @@ export function useBulkSelect(
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
 
   const toggleMode = React.useCallback(() => {
-    setBulkMode((mode) => {
-      if (mode) setSelected(new Set());
-      return !mode;
-    });
+    setBulkMode((mode) => !mode);
   }, []);
 
   const toggle = React.useCallback((id: string) => {
@@ -39,6 +39,11 @@ export function useBulkSelect(
   }, []);
 
   const exit = React.useCallback(() => {
+    setBulkMode(false);
+  }, []);
+
+  /** Leave bulk mode after the selected items have been acted on. */
+  const finish = React.useCallback(() => {
     setBulkMode(false);
     setSelected(new Set());
   }, []);
@@ -55,5 +60,5 @@ export function useBulkSelect(
     );
   });
 
-  return { bulkMode, selected, toggle, toggleMode, exit, setSelected };
+  return { bulkMode, selected, toggle, toggleMode, exit, finish, setSelected };
 }

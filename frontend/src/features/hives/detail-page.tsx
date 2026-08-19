@@ -151,22 +151,35 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   const unarchiveHive = useUnarchiveHive();
   const deadoutHive = useDeadoutHive();
 
-  useShortcut("i", "New inspection", () => {
-    if (canEdit) setInspectionOpen(true);
-  });
-  useShortcut("r", "Record inspection by voice", () =>
-    canEdit ? router.push(`/hives/${hiveId}/transcribe`) : undefined,
+  // Every one of these writes; a viewer gets none of them registered, so the
+  // `?` dialog and the command palette stop offering actions that do nothing.
+  const editable = { enabled: canEdit };
+  useShortcut("i", "New inspection", () => setInspectionOpen(true), editable);
+  useShortcut(
+    "r",
+    "Record inspection by voice",
+    () => router.push(`/hives/${hiveId}/transcribe`),
+    editable,
   );
-  useShortcut("f", "Record feeding", () => canEdit && setFeedOpen(true));
-  useShortcut("p", "Add photo", () => canEdit && setPhotoOpen(true));
-  useShortcut("e", "Edit hive", () => canEdit && setEditOpen(true));
-  // `x`, not `s`: `s` is Record sale on Honey and the tail of `g s` (Settings).
-  useShortcut("x", "Split hive", () => canEdit && setSplitOpen(true));
+  useShortcut("f", "Record feeding", () => setFeedOpen(true), editable);
+  useShortcut("p", "Add photo", () => setPhotoOpen(true), editable);
+  useShortcut("e", "Edit hive", () => setEditOpen(true), editable);
+  // `t`, not `x` (globally select-all, DESIGN.md) and not `s` (Record sale on
+  // Honey, and the tail of `g s` for Settings).
+  useShortcut("t", "Split hive", () => setSplitOpen(true), editable);
 
   if (hive.isPending) {
     return (
       <div className="grid gap-4">
         <Skeleton className="h-10 w-64" />
+        {/* The action bar is `size="sm"` buttons (h-8); reserving the row
+            keeps the tabs and content from jumping when the hive lands. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Skeleton className="h-8 w-36 rounded-md" />
+          <Skeleton className="h-8 w-20 rounded-md" />
+          <Skeleton className="h-8 w-24 rounded-md" />
+          <Skeleton className="h-8 w-20 rounded-md" />
+        </div>
         <Skeleton className="h-9 w-full max-w-xl" />
         <Skeleton className="h-64 w-full" />
       </div>

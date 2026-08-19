@@ -64,7 +64,13 @@ export function AudioRecorder({ onUpload, uploading }: AudioRecorderProps) {
             )}
           >
             {recorder.status === "recording" && (
-              <span className="absolute inset-0 animate-ping rounded-full bg-destructive/40" />
+              // DESIGN.md: motion is disabled when reduced motion is
+              // preferred. Without the fallback the ping freezes mid-pulse
+              // and the only "recording" cue is the button colour.
+              <span
+                aria-hidden
+                className="absolute inset-0 animate-ping rounded-full bg-destructive/40 motion-reduce:animate-none motion-reduce:ring-2 motion-reduce:ring-destructive"
+              />
             )}
             {recorder.status === "recording" ? (
               <Square className="size-9 fill-current" />

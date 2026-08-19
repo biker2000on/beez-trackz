@@ -73,6 +73,16 @@ export function FieldItemRow({
   focused?: boolean;
 }) {
   const urgent = item.priority === "urgent";
+  // DESIGN.md: status colour is always paired with text. The dot alone is
+  // 6 px of red-vs-gold, which is neither readable in sunlight nor present
+  // for a screen reader.
+  const priorityLabel = urgent
+    ? "Urgent"
+    : item.priority === "high"
+      ? "High priority"
+      : item.priority === "low"
+        ? "Low priority"
+        : "Normal priority";
 
   return (
     <li
@@ -92,6 +102,13 @@ export function FieldItemRow({
               urgent ? "bg-destructive" : "bg-primary",
             )}
           />
+          {urgent ? (
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-destructive">
+              Urgent
+            </span>
+          ) : (
+            <span className="sr-only">{priorityLabel}</span>
+          )}
           {item.action || "Review"}
           {item.hiveId ? (
             <Link

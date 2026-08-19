@@ -69,7 +69,9 @@ export function BottomNav() {
   return (
     <>
       <nav
-        aria-label="Main navigation"
+        // Both navs are always in the DOM (CSS-only hiding), so they need
+        // distinct names — a screen reader lists landmarks, not media queries.
+        aria-label="Mobile navigation"
         className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur pb-safe pl-[var(--safe-left)] pr-[var(--safe-right)] lg:hidden"
       >
         <ul className="grid grid-cols-5">

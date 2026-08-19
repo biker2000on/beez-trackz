@@ -94,6 +94,7 @@ export function HiveCard({
       <button
         type="button"
         className="block w-full text-left"
+        aria-pressed={selected}
         onClick={() => onToggleSelect?.(hive.id)}
       >
         {body}

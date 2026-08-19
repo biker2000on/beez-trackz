@@ -206,7 +206,7 @@ test("report navigation fits tablet width and the report home has no duplicate s
 test("Home remains pinned in the mobile bottom bar", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/harvest/activity");
-  const mainNav = page.getByRole("navigation", { name: "Main navigation" });
+  const mainNav = page.getByRole("navigation", { name: "Mobile navigation" });
   await expect(mainNav.getByRole("link", { name: "Home" })).toBeVisible();
 });
 
@@ -237,7 +237,7 @@ test("command palette follows keyboard selection without horizontal overflow", a
 
   await page.keyboard.press("Control+k");
   const dialog = page.getByRole("dialog", { name: "Command palette" });
-  const input = dialog.getByRole("textbox", { name: "Search commands" });
+  const input = dialog.getByRole("combobox", { name: "Search commands" });
   await input.fill("hive position");
   await expect(
     dialog.getByText("Hive Position 1", { exact: false }).first(),
@@ -246,7 +246,7 @@ test("command palette follows keyboard selection without horizontal overflow", a
     await input.press("ArrowDown");
   }
 
-  const activeCommand = dialog.locator('button[aria-current="true"]');
+  const activeCommand = dialog.locator('[role="option"][aria-selected="true"]');
   await expect(activeCommand).toHaveCount(1);
   const measurements = await activeCommand.evaluate((element) => {
     const results = element.closest<HTMLElement>("[data-command-results]");

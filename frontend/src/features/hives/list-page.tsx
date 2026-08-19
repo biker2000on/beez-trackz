@@ -86,6 +86,7 @@ export function HivesListPage() {
     toggle: toggleSelect,
     toggleMode,
     exit: exitBulkMode,
+    finish: finishBulk,
   } = useBulkSelect(
     (hives.data ?? []).map((hive) => hive.id),
     { selectAll: "Select all visible hives" },
@@ -117,7 +118,7 @@ export function HivesListPage() {
       toast.success(
         `Updated ${result.count} hive${result.count === 1 ? "" : "s"}`,
       );
-      exitBulkMode();
+      finishBulk();
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not update hives",
@@ -244,7 +245,11 @@ export function HivesListPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                {bulkMode && <TableHead className="w-10" />}
+                {bulkMode && (
+                  <TableHead className="w-10">
+                    <span className="sr-only">Selected</span>
+                  </TableHead>
+                )}
                 <TableHead>Hive</TableHead>
                 <TableHead>Apiary</TableHead>
                 <TableHead>Status</TableHead>
@@ -255,31 +260,52 @@ export function HivesListPage() {
               {list.map((hive) => (
                 <TableRow
                   key={hive.id}
-                  className={bulkMode ? "cursor-pointer" : undefined}
+                  className={
+                    bulkMode
+                      ? "cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                      : undefined
+                  }
+                  // The row itself is the control in bulk mode: focusable,
+                  // Space/Enter toggles, and `aria-selected` reports state.
+                  tabIndex={bulkMode ? 0 : undefined}
+                  aria-selected={bulkMode ? selected.has(hive.id) : undefined}
+                  data-state={
+                    bulkMode && selected.has(hive.id) ? "selected" : undefined
+                  }
                   onClick={
                     bulkMode ? () => toggleSelect(hive.id) : undefined
+                  }
+                  onKeyDown={
+                    bulkMode
+                      ? (event) => {
+                          if (event.key !== " " && event.key !== "Enter") return;
+                          if (event.target !== event.currentTarget) return;
+                          event.preventDefault();
+                          toggleSelect(hive.id);
+                        }
+                      : undefined
                   }
                 >
                   {bulkMode && (
                     <TableCell>
                       <Checkbox
                         checked={selected.has(hive.id)}
-                        aria-label={`Select ${hive.positionLabel}`}
+                        aria-hidden
+                        tabIndex={-1}
                         className="pointer-events-none"
                       />
                     </TableCell>
                   )}
                   <TableCell className="font-medium">
-                    {bulkMode ? (
-                      hive.positionLabel
-                    ) : (
-                      <Link
-                        href={`/hives/${hive.id}`}
-                        className="underline-offset-4 hover:underline"
-                      >
-                        {hive.positionLabel}
-                      </Link>
-                    )}
+                    {/* The name stays a link in bulk mode so a row can be
+                        opened for a second look without losing the selection. */}
+                    <Link
+                      href={`/hives/${hive.id}`}
+                      className="underline-offset-4 hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {hive.positionLabel}
+                    </Link>
                     {hive.isArchived && (
                       <span className="ml-2 text-xs text-muted-foreground">
                         (archived)

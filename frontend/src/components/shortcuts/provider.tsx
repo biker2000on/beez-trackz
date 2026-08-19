@@ -11,7 +11,7 @@ import {
   visibleNavItems,
   visibleNavRoutes,
 } from "@/components/shell/nav-items";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { isTypingTarget } from "@/lib/keyboard";
+import { cn } from "@/lib/utils";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import { useApiaries } from "@/features/apiaries/hooks";
 import { useHarvestLots } from "@/features/commerce/api";
@@ -126,6 +127,11 @@ function uniqueCommands(commands: PaletteCommand[]) {
 
 const GOTO_TIMEOUT_MS = 1500;
 const MAX_SEARCH_RESULTS = 60;
+const COMMAND_LIST_ID = "command-palette-results";
+
+function commandOptionId(index: number) {
+  return `${COMMAND_LIST_ID}-option-${index}`;
+}
 
 export function ShortcutsProvider({
   children,
@@ -160,6 +166,8 @@ export function ShortcutsProvider({
   const sales = useHoneySales(isAdmin && commandOpen);
   const sessions = useHarvestSessions(isAdmin && commandOpen);
   const lots = useHarvestLots(isAdmin && commandOpen);
+  /** Synchronous mirror of `entries`, so collisions can be detected on register. */
+  const registeredRef = React.useRef<Map<string, ShortcutEntry>>(new Map());
   const entriesRef = React.useRef(entries);
   React.useEffect(() => {
     entriesRef.current = entries;
@@ -169,12 +177,29 @@ export function ShortcutsProvider({
 
   const register = React.useCallback((entry: ShortcutEntry) => {
     const key = entry.key.toLowerCase();
+    // Last registration wins. That is silent in production, but a collision
+    // is almost always a bug, so say so while developing.
+    const existing = registeredRef.current.get(key);
+    if (
+      process.env.NODE_ENV !== "production" &&
+      existing &&
+      existing.description !== entry.description
+    ) {
+      console.warn(
+        `[shortcuts] "${key}" is already registered for "${existing.description}"; ` +
+          `"${entry.description}" now overwrites it.`,
+      );
+    }
+    registeredRef.current.set(key, entry);
     setEntries((prev) => {
       const next = new Map(prev);
       next.set(key, entry);
       return next;
     });
     return () => {
+      if (registeredRef.current.get(key) === entry) {
+        registeredRef.current.delete(key);
+      }
       setEntries((prev) => {
         if (prev.get(key) !== entry) return prev;
         const next = new Map(prev);
@@ -543,6 +568,15 @@ export function ShortcutsProvider({
               }}
               placeholder="Search routes, apiaries, hives, sales…"
               aria-label="Search commands"
+              role="combobox"
+              aria-expanded={filteredCommands.length > 0}
+              aria-controls={COMMAND_LIST_ID}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                filteredCommands[activeCommand]
+                  ? commandOptionId(activeCommand)
+                  : undefined
+              }
               className="h-10 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
             />
             <Kbd>Esc</Kbd>
@@ -557,35 +591,41 @@ export function ShortcutsProvider({
                 {indexing ? "Still indexing records…" : "No matching routes or records"}
               </p>
             ) : (
-              <ul className="grid gap-1">
+              // Listbox rather than a list of buttons: the input keeps focus
+              // and `aria-activedescendant` moves the screen reader's cursor,
+              // so an option must not itself be a focusable control.
+              <ul
+                id={COMMAND_LIST_ID}
+                role="listbox"
+                aria-label="Commands"
+                className="grid gap-1"
+              >
                 {filteredCommands.map((command, index) => (
                   <li
                     key={command.id}
+                    id={commandOptionId(index)}
+                    role="option"
+                    aria-selected={index === activeCommand}
                     ref={(node) => {
                       commandItemRefs.current[index] = node;
                     }}
-                    className="min-w-0 overflow-hidden"
+                    className={cn(
+                      buttonVariants({ variant: "ghost" }),
+                      "h-auto min-h-12 w-full min-w-0 max-w-full cursor-pointer justify-start overflow-hidden px-3 py-2",
+                      index === activeCommand && "bg-secondary",
+                    )}
+                    onMouseEnter={() => setActiveCommand(index)}
+                    onClick={() => runCommand(command)}
                   >
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      aria-current={index === activeCommand ? "true" : undefined}
-                      className={`h-auto min-h-12 w-full min-w-0 max-w-full justify-start overflow-hidden px-3 py-2 ${
-                        index === activeCommand ? "bg-secondary" : ""
-                      }`}
-                      onMouseEnter={() => setActiveCommand(index)}
-                      onClick={() => runCommand(command)}
-                    >
-                      <Command className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 text-left">
-                        <span className="block truncate">{command.label}</span>
-                        <span className="block truncate text-xs font-normal text-muted-foreground">
-                          {command.description}
-                        </span>
+                    <Command className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 text-left">
+                      <span className="block truncate">{command.label}</span>
+                      <span className="block truncate text-xs font-normal text-muted-foreground">
+                        {command.description}
                       </span>
-                      <Kbd>{command.hint}</Kbd>
-                      <ArrowRight className="size-3 shrink-0 text-muted-foreground" />
-                    </Button>
+                    </span>
+                    <Kbd>{command.hint}</Kbd>
+                    <ArrowRight className="size-3 shrink-0 text-muted-foreground" />
                   </li>
                 ))}
               </ul>
@@ -608,11 +648,16 @@ function Kbd({ children }: { children: React.ReactNode }) {
 /**
  * Register a page-level keyboard shortcut. The shortcut is listed in the `?`
  * help dialog and automatically removed when the component unmounts.
+ *
+ * Pass `{ enabled: false }` for an action the current viewer cannot perform:
+ * the key stays inert and the `?` dialog and command palette stop advertising
+ * it, rather than listing a shortcut that silently does nothing.
  */
 export function useShortcut(
   key: string,
   description: string,
   handler: () => void,
+  options?: { enabled?: boolean },
 ) {
   const context = React.useContext(ShortcutsContext);
   if (!context) {
@@ -623,13 +668,15 @@ export function useShortcut(
     handlerRef.current = handler;
   }, [handler]);
 
+  const enabled = options?.enabled ?? true;
   React.useEffect(() => {
+    if (!enabled) return;
     return context.register({
       key,
       description,
       handler: () => handlerRef.current(),
     });
-  }, [context, key, description]);
+  }, [context, key, description, enabled]);
 }
 
 export function CommandPaletteButton() {

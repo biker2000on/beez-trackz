@@ -61,6 +61,7 @@ export function PhotoGallery({
     toggle: togglePhoto,
     toggleMode,
     exit: exitBulkMode,
+    finish: finishBulk,
   } = useBulkSelect(
     (photos.data ?? []).map((photo) => photo.id),
     {
@@ -74,7 +75,7 @@ export function PhotoGallery({
     try {
       const count = await bulkDelete.mutateAsync(Array.from(selectedIds));
       toast.success(`${count} photo${count === 1 ? "" : "s"} deleted`);
-      exitBulkMode();
+      finishBulk();
       setConfirmDelete(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Bulk delete failed");

@@ -35,6 +35,8 @@ export function MarkingDot({
   if (!marking) {
     return (
       <span
+        role="img"
+        aria-label="No introduction date, unmarked"
         className={cn(
           "inline-block size-3 shrink-0 rounded-full border-2 border-muted-foreground/50",
           className,
@@ -43,8 +45,12 @@ export function MarkingDot({
       />
     );
   }
+  // `title` alone never surfaces on touch and is inconsistent for screen
+  // readers, so the color's meaning is also an accessible name.
   return (
     <span
+      role="img"
+      aria-label={`${marking.year} marking color: ${marking.name}`}
       className={cn(
         "inline-block size-3 shrink-0 rounded-full",
         marking.needsBorder && "border border-stone-400",
@@ -83,6 +89,11 @@ export const QueenNode = React.memo(function QueenNode({
           {marking ? `${marking.year} queen` : "Queen"}
         </span>
       </div>
+      {marking ? (
+        <p className="mt-0.5 text-[10px] text-muted-foreground">
+          {marking.name} mark
+        </p>
+      ) : null}
       <p className="mt-1 truncate text-xs text-muted-foreground">
         {queen.hiveName
           ? `${queen.apiaryName ?? "?"} — ${queen.hiveName}`
