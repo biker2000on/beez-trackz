@@ -46,9 +46,14 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   // Deep-linkable and back-button safe: the active tab lives in the URL.
   const [tab, setTab] = useSearchParamState("tab", "overview", APIARY_TABS);
 
-  useShortcut("e", "Edit apiary", () => {
-    if (canEdit) setEditOpen(true);
-  });
+  useShortcut(
+    "e",
+    "Edit apiary",
+    () => {
+      if (canEdit) setEditOpen(true);
+    },
+    { enabled: canEdit },
+  );
 
   if (apiary.isPending) {
     return (

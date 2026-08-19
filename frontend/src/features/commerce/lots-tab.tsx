@@ -252,7 +252,7 @@ function LotFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90dvh] max-w-2xl overflow-y-auto">
+      <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{lot ? `Edit lot ${lot.lotCode}` : "Create harvest lot"}</DialogTitle></DialogHeader>
         <ShortcutForm
           className="grid gap-4"
