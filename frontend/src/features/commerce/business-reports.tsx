@@ -13,6 +13,16 @@
 import * as React from "react";
 import { Bell, DollarSign, Plus, Trash2, Users } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,6 +69,7 @@ import {
   useUpdateCustomer,
   useWholesalePriceLists,
   type Customer,
+  type Expense,
 } from "./api";
 
 export function ProfitabilityPanel({ year }: { year: number }) {
@@ -122,6 +133,7 @@ export function ExpensesPanel({ year }: { year: number }) {
   const expenses = useExpenses(year);
   const remove = useDeleteExpense();
   const [open, setOpen] = React.useState(false);
+  const [confirmDelete, setConfirmDelete] = React.useState<Expense | null>(null);
   if (expenses.isPending) return <Skeleton className="h-64" />;
   if (expenses.isError) return <ErrorText />;
   return (
@@ -130,8 +142,33 @@ export function ExpensesPanel({ year }: { year: number }) {
         <p className="text-sm text-muted-foreground">{formatMoney(expenses.data.reduce((sum, row) => sum + row.amount, 0))} recorded in {year}</p>
         <Button size="sm" onClick={() => setOpen(true)}><Plus /> Add expense</Button>
       </div>
-      <Card><CardContent className="overflow-x-auto p-0"><Table><TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Category</TableHead><TableHead>Description</TableHead><TableHead>Assigned to</TableHead><TableHead className="text-right">Amount</TableHead><TableHead /></TableRow></TableHeader><TableBody>{expenses.data.map((expense) => <TableRow key={expense.id}><TableCell>{formatDate(expense.expenseDate)}</TableCell><TableCell className="capitalize">{expense.category.replaceAll("_", " ")}</TableCell><TableCell>{expense.description}</TableCell><TableCell>{expense.lotCode ?? expense.hiveName ?? expense.apiaryName ?? expense.season ?? "General"}</TableCell><TableCell className="text-right font-medium">{formatMoney(expense.amount)}</TableCell><TableCell><Button variant="ghost" size="icon-sm" aria-label="Delete expense" onClick={() => remove.mutate(expense.id)}><Trash2 /></Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+      <Card><CardContent className="overflow-x-auto p-0"><Table><TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Category</TableHead><TableHead>Description</TableHead><TableHead>Assigned to</TableHead><TableHead className="text-right">Amount</TableHead><TableHead /></TableRow></TableHeader><TableBody>{expenses.data.map((expense) => <TableRow key={expense.id}><TableCell>{formatDate(expense.expenseDate)}</TableCell><TableCell className="capitalize">{expense.category.replaceAll("_", " ")}</TableCell><TableCell>{expense.description}</TableCell><TableCell>{expense.lotCode ?? expense.hiveName ?? expense.apiaryName ?? expense.season ?? "General"}</TableCell><TableCell className="text-right font-medium">{formatMoney(expense.amount)}</TableCell><TableCell><Button variant="ghost" size="icon-sm" aria-label="Delete expense" onClick={() => setConfirmDelete(expense)}><Trash2 /></Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
       <ExpenseDialog open={open} onOpenChange={setOpen} />
+      <AlertDialog open={confirmDelete !== null} onOpenChange={(next) => { if (!next) setConfirmDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this expense?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDelete
+                ? `${formatMoney(confirmDelete.amount)} — ${confirmDelete.description} (${formatDate(confirmDelete.expenseDate)}) is removed permanently and stops counting against profitability.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep expense</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => {
+                event.preventDefault();
+                if (confirmDelete) remove.mutate(confirmDelete.id);
+                setConfirmDelete(null);
+              }}
+            >
+              Delete expense
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
