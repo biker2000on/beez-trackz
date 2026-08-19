@@ -23,7 +23,7 @@ export function FrameShortageWidget() {
           href="/inventory"
           className="text-xs font-medium text-primary underline-offset-4 hover:underline"
         >
-          Inventory
+          Equipment
         </Link>
       }
     >
