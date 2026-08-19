@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { OFFLINE_ROUTE_MANIFEST } from "@/lib/offline-routes.generated";
+
 // Interpolating the build id into the cache names gives every deploy a fresh
 // cache generation, and activate() deletes the previous one. Stale API and
 // static entries used to accumulate across deploys until the literal "-v2"
@@ -17,6 +19,7 @@ const BUILD_ID = nextBuildId();
 const serviceWorker = String.raw`
 const SHELL_CACHE = "beez-trackz-shell-${BUILD_ID}";
 const DATA_CACHE = "beez-trackz-api-${BUILD_ID}";
+const OFFLINE_ROUTES = ${JSON.stringify(OFFLINE_ROUTE_MANIFEST)};
 const QUEUE_DB = "beez-trackz-offline";
 const QUEUE_STORE = "mutations";
 const SHELL = [
@@ -324,65 +327,27 @@ function queueableMutation(request, url) {
   ) {
     return false;
   }
+  // OFFLINE_ROUTES is generated from the Go middleware's manifest, so the
+  // queue and the server's replay receipts always cover the same routes.
+  return offlineRouteSupported(request.method, url.pathname);
+}
 
-  const path = url.pathname;
-  const supportedFieldPaths = [
-    "/api/v1/inspections",
-    "/api/v1/feedings",
-    "/api/v1/bloom-observations",
-    "/api/v1/mite-counts",
-    "/api/v1/treatment-events",
-    "/api/v1/queen-events",
-    "/api/v1/queens",
-    "/api/v1/photos/",
-    "/api/v1/canvas/",
-    "/api/v1/harvest-sessions/",
-    "/api/v1/harvest-entries/",
-    "/api/v1/recommendations/",
-    "/api/v1/harvests",
-    "/api/v1/honey/jarring",
-    "/api/v1/honey/bulk-movements",
-    "/api/v1/honey/give-away",
-    "/api/v1/honey/jar-adjustments",
-    "/api/v1/honey/movements/",
-    "/api/v1/honey/sales",
-    "/api/v1/sales",
-    "/api/v1/jar-sizes",
-    "/api/v1/expenses",
-    "/api/v1/customers",
-    "/api/v1/harvest-lots",
-    "/api/v1/wholesale-price-lists",
-    "/api/v1/products",
-    "/api/v1/propolis-harvests",
-    "/api/v1/product-batches",
-  ];
-  const supportedHiveMutation =
-    path === "/api/v1/hives/bulk" ||
-    (path.startsWith("/api/v1/hives/") && request.method !== "DELETE");
-  const supportedApiaryMutation =
-    path.startsWith("/api/v1/apiaries/") && request.method === "PUT";
-  const supportedSplitMutation =
-    path.startsWith("/api/v1/splits/") && request.method === "DELETE";
-  if (
-    !supportedFieldPaths.some((prefix) => path.startsWith(prefix)) &&
-    !supportedHiveMutation &&
-    !supportedApiaryMutation &&
-    !supportedSplitMutation
-  ) {
+function offlineRouteMatches(rule, method, path) {
+  if (rule.exact ? path !== rule.prefix : !path.startsWith(rule.prefix)) {
     return false;
   }
+  if (rule.methods && rule.methods.length > 0) {
+    return rule.methods.includes(method);
+  }
+  return !(rule.exceptMethods || []).includes(method);
+}
 
-  if (
-    request.method === "POST" &&
-    [
-      "/api/v1/canvas/hives",
-      "/api/v1/harvest-sessions",
-      "/api/v1/recommendations/run",
-    ].includes(url.pathname)
-  ) {
+function offlineRouteSupported(method, path) {
+  if (!OFFLINE_ROUTES.rules.some((rule) => offlineRouteMatches(rule, method, path))) {
     return false;
   }
-  return true;
+  if (method !== "POST") return true;
+  return !OFFLINE_ROUTES.postExclusions.includes(path);
 }
 
 function cacheableAPI(url) {
