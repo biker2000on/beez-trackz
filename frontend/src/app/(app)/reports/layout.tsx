@@ -3,9 +3,11 @@
 import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 
+import { useQuery } from "@tanstack/react-query";
+
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReportsSectionNav } from "@/features/operations/reports-nav";
-import { useAccessProfile } from "@/features/access/api";
+import { api, type AuthStatus } from "@/lib/api";
 
 const ADMIN_REPORT_PREFIXES = [
   "/reports/finance",
@@ -30,7 +32,13 @@ export default function ReportsLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const profile = useAccessProfile();
+  // /auth/status is already in the cache from the app shell and carries the
+  // admin flag, so gating here costs no extra request (SEAM-019).
+  const profile = useQuery({
+    queryKey: ["auth", "status"],
+    queryFn: () => api.get<AuthStatus>("/auth/status"),
+    staleTime: 60_000,
+  });
   const needsAdmin = isAdminReportPath(pathname);
   const blocked =
     needsAdmin && profile.isSuccess && profile.data?.isAdmin !== true;

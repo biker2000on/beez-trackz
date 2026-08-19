@@ -91,6 +91,14 @@ export function ReceiptView({ saleId }: { saleId: string }) {
             <div className="flex justify-between text-lg font-bold">
               <span>Total</span><span>{formatMoney(sale.totalAmount)}</span>
             </div>
+            {sale.tax != null && sale.tax > 0 && (
+              // The API records tax next to the sale rather than inside
+              // totalAmount, so it is shown as collected, not as a summand.
+              <div className="flex justify-between">
+                <span>Tax collected</span>
+                <span>{formatMoney(sale.tax)}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span>Paid by {sale.paymentMethod}</span>
               <span>{formatMoney(sale.amountPaid)}</span>

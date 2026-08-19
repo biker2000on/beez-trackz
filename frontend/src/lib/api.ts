@@ -177,4 +177,10 @@ export interface AuthStatus {
   oidcEnabled: boolean;
   passwordLogin: boolean;
   displayName?: string;
+  /**
+   * Present only once authenticated. /auth/status already carries the admin
+   * flag, so role gating that needs nothing else can read it here instead of
+   * making a second /access/me round trip (SEAM-019).
+   */
+  isAdmin?: boolean;
 }
