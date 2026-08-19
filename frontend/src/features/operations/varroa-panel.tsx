@@ -37,6 +37,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, todayInput, toDateInput } from "@/features/hives/lib";
+import { cn } from "@/lib/utils";
 import {
   useCreateMiteCount,
   useDeleteMiteCount,
@@ -70,6 +71,9 @@ export function VarroaPanel({
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<MiteCount | null>(null);
   const [deleting, setDeleting] = React.useState<MiteCount | null>(null);
+  // Touch has no hover: tapping a bar selects it and its actions appear in a
+  // full-size row under the chart instead of the hover-only icons per bar.
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [date, setDate] = React.useState(todayInput());
   const [method, setMethod] = React.useState<MiteMethod>("alcohol_wash");
   const [count, setCount] = React.useState("");
@@ -269,16 +273,22 @@ export function VarroaPanel({
                 return (
                   <div key={row.id} className="group flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
                     <span className="text-[10px] font-medium tabular-nums">{value.toFixed(1)}</span>
-                    <div
-                      className="w-full max-w-12 rounded-t bg-primary/80"
+                    <button
+                      type="button"
+                      aria-pressed={selectedId === row.id}
+                      aria-label={`${formatDate(row.date)} · ${METHOD_LABELS[row.method] ?? row.method}: ${value.toFixed(1)} per 100 bees`}
+                      onClick={() => setSelectedId((current) => (current === row.id ? null : row.id))}
+                      className={cn(
+                        "w-full max-w-12 rounded-t bg-primary/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        selectedId === row.id && "bg-primary ring-2 ring-ring ring-offset-2 ring-offset-background",
+                      )}
                       style={{ height: `${Math.max(4, (value / chartMax) * 112)}px` }}
-                      title={`${METHOD_LABELS[row.method] ?? row.method}: ${value.toFixed(1)} per 100 bees`}
                     />
                     <span className="truncate text-[9px] text-muted-foreground">
                       {new Date(row.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                     </span>
                     {canEdit ? (
-                      <span className="flex gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+                      <span className="flex gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 touch:hidden">
                         <Button type="button" variant="ghost" size="icon-sm" aria-label="Edit count" onClick={() => openEdit(row)}>
                           <Pencil className="size-3" />
                         </Button>
@@ -292,6 +302,35 @@ export function VarroaPanel({
               })}
             </div>
           )}
+          {(() => {
+            const selected = rateCounts.find((row) => row.id === selectedId);
+            if (!selected) return null;
+            const value = selected.mitesPer100 ?? 0;
+            return (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
+                <span className="min-w-0">
+                  <span className="font-medium tabular-nums">{value.toFixed(1)} per 100</span>
+                  <span className="text-muted-foreground">
+                    {" · "}
+                    {formatDate(selected.date)} · {METHOD_LABELS[selected.method] ?? selected.method}
+                    {selected.notes ? ` · ${selected.notes}` : ""}
+                  </span>
+                </span>
+                {canEdit ? (
+                  <span className="flex shrink-0 gap-1">
+                    <Button type="button" variant="outline" size="sm" onClick={() => openEdit(selected)}>
+                      <Pencil className="size-3.5" />
+                      Edit
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setDeleting(selected)}>
+                      <Trash2 className="size-3.5" />
+                      Delete
+                    </Button>
+                  </span>
+                ) : null}
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
 
