@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -14,6 +15,7 @@ import { Layer, Stage, Text as KonvaText } from "react-konva";
 import { toast } from "sonner";
 
 import { Slider } from "@/components/ui/slider";
+import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import { DEFAULT_TILE_LAYER, type TileLayerId } from "@/features/map/tile-layers";
 
 import {
@@ -49,9 +51,14 @@ import {
   type StandGeometry,
 } from "./lib/types";
 import { useCanvasApi, type ApiaryDetail } from "./lib/use-canvas-data";
+import {
+  useCanvasKeyboard,
+  type CanvasFocusItem,
+} from "./lib/use-canvas-keyboard";
 import { useLayoutState } from "./lib/use-layout-state";
 import { measureCanvasSurface } from "./lib/sizing";
 import { useViewport } from "./lib/use-viewport";
+import { FocusRing } from "./stage/focus-ring";
 import { NorthArrow } from "./stage/north-arrow";
 import { RotationGizmo } from "./stage/rotation-gizmo";
 import { StandGroup, type DragOverSlot } from "./stage/stand-group";
@@ -155,6 +162,14 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   const apiaryId = apiary.id;
   const router = useRouter();
   const canvasApi = useCanvasApi(apiaryId);
+  const access = useAccessProfile();
+  // The detail page already blocks the pointer for viewers, but that does not
+  // stop keys — the keyboard path checks the role itself.
+  const canEdit = ["admin", "editor"].includes(
+    apiaryRole(access.data, apiaryId) ?? "",
+  );
+
+  const instructionsId = useId();
 
   const stageRef = useRef<Konva.Stage>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -261,9 +276,15 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   const rotationDrag = useRef<RotationTarget | null>(null);
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
+  const [menuAutoFocus, setMenuAutoFocus] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
 
-  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+    setMenuAutoFocus(false);
+    // A keyboard-opened menu owns focus; hand it back to the stage on close.
+    if (menuAutoFocus) surfaceRef.current?.focus();
+  }, [menuAutoFocus]);
   const closeDialog = useCallback(() => setDialog(null), []);
 
   const rotatingStand = rotatingStandId
@@ -652,6 +673,29 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     [hasLocation, pin, dimensions, viewport.offset, viewport.zoom, dispatch],
   );
 
+  /** Shared by stand dragging and keyboard nudging: move, then re-derive GPS. */
+  const handleStandMove = useCallback(
+    (standId: string, x: number, y: number) => {
+      const stand = stands.find((item) => item.id === standId);
+      if (pin && stand) {
+        const cx = x + (stand.cols * CELL_SIZE) / 2;
+        const cy = y + (stand.rows * CELL_SIZE) / 2;
+        const ll = canvasToLatLng(cx, cy, pin, IDENTITY_REGISTRATION);
+        dispatch({
+          type: "moveStand",
+          standId,
+          x,
+          y,
+          latitude: ll.lat,
+          longitude: ll.lng,
+        });
+        return;
+      }
+      dispatch({ type: "moveStand", standId, x, y });
+    },
+    [stands, pin, dispatch],
+  );
+
   const handleZoomIn = useCallback(() => {
     if (hasLocation && mapRef.current) mapRef.current.zoomIn();
     else viewport.zoomBy(ZOOM_STEP * 2);
@@ -685,6 +729,84 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     }
     viewport.fitToContent(stands);
   }, [hasLocation, pin, stands, resolvedReg, viewport]);
+
+  /** Screen position of a focused item, for anchoring the actions menu. */
+  const itemScreenPosition = useCallback(
+    (item: CanvasFocusItem): { x: number; y: number } | null => {
+      const stand = stands.find((s) => s.id === item.standId);
+      const stage = stageRef.current;
+      const layer = stage?.getLayers()[0];
+      if (!stand || !stage || !layer) return null;
+      const world =
+        item.kind === "hive"
+          ? slotWorldCenter(stand, item.row, item.col)
+          : standCenter(stand);
+      const local = layer.getAbsoluteTransform().point(world);
+      const rect = stage.container().getBoundingClientRect();
+      return { x: rect.left + local.x, y: rect.top + local.y };
+    },
+    [stands],
+  );
+
+  const handleKeyboardActivate = useCallback(
+    (item: CanvasFocusItem) => {
+      const at = itemScreenPosition(item);
+      if (item.kind === "hive") {
+        // Viewers get the same thing a double-click gives them: the hive page.
+        if (!canEdit || !at) {
+          openHive(item.hiveId);
+          return;
+        }
+        setMenuAutoFocus(true);
+        handleHiveRightClick(item.hiveId, at.x, at.y);
+        return;
+      }
+      if (!canEdit || !editMode || !at) return;
+      setMenuAutoFocus(true);
+      handleStandRightClick(item.standId, at.x, at.y);
+    },
+    [
+      itemScreenPosition,
+      canEdit,
+      editMode,
+      openHive,
+      handleHiveRightClick,
+      handleStandRightClick,
+    ],
+  );
+
+  const handleKeyboardDelete = useCallback(
+    (item: CanvasFocusItem) => {
+      if (!canEdit || !editMode) return;
+      if (item.kind === "stand") {
+        setDialog({ type: "deleteStand", standId: item.standId });
+        return;
+      }
+      void canvasApi.removeFromSlot(item.hiveId);
+    },
+    [canEdit, editMode, canvasApi],
+  );
+
+  const handleKeyboardNudge = useCallback(
+    (standId: string, dx: number, dy: number) => {
+      if (!canEdit || !editMode) return;
+      const stand = stands.find((s) => s.id === standId);
+      if (!stand) return;
+      handleStandMove(standId, stand.x + dx, stand.y + dy);
+    },
+    [canEdit, editMode, stands, handleStandMove],
+  );
+
+  const keyboard = useCanvasKeyboard({
+    stands,
+    slotsByStand,
+    hiveLabelById,
+    canEdit,
+    editMode,
+    onNudgeStand: handleKeyboardNudge,
+    onActivate: handleKeyboardActivate,
+    onDelete: handleKeyboardDelete,
+  });
 
   const sunWhen = useMemo(
     () => dateFromScrubber(sunDay, sunMinutes),
@@ -764,7 +886,11 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
     if (contextMenu.type === "north") {
       return (
-        <MenuSurface position={contextMenu.position} onClose={closeContextMenu}>
+        <MenuSurface
+          position={contextMenu.position}
+          onClose={closeContextMenu}
+          autoFocus={menuAutoFocus}
+        >
           <MenuHeading>North arrow</MenuHeading>
           <MenuSeparator />
           {NORTH_PRESETS.map((deg) => (
@@ -795,7 +921,11 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       if (!hive) return null;
       const derived = derivedHiveLatLng(hive);
       return (
-        <MenuSurface position={contextMenu.position} onClose={closeContextMenu}>
+        <MenuSurface
+          position={contextMenu.position}
+          onClose={closeContextMenu}
+          autoFocus={menuAutoFocus}
+        >
           <MenuHeading>{hive.positionLabel}</MenuHeading>
           {derived && (
             <p className="px-2 pb-1 font-mono text-[11px] text-muted-foreground">
@@ -895,7 +1025,11 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         pin != null ? slotLatLng(stand, row, col, pin, resolvedReg) : null;
 
       return (
-        <MenuSurface position={contextMenu.position} onClose={closeContextMenu}>
+        <MenuSurface
+          position={contextMenu.position}
+          onClose={closeContextMenu}
+          autoFocus={menuAutoFocus}
+        >
           <MenuHeading>
             Slot {slotLabel} · Stand {stand.label}
           </MenuHeading>
@@ -948,7 +1082,11 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     }
 
     return (
-      <MenuSurface position={contextMenu.position} onClose={closeContextMenu}>
+      <MenuSurface
+        position={contextMenu.position}
+        onClose={closeContextMenu}
+        autoFocus={menuAutoFocus}
+      >
         <MenuHeading>Stand {stand.label}</MenuHeading>
         <MenuSeparator />
         {renderStandMenuItems(stand)}
@@ -1201,9 +1339,21 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         </div>
       )}
 
+      <p id={instructionsId} className="sr-only">
+        {keyboard.instructions}
+      </p>
+      <div aria-live="polite" className="sr-only">
+        {keyboard.announcement}
+      </div>
+
       <div
         ref={surfaceRef}
-        className="relative w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-muted/30"
+        tabIndex={0}
+        role="application"
+        aria-label={`Layout canvas for ${apiary.name}`}
+        aria-describedby={instructionsId}
+        onKeyDown={keyboard.handleKeyDown}
+        className="relative w-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         onPointerMove={(e) => {
           if (!hasLocation || draggingHiveId) return;
           const stage = stageRef.current;
@@ -1325,24 +1475,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
                 isRotating={rotatingStandId === stand.id}
                 draggingHiveId={draggingHiveId}
                 dragOverSlot={dragOverSlot}
-                onStandDragEnd={(standId, x, y) => {
-                  const stand = stands.find((item) => item.id === standId);
-                  if (pin && stand) {
-                    const cx = x + (stand.cols * CELL_SIZE) / 2;
-                    const cy = y + (stand.rows * CELL_SIZE) / 2;
-                    const ll = canvasToLatLng(cx, cy, pin, IDENTITY_REGISTRATION);
-                    dispatch({
-                      type: "moveStand",
-                      standId,
-                      x,
-                      y,
-                      latitude: ll.lat,
-                      longitude: ll.lng,
-                    });
-                    return;
-                  }
-                  dispatch({ type: "moveStand", standId, x, y });
-                }}
+                onStandDragEnd={handleStandMove}
                 onStandRightClick={handleStandRightClick}
                 onSlotRightClick={handleSlotRightClick}
                 onHiveRightClick={handleHiveRightClick}
@@ -1352,6 +1485,8 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
                 onHiveDragEnd={handleHiveDragEnd}
               />
             ))}
+
+            <FocusRing item={keyboard.focusedItem} stands={stands} />
 
             {rotatingStand && (
               <RotationGizmo
@@ -1419,6 +1554,25 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           </span>
         </div>
       </div>
+
+      {/* Text fallback: everything the canvas draws, reachable without it. */}
+      <ul className="sr-only">
+        {keyboard.items.map((item) => (
+          <li key={item.id}>
+            {item.kind === "stand" ? (
+              item.label
+            ) : (
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={() => openHive(item.hiveId)}
+              >
+                Open hive {item.label}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
 
       {unassigned.length > 0 && (
         <div className="mt-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 dark:border-amber-700/60 dark:bg-amber-950/40">

@@ -12,11 +12,23 @@ import { useEffect, useRef } from "react";
 interface MenuSurfaceProps {
   position: { x: number; y: number };
   onClose: () => void;
+  /** Move focus to the first item — used when the menu was opened by keyboard. */
+  autoFocus?: boolean;
   children: React.ReactNode;
 }
 
-export function MenuSurface({ position, onClose, children }: MenuSurfaceProps) {
+export function MenuSurface({
+  position,
+  onClose,
+  autoFocus,
+  children,
+}: MenuSurfaceProps) {
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    ref.current?.querySelector("button")?.focus();
+  }, [autoFocus]);
 
   useEffect(() => {
     const handlePointerDown = (e: MouseEvent | TouchEvent) => {
