@@ -67,7 +67,8 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
 9. **Extractor controller** — long-term; hardware plus an ingest
    contract onto harvest sessions. Design the session payload when
    extraction IDs stabilize; do not wait to start the controller.
-10. P2 structural/a11y items and leftover ASI lows.
+10. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
+    2026-08-19 (see history); the ASI lows were already closed 2026-08-11.
 
 ## Shipped 2026-08-17 — review P0/P1 fixes
 
@@ -513,97 +514,19 @@ JSON, this item is an ingest + chart, not a microcontroller
 project. Zebra "harvest/extraction container labels" waits on
 stable process IDs; those IDs are these runs.
 
-## P2 — Structural: make drifted list pairs one artifact
+## Shipped 2026-08-19 — P2 structural, a11y, responsive, ASI lows
 
-**Added 2026-08-13**, promoted from the 2026-08-12 review's prose diagnosis.
-This is the item that prevents the next round of these findings.
-
-The recurring shape behind SEAM-004, SEAM-005, SEAM-007, UX-005, and UX-011 is a
-documented contract and an implementation that drifted with nothing testing the
-seam. `DESIGN.md:27,34` promises safe-area handling implemented in one component;
-`DESIGN.md:33` promises scrollable mobile tabs that were deliberately replaced
-with a `<Select>`; `README.md:55` promises cached offline reads while every
-offline navigation lands on `/offline`; `README.md:57` promises reviewable
-conflicts "instead of being overwritten" while the Retry button guarantees the
-overwrite; and the backend's offline-supported route list has no counterpart test
-on the client that duplicates it.
-
-Fix the pattern rather than each instance: make each pair one artifact with a
-test asserting they agree. Concretely — generate or share the offline route list
-between `middleware_offline.go` and `sw.js/route.ts` and test the agreement (the
-Go side already has `middleware_offline_test.go`; the client side has no test at
-all), and either correct `DESIGN.md`/`README.md` or add checks that fail when the
-promise stops being true.
-
-Also worth pinning with a test: CSRF currently rests entirely on `SameSite=Lax`
-with no Origin check outside MCP, which holds today only because no mutation is a
-GET. That invariant should fail loudly if it ever stops being true.
-
-## P2 — Accessibility and correctness papercuts
-
-- **UX-018 (High)** Bulk-selecting hives in table view is impossible with a
-  keyboard or screen reader — selection sits on a `<tr>` with no `tabIndex`, and
-  the checkbox is controlled with no `onCheckedChange` plus `pointer-events-none`.
-  The card branch is correct.
-- **UX-019 (Medium)** Color-only status against `DESIGN.md:26` — a 6 px
-  `aria-hidden` red-vs-amber urgency dot with no paired text, and queen marking
-  year only in a `title`.
-- **UX-020 (Medium)** Delete-expense and revoke-API-token fire with no
-  confirmation, unlike the nine comparable actions that all confirm.
-- **UX-021 (Medium)** Base dialog `max-h-[calc(100dvh-2rem)]` puts submit buttons
-  under the home indicator; the longest form is accidentally safe because it
-  overrides to `90dvh`.
-- **UX-022 (Medium)** Long forms have no sticky submit, so the most frequent write
-  in the app requires scrolling the full form one-handed.
-- **UX-023 (Medium)** Exiting bulk mode clears the selection, so "archive the
-  deadouts but let me check that one" means starting over.
-- **Low cluster (UX-025 / SEAM-019…024 / API-012).** `x` collides with the
-  documented global select-all; the shortcut registry overwrites silently; `?`
-  advertises shortcuts viewers cannot use; Radix dialogs push no history entry so
-  Android Back closes the route; duplicate `aria-label="Main navigation"`;
-  command-palette results lack listbox roles; unsized `<img>` CLS risk; skeletons
-  omit the action row; the apiary canvas has no keyboard path; `AuthStatus` omits
-  `isAdmin` (costing a round trip per load); `HoneySale` omits
-  `tax`/`updatedAt`/`cancelledAt`; `NEXT_PUBLIC_API_URL` inlines an internal
-  hostname into the public bundle; anonymous visitors can create customer records
-  (5/min/IP); migrations run uncancelable at startup. The CSRF item moved to the
-  structural item above; the honey-story date item is probably stale (see the
-  standing correction).
-
-## P2 — Responsive field polish
-
-**Partially delivered 2026-08-04** — touch targets, empty states, and phone
-layouts in apiaries, queens, and settings. Remaining gaps: sub-44 px targets,
-horizontal navigation strips, and wide tables that do not fit small screens.
-Substantially overlaps the "clunky" cluster above; do that first and re-scope
-what is left.
-
-## Remaining ASI low-severity findings
-
-Open Lows from `asi-review.md`: SSRF-shaped AI base-URL fetches (ASI-3-007),
-MinIO default-credential fallback (ASI-3-008), silent non-Secure cookies on
-misconfigured `APP_URL` (ASI-3-009), tag-pinned GitHub Actions (ASI-3-010),
-transcription hive-match on empty references (ASI-1-007), cancelled sales keeping
-serials "sold" (ASI-1-008), the `jar_serials` ON DELETE/CHECK contradiction
-(ASI-1-009), a minor backend correctness cluster (ASI-1-010), offline receipts
-unverified against method/path (ASI-5-008), a worker-edge reliability cluster
-(ASI-5-009), service-worker cache growth and the 5-second stale-serve (ASI-6-003,
-extended by SEAM-009 and SEAM-018), and `reorderUrl` scheme validation
-(ASI-3-011).
-
-Deliberately left closed: migrate-legacy per-table transactions (a one-shot
-operator tool) and the already-applied 00005 backfill's UTC quirk (a benign NULL
-link).
+Moved to history. Remaining follow-ups: the new e2e specs
+(`design-promises`, `a11y-bulk-select`, `solar`, updated `navigation`) first
+run in CI — worktrees could not start Playwright; `API_URL` is now the
+server-side contract and `NEXT_PUBLIC_API_URL` is deprecated for one
+release; `/harvest` → `/honey` rename and lot-weight derivation stay in
+"Smaller deferred items".
 
 ## Smaller deferred items
 
 - **`/harvest` → `/honey` route rename**, deferred from the 2026-08-11 navigation
   work because it collides with the public `/honey/[slug]` story pages.
-- **Void-bottling-run action.** ASI-1-002 was closed by refusing reversal of a
-  run-linked movement with a 409; voiding the run in the same transaction remains
-  unbuilt.
-- **Equipment naming clarity.** The equipment ledger is otherwise complete; only
-  naming **Equipment Inventory** distinctly from **Honey Inventory** remains.
 - **Lot weight is free-typed** against linked harvests rather than derived.
   Lot **moisture** is the sibling number and lives in the honey-product
   item below, not here.

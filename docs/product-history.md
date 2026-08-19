@@ -14,6 +14,130 @@ reported — the sibling path was never covered. Treat a completion note here as
 "the reported case was fixed and tested", not "the class of bug is gone". The
 specific carve-outs are noted inline below.
 
+## Delivered 2026-08-19 — P2 structural, accessibility, responsive polish, ASI lows
+
+Seven Opus workers in isolated worktrees, merged the same day. Gates: Go
+suite against an isolated Postgres, tsc, eslint 0 errors.
+
+- **Structural (drifted pairs → one artifact).** Offline route list is now
+  generated from Go (`offline_routes.go` → `frontend/src/lib/offline-routes.generated.ts`)
+  with a staleness test; CSRF Origin/Referer middleware on all mutating
+  cookie-authenticated requests reusing the MCP origin check, plus a
+  `chi.Walk` test asserting no mutating GET route (SEAM-021); migrations run
+  under a signal-cancellable 15-minute context with the advisory lock always
+  released (API-012); `AuthStatus.isAdmin` used instead of a second
+  `/access/me` (SEAM-019); `HoneySale.tax/updatedAt/cancelledAt` + receipt
+  tax line (SEAM-020); public story uses server-only `API_URL` and the
+  leading-`YYYY-MM-DD` date rule (SEAM-022/023); 50/day/slug cap on anonymous
+  customer signup (SEAM-024). DESIGN.md/README promises reconciled with code
+  and pinned by `design-promises.spec.ts`: safe-area tokens are the single
+  source, SectionNav `<Select>` vs scrollable in-page tabs documented, offline
+  cached reads described accurately, conflict rows relabelled "Retry without
+  overwriting" / "Discard my change".
+- **Accessibility papercuts.** UX-018 table bulk-select keyboard-operable
+  (`aria-selected`, Space/Enter, visible selected state); UX-019 urgency and
+  queen-marking colour paired with text; UX-020 confirm on expense delete and
+  type-to-confirm on API-token revoke; UX-021 dialog height respects safe-area
+  insets; UX-022 sticky dialog footer for every form; UX-023 selection
+  survives leaving bulk mode; UX-025: Split moved `x`→`t`, dev warning on
+  shortcut collision, viewer-gated shortcuts in `?`, distinct nav labels,
+  command palette listbox/option roles, skeleton action row, reduced-motion
+  recording indicator, Android Back closes the dialog (history entry per
+  dialog), and a full keyboard path for the apiary layout canvas (roving
+  focus, arrow nudge in edit mode, Enter/Delete/Escape, live announcements).
+- **Responsive field polish.** Touch targets ≥44 px via shared Button
+  variants, scroll-snapping nav strips, wide tables wrapped or collapsed on
+  small screens (see the `p2/responsive-polish` merge for the file table).
+- **ASI lows.** All twelve re-verified in code (ASI-3-007/008/009/010/011,
+  1-007/008/009/010, 5-008/009, 6-003) — already fixed 2026-08-11; two got
+  pinning tests (base-URL allowlist, serial unlink on cancel). Plus
+  `POST /bottling-runs/{id}/void` (one transaction, migration 00023) and the
+  equipment ledger renamed "Equipment" in nav/titles.
+
+Design notes as planned, preserved verbatim:
+
+### Structural: make drifted list pairs one artifact
+
+**Added 2026-08-13**, promoted from the 2026-08-12 review's prose diagnosis.
+This is the item that prevents the next round of these findings.
+
+The recurring shape behind SEAM-004, SEAM-005, SEAM-007, UX-005, and UX-011 is a
+documented contract and an implementation that drifted with nothing testing the
+seam. `DESIGN.md:27,34` promises safe-area handling implemented in one component;
+`DESIGN.md:33` promises scrollable mobile tabs that were deliberately replaced
+with a `<Select>`; `README.md:55` promises cached offline reads while every
+offline navigation lands on `/offline`; `README.md:57` promises reviewable
+conflicts "instead of being overwritten" while the Retry button guarantees the
+overwrite; and the backend's offline-supported route list has no counterpart test
+on the client that duplicates it.
+
+Fix the pattern rather than each instance: make each pair one artifact with a
+test asserting they agree. Concretely — generate or share the offline route list
+between `middleware_offline.go` and `sw.js/route.ts` and test the agreement (the
+Go side already has `middleware_offline_test.go`; the client side has no test at
+all), and either correct `DESIGN.md`/`README.md` or add checks that fail when the
+promise stops being true.
+
+Also worth pinning with a test: CSRF currently rests entirely on `SameSite=Lax`
+with no Origin check outside MCP, which holds today only because no mutation is a
+GET. That invariant should fail loudly if it ever stops being true.
+
+### Accessibility and correctness papercuts
+
+- **UX-018 (High)** Bulk-selecting hives in table view is impossible with a
+  keyboard or screen reader — selection sits on a `<tr>` with no `tabIndex`, and
+  the checkbox is controlled with no `onCheckedChange` plus `pointer-events-none`.
+  The card branch is correct.
+- **UX-019 (Medium)** Color-only status against `DESIGN.md:26` — a 6 px
+  `aria-hidden` red-vs-amber urgency dot with no paired text, and queen marking
+  year only in a `title`.
+- **UX-020 (Medium)** Delete-expense and revoke-API-token fire with no
+  confirmation, unlike the nine comparable actions that all confirm.
+- **UX-021 (Medium)** Base dialog `max-h-[calc(100dvh-2rem)]` puts submit buttons
+  under the home indicator; the longest form is accidentally safe because it
+  overrides to `90dvh`.
+- **UX-022 (Medium)** Long forms have no sticky submit, so the most frequent write
+  in the app requires scrolling the full form one-handed.
+- **UX-023 (Medium)** Exiting bulk mode clears the selection, so "archive the
+  deadouts but let me check that one" means starting over.
+- **Low cluster (UX-025 / SEAM-019…024 / API-012).** `x` collides with the
+  documented global select-all; the shortcut registry overwrites silently; `?`
+  advertises shortcuts viewers cannot use; Radix dialogs push no history entry so
+  Android Back closes the route; duplicate `aria-label="Main navigation"`;
+  command-palette results lack listbox roles; unsized `<img>` CLS risk; skeletons
+  omit the action row; the apiary canvas has no keyboard path; `AuthStatus` omits
+  `isAdmin` (costing a round trip per load); `HoneySale` omits
+  `tax`/`updatedAt`/`cancelledAt`; `NEXT_PUBLIC_API_URL` inlines an internal
+  hostname into the public bundle; anonymous visitors can create customer records
+  (5/min/IP); migrations run uncancelable at startup. The CSRF item moved to the
+  structural item above; the honey-story date item is probably stale (see the
+  standing correction).
+
+### Responsive field polish
+
+**Partially delivered 2026-08-04** — touch targets, empty states, and phone
+layouts in apiaries, queens, and settings. Remaining gaps: sub-44 px targets,
+horizontal navigation strips, and wide tables that do not fit small screens.
+Substantially overlaps the "clunky" cluster above; do that first and re-scope
+what is left.
+
+### Remaining ASI low-severity findings
+
+Open Lows from `asi-review.md`: SSRF-shaped AI base-URL fetches (ASI-3-007),
+MinIO default-credential fallback (ASI-3-008), silent non-Secure cookies on
+misconfigured `APP_URL` (ASI-3-009), tag-pinned GitHub Actions (ASI-3-010),
+transcription hive-match on empty references (ASI-1-007), cancelled sales keeping
+serials "sold" (ASI-1-008), the `jar_serials` ON DELETE/CHECK contradiction
+(ASI-1-009), a minor backend correctness cluster (ASI-1-010), offline receipts
+unverified against method/path (ASI-5-008), a worker-edge reliability cluster
+(ASI-5-009), service-worker cache growth and the 5-second stale-serve (ASI-6-003,
+extended by SEAM-009 and SEAM-018), and `reorderUrl` scheme validation
+(ASI-3-011).
+
+Deliberately left closed: migrate-legacy per-table transactions (a one-shot
+operator tool) and the already-applied 00005 backfill's UTC quirk (a benign NULL
+link).
+
 ## Delivered 2026-08-18 — roadmap items 1–5 (Antigravity run), reviewed and patched 2026-08-19
 
 Six feature branches merged 2026-08-18 (`2f82a82`…`f7fe99a`, follow-ups
