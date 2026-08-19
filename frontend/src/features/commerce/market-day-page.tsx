@@ -55,7 +55,7 @@ export function MarketDayPage() {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col overflow-y-auto overscroll-contain bg-background">
-      <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b bg-background/95 px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top,0px))] backdrop-blur">
+      <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b bg-background/95 px-4 pb-3 pt-[calc(0.75rem+var(--safe-top))] backdrop-blur">
         <div className="flex min-w-0 items-center gap-2">
           <ShoppingBasket className="size-5 shrink-0 text-primary" />
           <h1 className="truncate text-lg font-bold tracking-tight">
@@ -73,7 +73,7 @@ export function MarketDayPage() {
         </Button>
       </header>
 
-      <div className="flex-1 px-4 py-5 pb-[calc(6rem+env(safe-area-inset-bottom,0px))] md:px-8">
+      <div className="flex-1 px-4 py-5 pb-[calc(6rem+var(--safe-bottom))] md:px-8">
         <MarketDayTab onCartCountChange={onCartCountChange} />
       </div>
 

@@ -160,15 +160,22 @@ export function PwaRegister() {
           <DialogHeader>
             <DialogTitle>Offline changes needing review</DialogTitle>
             <DialogDescription>
-              Retry after checking the current server record, or discard the
-              local change.
+              A conflict means the server record changed after this edit was
+              queued. Nothing here can overwrite the newer server version:
+              retry re-sends the change with its original queue time, so it
+              only lands if the record is no longer newer. Otherwise discard
+              the local change.
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[55dvh] divide-y overflow-y-auto rounded-lg border">
             {queue.items
               .filter((item) => item.state !== "pending")
               .map((item) => (
-                <div className="grid gap-2 p-3" key={item.id}>
+                <div
+                  className="grid gap-2 p-3"
+                  data-queue-state={item.state}
+                  key={item.id}
+                >
                   <div className="flex items-center justify-between gap-3">
                     <code className="truncate text-xs">
                       {item.method} {item.path}
@@ -178,6 +185,12 @@ export function PwaRegister() {
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground">{item.error}</p>
+                  {item.state === "conflict" ? (
+                    <p className="text-xs text-muted-foreground">
+                      The server version is kept until you choose. Retrying
+                      cannot overwrite it.
+                    </p>
+                  ) : null}
                   <div className="flex justify-end gap-2">
                     <Button
                       size="sm"
@@ -186,15 +199,20 @@ export function PwaRegister() {
                         sendMutationAction("DISCARD_OFFLINE_MUTATION", item.id)
                       }
                     >
-                      Discard
+                      {item.state === "conflict"
+                        ? "Discard my change"
+                        : "Discard"}
                     </Button>
                     <Button
                       size="sm"
+                      variant={item.state === "conflict" ? "outline" : "default"}
                       onClick={() =>
                         sendMutationAction("RETRY_OFFLINE_MUTATION", item.id)
                       }
                     >
-                      Retry
+                      {item.state === "conflict"
+                        ? "Retry without overwriting"
+                        : "Retry"}
                     </Button>
                   </div>
                 </div>

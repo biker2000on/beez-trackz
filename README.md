@@ -53,8 +53,17 @@ Copy `.env.example` values into your environment (`SESSION_SECRET` and
   hive, inspection, feeding, bloom, photo, and operational records. Global
   AI, inventory, commerce, and instance settings remain administrator-only.
 - The production PWA caches field-data reads and queues supported JSON writes
-  in IndexedDB. Reconnect replays them with idempotency keys; newer server
-  edits become reviewable conflicts instead of being overwritten.
+  in IndexedDB. Offline navigation serves the cached page when there is one —
+  the service worker precaches the field routes (dashboard, yard queue,
+  harvest, sales, and both market-day screens) and falls back to a cached copy
+  of the requested path; `/offline` is only shown for a route that was never
+  cached. Auth, access, and settings reads are never cached.
+- Reconnect replays queued writes with idempotency keys, and each replay
+  carries the timestamp the change was queued at. If the server record changed
+  after that, the write is refused and becomes a reviewable conflict instead of
+  overwriting the newer edit. **Retry** re-sends the change with its original
+  queue timestamp, so it succeeds only if the record is no longer newer — it
+  cannot force the overwrite. The other choice is **Discard**.
 - Personal API tokens are created in Settings and used as
   `Authorization: Bearer bt_...`. The MCP Streamable HTTP endpoint is
   `https://your-app.example/api/v1/mcp` and exposes only tools allowed by the
