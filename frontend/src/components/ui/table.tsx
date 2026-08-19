@@ -2,7 +2,20 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  pinFirstColumn,
+  ...props
+}: React.ComponentProps<"table"> & {
+  /**
+   * Keep the first column visible while the rest of a wide table scrolls, so
+   * a sideways scroll never leaves a row without its identifier. Styling lives
+   * in `globals.css`; override `--table-pin-bg` when the table does not sit on
+   * a card surface. Only for tables whose rows are uniform — a `colSpan` group
+   * header would be pinned too.
+   */
+  pinFirstColumn?: boolean;
+}) {
   return (
     <div
       data-slot="table-container"
@@ -10,6 +23,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
     >
       <table
         data-slot="table"
+        data-pin-first-column={pinFirstColumn ? "" : undefined}
         className={cn("w-full caption-bottom text-sm", className)}
         {...props}
       />
