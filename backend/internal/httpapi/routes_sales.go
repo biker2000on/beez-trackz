@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -447,6 +448,126 @@ func saleRevertPhysical(
 
 func saleBadRequest(format string, args ...any) error {
 	return equipBadRequest(format, args...)
+}
+
+// --- location-scoped sales -------------------------------------------------
+//
+// Every sale comes off a stock location. sales.stock_location_id NULL means
+// home, which is what every sale was before locations existed, so nothing had
+// to be backfilled. A sale scoped to a location decrements THAT shelf: the
+// derivation in honey_ledger.go subtracts its lines from the location's net
+// instead of from home.
+//
+// Consignment is the one channel that must carry a location. The shop does not
+// buy the stock up front, so nothing is recognised when the jars go over
+// there; revenue appears here, at the shop's report, and the money is a
+// receivable until amount_paid_cents catches up with total_amount_cents. That
+// is the collected-vs-invoiced pair the rest of the app already reads — no
+// consignment payment table.
+
+// saleConsignmentLine is one SKU on a shop's report, priced at what the
+// operator is owed for it (the shop's commission is already taken out).
+type saleConsignmentLine struct {
+	JarSizeID *uuid.UUID
+	ProductID *uuid.UUID
+	Kind      string
+	Quantity  int
+	UnitPrice money
+}
+
+type saleConsignmentInput struct {
+	SaleID       uuid.UUID
+	LocationID   uuid.UUID
+	LocationName string
+	CustomerID   *uuid.UUID
+	Date         time.Time
+	// Defaults to consignment: the shop's report. A location that is simply a
+	// second place the operator sells from (a farm stand) names its own.
+	Channel        string
+	PaymentMethod  string
+	TotalAmount    money
+	DiscountAmount money
+	AmountPaid     money
+	OrderNumber    *string
+	CustomerName   *string
+	Location       *string
+	Notes          *string
+	Lines          []saleConsignmentLine
+	Actor          *uuid.UUID
+}
+
+// saleRecordConsignmentReport writes the sale a consignment settlement
+// recognises. It is a plain sale row — no new table, no second ledger — and it
+// is the only place revenue enters the consignment flow. Transfers never come
+// through here, which is how "never recognise revenue on a transfer" is kept.
+func saleRecordConsignmentReport(
+	ctx context.Context,
+	tx pgx.Tx,
+	input saleConsignmentInput,
+) (*string, error) {
+	if len(input.Lines) == 0 {
+		return nil, saleBadRequest("a consignment report needs at least one sold line")
+	}
+	orderNumber := input.OrderNumber
+	if orderNumber == nil {
+		value := "BT-" + strings.ToUpper(strings.ReplaceAll(input.SaleID.String()[:8], "-", ""))
+		orderNumber = &value
+	}
+	// Paid in full or not, the revenue is recognised now; the unpaid part is
+	// the receivable.
+	orderStatus := "pending"
+	if input.AmountPaid >= input.TotalAmount {
+		orderStatus = "paid"
+	}
+	channel := input.Channel
+	if channel == "" {
+		channel = "consignment"
+	}
+	if !honeySaleChannels[channel] {
+		return nil, saleBadRequest("invalid channel")
+	}
+	customerName := input.CustomerName
+	if customerName == nil {
+		name := input.LocationName
+		customerName = &name
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO sales
+			(id, date, customer_id, customer_name, location, channel, payment_method,
+			 total_amount_cents, discount_amount_cents, amount_paid_cents, order_status,
+			 order_number, stock_location_id, notes, created_by, physical_applied_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())`,
+		input.SaleID, input.Date, input.CustomerID, customerName, input.Location, channel,
+		input.PaymentMethod, input.TotalAmount, input.DiscountAmount, input.AmountPaid,
+		orderStatus, orderNumber, input.LocationID, input.Notes, input.Actor); err != nil {
+		if pgErrCode(err) == "23505" {
+			return nil, equipFail(http.StatusConflict, "order number already exists")
+		}
+		if pgErrCode(err) == "23503" {
+			return nil, saleBadRequest("invalid customer or stock location")
+		}
+		return nil, err
+	}
+	for _, line := range input.Lines {
+		if line.Quantity <= 0 {
+			return nil, saleBadRequest("quantity must be greater than zero")
+		}
+		if line.UnitPrice <= 0 {
+			return nil, saleBadRequest("unitPrice must be greater than zero")
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO sale_items
+				(sale_id, kind, jar_size_id, product_id, quantity, unit_price_cents, created_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			input.SaleID, line.Kind, line.JarSizeID, line.ProductID, line.Quantity,
+			line.UnitPrice, input.Actor); err != nil {
+			if honeyIsFKViolation(err) {
+				return nil, saleBadRequest("invalid jar size or product target")
+			}
+			return nil, err
+		}
+	}
+	return orderNumber, nil
 }
 
 // GET /hives/{id}/sale-offer — deployments and feeder count the sale dialog

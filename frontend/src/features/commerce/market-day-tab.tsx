@@ -31,6 +31,10 @@ import { useJarInventory, useProductCatalog, useRecordSale } from "@/features/ho
 import type { CatalogProduct, SaleLineKind } from "@/features/honey/types";
 import { OfflineQueuedError } from "@/lib/api";
 import { useHarvestLots, useLowStock, useReconciliation } from "./api";
+import {
+  useStockInventory,
+  useStockLocationSale,
+} from "./stock-locations-api";
 
 function jarKey(id: string) {
   return `jar:${id}`;
@@ -61,6 +65,12 @@ export function MarketDayTab({
   const [discount, setDiscount] = React.useState("0");
   const [customer, setCustomer] = React.useState("");
   const [harvestLotId, setHarvestLotId] = React.useState("none");
+  // Market day sells from ONE place at a time. Home is the default and
+  // usually the only choice; an empty id means "home, and we have not
+  // heard back from the locations request yet".
+  const [locationId, setLocationId] = React.useState("");
+  const stock = useStockInventory();
+  const locationSale = useStockLocationSale(locationId);
 
   const cartCount = Object.values(cart).reduce((sum, qty) => sum + qty, 0);
   React.useEffect(() => {
@@ -72,7 +82,30 @@ export function MarketDayTab({
 
   const products = catalog.data?.items ?? [];
   const propolisGrams = catalog.data?.propolisOnHandGrams ?? 0;
-  const jarLines = inventory.data
+
+  const locations = stock.data?.locations ?? [];
+  const homeId = locations.find((location) => location.isHome)?.id ?? "";
+  const sellingFrom = locationId || homeId;
+  const sellingHome = sellingFrom === "" || sellingFrom === homeId;
+  // What is actually on the shelf at the chosen place. Until the request
+  // lands there is nothing to subtract, so the global figure stands in.
+  const onShelf = new Map<string, number>();
+  for (const item of stock.data?.items ?? []) {
+    const key = item.jarSizeId
+      ? jarKey(item.jarSizeId)
+      : productKey(item.productId ?? "");
+    onShelf.set(key, item.byLocation[sellingFrom] ?? 0);
+  }
+  const stockFor = (key: string, fallback: number) =>
+    stock.data ? (onShelf.get(key) ?? 0) : fallback;
+  const awayUnits = locations
+    .filter((location) => !location.isHome)
+    .reduce((sum, location) => sum + location.onHandUnits, 0);
+  const jarRows = inventory.data.map((row) => ({
+    ...row,
+    onHand: stockFor(jarKey(row.jarSizeId), row.onHand),
+  }));
+  const jarLines = jarRows
     .map((row) => ({
       kind: "jar" as const,
       jarSizeId: row.jarSizeId,
@@ -103,8 +136,43 @@ export function MarketDayTab({
     }));
   }
 
+  function clearCart() {
+    setCart({});
+    setDiscount("0");
+    setCustomer("");
+  }
+
   function checkout() {
     if (lines.length === 0 || unpriced.length > 0) return;
+    if (!sellingHome) {
+      // Stock came off another shelf, so the sale has to say so or home
+      // would be the one debited. No offline queue on this path: the
+      // queue only knows the home sale route.
+      locationSale.mutate(
+        {
+          date,
+          channel,
+          paymentMethod: payment,
+          customerName: customer.trim() || undefined,
+          discountAmount,
+          amountPaid: total,
+          lines: lines.map((line) =>
+            "jarSizeId" in line && line.jarSizeId
+              ? { jarSizeId: line.jarSizeId, quantity: line.quantity, unitPrice: line.unitPrice }
+              : { productId: "productId" in line ? line.productId : "", quantity: line.quantity, unitPrice: line.unitPrice },
+          ),
+        },
+        {
+          onSuccess: () => {
+            clearCart();
+            toast.success("Sale complete; inventory updated");
+          },
+          onError: (error) =>
+            toast.error(error instanceof Error ? error.message : "Sale failed"),
+        },
+      );
+      return;
+    }
     sale.mutate({
       date,
       channel,
@@ -122,18 +190,14 @@ export function MarketDayTab({
       ),
     }, {
       onSuccess: () => {
-        setCart({});
-        setDiscount("0");
-        setCustomer("");
+        clearCart();
         toast.success("Sale complete; inventory updated");
       },
       onError: (error) => {
         if (error instanceof OfflineQueuedError) {
           // Accepted into the offline queue — do not claim inventory updated.
           // Clearing avoids a second tap queueing a duplicate sale.
-          setCart({});
-          setDiscount("0");
-          setCustomer("");
+          clearCart();
           return;
         }
         toast.error(error instanceof Error ? error.message : "Sale failed");
@@ -142,12 +206,14 @@ export function MarketDayTab({
   }
 
   const saleQueued = sale.error instanceof OfflineQueuedError;
+  const activeError = sellingHome ? sale.error : locationSale.error;
   const saleError =
     saleQueued
       ? null
-      : sale.error instanceof Error
-        ? sale.error.message
+      : activeError instanceof Error
+        ? activeError.message
         : null;
+  const salePending = sellingHome ? sale.isPending : locationSale.isPending;
 
   return (
     <div className="grid gap-5">
@@ -160,7 +226,7 @@ export function MarketDayTab({
       )}
       <div className="grid items-start gap-5 lg:grid-cols-[2fr_1fr]">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {inventory.data.map((row) => {
+          {jarRows.map((row) => {
             const key = jarKey(row.jarSizeId);
             const quantity = cart[key] ?? 0;
             return (
@@ -221,6 +287,40 @@ export function MarketDayTab({
                 <span>Sale accepted offline — will sync when you reconnect. Inventory is not updated yet.</span>
               </div>
             )}
+            {(locations.length > 1 || awayUnits > 0) && (
+              <div className="grid gap-1">
+                <Label>Selling from</Label>
+                <Select
+                  value={sellingFrom}
+                  onValueChange={(value) => {
+                    // The cart was priced against the old shelf; keeping it
+                    // would let a count that fitted at home overdraw a shop.
+                    setCart({});
+                    setLocationId(value);
+                  }}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {locations.map((location) => (
+                      <SelectItem
+                        key={location.id}
+                        value={location.id}
+                        disabled={location.isConsignment}
+                      >
+                        {location.name}
+                        {location.isConsignment ? " · settles by report" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {awayUnits > 0 && sellingHome && (
+                  <p className="text-xs text-muted-foreground">
+                    {awayUnits} units are at another location and are not on
+                    this table.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
               <div className="grid gap-1"><Label>Channel</Label><Select value={channel} onValueChange={(value) => setChannel(value as typeof channel)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="farmers_market">Farmers market</SelectItem><SelectItem value="farm_stand">Farm stand</SelectItem><SelectItem value="pickup">Pickup</SelectItem><SelectItem value="direct">Direct</SelectItem></SelectContent></Select></div>
@@ -260,7 +360,7 @@ export function MarketDayTab({
               {discountAmount > 0 && <div className="flex justify-between text-muted-foreground"><span>Discount</span><span>−{formatMoney(discountAmount)}</span></div>}
             </div>
             <div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">Total</span><span className="text-3xl font-bold tabular-nums">{formatMoney(total)}</span></div>
-            <Button type="submit" size="lg" className="h-14 text-base" disabled={sale.isPending || lines.length === 0 || unpriced.length > 0}>{sale.isPending ? "Completing…" : "Complete sale"}</Button>
+            <Button type="submit" size="lg" className="h-14 text-base" disabled={salePending || lines.length === 0 || unpriced.length > 0}>{salePending ? "Completing…" : "Complete sale"}</Button>
             </ShortcutForm>
           </CardContent>
         </Card>

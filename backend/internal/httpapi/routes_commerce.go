@@ -1864,8 +1864,18 @@ func (s *Server) productionPlan(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// lowStockAlerts warns about sizes that are running out AT HOME. Jars sitting
+// on the bike shop's shelf are still the operator's inventory, but they cannot
+// be put on the market-day table, so counting them would keep the warning
+// quiet exactly when more needs bottling. Both counts are reported so the
+// alert can say where the rest of the stock actually is.
 func (s *Server) lowStockAlerts(w http.ResponseWriter, r *http.Request) {
 	inventory, err := s.honeyJarInventory(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	away, err := stockAwayJarTotals(r.Context(), s.pool)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -1889,10 +1899,12 @@ func (s *Server) lowStockAlerts(w http.ResponseWriter, r *http.Request) {
 	rows.Close()
 	out := make([]map[string]any, 0)
 	for _, row := range inventory {
-		if row.OnHand <= thresholds[row.JarSizeID] {
+		atHome := row.OnHand - away[row.JarSizeID]
+		if atHome <= thresholds[row.JarSizeID] {
 			out = append(out, map[string]any{
 				"jarSizeId": row.JarSizeID, "label": row.Label,
-				"onHand": row.OnHand, "threshold": thresholds[row.JarSizeID],
+				"onHand": atHome, "threshold": thresholds[row.JarSizeID],
+				"totalOnHand": row.OnHand, "atOtherLocations": away[row.JarSizeID],
 			})
 		}
 	}

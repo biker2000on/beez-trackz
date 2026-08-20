@@ -141,6 +141,7 @@ export const NAV_ITEMS: NavItem[] = [
         href: "/sales/market-day",
         keywords: ["point of sale pos"],
       },
+      { label: "Consignment", href: "/sales/consignment", keywords: ["bike shop stock locations transfers settlement"] },
     ],
   },
   {

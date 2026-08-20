@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // Shared honey-ledger derivations. Every surface that reports a quantity of
@@ -80,6 +82,15 @@ func actorID(r *http.Request) *uuid.UUID {
 // locks two concurrent checkouts can both observe the same inventory and each
 // commit a sale the stock cannot cover.
 //
+// The count is HOME on-hand, not the global total: jars consigned to the bike
+// shop are still the operator's inventory but they are not on the table at
+// market day, and letting the guard count them lets you sell the same jar
+// twice. Every caller of this function is validating a withdrawal from home
+// (a sale, a give-away, a reversed jarring, a voided bottling run), so home is
+// the number all of them want. Stock standing at another location is only ever
+// withdrawn through routes_stock_locations.go, which locks the same jar_sizes
+// rows and checks that location instead.
+//
 // It returns an error message suitable for a 400 when a jar size id is unknown.
 func honeyLockJarSizes(
 	ctx context.Context,
@@ -118,10 +129,14 @@ func honeyLockJarSizes(
 	if err != nil {
 		return nil, nil, false, err
 	}
+	away, err := stockAwayJarTotals(ctx, tx)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	onHand = make(map[uuid.UUID]int, len(inventory))
 	labels = make(map[uuid.UUID]string, len(inventory))
 	for _, row := range inventory {
-		onHand[row.JarSizeID] = row.OnHand
+		onHand[row.JarSizeID] = row.OnHand - away[row.JarSizeID]
 		labels[row.JarSizeID] = row.Label
 	}
 	return onHand, labels, false, nil
@@ -173,4 +188,171 @@ func honeyBulkShortfall(requestedLbs, availableLbs float64) string {
 	}
 	return fmt.Sprintf("Not enough bulk honey: need %.2f lbs, have %.2f lbs",
 		requestedLbs, availableLbs)
+}
+
+// --- stock locations -------------------------------------------------------
+//
+// Finished goods (jar sizes and product_catalog SKUs) can stand somewhere
+// other than home — consigned to the bike shop, most of all. Home is the
+// RESIDUAL of the one ledger, never a second one:
+//
+//	onHand(L)    = SUM(stock_movements at L) - sold on sales scoped to L
+//	onHand(home) = globalOnHand - SUM over every non-home L
+//
+// So nothing had to be backfilled when locations arrived, and the two numbers
+// cannot drift apart. See migration 00024 for the same statement in SQL.
+
+// stockHomeSlug names the one row that is is_home.
+const stockHomeSlug = "home"
+
+// stockHomeLocationID resolves the home location, creating it if a database
+// (a truncated test one, most likely) has lost the row seeded by 00024.
+// Everything not standing at another location is here by definition.
+func stockHomeLocationID(ctx context.Context, q inspectionQuerier) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := q.QueryRow(ctx, `SELECT id FROM stock_locations WHERE is_home`).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, err
+	}
+	err = q.QueryRow(ctx, `
+		INSERT INTO stock_locations (name, slug, is_home, notes)
+		VALUES ('Home', $1, true, 'Default location for everything bottled or made.')
+		ON CONFLICT (slug) DO UPDATE SET is_home = true
+		RETURNING id`, stockHomeSlug).Scan(&id)
+	return id, err
+}
+
+// stockLocationQuantity is the net count of one SKU standing at one location.
+type stockLocationQuantity struct {
+	LocationID uuid.UUID
+	JarSizeID  *uuid.UUID
+	ProductID  *uuid.UUID
+	Quantity   int
+}
+
+// stockAwayQuantities is THE away-from-home formula: every non-home location's
+// net count per SKU. Movements add and subtract; sales scoped to that location
+// take stock off its shelf.
+//
+// Home never appears in the result even when a transfer wrote a row against it
+// (the -n half of "24 jars to the shop"): counting that row would subtract the
+// same 24 jars twice, once here and once as the residual.
+func stockAwayQuantities(
+	ctx context.Context,
+	q inspectionQuerier,
+) ([]stockLocationQuantity, error) {
+	rows, err := q.Query(ctx, `
+		SELECT location_id, jar_size_id, product_id, SUM(qty)::int
+		FROM (
+			SELECT m.location_id, m.jar_size_id, m.product_id, m.quantity AS qty
+			FROM stock_movements m
+			UNION ALL
+			SELECT s.stock_location_id, si.jar_size_id, si.product_id, -si.quantity
+			FROM sale_items si
+			JOIN sales s ON s.id = si.sale_id
+			WHERE s.order_status <> 'cancelled'
+			  AND s.stock_location_id IS NOT NULL
+			  AND (si.jar_size_id IS NOT NULL OR si.product_id IS NOT NULL)
+		) movements
+		WHERE location_id NOT IN (SELECT id FROM stock_locations WHERE is_home)
+		GROUP BY 1, 2, 3
+		HAVING SUM(qty) <> 0`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]stockLocationQuantity, 0)
+	for rows.Next() {
+		var row stockLocationQuantity
+		if err := rows.Scan(&row.LocationID, &row.JarSizeID, &row.ProductID,
+			&row.Quantity); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// stockAwayJarTotals sums away-from-home jars per size. Subtracting it from the
+// global ledger gives what is actually on the shelf at home.
+func stockAwayJarTotals(
+	ctx context.Context,
+	q inspectionQuerier,
+) (map[uuid.UUID]int, error) {
+	quantities, err := stockAwayQuantities(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	totals := make(map[uuid.UUID]int)
+	for _, row := range quantities {
+		if row.JarSizeID != nil {
+			totals[*row.JarSizeID] += row.Quantity
+		}
+	}
+	return totals, nil
+}
+
+// stockAwayProductTotals is stockAwayJarTotals for product_catalog SKUs.
+func stockAwayProductTotals(
+	ctx context.Context,
+	q inspectionQuerier,
+) (map[uuid.UUID]int, error) {
+	quantities, err := stockAwayQuantities(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	totals := make(map[uuid.UUID]int)
+	for _, row := range quantities {
+		if row.ProductID != nil {
+			totals[*row.ProductID] += row.Quantity
+		}
+	}
+	return totals, nil
+}
+
+// stockLockProducts is honeyLockJarSizes' counterpart for catalog SKUs: it
+// takes the product_catalog row locks so a transfer and a sale of the same
+// product cannot both read the same on-hand count and both commit.
+func stockLockProducts(
+	ctx context.Context,
+	tx inspectionQuerier,
+	productIDs []uuid.UUID,
+) (unknown bool, err error) {
+	unique := stockUniqueIDs(productIDs)
+	if len(unique) == 0 {
+		return false, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM product_catalog WHERE id = ANY($1) ORDER BY id FOR UPDATE`, unique)
+	if err != nil {
+		return false, err
+	}
+	locked := 0
+	for rows.Next() {
+		locked++
+	}
+	lockErr := rows.Err()
+	rows.Close()
+	if lockErr != nil {
+		return false, lockErr
+	}
+	return locked != len(unique), nil
+}
+
+// stockUniqueIDs sorts and deduplicates ids so lock order is deterministic
+// (no deadlock between two transactions taking the same rows) and a
+// "locked == requested" count stays meaningful.
+func stockUniqueIDs(ids []uuid.UUID) []uuid.UUID {
+	sorted := append([]uuid.UUID(nil), ids...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
+	unique := make([]uuid.UUID, 0, len(sorted))
+	for i, id := range sorted {
+		if i == 0 || sorted[i-1] != id {
+			unique = append(unique, id)
+		}
+	}
+	return unique
 }

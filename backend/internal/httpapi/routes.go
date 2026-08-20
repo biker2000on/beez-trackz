@@ -33,6 +33,9 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountOperations(r)
 	s.mountCommerce(r)
 	s.mountProducts(r)
+	// Stock locations: finished goods consigned to the bike shop, the
+	// transfers that put them there, and the settlement that pays for them.
+	s.mountStockLocations(r)
 	s.mountFieldIntelligence(r)
 	s.mountMCP(r)
 }

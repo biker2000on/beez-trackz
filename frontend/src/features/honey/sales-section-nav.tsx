@@ -11,6 +11,7 @@ import { HoneyQuickActions } from "./quick-actions";
 
 export const SALES_SECTIONS = [
   { href: "/sales", label: "Orders" },
+  { href: "/sales/consignment", label: "Consignment" },
 ] as const;
 
 export function SalesSectionNav() {
