@@ -23,6 +23,10 @@ import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Textarea } from "@/components/ui/textarea";
 import type { LocationValue } from "@/features/map/location-picker";
 import {
+  clampForageRadius,
+  FORAGE_RADIUS_DEFAULT_M,
+} from "@/features/map/forage-radius";
+import {
   type Apiary,
   type ApiaryListItem,
   useCreateApiary,
@@ -52,6 +56,9 @@ function toLocation(apiary?: Apiary | ApiaryListItem | null): LocationValue {
       source === "geolocation" || source === "terrain" || source === "override"
         ? source
         : null,
+    forageRadiusM: apiary
+      ? clampForageRadius(apiary.forageRadiusM)
+      : FORAGE_RADIUS_DEFAULT_M,
   };
 }
 
@@ -106,6 +113,7 @@ function ApiaryFormBody({
       longitude: location.longitude,
       elevationM: location.elevationM,
       elevationSource: location.elevationSource,
+      forageRadiusM: location.forageRadiusM,
       notes: values.notes.trim() === "" ? null : values.notes,
     };
     try {
@@ -123,6 +131,7 @@ function ApiaryFormBody({
           longitude: null,
           elevationM: null,
           elevationSource: null,
+          forageRadiusM: FORAGE_RADIUS_DEFAULT_M,
         });
       } else onOpenChange(false);
     } catch (error) {

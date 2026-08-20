@@ -4,6 +4,7 @@ import {
   CloudRain,
   CloudSun,
   Flower2,
+  Snowflake,
   Thermometer,
   TriangleAlert,
   Wind,
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
+import { FrostPanel } from "./frost-summary";
 import { useApiaryWeather, useBloomPredictions } from "./hooks";
 
 function shortDate(value: string) {
@@ -61,6 +63,14 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
   }
 
   const forecast = weather.data?.forecast;
+  // The daily arrays open on the past week so the frost read has night lows
+  // to count. The outlook strip starts at today.
+  const outlookStart = weather.data?.forecastStartIndex ?? 0;
+  const outlook = forecast
+    ? forecast.daily.time
+        .map((date, index) => ({ date, index }))
+        .slice(outlookStart)
+    : [];
   return (
     <div className="grid gap-4">
       {weather.data?.alerts.length ? (
@@ -116,8 +126,13 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
                   </div>
                 </div>
                 <div className="overflow-x-auto">
-                  <div className="grid min-w-[720px] grid-cols-10 gap-1">
-                    {forecast.daily.time.map((date, index) => (
+                  <div
+                    className="grid min-w-[720px] gap-1"
+                    style={{
+                      gridTemplateColumns: `repeat(${Math.max(outlook.length, 1)}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    {outlook.map(({ date, index }) => (
                       <div className="rounded-md border p-2 text-center" key={date}>
                         <p className="text-xs font-semibold">{shortWeekday(date)}</p>
                         <p className="text-[10px] text-muted-foreground">{shortDate(date)}</p>
@@ -142,6 +157,27 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
             ) : (
               <p className="text-sm text-muted-foreground">
                 Weather is temporarily unavailable.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Snowflake className="size-5 text-primary" />
+              Frost and night lows
+            </CardTitle>
+            <CardDescription>
+              The past week at this pin, from the same Open-Meteo snapshot —
+              no extra provider. Read it next to the yard&apos;s elevation.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {weather.data ? (
+              <FrostPanel frost={weather.data.frost} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Night lows need a map pin on this apiary.
               </p>
             )}
           </CardContent>

@@ -29,11 +29,14 @@ import { useShortcut } from "@/components/shortcuts/provider";
 import { useBulkSelect } from "@/lib/use-bulk-select";
 import { useAccessProfile } from "@/features/access/api";
 import { formatElevationM } from "@/features/map/elevation";
+import { formatForageRadius } from "@/features/map/forage-radius";
+import { useUnits } from "@/lib/use-units";
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { useApiaries, useBulkDeleteApiaries } from "./hooks";
 
 export function ApiariesListPage() {
   const apiaries = useApiaries();
+  const units = useUnits();
   const access = useAccessProfile();
   const isAdmin = access.data?.isAdmin === true;
   const bulkDelete = useBulkDeleteApiaries();
@@ -162,6 +165,7 @@ export function ApiariesListPage() {
                         {formatElevationM(apiary.elevationM, apiary.elevationSource)
                           ? ` · ${formatElevationM(apiary.elevationM, apiary.elevationSource)}`
                           : ""}
+                        {` · ${formatForageRadius(apiary.forageRadiusM, units.units)} forage`}
                       </CardDescription>
                     )}
                   </CardHeader>
@@ -187,6 +191,7 @@ export function ApiariesListPage() {
                       {formatElevationM(apiary.elevationM, apiary.elevationSource)
                         ? ` · ${formatElevationM(apiary.elevationM, apiary.elevationSource)}`
                         : ""}
+                      {` · ${formatForageRadius(apiary.forageRadiusM, units.units)} forage`}
                     </CardDescription>
                   )}
                 </CardHeader>

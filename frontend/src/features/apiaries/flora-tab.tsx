@@ -30,12 +30,18 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, todayInput } from "@/features/hives/lib";
+import { useUnits } from "@/lib/use-units";
+import { FlowCalendarCard } from "./flow-calendar";
+import { ScalePanel } from "./scale-panel";
 import {
+  useApiary,
   useBloomSpecies,
   useBlooms,
   useCreateBloom,
   useDeleteBloom,
+  useElevationBands,
   useEndBloom,
+  type ElevationBandId,
 } from "./hooks";
 
 const bloomSchema = z.object({
@@ -43,11 +49,17 @@ const bloomSchema = z.object({
   dateFirstSeen: z.string().min(1, "Date is required"),
   abundance: z.string(),
   notes: z.string(),
+  // Blank means "the yard pin's height" — the server fills it in rather than
+  // inventing a band for a stand it cannot place.
+  elevationM: z.string(),
 });
 
 type BloomValues = z.infer<typeof bloomSchema>;
 
 const NOT_RATED = "none";
+/** Band filter values that are not a band id. */
+const ALL_BANDS = "all";
+const NO_BAND = "none";
 
 export function FloraTab({
   apiaryId,
@@ -56,8 +68,15 @@ export function FloraTab({
   apiaryId: string;
   canEdit?: boolean;
 }) {
-  const active = useBlooms(apiaryId, "active");
-  const history = useBlooms(apiaryId, "history");
+  const [band, setBand] = React.useState<ElevationBandId | typeof ALL_BANDS | typeof NO_BAND>(
+    ALL_BANDS,
+  );
+  const bandFilter = band === ALL_BANDS ? undefined : band;
+  const active = useBlooms(apiaryId, "active", bandFilter);
+  const history = useBlooms(apiaryId, "history", bandFilter);
+  const bands = useElevationBands();
+  const apiary = useApiary(apiaryId);
+  const units = useUnits();
   const species = useBloomSpecies();
   const createBloom = useCreateBloom();
   const endBloom = useEndBloom();
@@ -72,6 +91,7 @@ export function FloraTab({
       dateFirstSeen: todayInput(),
       abundance: NOT_RATED,
       notes: "",
+      elevationM: "",
     },
   });
 
@@ -97,6 +117,10 @@ export function FloraTab({
         abundance:
           values.abundance === NOT_RATED ? null : Number(values.abundance),
         notes: values.notes.trim() === "" ? null : values.notes,
+        elevationM:
+          values.elevationM.trim() === ""
+            ? null
+            : Number(values.elevationM.trim()),
       });
       toast.success("Bloom recorded");
       form.reset({
@@ -104,6 +128,7 @@ export function FloraTab({
         dateFirstSeen: todayInput(),
         abundance: NOT_RATED,
         notes: "",
+        elevationM: "",
       });
     } catch (error) {
       toast.error(
@@ -135,7 +160,8 @@ export function FloraTab({
   }
 
   return (
-    <div className={`grid gap-4 ${canEdit ? "lg:grid-cols-2" : ""}`}>
+    <div className="grid gap-4">
+      <div className={`grid gap-4 ${canEdit ? "lg:grid-cols-2" : ""}`}>
       {canEdit ? <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -233,6 +259,28 @@ export function FloraTab({
               </div>
             </div>
             <div className="grid gap-2">
+              <Label htmlFor="bloom-elevation">
+                Elevation seen at (m above sea level)
+              </Label>
+              <Input
+                id="bloom-elevation"
+                inputMode="decimal"
+                placeholder={
+                  apiary.data?.elevationM != null
+                    ? `Blank uses the yard pin: ${apiary.data.elevationM} m`
+                    : "Blank uses the yard pin"
+                }
+                {...form.register("elevationM")}
+              />
+              <p className="text-xs text-muted-foreground">
+                The band is a filter on bloom, not a species model. Fill this
+                in when you saw it up the ridge rather than at the stand.
+                {apiary.data?.elevationM == null
+                  ? " This yard has no pin elevation yet, so blank records no band."
+                  : ""}
+              </p>
+            </div>
+            <div className="grid gap-2">
               <Label htmlFor="bloom-notes">Notes</Label>
               <Textarea id="bloom-notes" rows={2} {...form.register("notes")} />
             </div>
@@ -248,6 +296,35 @@ export function FloraTab({
       </Card> : null}
 
       <div className="grid content-start gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Elevation band
+          </span>
+          <Select
+            value={band}
+            onValueChange={(next) =>
+              setBand(next as ElevationBandId | typeof ALL_BANDS | typeof NO_BAND)
+            }
+          >
+            <SelectTrigger className="w-56" aria-label="Filter blooms by elevation band">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_BANDS}>All elevations</SelectItem>
+              {(bands.data ?? []).map((entry) => (
+                <SelectItem key={entry.id} value={entry.id}>
+                  {entry.label}
+                  {entry.minM != null || entry.maxM != null
+                    ? ` (${entry.minM != null ? units.formatElevation(entry.minM) : "below"}${
+                        entry.minM != null && entry.maxM != null ? " – " : " "
+                      }${entry.maxM != null ? units.formatElevation(entry.maxM) : "and up"})`
+                    : ""}
+                </SelectItem>
+              ))}
+              <SelectItem value={NO_BAND}>No elevation recorded</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Active blooms</CardTitle>
@@ -257,7 +334,9 @@ export function FloraTab({
               <Skeleton className="h-16 w-full" />
             ) : (active.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Nothing blooming right now.
+                {band === ALL_BANDS
+                  ? "Nothing blooming right now."
+                  : "Nothing blooming right now in this elevation band."}
               </p>
             ) : (
               <ul className="grid gap-2">
@@ -272,6 +351,10 @@ export function FloraTab({
                         Since {formatDate(bloom.dateFirstSeen)}
                         {bloom.abundance != null &&
                           ` · abundance ${bloom.abundance}/5`}
+                        {` · ${bloom.elevationBandLabel}`}
+                        {bloom.elevationM != null
+                          ? ` (${units.formatElevation(bloom.elevationM)})`
+                          : ""}
                       </p>
                     </div>
                     {canEdit ? (
@@ -300,7 +383,9 @@ export function FloraTab({
               <Skeleton className="h-16 w-full" />
             ) : (history.data?.length ?? 0) === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No blooms recorded yet.
+                {band === ALL_BANDS
+                  ? "No blooms recorded yet."
+                  : "No blooms recorded in this elevation band."}
               </p>
             ) : (
               <ul className="grid gap-1.5">
@@ -312,6 +397,11 @@ export function FloraTab({
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="truncate">{bloom.species}</span>
                       <Badge variant="outline">{bloom.year}</Badge>
+                      {bloom.elevationBand ? (
+                        <Badge variant="outline">
+                          {bloom.elevationBandLabel}
+                        </Badge>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="text-xs text-muted-foreground">
@@ -336,7 +426,14 @@ export function FloraTab({
             )}
           </CardContent>
         </Card>
+        </div>
       </div>
+
+      {/* The calendar and the scale are the "will this yard make sourwood"
+          half of flora: the history against this year, and the weight that
+          proves it. */}
+      <FlowCalendarCard apiaryId={apiaryId} />
+      <ScalePanel apiaryId={apiaryId} canEdit={canEdit} />
     </div>
   );
 }

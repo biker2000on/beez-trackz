@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  CircleDashed,
   Hexagon,
   LayoutDashboard,
   ListChecks,
@@ -26,8 +27,11 @@ import { useApiaryHives } from "@/features/canvas/lib/use-canvas-data";
 import { ApiaryFormDialog } from "./apiary-form-dialog";
 import { DeleteApiaryDialog } from "./delete-apiary-dialog";
 import { OverviewTab } from "./overview-tab";
-import { useApiary } from "./hooks";
+import { FrostLine } from "./frost-summary";
+import { useApiary, useApiaryWeather } from "./hooks";
 import { formatElevationM } from "@/features/map/elevation";
+import { formatForageRadius } from "@/features/map/forage-radius";
+import { useUnits } from "@/lib/use-units";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
 // Overview and Layout are the only peer views. Flora, Photos, and bulk
@@ -37,6 +41,9 @@ export const APIARY_TABS = ["overview", "layout"] as const;
 export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const apiary = useApiary(apiaryId);
   const hives = useApiaryHives(apiaryId);
+  // Same query key the overview uses, so the frost read costs no extra fetch.
+  const weather = useApiaryWeather(apiaryId);
+  const units = useUnits();
   const access = useAccessProfile();
   const canEdit = ["admin", "editor"].includes(
     apiaryRole(access.data, apiaryId) ?? "",
@@ -111,14 +118,24 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
                 {hives.data?.length === 1 ? "hive" : "hives"}
               </span>
               {detail.latitude != null && detail.longitude != null && (
-                <span className="inline-flex items-center gap-1.5 font-mono text-xs">
-                  <MapPin className="size-4" />
-                  {detail.latitude.toFixed(4)}, {detail.longitude.toFixed(4)}
-                  {formatElevationM(detail.elevationM, detail.elevationSource)
-                    ? ` · ${formatElevationM(detail.elevationM, detail.elevationSource)}`
-                    : ""}
-                </span>
+                <>
+                  <span className="inline-flex items-center gap-1.5 font-mono text-xs">
+                    <MapPin className="size-4" />
+                    {detail.latitude.toFixed(4)}, {detail.longitude.toFixed(4)}
+                    {formatElevationM(detail.elevationM, detail.elevationSource)
+                      ? ` · ${formatElevationM(detail.elevationM, detail.elevationSource)}`
+                      : ""}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <CircleDashed className="size-4" />
+                    {formatForageRadius(detail.forageRadiusM, units.units)}{" "}
+                    forage
+                  </span>
+                </>
               )}
+              {/* Frost sits next to elevation: together they are why two
+                  yards 400 m apart behave differently. */}
+              <FrostLine frost={weather.data?.frost} />
             </div>
             {detail.notes && (
               <p className="mt-2 max-w-2xl text-sm text-muted-foreground">

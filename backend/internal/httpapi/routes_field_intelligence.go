@@ -66,8 +66,42 @@ type apiaryWeatherResponse struct {
 	Source   string          `json:"source"`
 	Fetched  time.Time       `json:"fetchedAt"`
 	Forecast weatherForecast `json:"forecast"`
-	Alerts   []weatherAlert  `json:"alerts"`
-	Feeding  feedingStatus   `json:"feedingStatus"`
+	// Daily arrays start frostLookbackDays in the past. ForecastStart is the
+	// index of today so callers can render the outlook without the history.
+	ForecastStart int            `json:"forecastStartIndex"`
+	Alerts        []weatherAlert `json:"alerts"`
+	Frost         frostSummary   `json:"frost"`
+	Feeding       feedingStatus  `json:"feedingStatus"`
+}
+
+// frostLookbackDays is the "last week" in "this stand frosted N nights last
+// week" — the past window requested from the existing weather snapshot.
+const frostLookbackDays = 7
+
+// Freezing, and the hard freeze that ends a bloom rather than nipping it.
+// Canonical Fahrenheit, matching the Open-Meteo request the app already makes.
+const (
+	frostThresholdF      = 32.0
+	hardFreezeThresholdF = 28.0
+)
+
+// frostSummary is the night-lows read of the pin: what already happened in the
+// past week, and the next frost in the outlook. Available is false when the
+// snapshot carries no past days (a cache row written before past_days, or a
+// provider that returned only the outlook) — a silent zero would read as
+// "no frost" when it means "not known".
+type frostSummary struct {
+	Available        bool     `json:"available"`
+	ThresholdF       float64  `json:"thresholdF"`
+	WindowStart      string   `json:"windowStart"`
+	WindowEnd        string   `json:"windowEnd"`
+	NightsLastWeek   int      `json:"nightsLastWeek"`
+	HardFreezeNights int      `json:"hardFreezeNights"`
+	LowestF          *float64 `json:"lowestF"`
+	Dates            []string `json:"dates"`
+	UpcomingNights   int      `json:"upcomingNights"`
+	NextFrostDate    *string  `json:"nextFrostDate"`
+	Summary          string   `json:"summary"`
 }
 
 type feedingStatus struct {
@@ -76,9 +110,108 @@ type feedingStatus struct {
 	NeedsAttention bool       `json:"needsAttention"`
 }
 
+// weatherLocation resolves the apiary's own timezone so "today" is the
+// stand's today, not the server's. Falls back to the server zone when the
+// host has no tzdata for the name.
+func weatherLocation(forecast weatherForecast) *time.Location {
+	if forecast.Timezone == "" {
+		return time.Local
+	}
+	location, err := time.LoadLocation(forecast.Timezone)
+	if err != nil {
+		return time.Local
+	}
+	return location
+}
+
+// forecastStartIndex is the first daily index that is today or later. Every
+// index before it is the past week the frost read is built from.
+func forecastStartIndex(forecast weatherForecast) int {
+	today := time.Now().In(weatherLocation(forecast)).Format("2006-01-02")
+	for index, date := range forecast.Daily.Time {
+		if date >= today {
+			return index
+		}
+	}
+	return len(forecast.Daily.Time)
+}
+
+// dailyMin reads the daily minimum at an index, or false when the provider
+// returned a shorter array than the date list.
+func dailyMin(forecast weatherForecast, index int) (float64, bool) {
+	if index < 0 || index >= len(forecast.Daily.TemperatureMin) {
+		return 0, false
+	}
+	return forecast.Daily.TemperatureMin[index], true
+}
+
+// frostRead answers "this stand frosted N nights last week" from the snapshot
+// already cached for the pin. No new provider.
+func frostRead(forecast weatherForecast) frostSummary {
+	start := forecastStartIndex(forecast)
+	value := frostSummary{ThresholdF: frostThresholdF, Dates: []string{}}
+	if start > 0 {
+		value.Available = true
+		value.WindowStart = forecast.Daily.Time[0]
+		value.WindowEnd = forecast.Daily.Time[start-1]
+	}
+	for index := 0; index < start; index++ {
+		low, ok := dailyMin(forecast, index)
+		if !ok {
+			continue
+		}
+		if value.LowestF == nil || low < *value.LowestF {
+			lowest := low
+			value.LowestF = &lowest
+		}
+		if low <= frostThresholdF {
+			value.NightsLastWeek++
+			value.Dates = append(value.Dates, forecast.Daily.Time[index])
+		}
+		if low <= hardFreezeThresholdF {
+			value.HardFreezeNights++
+		}
+	}
+	for index := start; index < len(forecast.Daily.Time); index++ {
+		low, ok := dailyMin(forecast, index)
+		if !ok || low > frostThresholdF {
+			continue
+		}
+		value.UpcomingNights++
+		if value.NextFrostDate == nil {
+			date := forecast.Daily.Time[index]
+			value.NextFrostDate = &date
+		}
+	}
+	value.Summary = frostSentence(value)
+	return value
+}
+
+func frostSentence(value frostSummary) string {
+	if !value.Available {
+		return "Night lows for the past week are not in this snapshot yet."
+	}
+	switch {
+	case value.NightsLastWeek == 0:
+		return "No frost at this stand in the past week."
+	case value.NightsLastWeek == 1:
+		return "This stand frosted 1 night last week."
+	default:
+		return fmt.Sprintf("This stand frosted %d nights last week.",
+			value.NightsLastWeek)
+	}
+}
+
+// weatherAlerts warns about the outlook only: start is the first daily index
+// that is today or later, so the past week the frost read uses never turns
+// into a cold-snap alert for a night that already passed.
 func weatherAlerts(forecast weatherForecast, feeding feedingStatus) []weatherAlert {
+	start := forecastStartIndex(forecast)
 	alerts := []weatherAlert{}
 	for index, date := range forecast.Daily.Time {
+		if index < start {
+			continue
+		}
 		if index < len(forecast.Daily.TemperatureMin) &&
 			forecast.Daily.TemperatureMin[index] <= 32 {
 			message := fmt.Sprintf("Cold snap: %.0f°F low; check feed and wind protection.",
@@ -144,7 +277,8 @@ func (s *Server) loadApiaryWeather(
 		if json.Unmarshal(cached, &forecast) == nil {
 			return &apiaryWeatherResponse{
 				ApiaryID: apiaryID, Source: "Open-Meteo", Fetched: fetched,
-				Forecast: forecast, Alerts: weatherAlerts(forecast, feeding),
+				Forecast: forecast, ForecastStart: forecastStartIndex(forecast),
+				Alerts: weatherAlerts(forecast, feeding), Frost: frostRead(forecast),
 				Feeding: feeding,
 			}, nil
 		}
@@ -163,6 +297,10 @@ func (s *Server) loadApiaryWeather(
 	query.Set("wind_speed_unit", "mph")
 	query.Set("precipitation_unit", "inch")
 	query.Set("forecast_days", "10")
+	// Frost and night lows at the pin come from the same snapshot, not a new
+	// provider: the forecast endpoint returns the past week's daily minimum
+	// alongside the outlook when past_days is set.
+	query.Set("past_days", strconv.Itoa(frostLookbackDays))
 	query.Set("timezone", "auto")
 
 	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
@@ -202,7 +340,8 @@ func (s *Server) loadApiaryWeather(
 	}
 	return &apiaryWeatherResponse{
 		ApiaryID: apiaryID, Source: "Open-Meteo", Fetched: fetched,
-		Forecast: forecast, Alerts: weatherAlerts(forecast, feeding),
+		Forecast: forecast, ForecastStart: forecastStartIndex(forecast),
+		Alerts: weatherAlerts(forecast, feeding), Frost: frostRead(forecast),
 		Feeding: feeding,
 	}, nil
 }
@@ -256,19 +395,25 @@ func distanceMiles(lat1, lon1, lat2, lon2 float64) float64 {
 	return 3958.8 * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
+// forecastWarmthShift nudges a bloom prediction by the coming week's warmth.
+// The daily arrays now open on the past week, so the average starts at today.
 func forecastWarmthShift(forecast weatherForecast) int {
-	days := len(forecast.Daily.TemperatureMax)
-	if days > 7 {
-		days = 7
+	start := forecastStartIndex(forecast)
+	if start > len(forecast.Daily.TemperatureMax) {
+		start = len(forecast.Daily.TemperatureMax)
 	}
-	if days == 0 {
+	window := forecast.Daily.TemperatureMax[start:]
+	if len(window) > 7 {
+		window = window[:7]
+	}
+	if len(window) == 0 {
 		return 0
 	}
 	sum := 0.0
-	for _, value := range forecast.Daily.TemperatureMax[:days] {
+	for _, value := range window {
 		sum += value
 	}
-	average := sum / float64(days)
+	average := sum / float64(len(window))
 	switch {
 	case average >= 75:
 		return -4

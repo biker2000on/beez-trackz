@@ -7,9 +7,20 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 
+import { useUnits } from "@/lib/use-units";
+
 import { lookupTerrainElevation, type ElevationSource } from "./elevation";
+import {
+  clampForageRadius,
+  formatForageRadius,
+  FORAGE_RADIUS_MAX_M,
+  FORAGE_RADIUS_MIN_M,
+  FORAGE_RADIUS_PRESETS_M,
+  FORAGE_RADIUS_STEP_M,
+} from "./forage-radius";
 import { DEFAULT_TILE_LAYER, TILE_LAYERS, type TileLayerId } from "./tile-layers";
 
 import "leaflet/dist/leaflet.css";
@@ -19,6 +30,12 @@ export interface LocationValue {
   longitude: number | null;
   elevationM: number | null;
   elevationSource: ElevationSource | null;
+  /**
+   * Forage circle drawn around the pin; also the Immich search radius.
+   * Optional: a surface that only moves the pin (the canvas Set location
+   * dialog) omits it, and the server then leaves the stored radius alone.
+   */
+  forageRadiusM?: number;
 }
 
 interface LocationPickerProps {
@@ -65,11 +82,13 @@ export function LocationPicker({
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("leaflet").Map | null>(null);
   const markerRef = useRef<import("leaflet").CircleMarker | null>(null);
+  const forageRef = useRef<import("leaflet").Circle | null>(null);
   const tileRef = useRef<import("leaflet").TileLayer | null>(null);
   const onChangeRef = useRef(onChange);
   const valueRef = useRef(value);
   const userClearedElevation = useRef(false);
   const lookedUpPin = useRef<{ lat: number; lng: number } | null>(null);
+  const units = useUnits();
   const [layerId, setLayerId] = useState<TileLayerId>(DEFAULT_TILE_LAYER);
   const [locating, setLocating] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
@@ -122,6 +141,19 @@ export function LocationPicker({
         maxNativeZoom: def.maxNativeZoom,
         maxZoom: def.maxZoom,
       }).addTo(map);
+      // Forage circle first so the pin draws on top of it.
+      const forage =
+        valueRef.current.forageRadiusM == null
+          ? null
+          : L.circle([startLat, startLng], {
+              radius: clampForageRadius(valueRef.current.forageRadiusM),
+              color: "#d97706",
+              weight: 1.5,
+              dashArray: "5 5",
+              fillColor: "#fbbf24",
+              fillOpacity: 0.08,
+              interactive: false,
+            }).addTo(map);
       const marker = L.circleMarker([startLat, startLng], {
         radius: 8,
         color: "#d97706",
@@ -140,10 +172,9 @@ export function LocationPicker({
       const commit = (lat: number, lng: number) => {
         const cur = valueRef.current;
         onChangeRef.current({
+          ...cur,
           latitude: roundCoord(lat),
           longitude: roundCoord(lng),
-          elevationM: cur.elevationM,
-          elevationSource: cur.elevationSource,
         });
       };
 
@@ -176,6 +207,7 @@ export function LocationPicker({
 
       mapRef.current = map;
       markerRef.current = marker;
+      forageRef.current = forage;
       tileRef.current = tile;
       requestAnimationFrame(() => map?.invalidateSize());
       window.setTimeout(() => map?.invalidateSize(), 250);
@@ -186,6 +218,7 @@ export function LocationPicker({
       map?.remove();
       mapRef.current = null;
       markerRef.current = null;
+      forageRef.current = null;
       tileRef.current = null;
     };
     // Recreate when the map first appears. Pin moves and layer swaps
@@ -205,11 +238,25 @@ export function LocationPicker({
       Math.abs(cur.lng - next.lng) > 1e-7
     ) {
       marker.setLatLng(next);
+      forageRef.current?.setLatLng(next);
       if (!map.getBounds().contains(next)) {
         map.panTo(next);
       }
     }
   }, [value.latitude, value.longitude]);
+
+  // The circle is the point of the map here: fit the view to it so a 5 km
+  // ring is not silently cropped at zoom 18.
+  useEffect(() => {
+    const circle = forageRef.current;
+    const map = mapRef.current;
+    if (!circle || !map) return;
+    if (value.forageRadiusM == null) return;
+    const next = clampForageRadius(value.forageRadiusM);
+    if (circle.getRadius() === next) return;
+    circle.setRadius(next);
+    map.fitBounds(circle.getBounds(), { padding: [16, 16], animate: false });
+  }, [value.forageRadiusM]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -224,6 +271,7 @@ export function LocationPicker({
         maxNativeZoom: def.maxNativeZoom,
         maxZoom: def.maxZoom,
       }).addTo(map);
+      tile.bringToBack();
       tileRef.current = tile;
     });
   }, [layerId]);
@@ -273,18 +321,16 @@ export function LocationPicker({
     const lng = parseCoord(lngRaw);
     if (lat == null || lng == null || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       onChange({
+        ...value,
         latitude: lat != null && lat >= -90 && lat <= 90 ? lat : null,
         longitude: lng != null && lng >= -180 && lng <= 180 ? lng : null,
-        elevationM: value.elevationM,
-        elevationSource: value.elevationSource,
       });
       return;
     }
     onChange({
+      ...value,
       latitude: roundCoord(lat),
       longitude: roundCoord(lng),
-      elevationM: value.elevationM,
-      elevationSource: value.elevationSource,
     });
   }
 
@@ -315,6 +361,7 @@ export function LocationPicker({
         const altitude = position.coords.altitude;
         const hasAlt = altitude != null && Number.isFinite(altitude);
         onChange({
+          ...value,
           latitude: roundCoord(position.coords.latitude),
           longitude: roundCoord(position.coords.longitude),
           elevationM: hasAlt ? Math.round(altitude * 10) / 10 : value.elevationM,
@@ -356,6 +403,7 @@ export function LocationPicker({
       return;
     }
     onChange({
+      ...value,
       latitude: roundCoord(lat),
       longitude: roundCoord(lng),
       elevationM: Math.round(meters * 10) / 10,
@@ -363,6 +411,10 @@ export function LocationPicker({
     });
   }
 
+  // A caller that does not pass a radius is not editing one: the canvas
+  // "Set location" dialog moves the pin only. Show no ring it cannot change.
+  const radius =
+    value.forageRadiusM == null ? null : clampForageRadius(value.forageRadiusM);
   const layer = TILE_LAYERS[layerId];
 
   return (
@@ -499,6 +551,48 @@ export function LocationPicker({
         </p>
       </div>
 
+      {radius != null ? (
+      <div className="grid gap-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <Label htmlFor="location-forage">Forage radius</Label>
+          <span className="text-sm font-medium tabular-nums">
+            {formatForageRadius(radius, units.units)}
+          </span>
+        </div>
+        <Slider
+          id="location-forage"
+          min={FORAGE_RADIUS_MIN_M}
+          max={FORAGE_RADIUS_MAX_M}
+          step={FORAGE_RADIUS_STEP_M}
+          value={[radius]}
+          disabled={disabled}
+          className="min-h-11"
+          onValueChange={([next]) =>
+            onChange({ ...value, forageRadiusM: clampForageRadius(next) })
+          }
+        />
+        <div className="flex flex-wrap gap-2">
+          {FORAGE_RADIUS_PRESETS_M.map((preset) => (
+            <Button
+              key={preset}
+              type="button"
+              size="sm"
+              variant={radius === preset ? "default" : "outline"}
+              disabled={disabled}
+              onClick={() => onChange({ ...value, forageRadiusM: preset })}
+            >
+              {formatForageRadius(preset, units.units)}
+            </Button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The circle drawn around the pin, so the tile layer shows the tree
+          line, crop, and water this yard actually works. It is also the
+          radius the yard photo timeline searches around the pin.
+        </p>
+      </div>
+      ) : null}
+
       {hasPin ? (
         <div className="grid gap-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -519,8 +613,12 @@ export function LocationPicker({
             className="h-56 w-full overflow-hidden rounded-md border [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:font-sans"
           />
           <p className="text-xs text-muted-foreground">
-            Click the map or drag the pin. {layer.seenBy} sees tile requests
-            for this location while the map is open.
+            Click the map or drag the pin.
+            {radius != null
+              ? ` The dashed ring is the ${formatForageRadius(radius, units.units)} forage circle.`
+              : ""}{" "}
+            {layer.seenBy} sees tile requests for this location while the map
+            is open.
           </p>
         </div>
       ) : (

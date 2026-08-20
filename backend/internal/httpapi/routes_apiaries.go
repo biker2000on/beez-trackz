@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,31 @@ const (
 	elevationSourceOverride    = "override"
 )
 
+// Forage radius around the pin: the circle drawn on the Leaflet map, and the
+// radius the Immich yard-timeline scan searches. 2.5 km is the working
+// default; the bounds keep it a forage circle rather than a county.
+const (
+	forageRadiusDefaultM = 2500
+	forageRadiusMinM     = 250
+	forageRadiusMaxM     = 8000
+)
+
+// apiaryValidateForageRadius refuses a radius that is not a forage distance.
+// It returns the value unchanged, including nil: an omitted radius means
+// "leave it alone" on update and "take the default" on create. Surfaces that
+// only set the pin (the canvas Set location dialog) must not silently reset a
+// radius the operator tuned on the map.
+func apiaryValidateForageRadius(v *int) (*int, error) {
+	if v == nil {
+		return nil, nil
+	}
+	if *v < forageRadiusMinM || *v > forageRadiusMaxM {
+		return nil, fmt.Errorf("forage radius must be between %d and %d meters",
+			forageRadiusMinM, forageRadiusMaxM)
+	}
+	return v, nil
+}
+
 // apiaryJSON is the detail response shape for a single apiary.
 type apiaryJSON struct {
 	ID                string          `json:"id"`
@@ -35,6 +62,7 @@ type apiaryJSON struct {
 	Longitude         *float64        `json:"longitude"`
 	ElevationM        *float64        `json:"elevationM"`
 	ElevationSource   *string         `json:"elevationSource"`
+	ForageRadiusM     int             `json:"forageRadiusM"`
 	Notes             *string         `json:"notes"`
 	CanvasLayout      json.RawMessage `json:"canvasLayout"`
 	SatelliteImageKey *string         `json:"satelliteImageKey"`
@@ -50,6 +78,7 @@ type apiaryListJSON struct {
 	Longitude       *float64  `json:"longitude"`
 	ElevationM      *float64  `json:"elevationM"`
 	ElevationSource *string   `json:"elevationSource"`
+	ForageRadiusM   int       `json:"forageRadiusM"`
 	Notes           *string   `json:"notes"`
 	CreatedAt       time.Time `json:"createdAt"`
 	HiveCount       int64     `json:"hiveCount"`
@@ -62,6 +91,7 @@ type apiaryPayload struct {
 	Longitude       *float64 `json:"longitude"`
 	ElevationM      *float64 `json:"elevationM"`
 	ElevationSource *string  `json:"elevationSource"`
+	ForageRadiusM   *int     `json:"forageRadiusM"`
 	Notes           *string  `json:"notes"`
 }
 
@@ -104,10 +134,12 @@ func (s *Server) apiaryFetch(ctx context.Context, id any) (*apiaryJSON, error) {
 	var layout []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, latitude, longitude, elevation_m, elevation_source,
-		       notes, canvas_layout, satellite_image_key, created_at, updated_at
+		       forage_radius_m, notes, canvas_layout, satellite_image_key,
+		       created_at, updated_at
 		FROM apiaries WHERE id = $1`, id).
 		Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude, &a.ElevationM, &a.ElevationSource,
-			&a.Notes, &layout, &a.SatelliteImageKey, &a.CreatedAt, &a.UpdatedAt)
+			&a.ForageRadiusM, &a.Notes, &layout, &a.SatelliteImageKey,
+			&a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +152,7 @@ func (s *Server) handleApiaryList(w http.ResponseWriter, r *http.Request) {
 	user := principalFrom(r)
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT a.id, a.name, a.latitude, a.longitude, a.elevation_m, a.elevation_source,
-		       a.notes, a.created_at, count(h.id)
+		       a.forage_radius_m, a.notes, a.created_at, count(h.id)
 		FROM apiaries a
 		LEFT JOIN hives h ON h.apiary_id = a.id
 			AND h.is_archived = false AND h.deadout_date IS NULL
@@ -140,7 +172,7 @@ func (s *Server) handleApiaryList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var a apiaryListJSON
 		if err := rows.Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude,
-			&a.ElevationM, &a.ElevationSource, &a.Notes,
+			&a.ElevationM, &a.ElevationSource, &a.ForageRadiusM, &a.Notes,
 			&a.CreatedAt, &a.HiveCount); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -175,12 +207,19 @@ func (s *Server) handleApiaryCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	radius, err := apiaryValidateForageRadius(req.ForageRadiusM)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var id string
 	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO apiaries (name, latitude, longitude, elevation_m, elevation_source, notes)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		INSERT INTO apiaries (name, latitude, longitude, elevation_m, elevation_source,
+			forage_radius_m, notes)
+		VALUES ($1, $2, $3, $4, $5, COALESCE($6, `+strconv.Itoa(forageRadiusDefaultM)+`), $7)
+		RETURNING id`,
 		name, apiaryRoundCoord(req.Latitude), apiaryRoundCoord(req.Longitude),
-		elev, elevSrc, hiveTextOrNil(req.Notes)).Scan(&id)
+		elev, elevSrc, radius, hiveTextOrNil(req.Notes)).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -238,12 +277,19 @@ func (s *Server) handleApiaryUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, elevErr.Error())
 		return
 	}
+	radius, radiusErr := apiaryValidateForageRadius(req.ForageRadiusM)
+	if radiusErr != nil {
+		writeError(w, http.StatusBadRequest, radiusErr.Error())
+		return
+	}
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE apiaries SET name = $1, latitude = $2, longitude = $3,
-		                    elevation_m = $4, elevation_source = $5, notes = $6
-		WHERE id = $7`,
+		                    elevation_m = $4, elevation_source = $5,
+		                    forage_radius_m = COALESCE($6, forage_radius_m),
+		                    notes = $7
+		WHERE id = $8`,
 		name, apiaryRoundCoord(req.Latitude), apiaryRoundCoord(req.Longitude),
-		elev, elevSrc, hiveTextOrNil(req.Notes), id)
+		elev, elevSrc, radius, hiveTextOrNil(req.Notes), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

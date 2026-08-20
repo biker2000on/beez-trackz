@@ -42,6 +42,10 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountFieldIntelligence(r)
 	s.mountMCP(r)
 
+	// Place and flow: yard scales (CSV ingest, daily weights, and the
+	// series the bloom/inspection overlay chart draws).
+	s.mountScale(r)
+
 	// Units + weekly operations (ntfy, labor minutes, compliance packet).
 	// Separate from mountOperations (treatments / varroa / yard queue).
 	s.mountOps(r)
