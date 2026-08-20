@@ -59,15 +59,14 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    gaps under "Shipped 2026-08-20 — remaining gaps" below.
 7. **Live GnuCash sync**, then **Zebra labels**. The `external_sync`
    location dimension landed with item 6.
-8. **The rest of the 2026-08-18 wave** — **partially shipped 2026-08-20**:
-   field objects (catch boxes, intake, comb age, swarm readiness),
-   health (strength, incidents, deadout autopsy), **units** preference,
-   ntfy, labor, compliance packet (migrations 00025/00026). Still open:
-   place/flow (elevation-banded flora, forage radius, Immich yard
-   timeline, scale hives, frost), photo time-series, queen breeding
-   (mating-yard map), floral claim, pollination — these sit on the
-   yard-map pin/Immich stack or are skip-until-signed per their
-   sections below.
+8. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
+   Polyagent waves (migrations 00025–00029): field objects, health
+   objects, units preference + display sweep, ntfy, labor, compliance
+   packet, place/flow (elevation-banded flora, forage radius, Immich
+   yard timeline, scale-hive CSV ingest, frost), photo time-series,
+   mating-yard field, floral claim. Deliberately still open per their
+   sections: pollination contracts (skip until signed), grafting cycle
+   (skip until recorded), MQTT scale ingest (CSV only for now).
 9. **Extractor controller** — long-term; hardware plus an ingest
    contract onto harvest sessions. Design the session payload when
    extraction IDs stabilize; do not wait to start the controller.
@@ -167,13 +166,12 @@ Polyagent run (consignment / field+health / units+ops; migrations
   does not return `stock_location_id` yet. `GET /stock-locations/inventory`
   is O(locations) round trips — fine at 2–3 locations.
   Transfers/settlements are online-only by design.
-- **Units.** The conversion library, preference, and settings UI landed;
-  display conversion is wired only where the lead applied it — the sweep
-  across honey/feedings/propolis/elevation/weather/lot-weight surfaces
-  and the public Honey Story (operator preference, not viewer locale)
-  remains. Weather stays °F/mph canonical until the Open-Meteo request
-  switches to Celsius in a coordinated change. Lot create/update does not
-  yet persist `honey_weight_entered`.
+- **Units.** Display sweep shipped in wave 2 (honey, feedings, propolis,
+  inspection weather, hive feeding lists, lot form with typed suffixes,
+  Honey Story on the operator preference, `honey_weight_entered`
+  persisted). Still open: the raw °F/mph tiles inside the forecast tab's
+  current-conditions strip, and weather stays °F/mph canonical until the
+  Open-Meteo request switches to Celsius in a coordinated change.
 - **Ops.** ntfy has no access token column (reserved topics fail-soft);
   dispatch is on-demand (`POST /ops/ntfy/dispatch`) — wire it into
   `jobs/schedule.go` or after `recs.Run` for hands-free pushes.
@@ -363,11 +361,11 @@ exist. These are the Saturday-morning objects that are still notes.
   transaction. Splits you already record; packages and bought nucs
   you do not.
 
-## P1 — Place and flow
+## Place and flow — shipped 2026-08-20 (wave 2)
 
-**Added 2026-08-18.** Sits on the yard-map item (Leaflet, elevation,
-registered canvas). Do not start these before the pin and
-`elevation_m` exist.
+**Added 2026-08-18; shipped 2026-08-20** (migration 00027 flora bands /
+forage radius / scales / frost, 00028 Immich timeline). MQTT scale
+ingest deferred — CSV only.
 
 - **Elevation-banded flora.** Bloom observations exist; they are not
   tied to height. Sourwood (and other flora) tracks elevation bands.
@@ -410,11 +408,13 @@ registered canvas). Do not start these before the pin and
   week" next to elevation. Matters for sourwood and for winter.
   No new provider if the existing snapshot already has min temp.
 
-## Colony health beyond mite counts — partially shipped 2026-08-20
+## Colony health beyond mite counts — shipped 2026-08-20
 
-**Added 2026-08-18.** Strength score, incident log, and deadout autopsy
-shipped 2026-08-20; **photo time-series remains open** (build on the
-Immich work). Varroa stays its own item. This is everything
+**Added 2026-08-18; shipped 2026-08-20** (strength score, incident log,
+deadout autopsy in wave 1; photo time-series with operator-labelled
+comparison angles in wave 2, migration 00028). Image analysis on the
+strip was deliberately left out — the `imageAnalysis` task has no
+trustworthy reprocessable pipeline yet. Varroa stays its own item. This is everything
 else a deadout or a weak nuc should have taught us.
 
 - **Photo time-series.** Same hive, same angle, April vs June vs
@@ -439,9 +439,11 @@ else a deadout or a weak nuc should have taught us.
   reports should segment on these rows. A deadout without an
   autopsy is a status change you cannot learn from.
 
-## P1 — Queen breeding
+## Queen breeding — mating yard shipped 2026-08-20
 
-**Added 2026-08-18.** Queen performance scoring exists. Mating place
+**Added 2026-08-18.** Mating-yard field + drone-source note shipped
+2026-08-20 (migration 00029). Grafting cycle stays skipped per the
+bullet below. Queen performance scoring exists. Mating place
 and raising cycle do not.
 
 - **Mating-yard / drone-source map.** Where she mated, which yards
@@ -452,9 +454,12 @@ and raising cycle do not.
   never graft; build when the first graft is recorded as a note
   for the third time.
 
-## P1 — Honey as a declared product
+## Honey as a declared product — floral claim shipped 2026-08-20
 
-**Added 2026-08-18.** Lots, bottling, Honey Story, and market day
+**Added 2026-08-18.** Floral-source claim shipped 2026-08-20 (migration
+00029: lot claim fields, lot form, Honey Story render, `floralClaim` in
+lot JSON for future label templates). Pollination contracts stay
+skipped until one is signed. Lots, bottling, Honey Story, and market day
 exist. The claim on the jar and the number that decides if it
 bottles do not.
 

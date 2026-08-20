@@ -71,9 +71,11 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { FeedingDialog } from "@/features/feedings/feeding-dialog";
+import { useUnits } from "@/lib/use-units";
 import {
   feederTypeLabel,
   feedingTypeLabel,
+  formatFeedingAmount,
   useHiveFeedings,
   useCloseFeeding,
   useRefillFeeding,
@@ -576,6 +578,7 @@ function FeedingsList({
   canEdit: boolean;
 }) {
   const feedings = useHiveFeedings(hiveId);
+  const units = useUnits();
   const closeFeeding = useCloseFeeding();
   const refillFeeding = useRefillFeeding();
   const deleteFeeding = useDeleteFeeding();
@@ -640,8 +643,12 @@ function FeedingsList({
             >
               <div className="min-w-0">
                 <p className="font-medium">
-                  {feedingTypeLabel(feeding.type)} — {feeding.quantity}{" "}
-                  {feeding.quantityUnit}
+                  {feedingTypeLabel(feeding.type)} —{" "}
+                  {formatFeedingAmount(
+                    feeding.quantity,
+                    feeding.quantityUnit,
+                    units.units,
+                  )}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   Fed {formatDate(feeding.dateFed)}

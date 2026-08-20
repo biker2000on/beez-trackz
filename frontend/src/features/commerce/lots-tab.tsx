@@ -36,7 +36,17 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatLbs } from "@/features/honey/format";
-import { useHarvests, useJarInventory } from "@/features/honey/hooks";
+import {
+  useApiaryOptions,
+  useHarvests,
+  useJarInventory,
+} from "@/features/honey/hooks";
+import {
+  parseElevation,
+  parseHoneyMassInput,
+  preferredElevationSuffix,
+} from "@/lib/units";
+import { useUnits } from "@/lib/use-units";
 import { todayISO } from "@/features/honey/format";
 import {
   useCreateBottlingRun,
@@ -95,7 +105,7 @@ export function LotsTab() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={`/api/v1/harvest-lots/${lot.id}/qr`} alt={`QR code for ${lot.lotCode}`} className="size-[88px] rounded-md border bg-white p-1" />
                   <div className="grid content-start gap-1 text-sm">
-                    <p className="font-medium">{lot.honeyVariety ?? "Honey"}{lot.season ? ` · ${lot.season}` : ""}</p>
+                    <p className="font-medium">{lot.floralClaim || (lot.honeyVariety ?? "Honey")}{lot.season ? ` · ${lot.season}` : ""}</p>
                     <p className="text-xs text-muted-foreground">
                       {lot.apiaryRegion ?? (lot.sourceApiaries.join(", ") || "Region not published")}
                     </p>
@@ -178,9 +188,23 @@ function LotFormDialog({
     () => lot?.extractionDate?.slice(0, 10) ?? todayISO(),
   );
   const [weight, setWeight] = React.useState(
-    () => (lot ? String(lot.honeyWeightLbs) : ""),
+    () => lot?.honeyWeightEntered ?? (lot ? String(lot.honeyWeightLbs) : ""),
   );
   const [variety, setVariety] = React.useState(lot?.honeyVariety ?? "");
+  const [claimSpecies, setClaimSpecies] = React.useState(
+    lot?.claimSpecies ?? "",
+  );
+  const [claimYear, setClaimYear] = React.useState(
+    lot?.claimYear != null ? String(lot.claimYear) : "",
+  );
+  const [claimApiaryId, setClaimApiaryId] = React.useState(
+    lot?.claimApiaryId ?? "",
+  );
+  const [claimElevation, setClaimElevation] = React.useState(
+    lot?.claimElevationM != null ? `${Math.round(lot.claimElevationM)} m` : "",
+  );
+  const apiaries = useApiaryOptions();
+  const units = useUnits();
   const [season, setSeason] = React.useState(lot?.season ?? "");
   const [region, setRegion] = React.useState(lot?.apiaryRegion ?? "");
   const [bloom, setBloom] = React.useState(lot?.bloomNotes ?? "");
@@ -204,6 +228,10 @@ function LotFormDialog({
     setDate(todayISO());
     setWeight("");
     setVariety("");
+    setClaimSpecies("");
+    setClaimYear("");
+    setClaimApiaryId("");
+    setClaimElevation("");
     setSeason("");
     setRegion("");
     setBloom("");
@@ -216,12 +244,20 @@ function LotFormDialog({
   }
 
   function submit(resetAfter = false) {
-    const pounds = Number(weight);
-    if (!lotCode.trim() || !date || !Number.isFinite(pounds) || pounds < 0) return;
+    const pounds = parseHoneyMassInput(weight, units.units);
+    if (!lotCode.trim() || !date || pounds == null || pounds < 0) return;
+    const claimYearNumber = claimYear.trim() ? Number(claimYear) : undefined;
+    if (claimYearNumber !== undefined && !Number.isInteger(claimYearNumber)) return;
+    const elevation = parseElevation(claimElevation, units.units);
     const payload = {
       lotCode: lotCode.trim(),
       extractionDate: date,
       honeyWeightLbs: pounds,
+      honeyWeightEntered: weight.trim() || undefined,
+      claimSpecies: claimSpecies.trim() || undefined,
+      claimYear: claimYearNumber,
+      claimApiaryId: claimApiaryId || undefined,
+      claimElevationM: elevation?.meters,
       honeyVariety: variety.trim() || undefined,
       season: season.trim() || undefined,
       apiaryRegion: region.trim() || undefined,
@@ -266,7 +302,7 @@ function LotFormDialog({
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label htmlFor="lot-code">Lot code</Label><Input id="lot-code" value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-            <div className="grid gap-1.5"><Label htmlFor="lot-weight">Extracted lb</Label><Input id="lot-weight" type="number" min="0" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} /></div>
+            <div className="grid gap-1.5"><Label htmlFor="lot-weight">Extracted weight</Label><Input id="lot-weight" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder={units.units === "metric" ? "9 kg or 20 lb" : "20 lb or 9 kg"} /></div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">
@@ -283,6 +319,41 @@ function LotFormDialog({
             <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
             <div className="grid gap-1.5"><Label>Approximate region</Label><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Western New York" /></div>
           </div>
+          <fieldset className="grid gap-3 rounded-md border p-3">
+            <legend className="px-1 text-sm font-medium">
+              Floral source claim
+            </legend>
+            <p className="text-xs text-muted-foreground">
+              The declared source shared by the lot, the label, and the public
+              Honey Story — e.g. &ldquo;Sourwood 2026, Yard B, 2100 ft&rdquo;.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="claim-species">Species or blend</Label>
+                <Input id="claim-species" value={claimSpecies} onChange={(e) => setClaimSpecies(e.target.value)} placeholder="Sourwood" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="claim-year">Year</Label>
+                <Input id="claim-year" type="number" min="1900" max="2100" value={claimYear} onChange={(e) => setClaimYear(e.target.value)} placeholder={String(new Date().getFullYear())} />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Yard</Label>
+                <Select value={claimApiaryId || "none"} onValueChange={(value) => setClaimApiaryId(value === "none" ? "" : value)}>
+                  <SelectTrigger><SelectValue placeholder="No yard claimed" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No yard claimed</SelectItem>
+                    {(apiaries.data ?? []).map((apiary) => (
+                      <SelectItem key={apiary.id} value={apiary.id}>{apiary.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="claim-elevation">Elevation ({preferredElevationSuffix(units.units)})</Label>
+                <Input id="claim-elevation" inputMode="decimal" value={claimElevation} onChange={(e) => setClaimElevation(e.target.value)} placeholder={units.units === "us" ? "2100 ft" : "640 m"} />
+              </div>
+            </div>
+          </fieldset>
           <div className="grid gap-1.5">
             <Label>Source hive harvests</Label>
             <div className="grid max-h-36 gap-2 overflow-y-auto rounded-md border p-3 sm:grid-cols-2">

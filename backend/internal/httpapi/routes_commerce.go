@@ -1079,7 +1079,7 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 		"slug": item.PublicSlug, "name": name,
 		"lotCode": item.LotCode, "season": item.Season,
 		"description": item.BloomNotes, "floralSource": floralSource,
-		"floralClaim": item.FloralClaim,
+		"floralClaim":  item.FloralClaim,
 		"claimSpecies": item.ClaimSpecies, "claimYear": item.ClaimYear,
 		"claimApiaryName": item.ClaimApiaryName, "claimElevationM": item.ClaimElevationM,
 		"apiaryRegion": item.ApiaryRegion, "sourceApiaries": item.SourceApiaries,
@@ -1087,7 +1087,7 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 		"beekeeperNotes": item.BeekeeperStory, "testingData": item.TestingData,
 		"reorderUrl": item.ReorderURL, "photos": publicPhotos,
 		"bottlingRuns": publicBottlingRuns,
-		"units": units, "temperatureUnit": temperatureUnit,
+		"units":        units, "temperatureUnit": temperatureUnit,
 	})
 }
 

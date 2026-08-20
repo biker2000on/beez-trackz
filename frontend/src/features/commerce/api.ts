@@ -11,7 +11,14 @@ export interface HarvestLot {
   publicSlug: string;
   extractionDate: string;
   honeyWeightLbs: number;
+  honeyWeightEntered: string | null;
   honeyVariety: string | null;
+  claimSpecies: string | null;
+  claimYear: number | null;
+  claimApiaryId: string | null;
+  claimApiaryName: string | null;
+  claimElevationM: number | null;
+  floralClaim: string;
   season: string | null;
   apiaryRegion: string | null;
   bloomNotes: string | null;
@@ -53,7 +60,12 @@ export interface HarvestLotInput {
   publicSlug?: string;
   extractionDate: string;
   honeyWeightLbs: number;
+  honeyWeightEntered?: string;
   honeyVariety?: string;
+  claimSpecies?: string;
+  claimYear?: number;
+  claimApiaryId?: string;
+  claimElevationM?: number;
   season?: string;
   apiaryRegion?: string;
   bloomNotes?: string;
