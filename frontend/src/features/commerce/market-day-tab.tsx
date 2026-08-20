@@ -90,14 +90,17 @@ export function MarketDayTab({
   // What is actually on the shelf at the chosen place. Until the request
   // lands there is nothing to subtract, so the global figure stands in.
   const onShelf = new Map<string, number>();
-  for (const item of stock.data?.items ?? []) {
+  // Guard the shape, not just presence: a malformed payload must fall back
+  // to the global figure rather than reading every shelf as empty.
+  const stockItems = Array.isArray(stock.data?.items) ? stock.data.items : null;
+  for (const item of stockItems ?? []) {
     const key = item.jarSizeId
       ? jarKey(item.jarSizeId)
       : productKey(item.productId ?? "");
     onShelf.set(key, item.byLocation[sellingFrom] ?? 0);
   }
   const stockFor = (key: string, fallback: number) =>
-    stock.data ? (onShelf.get(key) ?? 0) : fallback;
+    stockItems ? (onShelf.get(key) ?? 0) : fallback;
   const awayUnits = locations
     .filter((location) => !location.isHome)
     .reduce((sum, location) => sum + location.onHandUnits, 0);
