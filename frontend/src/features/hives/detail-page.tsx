@@ -91,12 +91,12 @@ import { HiveFormDialog } from "./hive-form-dialog";
 import { HiveOverviewTab } from "./overview-tab";
 import {
   useArchiveHive,
-  useDeadoutHive,
   useHive,
   useHiveLocationHistory,
   useHiveSplits,
   useUnarchiveHive,
 } from "./hooks";
+import { DeadoutAutopsyDialog } from "./deadout-autopsy-dialog";
 import { formatDate } from "./lib";
 import { SplitDialog } from "./split-dialog";
 
@@ -149,7 +149,6 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
 
   const archiveHive = useArchiveHive();
   const unarchiveHive = useUnarchiveHive();
-  const deadoutHive = useDeadoutHive();
 
   // Every one of these writes; a viewer gets none of them registered, so the
   // `?` dialog and the command palette stop offering actions that do nothing.
@@ -465,34 +464,12 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={deadoutOpen} onOpenChange={setDeadoutOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Mark {data.positionLabel} as a deadout?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              The hive is marked dead with today&apos;s date and archived.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={(event) => {
-                event.preventDefault();
-                void run(async () => {
-                  await deadoutHive.mutateAsync(data.id);
-                  setDeadoutOpen(false);
-                }, "Deadout recorded");
-              }}
-              disabled={deadoutHive.isPending}
-            >
-              {deadoutHive.isPending ? "Saving…" : "Mark deadout"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeadoutAutopsyDialog
+        open={deadoutOpen}
+        onOpenChange={setDeadoutOpen}
+        hiveId={data.id}
+        hiveName={data.positionLabel}
+      />
     </div>
   );
 }

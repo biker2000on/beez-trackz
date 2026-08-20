@@ -185,6 +185,7 @@ export interface ReceiveStockBody {
   quantity: number;
   reason: string;
   unitCostCents?: number | null;
+  firstDeployedYear?: number | null;
   date?: string;
   notes?: string;
 }
@@ -280,6 +281,7 @@ export interface UpdateStockBody {
   notes?: string | null;
   neededQuantity?: number;
   unitCostCents?: number | null;
+  firstDeployedYear?: number | null;
 }
 
 export function useUpdateStock() {
@@ -298,6 +300,7 @@ export interface CreateStockBody {
   frameCondition?: "drawn" | "fresh";
   neededQuantity?: number;
   unitCostCents?: number | null;
+  firstDeployedYear?: number | null;
 }
 
 export function useCreateStock() {

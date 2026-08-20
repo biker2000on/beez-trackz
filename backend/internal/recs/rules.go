@@ -29,6 +29,7 @@ type rule struct {
 func allRules() []rule {
 	return []rule{
 		{Type: "inspection_due", Check: checkInspectionDue},
+		{Type: "swarm_split_readiness", Check: checkSwarmReadiness},
 		{Type: "treatment_reminder", Check: checkTreatmentReminder},
 		{Type: "equipment_needed", Check: checkEquipmentNeeded},
 		{Type: "feeder_check", Check: checkFeederCheck},

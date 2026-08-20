@@ -103,6 +103,16 @@ export interface SurvivalReport {
   byQueenLine: SurvivalGroup[];
 }
 
+export interface AutopsySummary {
+  year: number;
+  total: number;
+  moisture: number;
+  mold: number;
+  stores: { label: string; count: number }[];
+  clusterPositions: { label: string; count: number }[];
+  queenStatuses: { label: string; count: number }[];
+}
+
 export interface YieldReport {
   year: number;
   totalPounds: number;
@@ -162,10 +172,45 @@ export interface YardQueue {
   yards: YardQueueYard[];
 }
 
+export interface FieldIncident {
+  id: string;
+  incidentType: "robbing" | "yellowjackets" | "bears" | "skunks" | "flood";
+  incidentDate: string;
+  apiaryId: string;
+  apiaryName: string;
+  hiveId: string | null;
+  hiveName: string | null;
+  notes: string | null;
+}
+
 export function useYardQueue() {
   return useQuery({
     queryKey: ["operations", "yard-queue"],
     queryFn: () => api.get<YardQueue>("/operations/yard-queue"),
+  });
+}
+
+export function useFieldIncidents() {
+  return useQuery({
+    queryKey: ["operations", "incidents"],
+    queryFn: () => api.get<FieldIncident[]>("/incidents"),
+  });
+}
+
+export function useCreateFieldIncident() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      incidentType: FieldIncident["incidentType"];
+      incidentDate: string;
+      apiaryId: string;
+      hiveId?: string;
+      notes?: string;
+    }) => api.post<{ id: string }>("/incidents", body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["operations", "incidents"] });
+      void client.invalidateQueries({ queryKey: ["hives"] });
+    },
   });
 }
 
@@ -199,6 +244,13 @@ export function useSurvivalReport(year: number) {
     queryKey: ["analytics", "survival", year],
     queryFn: () =>
       api.get<SurvivalReport>("/analytics/survival", { params: { year } }),
+  });
+}
+
+export function useAutopsySummary(year: number) {
+  return useQuery({
+    queryKey: ["analytics", "autopsies", year],
+    queryFn: () => api.get<AutopsySummary>("/field/autopsy-summary", { params: { year } }),
   });
 }
 

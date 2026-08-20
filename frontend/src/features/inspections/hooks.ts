@@ -32,6 +32,9 @@ export interface Inspection {
   storesHoney: number | null;
   storesPollen: number | null;
   temperament: number | null;
+  framesOfBees: number | null;
+  framesOfBrood: number | null;
+  framesOfStores: number | null;
   pests: InspectionPest[] | null;
   treatments: InspectionTreatment[] | null;
   notes: string | null;
@@ -82,6 +85,9 @@ export interface InspectionPayload {
   storesHoney?: number | null;
   storesPollen?: number | null;
   temperament?: number | null;
+  framesOfBees?: number | null;
+  framesOfBrood?: number | null;
+  framesOfStores?: number | null;
   pests?: InspectionPest[] | null;
   treatments?: InspectionTreatment[] | null;
   miteCounts?: {

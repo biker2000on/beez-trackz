@@ -50,6 +50,11 @@ import {
 const NOT_RATED = "none";
 
 const ratingField = z.string();
+const frameCountField = z.string().refine(
+  (value) =>
+    value === "" || (Number.isInteger(Number(value)) && Number(value) >= 0),
+  "Enter a non-negative whole number",
+);
 
 const inspectionSchema = z.object({
   date: z.string().min(1, "Date is required"),
@@ -60,6 +65,9 @@ const inspectionSchema = z.object({
   storesHoney: ratingField,
   storesPollen: ratingField,
   temperament: ratingField,
+  framesOfBees: frameCountField,
+  framesOfBrood: frameCountField,
+  framesOfStores: frameCountField,
   pests: z.array(
     z.object({
       type: z.string().trim().min(1, "Pest type is required"),
@@ -109,6 +117,12 @@ function toValues(inspection?: Inspection | null): InspectionValues {
       inspection?.temperament != null
         ? String(inspection.temperament)
         : NOT_RATED,
+    framesOfBees:
+      inspection?.framesOfBees != null ? String(inspection.framesOfBees) : "",
+    framesOfBrood:
+      inspection?.framesOfBrood != null ? String(inspection.framesOfBrood) : "",
+    framesOfStores:
+      inspection?.framesOfStores != null ? String(inspection.framesOfStores) : "",
     pests: (inspection?.pests ?? []).map((pest) => ({
       type: pest.type,
       count: pest.count != null ? String(pest.count) : "",
@@ -242,6 +256,10 @@ export function InspectionFormDialog({
     return value === NOT_RATED ? null : Number(value);
   }
 
+  function frameCount(value: string): number | null {
+    return value.trim() === "" ? null : Number(value);
+  }
+
   async function onSubmit(values: InspectionValues, resetAfter = false) {
     const miteCount = values.miteCount.trim() === "" ? null : Number(values.miteCount);
     const miteSample = values.miteSampleSize.trim() === "" ? undefined : Number(values.miteSampleSize);
@@ -291,6 +309,9 @@ export function InspectionFormDialog({
       storesHoney: rating(values.storesHoney),
       storesPollen: rating(values.storesPollen),
       temperament: rating(values.temperament),
+      framesOfBees: frameCount(values.framesOfBees),
+      framesOfBrood: frameCount(values.framesOfBrood),
+      framesOfStores: frameCount(values.framesOfStores),
       pests: values.pests.map((pest) => ({
         type: pest.type,
         // The API stores count as free text ("12", "low", "heavy") — never a number.
@@ -507,6 +528,31 @@ export function InspectionFormDialog({
                 placeholder="e.g. laying well, good pattern"
                 {...form.register("queenHealth")}
               />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {([
+                ["framesOfBees", "Frames of bees"],
+                ["framesOfBrood", "Frames of brood"],
+                ["framesOfStores", "Frames of stores"],
+              ] as const).map(([name, label]) => (
+                <div className="grid gap-2" key={name}>
+                  <Label htmlFor={`inspection-${name}`}>{label}</Label>
+                  <Input
+                    id={`inspection-${name}`}
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="Optional"
+                    aria-invalid={form.formState.errors[name] ? true : undefined}
+                    {...form.register(name)}
+                  />
+                  {form.formState.errors[name] && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {form.formState.errors[name]?.message}
+                    </p>
+                  )}
+                </div>
+              ))}
             </div>
           </section>
 

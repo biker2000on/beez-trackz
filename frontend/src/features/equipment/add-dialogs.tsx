@@ -69,6 +69,10 @@ const stockSchema = z.object({
       "Enter a whole number of 0 or more",
     ),
   unitCost: z.string(),
+  firstDeployedYear: z.string().refine(
+    (v) => v === "" || (Number.isInteger(Number(v)) && Number(v) >= 1900),
+    "Enter a four-digit year",
+  ),
   frameCondition: z.string(),
   storageLocation: z.string(),
   notes: z.string(),
@@ -80,6 +84,7 @@ const EMPTY_STOCK: StockValues = {
   initialQuantity: "0",
   neededQuantity: "0",
   unitCost: "",
+  firstDeployedYear: "",
   frameCondition: "unspecified",
   storageLocation: "",
   notes: "",
@@ -121,6 +126,10 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
         initialQuantity: parseNum(values.initialQuantity) ?? 0,
         neededQuantity: parseNum(values.neededQuantity) ?? 0,
         unitCostCents,
+        firstDeployedYear:
+          values.firstDeployedYear === ""
+            ? undefined
+            : Number(values.firstDeployedYear),
         storageLocation: values.storageLocation.trim() || undefined,
         notes: values.notes.trim() || undefined,
         ...(isFrame && (condition === "drawn" || condition === "fresh")
@@ -213,6 +222,18 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
                 {...form.register("unitCost")}
               />
               <FieldError message={errors.unitCost?.message} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="stock-first-deployed">First deployed year</Label>
+              <Input
+                id="stock-first-deployed"
+                type="number"
+                min={1900}
+                max={new Date().getFullYear() + 1}
+                placeholder="e.g. 2022"
+                {...form.register("firstDeployedYear")}
+              />
+              <FieldError message={errors.firstDeployedYear?.message} />
             </div>
             {isFrame && (
               <div className="grid gap-1.5">

@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 import { useYardQueue, type YardQueueItem } from "./hooks";
+import { IncidentLog } from "./incident-log";
 
 const KIND_META: Record<
   YardQueueItem["kind"],
@@ -91,6 +92,7 @@ export function YardQueuePage() {
           </section>
         ))
       )}
+      <IncidentLog />
     </div>
   );
 }

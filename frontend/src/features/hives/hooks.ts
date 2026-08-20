@@ -114,6 +114,42 @@ export interface HiveListFilters {
   includeArchived?: boolean;
 }
 
+export interface HiveReadiness {
+  hiveId: string;
+  hiveName: string;
+  apiaryId: string;
+  apiaryName: string;
+  call: "will_swarm" | "ready_to_split" | "neither";
+  evidence: string[];
+  daysSinceLastSplit: number | null;
+}
+
+export interface DeadoutAutopsyPayload {
+  autopsyDate: string;
+  storesLeft?: string | null;
+  clusterPosition?: string | null;
+  lastFallMiteLoad?: number | null;
+  queenStatus?: "present" | "absent" | "unknown" | null;
+  moisture?: boolean | null;
+  mold?: boolean | null;
+  notes?: string | null;
+}
+
+export interface CatchBox {
+  id: string;
+  apiaryId: string;
+  apiaryName: string;
+  locationKind: "yard" | "stand" | "fence_line";
+  standId: string | null;
+  fenceLine: string | null;
+  dateSet: string;
+  emptyAsOf: string | null;
+  occupied: boolean;
+  occupiedAt: string | null;
+  occupiedHiveId: string | null;
+  notes: string | null;
+}
+
 // --- queries ---
 
 export function useHives(filters: HiveListFilters = {}, enabled = true) {
@@ -170,6 +206,20 @@ export function useHiveDeployments(id: string) {
   return useQuery({
     queryKey: ["hives", "detail", id, "deployments"],
     queryFn: () => api.get<HiveDeployment[]>(`/hives/${id}/deployments`),
+  });
+}
+
+export function useHiveReadiness() {
+  return useQuery({
+    queryKey: ["hives", "readiness"],
+    queryFn: () => api.get<HiveReadiness[]>("/field/readiness"),
+  });
+}
+
+export function useCatchBoxes() {
+  return useQuery({
+    queryKey: ["hives", "catch-boxes"],
+    queryFn: () => api.get<CatchBox[]>("/catch-boxes"),
   });
 }
 
@@ -250,6 +300,50 @@ export function useDeadoutHive() {
     mutationFn: (id: string) =>
       api.post<{ success: boolean }>(`/hives/${id}/deadout`),
     onSuccess: invalidate,
+  });
+}
+
+export function useSaveDeadoutAutopsy() {
+  const invalidate = useInvalidateHives();
+  return useMutation({
+    mutationFn: ({ hiveId, ...payload }: DeadoutAutopsyPayload & { hiveId: string }) =>
+      api.put<{ success: boolean; id: string }>(`/hives/${hiveId}/autopsy`, payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCreateColonyIntake() {
+  const invalidate = useInvalidateHives();
+  return useMutation({
+    mutationFn: (payload: {
+      apiaryId: string;
+      positionLabel: string;
+      source: "package" | "nuc" | "split" | "swarm" | "catch_box" | "other";
+      sourceDetail?: string;
+      sourceHiveId?: string;
+      catchBoxId?: string;
+      intakeDate: string;
+      startingStores?: string;
+      cost: number;
+      notes?: string;
+    }) => api.post<{ id: string; hiveId: string }>("/colony-intakes", payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCreateCatchBox() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: {
+      apiaryId: string;
+      locationKind: CatchBox["locationKind"];
+      standId?: string;
+      fenceLine?: string;
+      dateSet: string;
+      emptyAsOf?: string;
+      notes?: string;
+    }) => api.post<{ id: string }>("/catch-boxes", payload),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["hives", "catch-boxes"] }),
   });
 }
 

@@ -287,6 +287,20 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
                               {row.framesPerBox} frames/box
                             </span>
                           )}
+                          {row.combAgeYears != null && (
+                            <span
+                              className={cn(
+                                "ml-2 text-xs",
+                                row.pullRecommended
+                                  ? "font-semibold text-destructive"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {row.pullRecommended
+                                ? `This ${row.typeName.toLowerCase()} is ${row.combAgeYears} years old — pull it`
+                                : `${row.combAgeYears} years in service`}
+                            </span>
+                          )}
                           {lineError && (
                             <p className="text-xs text-destructive">
                               {lineError}

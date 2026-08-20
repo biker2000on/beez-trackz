@@ -73,20 +73,27 @@ type inspectionTreatment struct {
 
 // inspectionFields is the full set of writable inspection columns.
 type inspectionFields struct {
-	HiveID        uuid.UUID
-	Date          time.Time
-	InspectorName *string
-	QueenSeen     *bool
-	QueenHealth   *string
-	BroodPattern  *string
-	StoresHoney   *int
-	StoresPollen  *int
-	Temperament   *int
-	Pests         []byte // JSON array or nil
-	Treatments    []byte // JSON array or nil
-	Notes         *string
-	SourceMedia   []byte // JSON object or nil (passthrough)
-	Weather       []byte // provider snapshot captured when the record is created
+	HiveID          uuid.UUID
+	Date            time.Time
+	InspectorName   *string
+	QueenSeen       *bool
+	QueenHealth     *string
+	BroodPattern    *string
+	StoresHoney     *int
+	StoresPollen    *int
+	Temperament     *int
+	FramesOfBees    *int
+	FramesOfBrood   *int
+	FramesOfStores  *int
+	CrowdedBrood    *bool
+	QueenCupsCount  *int
+	QueenCellsCount *int
+	FlowOn          *bool
+	Pests           []byte // JSON array or nil
+	Treatments      []byte // JSON array or nil
+	Notes           *string
+	SourceMedia     []byte // JSON object or nil (passthrough)
+	Weather         []byte // provider snapshot captured when the record is created
 }
 
 // inspectionInsert is THE single insert path for inspections (CRUD, bulk, and
@@ -97,12 +104,15 @@ func inspectionInsert(ctx context.Context, q inspectionQuerier, f inspectionFiel
 		INSERT INTO inspections
 			(hive_id, date, inspector_name, queen_seen, queen_health, brood_pattern,
 			 stores_honey, stores_pollen, temperament, pests, treatments, notes,
-			 source_media, weather_snapshot)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			 source_media, weather_snapshot, frames_of_bees, frames_of_brood,
+			 frames_of_stores, crowded_brood, queen_cups_count, queen_cells_count, flow_on)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+			$15, $16, $17, $18, $19, $20, $21)
 		RETURNING id`,
 		f.HiveID, f.Date, f.InspectorName, f.QueenSeen, f.QueenHealth, f.BroodPattern,
 		f.StoresHoney, f.StoresPollen, f.Temperament, f.Pests, f.Treatments, f.Notes,
-		f.SourceMedia, f.Weather).Scan(&id)
+		f.SourceMedia, f.Weather, f.FramesOfBees, f.FramesOfBrood, f.FramesOfStores,
+		f.CrowdedBrood, f.QueenCupsCount, f.QueenCellsCount, f.FlowOn).Scan(&id)
 	return id, err
 }
 
@@ -131,24 +141,31 @@ func inspectionUpdate(ctx context.Context, q inspectionQuerier, id uuid.UUID, co
 
 // inspectionJSON mirrors the legacy drizzle row shape (camelCase).
 type inspectionJSON struct {
-	ID            uuid.UUID                 `json:"id"`
-	HiveID        uuid.UUID                 `json:"hiveId"`
-	Date          time.Time                 `json:"date"`
-	InspectorName *string                   `json:"inspectorName"`
-	QueenSeen     *bool                     `json:"queenSeen"`
-	QueenHealth   *string                   `json:"queenHealth"`
-	BroodPattern  *string                   `json:"broodPattern"`
-	StoresHoney   *int                      `json:"storesHoney"`
-	StoresPollen  *int                      `json:"storesPollen"`
-	Temperament   *int                      `json:"temperament"`
-	Pests         any                       `json:"pests"`
-	Treatments    any                       `json:"treatments"`
-	Notes         *string                   `json:"notes"`
-	SourceMedia   any                       `json:"sourceMedia"`
-	Weather       any                       `json:"weather"`
-	CreatedAt     time.Time                 `json:"createdAt"`
-	UpdatedAt     time.Time                 `json:"updatedAt"`
-	MiteCounts    []inspectionMiteCountJSON `json:"miteCounts"`
+	ID              uuid.UUID                 `json:"id"`
+	HiveID          uuid.UUID                 `json:"hiveId"`
+	Date            time.Time                 `json:"date"`
+	InspectorName   *string                   `json:"inspectorName"`
+	QueenSeen       *bool                     `json:"queenSeen"`
+	QueenHealth     *string                   `json:"queenHealth"`
+	BroodPattern    *string                   `json:"broodPattern"`
+	StoresHoney     *int                      `json:"storesHoney"`
+	StoresPollen    *int                      `json:"storesPollen"`
+	Temperament     *int                      `json:"temperament"`
+	FramesOfBees    *int                      `json:"framesOfBees"`
+	FramesOfBrood   *int                      `json:"framesOfBrood"`
+	FramesOfStores  *int                      `json:"framesOfStores"`
+	CrowdedBrood    *bool                     `json:"crowdedBrood"`
+	QueenCupsCount  *int                      `json:"queenCupsCount"`
+	QueenCellsCount *int                      `json:"queenCellsCount"`
+	FlowOn          *bool                     `json:"flowOn"`
+	Pests           any                       `json:"pests"`
+	Treatments      any                       `json:"treatments"`
+	Notes           *string                   `json:"notes"`
+	SourceMedia     any                       `json:"sourceMedia"`
+	Weather         any                       `json:"weather"`
+	CreatedAt       time.Time                 `json:"createdAt"`
+	UpdatedAt       time.Time                 `json:"updatedAt"`
+	MiteCounts      []inspectionMiteCountJSON `json:"miteCounts"`
 }
 
 type inspectionMiteCountJSON struct {
@@ -164,13 +181,16 @@ type inspectionMiteCountJSON struct {
 
 const inspectionSelectCols = `id, hive_id, date, inspector_name, queen_seen, queen_health,
 	brood_pattern, stores_honey, stores_pollen, temperament, pests, treatments, notes,
-	source_media, weather_snapshot, created_at, updated_at`
+	source_media, weather_snapshot, frames_of_bees, frames_of_brood, frames_of_stores,
+	crowded_brood, queen_cups_count, queen_cells_count, flow_on, created_at, updated_at`
 
 func inspectionScan(row pgx.Row) (inspectionJSON, error) {
 	var v inspectionJSON
 	err := row.Scan(&v.ID, &v.HiveID, &v.Date, &v.InspectorName, &v.QueenSeen, &v.QueenHealth,
 		&v.BroodPattern, &v.StoresHoney, &v.StoresPollen, &v.Temperament, &v.Pests,
-		&v.Treatments, &v.Notes, &v.SourceMedia, &v.Weather, &v.CreatedAt, &v.UpdatedAt)
+		&v.Treatments, &v.Notes, &v.SourceMedia, &v.Weather, &v.FramesOfBees,
+		&v.FramesOfBrood, &v.FramesOfStores, &v.CrowdedBrood, &v.QueenCupsCount,
+		&v.QueenCellsCount, &v.FlowOn, &v.CreatedAt, &v.UpdatedAt)
 	return v, err
 }
 
@@ -295,20 +315,27 @@ func (s *Server) inspectionWeatherSnapshot(
 // --- handlers ---
 
 type inspectionCreateReq struct {
-	HiveID        string                `json:"hiveId"`
-	Date          string                `json:"date"`
-	InspectorName *string               `json:"inspectorName"`
-	QueenSeen     *bool                 `json:"queenSeen"`
-	QueenHealth   *string               `json:"queenHealth"`
-	BroodPattern  *string               `json:"broodPattern"`
-	StoresHoney   *int                  `json:"storesHoney"`
-	StoresPollen  *int                  `json:"storesPollen"`
-	Temperament   *int                  `json:"temperament"`
-	Pests         []inspectionPest      `json:"pests"`
-	Treatments    []inspectionTreatment `json:"treatments"`
-	MiteCounts    []miteCountPayload    `json:"miteCounts"`
-	Notes         *string               `json:"notes"`
-	SourceMedia   json.RawMessage       `json:"sourceMedia"`
+	HiveID          string                `json:"hiveId"`
+	Date            string                `json:"date"`
+	InspectorName   *string               `json:"inspectorName"`
+	QueenSeen       *bool                 `json:"queenSeen"`
+	QueenHealth     *string               `json:"queenHealth"`
+	BroodPattern    *string               `json:"broodPattern"`
+	StoresHoney     *int                  `json:"storesHoney"`
+	StoresPollen    *int                  `json:"storesPollen"`
+	Temperament     *int                  `json:"temperament"`
+	FramesOfBees    *int                  `json:"framesOfBees"`
+	FramesOfBrood   *int                  `json:"framesOfBrood"`
+	FramesOfStores  *int                  `json:"framesOfStores"`
+	CrowdedBrood    *bool                 `json:"crowdedBrood"`
+	QueenCupsCount  *int                  `json:"queenCupsCount"`
+	QueenCellsCount *int                  `json:"queenCellsCount"`
+	FlowOn          *bool                 `json:"flowOn"`
+	Pests           []inspectionPest      `json:"pests"`
+	Treatments      []inspectionTreatment `json:"treatments"`
+	MiteCounts      []miteCountPayload    `json:"miteCounts"`
+	Notes           *string               `json:"notes"`
+	SourceMedia     json.RawMessage       `json:"sourceMedia"`
 }
 
 // POST /inspections
@@ -330,6 +357,16 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "Date is required")
 		return
 	}
+	for name, value := range map[string]*int{
+		"framesOfBees": req.FramesOfBees, "framesOfBrood": req.FramesOfBrood,
+		"framesOfStores": req.FramesOfStores, "queenCupsCount": req.QueenCupsCount,
+		"queenCellsCount": req.QueenCellsCount,
+	} {
+		if value != nil && *value < 0 {
+			writeError(w, http.StatusBadRequest, name+" cannot be negative")
+			return
+		}
+	}
 	date, err := parseDate(req.Date)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid date")
@@ -340,20 +377,27 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		sourceMedia = req.SourceMedia
 	}
 	fields := inspectionFields{
-		HiveID:        hiveID,
-		Date:          date,
-		InspectorName: inspectionTrimPtr(req.InspectorName),
-		QueenSeen:     req.QueenSeen,
-		QueenHealth:   inspectionTrimPtr(req.QueenHealth),
-		BroodPattern:  inspectionTrimPtr(req.BroodPattern),
-		StoresHoney:   clampRating(req.StoresHoney),
-		StoresPollen:  clampRating(req.StoresPollen),
-		Temperament:   clampRating(req.Temperament),
-		Pests:         inspectionMarshal(req.Pests, req.Pests != nil),
-		Treatments:    inspectionMarshal(req.Treatments, req.Treatments != nil),
-		Notes:         inspectionTrimPtr(req.Notes),
-		SourceMedia:   sourceMedia,
-		Weather:       s.inspectionWeatherSnapshot(r, hiveID),
+		HiveID:          hiveID,
+		Date:            date,
+		InspectorName:   inspectionTrimPtr(req.InspectorName),
+		QueenSeen:       req.QueenSeen,
+		QueenHealth:     inspectionTrimPtr(req.QueenHealth),
+		BroodPattern:    inspectionTrimPtr(req.BroodPattern),
+		StoresHoney:     clampRating(req.StoresHoney),
+		StoresPollen:    clampRating(req.StoresPollen),
+		Temperament:     clampRating(req.Temperament),
+		FramesOfBees:    req.FramesOfBees,
+		FramesOfBrood:   req.FramesOfBrood,
+		FramesOfStores:  req.FramesOfStores,
+		CrowdedBrood:    req.CrowdedBrood,
+		QueenCupsCount:  req.QueenCupsCount,
+		QueenCellsCount: req.QueenCellsCount,
+		FlowOn:          req.FlowOn,
+		Pests:           inspectionMarshal(req.Pests, req.Pests != nil),
+		Treatments:      inspectionMarshal(req.Treatments, req.Treatments != nil),
+		Notes:           inspectionTrimPtr(req.Notes),
+		SourceMedia:     sourceMedia,
+		Weather:         s.inspectionWeatherSnapshot(r, hiveID),
 	}
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
@@ -427,18 +471,25 @@ func (s *Server) handleInspectionGet(w http.ResponseWriter, r *http.Request) {
 // inspectionUpdatableCols maps JSON field names to their column + decoder.
 // hiveId is intentionally not updatable.
 var inspectionUpdatableCols = map[string]string{
-	"date":          "date",
-	"inspectorName": "inspector_name",
-	"queenSeen":     "queen_seen",
-	"queenHealth":   "queen_health",
-	"broodPattern":  "brood_pattern",
-	"storesHoney":   "stores_honey",
-	"storesPollen":  "stores_pollen",
-	"temperament":   "temperament",
-	"pests":         "pests",
-	"treatments":    "treatments",
-	"notes":         "notes",
-	"sourceMedia":   "source_media",
+	"date":            "date",
+	"inspectorName":   "inspector_name",
+	"queenSeen":       "queen_seen",
+	"queenHealth":     "queen_health",
+	"broodPattern":    "brood_pattern",
+	"storesHoney":     "stores_honey",
+	"storesPollen":    "stores_pollen",
+	"temperament":     "temperament",
+	"framesOfBees":    "frames_of_bees",
+	"framesOfBrood":   "frames_of_brood",
+	"framesOfStores":  "frames_of_stores",
+	"crowdedBrood":    "crowded_brood",
+	"queenCupsCount":  "queen_cups_count",
+	"queenCellsCount": "queen_cells_count",
+	"flowOn":          "flow_on",
+	"pests":           "pests",
+	"treatments":      "treatments",
+	"notes":           "notes",
+	"sourceMedia":     "source_media",
 }
 
 // PUT /inspections/{id} — partial update: only fields present in the body are
@@ -509,6 +560,20 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			vals = append(vals, clampRating(v))
+		case "framesOfBees", "framesOfBrood", "framesOfStores", "queenCupsCount", "queenCellsCount":
+			var v *int
+			if err := json.Unmarshal(raw, &v); err != nil || (v != nil && *v < 0) {
+				writeError(w, http.StatusBadRequest, key+" must be a non-negative integer")
+				return
+			}
+			vals = append(vals, v)
+		case "crowdedBrood", "flowOn":
+			var v *bool
+			if err := json.Unmarshal(raw, &v); err != nil {
+				writeError(w, http.StatusBadRequest, key+" must be a boolean")
+				return
+			}
+			vals = append(vals, v)
 		case "pests":
 			var v []inspectionPest
 			if err := json.Unmarshal(raw, &v); err != nil {

@@ -20,11 +20,14 @@ import {
   currentYear,
   useReportYear,
 } from "./reports-sections";
+import { useAutopsySummary } from "./hooks";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function SurvivalReportView() {
   // Winter survival is measured over the winter that *ends* in the season
   // year, so the useful default is last year rather than the current one.
   const [year, setYear] = useReportYear(currentYear() - 1);
+  const autopsies = useAutopsySummary(year);
   return (
     <div className="grid gap-5">
       <ReportHeader
@@ -34,6 +37,9 @@ export function SurvivalReportView() {
         onYearChange={setYear}
       />
       <SurvivalReport year={year} />
+      <Card><CardHeader><CardTitle className="text-base">Deadout autopsy segments</CardTitle></CardHeader><CardContent>
+        {autopsies.isPending ? <p className="text-sm text-muted-foreground">Loading autopsies…</p> : !autopsies.data || autopsies.data.total === 0 ? <p className="text-sm text-muted-foreground">No autopsies recorded for this winter.</p> : <div className="grid gap-3 text-sm sm:grid-cols-3"><div><p className="font-medium">Conditions</p><p>{autopsies.data.moisture} moisture · {autopsies.data.mold} mold</p></div><div><p className="font-medium">Queen status</p>{autopsies.data.queenStatuses.map((g) => <p key={g.label}>{g.label}: {g.count}</p>)}</div><div><p className="font-medium">Stores left</p>{autopsies.data.stores.map((g) => <p key={g.label}>{g.label}: {g.count}</p>)}</div></div>}
+      </CardContent></Card>
     </div>
   );
 }

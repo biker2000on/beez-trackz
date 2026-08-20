@@ -121,6 +121,15 @@ export function InspectionCard({
           <Rating label="Pollen" value={inspection.storesPollen} />
           <Rating label="Temperament" value={inspection.temperament} />
         </div>
+        {(inspection.framesOfBees != null ||
+          inspection.framesOfBrood != null ||
+          inspection.framesOfStores != null) && (
+          <p className="text-xs text-muted-foreground">
+            Strength: {inspection.framesOfBees ?? "—"} frames bees ·{" "}
+            {inspection.framesOfBrood ?? "—"} brood ·{" "}
+            {inspection.framesOfStores ?? "—"} stores
+          </p>
+        )}
         {pests.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs text-muted-foreground">Pests:</span>

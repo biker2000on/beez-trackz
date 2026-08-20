@@ -39,6 +39,7 @@ import { useBulkSelect } from "@/lib/use-bulk-select";
 import { useApiaries } from "@/features/apiaries/hooks";
 import { HiveCard, HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
+import { CatchBoxesPanel, FieldReadinessPanel } from "./field-health";
 import { useBulkUpdateHives, useHives } from "./hooks";
 import { HIVE_STATUSES, HIVE_STATUS_LABELS, formatDate } from "./lib";
 
@@ -206,6 +207,9 @@ export function HivesListPage() {
           </Button>
         </div>
       </div>
+
+      <FieldReadinessPanel />
+      <CatchBoxesPanel />
 
       {hives.isPending ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

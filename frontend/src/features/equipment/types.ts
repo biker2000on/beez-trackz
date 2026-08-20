@@ -135,6 +135,9 @@ export interface EquipmentStockRow {
   /** How far short of `needed` the available count is (0 when covered). */
   shortfall: number;
   unitCostCents: number | null;
+  firstDeployedYear: number | null;
+  combAgeYears: number | null;
+  pullRecommended: boolean;
   updatedAt: string;
 }
 

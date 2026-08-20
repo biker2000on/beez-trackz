@@ -344,23 +344,26 @@ func (s *Server) equipCreateType(w http.ResponseWriter, r *http.Request) {
 // unchanged so the hive equipment tab keeps working; owned / deployed /
 // available / needed / damaged / retired are all present now.
 type equipStockRow struct {
-	ID              uuid.UUID `json:"id"`
-	TypeID          uuid.UUID `json:"typeId"`
-	TypeName        string    `json:"typeName"`
-	TypeCategory    string    `json:"typeCategory"`
-	TotalOwned      int       `json:"totalOwned"`
-	StorageLocation *string   `json:"storageLocation"`
-	Notes           *string   `json:"notes"`
-	FrameCondition  *string   `json:"frameCondition"`
-	FramesPerBox    *int      `json:"framesPerBox"`
-	Deployed        int       `json:"deployed"`
-	Available       int       `json:"available"`
-	Damaged         int       `json:"damaged"`
-	Retired         int       `json:"retired"`
-	Needed          int       `json:"needed"`
-	Shortfall       int       `json:"shortfall"`
-	UnitCostCents   *int      `json:"unitCostCents"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID                uuid.UUID `json:"id"`
+	TypeID            uuid.UUID `json:"typeId"`
+	TypeName          string    `json:"typeName"`
+	TypeCategory      string    `json:"typeCategory"`
+	TotalOwned        int       `json:"totalOwned"`
+	StorageLocation   *string   `json:"storageLocation"`
+	Notes             *string   `json:"notes"`
+	FrameCondition    *string   `json:"frameCondition"`
+	FramesPerBox      *int      `json:"framesPerBox"`
+	Deployed          int       `json:"deployed"`
+	Available         int       `json:"available"`
+	Damaged           int       `json:"damaged"`
+	Retired           int       `json:"retired"`
+	Needed            int       `json:"needed"`
+	Shortfall         int       `json:"shortfall"`
+	UnitCostCents     *int      `json:"unitCostCents"`
+	FirstDeployedYear *int      `json:"firstDeployedYear"`
+	CombAgeYears      *int      `json:"combAgeYears"`
+	PullRecommended   bool      `json:"pullRecommended"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // GET /equipment/stock
@@ -369,7 +372,7 @@ func (s *Server) equipListStock(w http.ResponseWriter, r *http.Request) {
 		SELECT stock_id, type_id, type_name, type_category, total_owned,
 		       storage_location, notes, frame_condition, frames_per_box,
 		       deployed, available, damaged_quantity, retired_quantity,
-		       needed_quantity, unit_cost_cents, updated_at
+		       needed_quantity, unit_cost_cents, first_deployed_year, updated_at
 		FROM equipment_stock_status
 		ORDER BY type_category, type_name`)
 	if err != nil {
@@ -384,12 +387,21 @@ func (s *Server) equipListStock(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&row.ID, &row.TypeID, &row.TypeName, &row.TypeCategory,
 			&row.TotalOwned, &row.StorageLocation, &row.Notes, &row.FrameCondition,
 			&row.FramesPerBox, &row.Deployed, &row.Available, &row.Damaged,
-			&row.Retired, &row.Needed, &row.UnitCostCents, &row.UpdatedAt); err != nil {
+			&row.Retired, &row.Needed, &row.UnitCostCents, &row.FirstDeployedYear,
+			&row.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
 		if gap := row.Needed - row.Available; gap > 0 {
 			row.Shortfall = gap
+		}
+		if row.FirstDeployedYear != nil {
+			age := time.Now().Year() - *row.FirstDeployedYear
+			if age < 0 {
+				age = 0
+			}
+			row.CombAgeYears = &age
+			row.PullRecommended = age >= 5 && (row.TypeCategory == "box" || row.TypeCategory == "frame")
 		}
 		out = append(out, row)
 	}
@@ -406,13 +418,14 @@ func (s *Server) equipListStock(w http.ResponseWriter, r *http.Request) {
 //	neededQuantity?, unitCostCents?}
 func (s *Server) equipCreateStock(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		TypeID          string  `json:"typeId"`
-		InitialQuantity *int    `json:"initialQuantity"`
-		StorageLocation *string `json:"storageLocation"`
-		Notes           *string `json:"notes"`
-		FrameCondition  *string `json:"frameCondition"`
-		NeededQuantity  *int    `json:"neededQuantity"`
-		UnitCostCents   *int    `json:"unitCostCents"`
+		TypeID            string  `json:"typeId"`
+		InitialQuantity   *int    `json:"initialQuantity"`
+		StorageLocation   *string `json:"storageLocation"`
+		Notes             *string `json:"notes"`
+		FrameCondition    *string `json:"frameCondition"`
+		NeededQuantity    *int    `json:"neededQuantity"`
+		UnitCostCents     *int    `json:"unitCostCents"`
+		FirstDeployedYear *int    `json:"firstDeployedYear"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -452,6 +465,10 @@ func (s *Server) equipCreateStock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Unit cost cannot be negative")
 		return
 	}
+	if req.FirstDeployedYear != nil && (*req.FirstDeployedYear < 1900 || *req.FirstDeployedYear > time.Now().Year()+1) {
+		writeError(w, http.StatusBadRequest, "First deployed year is invalid")
+		return
+	}
 
 	ctx := r.Context()
 	tx, err := s.pool.Begin(ctx)
@@ -467,11 +484,11 @@ func (s *Server) equipCreateStock(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(ctx, `
 		INSERT INTO equipment_stock
 			(type_id, total_owned, frame_condition, storage_location, notes,
-			 needed_quantity, unit_cost_cents, created_by)
-		VALUES ($1, 0, $2, $3, $4, $5, $6, $7)
+			 needed_quantity, unit_cost_cents, first_deployed_year, created_by)
+		VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id`,
 		typeID, condition, equipTrimPtr(req.StorageLocation), equipTrimPtr(req.Notes),
-		needed, req.UnitCostCents, equipActor(r)).
+		needed, req.UnitCostCents, req.FirstDeployedYear, equipActor(r)).
 		Scan(&stockID)
 	if err != nil {
 		switch {
@@ -516,11 +533,12 @@ func (s *Server) equipUpdateStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		StorageLocation json.RawMessage `json:"storageLocation"`
-		Notes           json.RawMessage `json:"notes"`
-		FrameCondition  json.RawMessage `json:"frameCondition"`
-		NeededQuantity  *int            `json:"neededQuantity"`
-		UnitCostCents   json.RawMessage `json:"unitCostCents"`
+		StorageLocation   json.RawMessage `json:"storageLocation"`
+		Notes             json.RawMessage `json:"notes"`
+		FrameCondition    json.RawMessage `json:"frameCondition"`
+		NeededQuantity    *int            `json:"neededQuantity"`
+		UnitCostCents     json.RawMessage `json:"unitCostCents"`
+		FirstDeployedYear json.RawMessage `json:"firstDeployedYear"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -575,6 +593,16 @@ func (s *Server) equipUpdateStock(w http.ResponseWriter, r *http.Request) {
 		}
 		args = append(args, cost)
 		sets = append(sets, fmt.Sprintf("unit_cost_cents = $%d", len(args)))
+	}
+	if req.FirstDeployedYear != nil {
+		var year *int
+		if err := json.Unmarshal(req.FirstDeployedYear, &year); err != nil ||
+			(year != nil && (*year < 1900 || *year > time.Now().Year()+1)) {
+			writeError(w, http.StatusBadRequest, "invalid firstDeployedYear")
+			return
+		}
+		args = append(args, year)
+		sets = append(sets, fmt.Sprintf("first_deployed_year = $%d", len(args)))
 	}
 	if len(sets) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})

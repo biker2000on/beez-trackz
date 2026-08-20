@@ -869,6 +869,10 @@ const detailsSchema = z.object({
   storageLocation: z.string(),
   needed: wholeNumber(0, "Enter a whole number of 0 or more"),
   unitCost: z.string(),
+  firstDeployedYear: z.string().refine(
+    (v) => v === "" || (Number.isInteger(Number(v)) && Number(v) >= 1900),
+    "Enter a four-digit year",
+  ),
 });
 type DetailsValues = z.infer<typeof detailsSchema>;
 
@@ -884,8 +888,10 @@ export function EditDetailsDialog({
       needed: String(stock.needed),
       unitCost:
         stock.unitCostCents != null ? String(stock.unitCostCents / 100) : "",
+      firstDeployedYear:
+        stock.firstDeployedYear != null ? String(stock.firstDeployedYear) : "",
     }),
-    [stock.storageLocation, stock.needed, stock.unitCostCents],
+    [stock.storageLocation, stock.needed, stock.unitCostCents, stock.firstDeployedYear],
   );
   const form = useForm<DetailsValues>({
     resolver: zodResolver(detailsSchema),
@@ -910,6 +916,10 @@ export function EditDetailsDialog({
         storageLocation: values.storageLocation.trim() || null,
         neededQuantity: parseNum(values.needed)!,
         unitCostCents,
+        firstDeployedYear:
+          values.firstDeployedYear === ""
+            ? null
+            : Number(values.firstDeployedYear),
       },
       { onSuccess: () => onOpenChange(false) },
     );
@@ -967,6 +977,18 @@ export function EditDetailsDialog({
               <p className="text-xs text-muted-foreground">
                 Used to value losses.
               </p>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="stock-first-year">First deployed year</Label>
+              <Input
+                id="stock-first-year"
+                type="number"
+                min={1900}
+                max={new Date().getFullYear() + 1}
+                placeholder="e.g. 2022"
+                {...form.register("firstDeployedYear")}
+              />
+              <FieldError message={errors.firstDeployedYear?.message} />
             </div>
           </div>
           <DialogFooter>
