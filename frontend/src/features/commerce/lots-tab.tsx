@@ -44,6 +44,7 @@ import {
 import {
   parseElevation,
   parseHoneyMassInput,
+  parseMass,
   preferredElevationSuffix,
 } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
@@ -187,9 +188,15 @@ function LotFormDialog({
   const [date, setDate] = React.useState(
     () => lot?.extractionDate?.slice(0, 10) ?? todayISO(),
   );
-  const [weight, setWeight] = React.useState(
-    () => lot?.honeyWeightEntered ?? (lot ? String(lot.honeyWeightLbs) : ""),
-  );
+  // Seed from the typed text only when it names its unit. A bare number
+  // stored by one preference must not be re-parsed under another — that
+  // would silently rewrite honey_weight_lbs (the bottling ceiling).
+  const [weight, setWeight] = React.useState(() => {
+    if (!lot) return "";
+    const entered = lot.honeyWeightEntered?.trim();
+    if (entered && parseMass(entered, "pounds")?.suffix) return entered;
+    return `${lot.honeyWeightLbs} lb`;
+  });
   const [variety, setVariety] = React.useState(lot?.honeyVariety ?? "");
   const [claimSpecies, setClaimSpecies] = React.useState(
     lot?.claimSpecies ?? "",
@@ -253,7 +260,13 @@ function LotFormDialog({
       lotCode: lotCode.trim(),
       extractionDate: date,
       honeyWeightLbs: pounds,
-      honeyWeightEntered: weight.trim() || undefined,
+      // Persist the typed text with an explicit unit so a later edit under a
+      // different preference cannot re-interpret it.
+      honeyWeightEntered: weight.trim()
+        ? parseMass(weight, "pounds")?.suffix
+          ? weight.trim()
+          : `${weight.trim()} ${units.units === "metric" ? "kg" : "lb"}`
+        : undefined,
       claimSpecies: claimSpecies.trim() || undefined,
       claimYear: claimYearNumber,
       claimApiaryId: claimApiaryId || undefined,

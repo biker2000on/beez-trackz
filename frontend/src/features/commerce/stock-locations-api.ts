@@ -283,7 +283,9 @@ export function useUpdateStockLocation() {
       settlementCadence: StockSettlementCadence;
       address?: string | null;
       notes?: string | null;
-      isActive?: boolean;
+      // The endpoint replaces the whole location; a partial body is refused
+      // so an omitted basis cannot silently convert commission to retail.
+      isActive: boolean;
     }) => api.patch(`/stock-locations/${id}`, body),
     "Location updated",
   );

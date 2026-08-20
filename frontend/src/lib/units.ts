@@ -276,7 +276,9 @@ export function parseFeedingQuantity(
   }
   if (suffix && VOLUME_SUFFIX[suffix]) return VOLUME_SUFFIX[suffix](value);
   if (preferred === "metric") {
-    return { quantity: value, unit: "lbs" };
+    // A bare number from a metric operator means kilograms, same as the
+    // honey and propolis parsers; canonical feeding mass stays pounds.
+    return { quantity: (value * 1000) / GRAMS_PER_POUND, unit: "lbs" };
   }
   return { quantity: value, unit: "lbs" };
 }

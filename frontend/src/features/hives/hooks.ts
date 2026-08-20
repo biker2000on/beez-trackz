@@ -305,15 +305,21 @@ export function useDeadoutHive() {
 
 export function useSaveDeadoutAutopsy() {
   const invalidate = useInvalidateHives();
+  const client = useQueryClient();
   return useMutation({
     mutationFn: ({ hiveId, ...payload }: DeadoutAutopsyPayload & { hiveId: string }) =>
       api.put<{ success: boolean; id: string }>(`/hives/${hiveId}/autopsy`, payload),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      // The autopsy feeds the deadout-segment and winter-survival reports.
+      void client.invalidateQueries({ queryKey: ["analytics"] });
+    },
   });
 }
 
 export function useCreateColonyIntake() {
   const invalidate = useInvalidateHives();
+  const client = useQueryClient();
   return useMutation({
     mutationFn: (payload: {
       apiaryId: string;
@@ -327,7 +333,12 @@ export function useCreateColonyIntake() {
       cost: number;
       notes?: string;
     }) => api.post<{ id: string; hiveId: string }>("/colony-intakes", payload),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      // The intake also writes a queen row and a bees_queens expense.
+      void client.invalidateQueries({ queryKey: ["queens"] });
+      void client.invalidateQueries({ queryKey: ["commerce"] });
+    },
   });
 }
 

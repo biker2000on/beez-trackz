@@ -212,6 +212,21 @@ func (s *Server) catchBoxSetOccupancy(w http.ResponseWriter, r *http.Request) {
 		occupiedAt = nil
 		req.OccupiedHiveID = nil
 	}
+	if req.OccupiedHiveID != nil {
+		// The hive must live in the catch box's own yard: the caller's editor
+		// role was checked against that yard only, so accepting a foreign
+		// hive UUID would let them attach a hive they cannot even view.
+		var hiveApiary uuid.UUID
+		if err := s.pool.QueryRow(r.Context(), `
+			SELECT apiary_id FROM hives WHERE id=$1`, *req.OccupiedHiveID).Scan(&hiveApiary); err != nil {
+			writeError(w, 400, "invalid occupiedHiveId")
+			return
+		}
+		if hiveApiary != apiaryID {
+			writeError(w, 400, "occupiedHiveId must be a hive in the catch box's yard")
+			return
+		}
+	}
 	_, err = s.pool.Exec(r.Context(), `UPDATE catch_boxes SET occupied=$2,occupied_at=$3,occupied_hive_id=$4,empty_as_of=$5 WHERE id=$1`, id, req.Occupied, occupiedAt, req.OccupiedHiveID, empty)
 	if err != nil {
 		writeError(w, 400, "invalid occupancy")

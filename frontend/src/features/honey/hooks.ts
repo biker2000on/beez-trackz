@@ -146,6 +146,9 @@ function useHoneyMutation<TVars, TData = unknown>(
     onSuccess: () => {
       toast.success(options.successMessage);
       queryClient.invalidateQueries({ queryKey: ["honey"] });
+      // Every honey mutation can move the home residual, and the market-day
+      // tiles read per-location counts from this key.
+      queryClient.invalidateQueries({ queryKey: ["stock-locations"] });
       for (const key of options.invalidate ?? []) {
         queryClient.invalidateQueries({ queryKey: key });
       }

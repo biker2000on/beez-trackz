@@ -91,5 +91,10 @@ func apiUploadExempt(r *http.Request) bool {
 		return false
 	}
 	path := strings.TrimRight(r.URL.Path, "/")
-	return path == "/api/v1/photos" || path == "/api/v1/transcriptions"
+	if path == "/api/v1/photos" || path == "/api/v1/transcriptions" {
+		return true
+	}
+	// Scale CSV imports carry multi-MB device exports; the handler applies
+	// its own 8 MB per-file MaxBytesReader.
+	return strings.HasPrefix(path, "/api/v1/scales/") && strings.HasSuffix(path, "/readings")
 }

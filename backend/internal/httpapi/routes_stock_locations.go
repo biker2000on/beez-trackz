@@ -367,6 +367,15 @@ func (s *Server) stockLocationUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// This endpoint replaces the whole location. Defaulting an omitted
+	// priceBasis/cadence/isActive here would silently convert a commission
+	// location to retail (handing the shop's cut to revenue), so a partial
+	// body is refused loudly instead.
+	if payload.PriceBasis == "" || payload.SettlementCadence == "" || payload.IsActive == nil {
+		writeError(w, http.StatusBadRequest,
+			"priceBasis, settlementCadence, and isActive are required: this endpoint replaces the whole location")
+		return
+	}
 	if err := payload.normalize(); err != nil {
 		equipWriteError(w, err)
 		return
@@ -376,10 +385,7 @@ func (s *Server) stockLocationUpdate(w http.ResponseWriter, r *http.Request) {
 		equipWriteError(w, err)
 		return
 	}
-	isActive := true
-	if payload.IsActive != nil {
-		isActive = *payload.IsActive
-	}
+	isActive := *payload.IsActive
 	// Home cannot become a consignment location: its stock is the operator's
 	// own by definition, and the database CHECK says so too.
 	tag, err := s.pool.Exec(r.Context(), `
@@ -1847,12 +1853,21 @@ func (s *Server) stockApplySettlement(
 	shrinks := make([]shrinkLine, 0)
 	var owed, commission money
 
+	// One line per SKU: the shelf check and the shrink expectation below both
+	// read the opening shelf, so a duplicated SKU would be validated against
+	// the full shelf twice and oversell it.
+	seenLines := make(map[string]bool, len(req.Lines))
 	for _, line := range req.Lines {
 		key := stockLineKey(stockTransferLine{JarSizeID: line.JarSizeID, ProductID: line.ProductID})
 		label, ok := labels[key]
 		if !ok {
 			label = "units"
 		}
+		if seenLines[key] {
+			return result, stockBadRequest(
+				"%s: the report lists this SKU twice; combine it into one line", label)
+		}
+		seenLines[key] = true
 		have := onShelf[key]
 		if line.QuantitySold+line.QuantityReturned > have {
 			return result, stockBadRequest(
@@ -1887,6 +1902,15 @@ func (s *Server) stockApplySettlement(
 					value := price
 					listPrice = &value
 				}
+			}
+			// The wholesale price list only prices jar sizes. Falling through
+			// would credit the operator the full shelf price of a catalog
+			// product — the shop's entire margin — so refuse instead, the same
+			// way product shrink is refused below.
+			if location.PriceBasis == "wholesale_list" && line.ProductID != nil {
+				return result, stockBadRequest(
+					"%s: the wholesale price list has no product prices; use a "+
+						"commission basis for catalog products", label)
 			}
 			unitOwed, unitCommission := stockOwedSplit(location, retail, listPrice)
 			if unitOwed <= 0 {

@@ -85,7 +85,9 @@ export function useUpdatePreferences() {
       api.put<{ success: boolean }>("/settings/preferences", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
-      queryClient.invalidateQueries({ queryKey: ["ops", "units"] });
+      // The whole ops group: units display AND the labor widget's enabled
+      // flag, which this form toggles.
+      queryClient.invalidateQueries({ queryKey: ["ops"] });
     },
   });
 }

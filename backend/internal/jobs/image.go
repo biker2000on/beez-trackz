@@ -285,7 +285,23 @@ func (h *Handlers) readImmichPreview(ctx context.Context, ref string) ([]byte, e
 		return nil, err
 	}
 	defer obj.Close()
-	return io.ReadAll(obj)
+	return imgReadBounded(obj)
+}
+
+// imgMaxOriginalBytes bounds how much of a photo original is buffered before
+// decoding. The pixel-count check runs after the read, so without this a
+// multi-gigabyte RAW in an Immich library could OOM the worker.
+const imgMaxOriginalBytes = 256 << 20
+
+func imgReadBounded(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, imgMaxOriginalBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > imgMaxOriginalBytes {
+		return nil, fmt.Errorf("original exceeds %d MB; skipping rendition", imgMaxOriginalBytes>>20)
+	}
+	return data, nil
 }
 
 func (h *Handlers) readPhotoOriginal(ctx context.Context, backend, ref string, originalKey *string) ([]byte, string, error) {
@@ -299,7 +315,7 @@ func (h *Handlers) readPhotoOriginal(ctx context.Context, backend, ref string, o
 			return nil, label, err
 		}
 		defer obj.Close()
-		data, err := io.ReadAll(obj)
+		data, err := imgReadBounded(obj)
 		return data, label, err
 	}
 	if originalKey == nil || *originalKey == "" {
@@ -309,7 +325,7 @@ func (h *Handlers) readPhotoOriginal(ctx context.Context, backend, ref string, o
 	if err != nil {
 		return nil, label, err
 	}
-	data, err := io.ReadAll(obj)
+	data, err := imgReadBounded(obj)
 	obj.Close()
 	return data, label, err
 }

@@ -1656,6 +1656,24 @@ func (s *Server) honeyCancelSaleByID(
 	// Cancelling twice is not an error: the endpoint is idempotent so an
 	// offline queue replaying a cancel does not surface a spurious failure.
 	ctx := r.Context()
+
+	// A settlement's sale is one half of a larger unit of work (returns,
+	// shrink, the statement itself). Cancelling it alone would strand the
+	// rest; the settlement void unwinds everything together. (The void's own
+	// cancel runs inside its transaction, not through this function.)
+	var settled bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM consignment_settlements
+			WHERE sale_id = $1 AND voided_at IS NULL)`, id).Scan(&settled); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if settled {
+		writeError(w, http.StatusConflict,
+			"this sale was recognised by a consignment settlement; void the settlement instead")
+		return
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
