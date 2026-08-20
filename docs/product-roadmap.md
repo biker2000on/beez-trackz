@@ -54,16 +54,20 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
 "Delivered 2026-08-18". Their remaining gaps are listed under
 "Shipped 2026-08-18 — remaining gaps" below. Next:
 
-6. **Inventory at more than one location** — consignment stock at the
-   bike shop, pay-as-sold; transfers and settlement on the existing
-   ledger. Needed before GnuCash mappings are finalized.
-7. **Live GnuCash sync**, then **Zebra labels**.
-8. **The rest of the 2026-08-18 wave** — field objects (catch boxes,
-   intake, comb age, swarm readiness), place/flow (elevation-banded
-   flora, forage radius, scale hives, frost), health (photo time-series,
-   strength, incidents, deadout autopsy), queen breeding, floral claim,
-   pollination, ntfy, labor, compliance packet. Plus **units** (metric or
-   US display across the app, one per-user preference).
+6. ~~**Inventory at more than one location**~~ — **shipped 2026-08-20**
+   (Polyagent run `20260820-roadmap-6-8-w1`; migration 00024). Remaining
+   gaps under "Shipped 2026-08-20 — remaining gaps" below.
+7. **Live GnuCash sync**, then **Zebra labels**. The `external_sync`
+   location dimension landed with item 6.
+8. **The rest of the 2026-08-18 wave** — **partially shipped 2026-08-20**:
+   field objects (catch boxes, intake, comb age, swarm readiness),
+   health (strength, incidents, deadout autopsy), **units** preference,
+   ntfy, labor, compliance packet (migrations 00025/00026). Still open:
+   place/flow (elevation-banded flora, forage radius, Immich yard
+   timeline, scale hives, frost), photo time-series, queen breeding
+   (mating-yard map), floral claim, pollination — these sit on the
+   yard-map pin/Immich stack or are skip-until-signed per their
+   sections below.
 9. **Extractor controller** — long-term; hardware plus an ingest
    contract onto harvest sessions. Design the session payload when
    extraction IDs stabilize; do not wait to start the controller.
@@ -75,9 +79,11 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
 Moved to history: SEAM-001…018, UX-001…017, API-001…011, and the varroa
 sticky-board chart bug. Do not re-open those IDs without a new failing test.
 
-## P1 — Inventory at more than one location (consignment at the bike shop)
+## Inventory at more than one location (consignment) — shipped 2026-08-20
 
-**Requested 2026-08-19.** Finished goods are about to live in more than
+**Requested 2026-08-19; shipped 2026-08-20** (migration 00024). The spec
+below is retained until this section moves to history; see "Shipped
+2026-08-20 — remaining gaps" for what stayed open. Finished goods are about to live in more than
 one place. Jars (and later creamed/hot honey, propolis, mead) go to the
 local bike shop, which sells them on the operator's behalf. The shop
 does not buy the stock up front; it pays as sales happen. Today the
@@ -145,6 +151,36 @@ and shrink at a location is an idempotent, reversible movement on the
 existing ledger. Equipment consignment (selling used boxes through the
 shop) is out of scope until it actually happens — but the location
 table should not be jar-only in name.
+
+## Shipped 2026-08-20 — remaining gaps
+
+Items 6 and most of item 8 shipped 2026-08-20 via a three-worker
+Polyagent run (consignment / field+health / units+ops; migrations
+00024–00026). What the worker reports left open:
+
+- **Consignment.** Shrink on `product_catalog` SKUs is refused at
+  settlement (400) because products have no adjustment ledger — jars are
+  complete; a product adjustment table belongs to the other-hive-products
+  work. The generic `POST /sales` endpoint cannot name a stock location
+  (safe failure: consignment channel validates against home); converging
+  it with `/stock-locations/{id}/sales` retires the latter. `GET /sales`
+  does not return `stock_location_id` yet. `GET /stock-locations/inventory`
+  is O(locations) round trips — fine at 2–3 locations.
+  Transfers/settlements are online-only by design.
+- **Units.** The conversion library, preference, and settings UI landed;
+  display conversion is wired only where the lead applied it — the sweep
+  across honey/feedings/propolis/elevation/weather/lot-weight surfaces
+  and the public Honey Story (operator preference, not viewer locale)
+  remains. Weather stays °F/mph canonical until the Open-Meteo request
+  switches to Celsius in a coordinated change. Lot create/update does not
+  yet persist `honey_weight_entered`.
+- **Ops.** ntfy has no access token column (reserved topics fail-soft);
+  dispatch is on-demand (`POST /ops/ntfy/dispatch`) — wire it into
+  `jobs/schedule.go` or after `recs.Run` for hands-free pushes.
+  Compliance packet is JSON, not a printable PDF. Labor start/stop is
+  not in the offline mutation manifest.
+- **Field/health.** None blocking; voice parser now extracts
+  frames-of-bees/brood/stores (`extract-v2`).
 
 ## Shipped 2026-08-18 — remaining gaps
 
@@ -294,9 +330,11 @@ durable fallback. Only curated Honey Story content is public; hive, order,
 container, apiary/stand, and equipment identifiers remain authenticated and
 internal.
 
-## P1 — Field work that still has no object
+## Field work that still has no object — shipped 2026-08-20
 
-**Added 2026-08-18.** Inspections, feedings, treatments, and hive status
+**Added 2026-08-18; shipped 2026-08-20** (migration 00025: catch boxes,
+colony intake, incidents, deadout autopsy, strength scores, comb age,
+swarm/split readiness rule, lockout was already delivered 2026-08-18). Inspections, feedings, treatments, and hive status
 exist. These are the Saturday-morning objects that are still notes.
 
 - **Swarm and split readiness.** Derive a per-hive call from what is
@@ -372,9 +410,11 @@ registered canvas). Do not start these before the pin and
   week" next to elevation. Matters for sourwood and for winter.
   No new provider if the existing snapshot already has min temp.
 
-## P1 — Colony health beyond mite counts
+## Colony health beyond mite counts — partially shipped 2026-08-20
 
-**Added 2026-08-18.** Varroa stays its own item. This is everything
+**Added 2026-08-18.** Strength score, incident log, and deadout autopsy
+shipped 2026-08-20; **photo time-series remains open** (build on the
+Immich work). Varroa stays its own item. This is everything
 else a deadout or a weak nuc should have taught us.
 
 - **Photo time-series.** Same hive, same angle, April vs June vs
@@ -427,9 +467,10 @@ bottles do not.
   not COGS — design against the GnuCash item, do not fork a
   third sales system. Skip until a contract is actually signed.
 
-## P1 — Operations around the week
+## Operations around the week — shipped 2026-08-20
 
-**Added 2026-08-18.** Recommendations exist and live in the app.
+**Added 2026-08-18; shipped 2026-08-20** (ntfy, labor minutes,
+compliance packet — gaps noted above). Recommendations exist and live in the app.
 Field work wants a list and a push.
 
 - **ntfy / phone push.** Mite check due, feeder empty, treatment
@@ -442,9 +483,11 @@ Field work wants a list and a push.
   treatments, lots, sales, withdrawal windows. The day the
   inspector or the market manager asks. Authenticated, not public.
 
-## P1 — Units: metric or US across the app
+## Units: metric or US across the app — shipped 2026-08-20 (display sweep open)
 
-**Requested 2026-08-19.** Every quantity is entered and shown in whatever
+**Requested 2026-08-19; core shipped 2026-08-20** (migration 00026,
+`lib/units.ts`, Settings > Preferences). The per-surface display sweep is
+listed under "Shipped 2026-08-20 — remaining gaps". Every quantity is entered and shown in whatever
 unit its table happened to be written in: honey in `lbs`, feedings in
 `lbs/oz/quarts/gallons`, propolis in `grams/ounces`, moisture in `%`,
 elevation in `m` (the pin) but flora bands described in feet, weather in

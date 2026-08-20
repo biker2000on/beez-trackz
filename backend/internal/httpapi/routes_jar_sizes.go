@@ -235,6 +235,17 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "jar size not found")
 			return
 		}
+		away, err := stockAwayJarTotals(ctx, tx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if consigned := away[id]; consigned != 0 {
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"%d jars of this size are at consignment locations. Return or settle "+
+					"them before deactivating the size.", consigned))
+			return
+		}
 		remaining := onHand[id]
 		if remaining != 0 {
 			if !req.WriteOffRemaining {

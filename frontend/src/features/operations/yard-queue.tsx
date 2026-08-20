@@ -15,6 +15,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
+import { LaborControl } from "@/features/settings/labor-control";
+
 import { useYardQueue, type YardQueueItem } from "./hooks";
 import { IncidentLog } from "./incident-log";
 
@@ -56,6 +58,8 @@ export function YardQueuePage() {
           look, and lockout end dates. Cached for offline walks.
         </p>
       </div>
+
+      <LaborControl quietWhenOff />
 
       {queue.isPending ? (
         <div className="grid gap-3">

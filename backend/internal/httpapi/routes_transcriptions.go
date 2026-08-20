@@ -568,12 +568,14 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 			INSERT INTO inspections
 				(hive_id, date, queen_seen, queen_health, brood_pattern,
 				 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media,
-				 source_media_file_id, source_transcript_version_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				 source_media_file_id, source_transcript_version_id,
+				 frames_of_bees, frames_of_brood, frames_of_stores)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			RETURNING id`,
 			*hiveID, now, item.QueenSeen, item.QueenHealth, item.BroodPattern,
 			clampRating(item.StoresHoney), clampRating(item.StoresPollen), clampRating(item.Temperament),
-			pestsJSON, treatmentsJSON, item.Notes, sourceMedia, row.ID, versionID).Scan(&createdID)
+			pestsJSON, treatmentsJSON, item.Notes, sourceMedia, row.ID, versionID,
+			item.FramesOfBees, item.FramesOfBrood, item.FramesOfStores).Scan(&createdID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return

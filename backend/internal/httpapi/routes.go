@@ -31,6 +31,9 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountPhotos(r)
 	s.mountTranscriptions(r)
 	s.mountOperations(r)
+	// Field objects: catch boxes, colony intake, incidents, deadout
+	// autopsies, and the derived swarm/split readiness list.
+	s.mountFieldObjects(r)
 	s.mountCommerce(r)
 	s.mountProducts(r)
 	// Stock locations: finished goods consigned to the bike shop, the

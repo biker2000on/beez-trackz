@@ -11,19 +11,22 @@ import (
 
 // ParsedInspection is one structured inspection extracted from a transcription.
 type ParsedInspection struct {
-	HiveReference *string      `json:"hiveReference,omitempty"`
-	QueenSeen     *bool        `json:"queenSeen,omitempty"`
-	QueenHealth   *string      `json:"queenHealth,omitempty"`
-	BroodPattern  *string      `json:"broodPattern,omitempty"`
-	StoresHoney   *int         `json:"storesHoney,omitempty"`
-	StoresPollen  *int         `json:"storesPollen,omitempty"`
-	Temperament   *int         `json:"temperament,omitempty"`
-	Pests         []Pest       `json:"pests,omitempty"`
-	Treatments    []Treatment  `json:"treatments,omitempty"`
-	Feedings      []Feeding    `json:"feedings,omitempty"`
-	QueenEvents   []QueenEvent `json:"queenEvents,omitempty"`
-	MiteCounts    []MiteCount  `json:"miteCounts,omitempty"`
-	Notes         *string      `json:"notes,omitempty"`
+	HiveReference  *string      `json:"hiveReference,omitempty"`
+	QueenSeen      *bool        `json:"queenSeen,omitempty"`
+	QueenHealth    *string      `json:"queenHealth,omitempty"`
+	BroodPattern   *string      `json:"broodPattern,omitempty"`
+	StoresHoney    *int         `json:"storesHoney,omitempty"`
+	StoresPollen   *int         `json:"storesPollen,omitempty"`
+	Temperament    *int         `json:"temperament,omitempty"`
+	FramesOfBees   *int         `json:"framesOfBees,omitempty"`
+	FramesOfBrood  *int         `json:"framesOfBrood,omitempty"`
+	FramesOfStores *int         `json:"framesOfStores,omitempty"`
+	Pests          []Pest       `json:"pests,omitempty"`
+	Treatments     []Treatment  `json:"treatments,omitempty"`
+	Feedings       []Feeding    `json:"feedings,omitempty"`
+	QueenEvents    []QueenEvent `json:"queenEvents,omitempty"`
+	MiteCounts     []MiteCount  `json:"miteCounts,omitempty"`
+	Notes          *string      `json:"notes,omitempty"`
 }
 
 // Pest and Treatment match the inspections.pests / .treatments jsonb shapes.
@@ -66,7 +69,7 @@ type TranscriptionResult struct {
 // Prompt revisions recorded on transcript versions / parse lineage.
 const (
 	STTPromptRevision   = "stt-v1"
-	ParsePromptRevision = "extract-v1"
+	ParsePromptRevision = "extract-v2"
 )
 
 // Prompts ported VERBATIM from src/lib/ai/transcription-parser.ts.
@@ -80,6 +83,9 @@ Return ONLY valid JSON with this exact shape (omit fields that aren't mentioned)
   "storesHoney": number from 1 to 5,
   "storesPollen": number from 1 to 5,
   "temperament": number from 1 to 5 (1=calm, 5=aggressive),
+  "framesOfBees": number of frames covered in bees,
+  "framesOfBrood": number of frames of brood,
+  "framesOfStores": number of frames of stores,
   "pests": [{"type": "pest name", "count": "optional count or severity"}],
   "treatments": [{"product": "treatment name", "method": "optional application method"}],
   "feedings": [{"type": "sugar_syrup_1to1|sugar_syrup_2to1|dry_sugar|pollen_patty|fondant|other", "quantity": number, "quantityUnit": "lbs|oz|quarts|gallons", "feederType": "entrance|top|frame|baggie|bucket|open|other", "notes": "optional"}],
@@ -91,6 +97,7 @@ Return ONLY valid JSON with this exact shape (omit fields that aren't mentioned)
 Rules:
 - For numeric scales (storesHoney, storesPollen, temperament), interpret qualitative descriptions: "low"=1-2, "medium/moderate"=3, "high/good"=4, "excellent/full"=5
 - For queenSeen, look for phrases like "saw the queen", "queen spotted", "couldn't find the queen", "queenless"
+- framesOfBees/framesOfBrood/framesOfStores are literal frame counts ("eight frames of bees" means framesOfBees: 8); they are separate from the 1-5 stores scales
 - For pests, look for: varroa mites, hive beetles, wax moths, ants, etc.
 - For treatments, look for: oxalic acid, formic acid, Apivar, thymol, etc.
 - Extract every feeding, treatment, queen event, and structured mite count mentioned. Do not bury these in notes.
@@ -111,6 +118,9 @@ Return ONLY valid JSON as an array with this exact shape:
     "storesHoney": number from 1 to 5,
     "storesPollen": number from 1 to 5,
     "temperament": number from 1 to 5 (1=calm, 5=aggressive),
+    "framesOfBees": number of frames covered in bees,
+    "framesOfBrood": number of frames of brood,
+    "framesOfStores": number of frames of stores,
     "pests": [{"type": "pest name", "count": "optional count or severity"}],
     "treatments": [{"product": "treatment name", "method": "optional application method"}],
     "feedings": [{"type": "sugar_syrup_1to1|sugar_syrup_2to1|dry_sugar|pollen_patty|fondant|other", "quantity": number, "quantityUnit": "lbs|oz|quarts|gallons", "feederType": "entrance|top|frame|baggie|bucket|open|other", "notes": "optional"}],
@@ -125,6 +135,7 @@ Rules:
 - Segment the transcription by hive and extract fields for each
 - For numeric scales (storesHoney, storesPollen, temperament), interpret qualitative descriptions: "low"=1-2, "medium/moderate"=3, "high/good"=4, "excellent/full"=5
 - For queenSeen, look for phrases like "saw the queen", "queen spotted", "couldn't find the queen", "queenless"
+- framesOfBees/framesOfBrood/framesOfStores are literal frame counts ("eight frames of bees" means framesOfBees: 8); they are separate from the 1-5 stores scales
 - For pests, look for: varroa mites, hive beetles, wax moths, ants, etc.
 - For treatments, look for: oxalic acid, formic acid, Apivar, thymol, etc.
 - Extract every feeding, treatment, queen event, and structured mite count mentioned for each hive.
@@ -237,6 +248,15 @@ func validateParsedInspection(raw map[string]any) ParsedInspection {
 	result.StoresHoney = ratingValue(raw["storesHoney"])
 	result.StoresPollen = ratingValue(raw["storesPollen"])
 	result.Temperament = ratingValue(raw["temperament"])
+	if v, ok := nonNegativeInt(raw["framesOfBees"]); ok {
+		result.FramesOfBees = &v
+	}
+	if v, ok := nonNegativeInt(raw["framesOfBrood"]); ok {
+		result.FramesOfBrood = &v
+	}
+	if v, ok := nonNegativeInt(raw["framesOfStores"]); ok {
+		result.FramesOfStores = &v
+	}
 
 	if pests, ok := raw["pests"].([]any); ok {
 		out := make([]Pest, 0, len(pests))

@@ -38,7 +38,7 @@ function formatElapsed(startedAt: string, now: number): string {
  * Start/stop control for a yard visit. Off until Settings > Preferences
  * enables labor minutes. Import this onto the yard-queue page as well.
  */
-export function LaborControl() {
+export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean } = {}) {
   const current = useLaborCurrent();
   const list = useLaborList();
   const apiaries = useApiaryOptions();
@@ -55,9 +55,11 @@ export function LaborControl() {
   }, [running]);
 
   if (current.isPending) {
+    if (quietWhenOff) return null;
     return <Skeleton className="h-24 w-full" />;
   }
   if (current.isError || !current.data) {
+    if (quietWhenOff) return null;
     return (
       <p className="text-sm text-muted-foreground">
         Could not load labor tracking.
@@ -65,6 +67,7 @@ export function LaborControl() {
     );
   }
   if (!current.data.enabled) {
+    if (quietWhenOff) return null;
     return (
       <p className="text-sm text-muted-foreground">
         Labor minutes are off. Enable them under Preferences if you want

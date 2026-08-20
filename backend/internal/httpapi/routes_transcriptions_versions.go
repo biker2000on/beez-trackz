@@ -225,17 +225,20 @@ type reparseDiff struct {
 }
 
 type existingInspection struct {
-	ID           uuid.UUID
-	HiveID       uuid.UUID
-	QueenSeen    *bool
-	QueenHealth  *string
-	BroodPattern *string
-	StoresHoney  *int
-	StoresPollen *int
-	Temperament  *int
-	Pests        []byte
-	Treatments   []byte
-	Notes        *string
+	ID             uuid.UUID
+	HiveID         uuid.UUID
+	QueenSeen      *bool
+	QueenHealth    *string
+	BroodPattern   *string
+	StoresHoney    *int
+	StoresPollen   *int
+	Temperament    *int
+	FramesOfBees   *int
+	FramesOfBrood  *int
+	FramesOfStores *int
+	Pests          []byte
+	Treatments     []byte
+	Notes          *string
 }
 
 type existingFeeding struct {
@@ -271,7 +274,9 @@ func (s *Server) transcriptionReparseDiff(ctx context.Context, mediaID uuid.UUID
 	}
 	inspRows, err := s.pool.Query(ctx, `
 		SELECT id, hive_id, queen_seen, queen_health, brood_pattern,
-		       stores_honey, stores_pollen, temperament, pests, treatments, notes
+		       stores_honey, stores_pollen, temperament,
+		       frames_of_bees, frames_of_brood, frames_of_stores,
+		       pests, treatments, notes
 		FROM inspections
 		WHERE source_media_file_id = $1
 		   OR (source_media->>'mediaFileId') = $1::text
@@ -283,7 +288,9 @@ func (s *Server) transcriptionReparseDiff(ctx context.Context, mediaID uuid.UUID
 	for inspRows.Next() {
 		var row existingInspection
 		if err := inspRows.Scan(&row.ID, &row.HiveID, &row.QueenSeen, &row.QueenHealth, &row.BroodPattern,
-			&row.StoresHoney, &row.StoresPollen, &row.Temperament, &row.Pests, &row.Treatments, &row.Notes); err != nil {
+			&row.StoresHoney, &row.StoresPollen, &row.Temperament,
+			&row.FramesOfBees, &row.FramesOfBrood, &row.FramesOfStores,
+			&row.Pests, &row.Treatments, &row.Notes); err != nil {
 			inspRows.Close()
 			return diff, err
 		}
@@ -508,6 +515,9 @@ func inspectionFieldsEqual(cur existingInspection, proposed ai.ParsedInspection)
 		ptrIntEqual(cur.StoresHoney, proposed.StoresHoney) &&
 		ptrIntEqual(cur.StoresPollen, proposed.StoresPollen) &&
 		ptrIntEqual(cur.Temperament, proposed.Temperament) &&
+		ptrIntEqual(cur.FramesOfBees, proposed.FramesOfBees) &&
+		ptrIntEqual(cur.FramesOfBrood, proposed.FramesOfBrood) &&
+		ptrIntEqual(cur.FramesOfStores, proposed.FramesOfStores) &&
 		ptrStrEqual(cur.Notes, proposed.Notes)
 }
 
@@ -624,14 +634,16 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 						queen_seen = $2, queen_health = $3, brood_pattern = $4,
 						stores_honey = $5, stores_pollen = $6, temperament = $7,
 						pests = $8, treatments = $9, notes = $10,
-						source_transcript_version_id = $11
+						source_transcript_version_id = $11,
+						frames_of_bees = $13, frames_of_brood = $14, frames_of_stores = $15
 					WHERE id = $1 AND (
 						source_media_file_id = $12
 						OR (source_media->>'mediaFileId') = $12::text
 					)`,
 					*item.ExistingID, fields.QueenSeen, fields.QueenHealth, fields.BroodPattern,
 					clampRating(fields.StoresHoney), clampRating(fields.StoresPollen), clampRating(fields.Temperament),
-					pestsJSON, treatmentsJSON, fields.Notes, versionID, row.ID)
+					pestsJSON, treatmentsJSON, fields.Notes, versionID, row.ID,
+					fields.FramesOfBees, fields.FramesOfBrood, fields.FramesOfStores)
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "database error")
 					return
@@ -658,11 +670,13 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				INSERT INTO inspections
 					(hive_id, date, queen_seen, queen_health, brood_pattern,
 					 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media,
-					 source_media_file_id, source_transcript_version_id)
-				VALUES ($1, now(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+					 source_media_file_id, source_transcript_version_id,
+					 frames_of_bees, frames_of_brood, frames_of_stores)
+				VALUES ($1, now(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 				*item.HiveID, fields.QueenSeen, fields.QueenHealth, fields.BroodPattern,
 				clampRating(fields.StoresHoney), clampRating(fields.StoresPollen), clampRating(fields.Temperament),
-				pestsJSON, treatmentsJSON, fields.Notes, sourceMedia, row.ID, versionID); err != nil {
+				pestsJSON, treatmentsJSON, fields.Notes, sourceMedia, row.ID, versionID,
+				fields.FramesOfBees, fields.FramesOfBrood, fields.FramesOfStores); err != nil {
 				writeError(w, http.StatusInternalServerError, "database error")
 				return
 			}
