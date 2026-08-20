@@ -188,6 +188,7 @@ export function PhotoUpload({
                           assetId: asset.id,
                           ownerType,
                           ownerId,
+                          takenDate: asset.takenAt,
                         });
                         toast.success("Photo linked from library");
                         setLibraryOpen(false);

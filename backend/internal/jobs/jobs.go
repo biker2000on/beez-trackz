@@ -12,6 +12,7 @@ import (
 // Task type names shared between the API (enqueuer) and the worker.
 const (
 	TypeProcessImage    = "media:process_image"
+	TypeImmichYardScan  = "media:immich_yard_scan"
 	TypeTranscribeAudio = "ai:transcribe_audio"
 	TypeGenerateRecs    = "recs:generate"
 	TypeCleanupReceipts = "maintenance:cleanup_receipts"
@@ -19,6 +20,21 @@ const (
 
 type ProcessImagePayload struct {
 	PhotoID string `json:"photoId"`
+}
+
+type ImmichYardScanPayload struct {
+	ApiaryID string `json:"apiaryId"`
+	ScanID   string `json:"scanId"`
+}
+
+// NewImmichYardScanTask gives every persisted scan a stable queue identity.
+// The handler is idempotent, so an asynq retry resumes the same scan row.
+func NewImmichYardScanTask(apiaryID, scanID string) (*asynq.Task, error) {
+	payload, err := json.Marshal(ImmichYardScanPayload{ApiaryID: apiaryID, ScanID: scanID})
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeImmichYardScan, payload, asynq.TaskID("immich-yard-scan:"+scanID)), nil
 }
 
 type TranscribeAudioPayload struct {

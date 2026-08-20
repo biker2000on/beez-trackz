@@ -38,6 +38,50 @@ export interface Photo {
   mediumUrl: string | null;
   storageBackend?: "minio" | "immich";
   originalExternal?: boolean;
+  comparisonAngle?: string | null;
+}
+
+export interface TimelinePhoto extends Photo {
+  matchedTerms: string[];
+}
+
+export type TimelineReviewReason =
+  | "missing_gps"
+  | "multiple_apiaries"
+  | "flora_or_bees_needs_review"
+  | "no_longer_matched"
+  | "rendition_enqueue_failed"
+  | string;
+
+export interface TimelineCandidate {
+  id: string;
+  immichAssetId: string;
+  originalFilename: string | null;
+  takenDate: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  matchedTerms: string[];
+  nearbyApiaryIds: string[];
+  reviewReason: TimelineReviewReason;
+  thumbnailUrl: string;
+}
+
+export interface TimelineScan {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  matchedCount: number;
+  adoptedCount: number;
+  reviewCount: number;
+  error: string | null;
+  requestedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ApiaryPhotoTimeline {
+  photos: TimelinePhoto[];
+  review: TimelineCandidate[];
+  latestScan: TimelineScan | null;
 }
 
 export interface PhotoStorageInfo {
@@ -82,6 +126,60 @@ export function usePhotos(ownerType: PhotoOwnerType, ownerId: string) {
     queryKey: ["photos", ownerType, ownerId],
     queryFn: () =>
       api.get<Photo[]>("/photos", { params: { ownerType, ownerId } }),
+  });
+}
+
+export function useApiaryPhotoTimeline(apiaryId: string) {
+  return useQuery({
+    queryKey: ["photos", "timeline", apiaryId],
+    queryFn: () =>
+      api.get<ApiaryPhotoTimeline>(`/apiaries/${apiaryId}/photos/timeline`),
+    refetchInterval: (query) => {
+      const status = query.state.data?.latestScan?.status;
+      return status === "queued" || status === "running" ? 2_000 : false;
+    },
+  });
+}
+
+export function useScanApiaryPhotos(apiaryId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ queued: boolean; scanId: string; alreadyActive: boolean }>(
+        `/apiaries/${apiaryId}/photos/scan`,
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["photos", "timeline", apiaryId],
+      }),
+  });
+}
+
+export function useReviewTimelinePhoto(apiaryId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      candidateId,
+      action,
+    }: {
+      candidateId: string;
+      action: "adopt" | "reject";
+    }) =>
+      api.post<{ success: boolean; photoId?: string }>(
+        `/apiaries/${apiaryId}/photos/review/${candidateId}`,
+        { action },
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["photos", "timeline", apiaryId],
+      }),
+  });
+}
+
+export function useHivePhotoStrip(hiveId: string) {
+  return useQuery({
+    queryKey: ["photos", "strip", hiveId],
+    queryFn: () => api.get<Photo[]>(`/hives/${hiveId}/photos/strip`),
   });
 }
 
@@ -137,6 +235,7 @@ export function useLinkPhoto() {
       ownerType: PhotoOwnerType;
       ownerId: string;
       caption?: string;
+      takenDate?: string | null;
     }) =>
       api.post<{ success: boolean; photoId: string }>("/photos/link", input),
     onSuccess: (_data, variables) => {
@@ -157,6 +256,7 @@ export function useUploadPhoto() {
 
 export function useUpdatePhoto(ownerType: PhotoOwnerType, ownerId: string) {
   const invalidate = useInvalidatePhotos();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({
       id,
@@ -165,8 +265,16 @@ export function useUpdatePhoto(ownerType: PhotoOwnerType, ownerId: string) {
       id: string;
       caption?: string | null;
       tags?: string[];
+      comparisonAngle?: string;
     }) => api.patch<{ success: boolean }>(`/photos/${id}`, payload),
-    onSuccess: () => invalidate(ownerType, ownerId),
+    onSuccess: () => {
+      invalidate(ownerType, ownerId);
+      if (ownerType === "hive") {
+        void queryClient.invalidateQueries({
+          queryKey: ["photos", "strip", ownerId],
+        });
+      }
+    },
   });
 }
 

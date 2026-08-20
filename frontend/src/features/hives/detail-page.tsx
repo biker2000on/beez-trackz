@@ -83,6 +83,7 @@ import { InspectionCard } from "@/features/inspections/inspection-card";
 import { InspectionFormDialog } from "@/features/inspections/inspection-form-dialog";
 import { useHiveInspections } from "@/features/inspections/hooks";
 import { PhotoUpload } from "@/features/photos/photo-upload";
+import { HivePhotoStrip } from "@/features/photos/hive-strip";
 import { HiveTimeline } from "@/features/operations/hive-timeline";
 import type { HiveTimelineEntry } from "@/features/operations/hooks";
 import { VarroaPanel } from "@/features/operations/varroa-panel";
@@ -396,6 +397,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
               setSearchParams({ tab: "timeline", view: "inspections" });
             }}
           />
+          <HivePhotoStrip hiveId={data.id} canEdit={canEdit} />
         </TabsContent>
       </Tabs>
 

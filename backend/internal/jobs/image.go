@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/disintegration/imaging"
 	"github.com/hibiken/asynq"
@@ -85,6 +86,7 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("process image: decode %s: %v: %w", sourceLabel, err, asynq.SkipRetry)
 	}
 	src = imgApplyEXIFOrientation(src, data)
+	takenDate := imgEXIFTakenDate(data)
 
 	base, ext := imgRenditionBase(originalKey, ownerType, ownerID, payload.PhotoID)
 	encodeFormat := format
@@ -116,15 +118,33 @@ func (h *Handlers) handleProcessImage(ctx context.Context, t *asynq.Task) error 
 		return fmt.Errorf("process image: upload %s: %w", mediumKey, err)
 	}
 
-	if _, err := h.pool.Exec(ctx,
-		`UPDATE photos SET thumbnail_key = $1, medium_key = $2 WHERE id = $3`,
-		thumbKey, mediumKey, payload.PhotoID); err != nil {
+	if _, err := h.pool.Exec(ctx, `
+		UPDATE photos
+		SET thumbnail_key = $1, medium_key = $2,
+		    taken_date = COALESCE($3, taken_date)
+		WHERE id = $4`,
+		thumbKey, mediumKey, takenDate, payload.PhotoID); err != nil {
 		return fmt.Errorf("process image: update photo %s: %w", payload.PhotoID, err)
 	}
 
 	slog.Info("process image: done", "photoId", payload.PhotoID,
 		"thumbKey", thumbKey, "mediumKey", mediumKey)
 	return nil
+}
+
+// imgEXIFTakenDate returns DateTimeOriginal when it is available. Upload time
+// is not a substitute for the seasonal photo series; existing taken_date is
+// left unchanged when the original has no readable EXIF timestamp.
+func imgEXIFTakenDate(raw []byte) *time.Time {
+	x, err := exif.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil
+	}
+	taken, err := x.DateTime()
+	if err != nil || taken.IsZero() {
+		return nil
+	}
+	return &taken
 }
 
 // imgCheckDimensions reads only the image header and rejects anything whose

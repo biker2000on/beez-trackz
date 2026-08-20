@@ -33,6 +33,7 @@ func NewWorker(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*a
 	h := &Handlers{cfg: cfg, pool: pool, store: store, photos: photostore.New(cfg, store)}
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TypeProcessImage, h.handleProcessImage)
+	mux.HandleFunc(TypeImmichYardScan, h.handleImmichYardScan)
 	mux.HandleFunc(TypeTranscribeAudio, h.handleTranscribeAudio)
 	mux.HandleFunc(TypeGenerateRecs, h.handleGenerateRecs)
 	mux.HandleFunc(TypeCleanupReceipts, h.handleCleanupReceipts)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -103,11 +104,12 @@ func (s *Server) handlePhotoLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		AssetID   string   `json:"assetId"`
-		OwnerType string   `json:"ownerType"`
-		OwnerID   string   `json:"ownerId"`
-		Caption   *string  `json:"caption"`
-		Tags      []string `json:"tags"`
+		AssetID   string     `json:"assetId"`
+		OwnerType string     `json:"ownerType"`
+		OwnerID   string     `json:"ownerId"`
+		Caption   *string    `json:"caption"`
+		Tags      []string   `json:"tags"`
+		TakenDate *time.Time `json:"takenDate"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -145,9 +147,9 @@ func (s *Server) handlePhotoLink(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO photos
 			(owner_type, owner_id, original_key, original_ref, storage_backend, original_external,
 			 taken_date, caption, tags)
-		VALUES ($1, $2, NULL, $3, 'immich', true, now(), $4, $5)
+		VALUES ($1, $2, NULL, $3, 'immich', true, $4, $5, $6)
 		RETURNING id`,
-		req.OwnerType, ownerID, assetID.String(), caption, req.Tags).Scan(&photoID)
+		req.OwnerType, ownerID, assetID.String(), req.TakenDate, caption, req.Tags).Scan(&photoID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

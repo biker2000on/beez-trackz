@@ -74,6 +74,14 @@ func photoFileURL(key *string) *string {
 }
 
 func (s *Server) mountPhotos(r chi.Router) {
+	r.With(s.requireApiaryParamRole(true)).
+		Post("/apiaries/{id}/photos/scan", s.handleApiaryPhotoScan)
+	r.With(s.requireApiaryParamRole(false)).
+		Get("/apiaries/{id}/photos/timeline", s.handleApiaryPhotoTimeline)
+	r.With(s.requireApiaryParamRole(true)).
+		Post("/apiaries/{id}/photos/review/{candidateId}", s.handleApiaryPhotoReview)
+	r.With(s.requireHiveParamRole(false)).
+		Get("/hives/{id}/photos/strip", s.handleHivePhotoStrip)
 	r.Route("/photos", func(r chi.Router) {
 		r.Post("/", s.handlePhotoUpload)
 		r.Get("/", s.handlePhotoList)
@@ -135,6 +143,7 @@ type photoResponse struct {
 	MediumURL        *string    `json:"mediumUrl"`
 	StorageBackend   string     `json:"storageBackend"`
 	OriginalExternal bool       `json:"originalExternal"`
+	ComparisonAngle  *string    `json:"comparisonAngle"`
 }
 
 func photoOriginalURL(id string) *string {
@@ -261,7 +270,7 @@ func (s *Server) handlePhotoUpload(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO photos
 			(owner_type, owner_id, original_key, original_ref, storage_backend, original_external,
 			 taken_date, caption, tags)
-		VALUES ($1, $2, $3, $4, $5, $6, now(), $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)
 		RETURNING id`,
 		ownerType, ownerID, originalKey, ref, backend, originalExternal, caption, tags).Scan(&photoID)
 	if err != nil {
@@ -313,7 +322,8 @@ func (s *Server) handlePhotoList(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, owner_type, owner_id, original_key, thumbnail_key, medium_key,
-		       taken_date, caption, tags, created_at, storage_backend::text, original_external
+		       taken_date, caption, tags, created_at, storage_backend::text, original_external,
+		       comparison_angle
 		FROM photos
 		WHERE owner_type = $1 AND owner_id = $2
 		ORDER BY created_at DESC`,
@@ -334,7 +344,7 @@ func (s *Server) handlePhotoList(w http.ResponseWriter, r *http.Request) {
 		)
 		if err := rows.Scan(&p.ID, &p.OwnerType, &p.OwnerID, &originalKey, &thumbnailKey,
 			&mediumKey, &p.TakenDate, &p.Caption, &p.Tags, &p.CreatedAt,
-			&p.StorageBackend, &p.OriginalExternal); err != nil {
+			&p.StorageBackend, &p.OriginalExternal, &p.ComparisonAngle); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -358,8 +368,9 @@ func (s *Server) handlePhotoUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Caption *string   `json:"caption"`
-		Tags    *[]string `json:"tags"`
+		Caption         *string   `json:"caption"`
+		Tags            *[]string `json:"tags"`
+		ComparisonAngle *string   `json:"comparisonAngle"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -379,6 +390,18 @@ func (s *Server) handlePhotoUpdate(w http.ResponseWriter, r *http.Request) {
 	if req.Tags != nil {
 		args = append(args, *req.Tags)
 		sets = append(sets, "tags = $"+strconv.Itoa(len(args)))
+	}
+	if req.ComparisonAngle != nil {
+		var angle *string
+		if value := strings.TrimSpace(*req.ComparisonAngle); value != "" {
+			if len(value) > 80 {
+				writeError(w, http.StatusBadRequest, "Comparison angle must be 80 characters or fewer")
+				return
+			}
+			angle = &value
+		}
+		args = append(args, angle)
+		sets = append(sets, "comparison_angle = $"+strconv.Itoa(len(args)))
 	}
 	if len(sets) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
@@ -541,4 +564,388 @@ func (s *Server) servePhotoKey(w http.ResponseWriter, r *http.Request, key strin
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, obj)
+}
+
+type photoScanResponse struct {
+	ID           string     `json:"id"`
+	Status       string     `json:"status"`
+	MatchedCount int        `json:"matchedCount"`
+	AdoptedCount int        `json:"adoptedCount"`
+	ReviewCount  int        `json:"reviewCount"`
+	Error        *string    `json:"error"`
+	RequestedAt  time.Time  `json:"requestedAt"`
+	StartedAt    *time.Time `json:"startedAt"`
+	CompletedAt  *time.Time `json:"completedAt"`
+}
+
+type timelinePhotoResponse struct {
+	photoResponse
+	MatchedTerms []string `json:"matchedTerms"`
+}
+
+type timelineCandidateResponse struct {
+	ID               string      `json:"id"`
+	ImmichAssetID    string      `json:"immichAssetId"`
+	OriginalFilename *string     `json:"originalFilename"`
+	TakenDate        *time.Time  `json:"takenDate"`
+	Latitude         *float64    `json:"latitude"`
+	Longitude        *float64    `json:"longitude"`
+	MatchedTerms     []string    `json:"matchedTerms"`
+	NearbyApiaryIDs  []uuid.UUID `json:"nearbyApiaryIds"`
+	ReviewReason     string      `json:"reviewReason"`
+	ThumbnailURL     string      `json:"thumbnailUrl"`
+}
+
+// POST /apiaries/{id}/photos/scan queues (or resumes) one persisted scan.
+func (s *Server) handleApiaryPhotoScan(w http.ResponseWriter, r *http.Request) {
+	apiaryID, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.queue == nil {
+		writeError(w, http.StatusInternalServerError, "queue is not configured")
+		return
+	}
+	if s.immichClient() == nil {
+		writeError(w, http.StatusNotFound, "Immich is not configured")
+		return
+	}
+	var hasPin bool
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT latitude IS NOT NULL AND longitude IS NOT NULL
+		FROM apiaries WHERE id=$1`, apiaryID).Scan(&hasPin); err != nil {
+		writeError(w, http.StatusNotFound, "Apiary not found")
+		return
+	}
+	if !hasPin {
+		writeError(w, http.StatusConflict, "Set the apiary map pin before scanning Immich")
+		return
+	}
+
+	var scanID uuid.UUID
+	created := true
+	err = s.pool.QueryRow(r.Context(), `
+		INSERT INTO immich_timeline_scans (apiary_id)
+		VALUES ($1)
+		ON CONFLICT DO NOTHING
+		RETURNING id`, apiaryID).Scan(&scanID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		created = false
+		err = s.pool.QueryRow(r.Context(), `
+			SELECT id FROM immich_timeline_scans
+			WHERE apiary_id=$1 AND status IN ('queued','running')
+			ORDER BY requested_at DESC LIMIT 1`, apiaryID).Scan(&scanID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	task, err := jobs.NewImmichYardScanTask(apiaryID.String(), scanID.String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encoding error")
+		return
+	}
+	info, enqueueErr := s.queue.EnqueueContext(r.Context(), task, asynq.MaxRetry(3))
+	if enqueueErr != nil && !errors.Is(enqueueErr, asynq.ErrTaskIDConflict) {
+		if created {
+			_, _ = s.pool.Exec(r.Context(), `
+				UPDATE immich_timeline_scans
+				SET status='failed', error=$2, completed_at=now() WHERE id=$1`,
+				scanID, "failed to enqueue Immich scan")
+		}
+		writeError(w, http.StatusInternalServerError, "failed to enqueue Immich scan")
+		return
+	}
+	taskID := "immich-yard-scan:" + scanID.String()
+	if info != nil {
+		taskID = info.ID
+	}
+	_, _ = s.pool.Exec(r.Context(),
+		`UPDATE immich_timeline_scans SET task_id=$2 WHERE id=$1`, scanID, taskID)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"queued": true, "scanId": scanID, "alreadyActive": !created,
+	})
+}
+
+// GET /apiaries/{id}/photos/timeline returns only adopted scan matches plus
+// the pending review tray. All adopted image URLs resolve to Beez renditions.
+func (s *Server) handleApiaryPhotoTimeline(w http.ResponseWriter, r *http.Request) {
+	apiaryID, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	photos := []timelinePhotoResponse{}
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT p.id, p.owner_type, p.owner_id, p.original_key, p.thumbnail_key, p.medium_key,
+		       p.taken_date, p.caption, p.tags, p.created_at, p.storage_backend::text,
+		       p.original_external, p.comparison_angle, c.matched_terms
+		FROM immich_timeline_candidates c
+		JOIN photos p ON p.id=c.photo_id
+		WHERE c.apiary_id=$1 AND c.review_state='adopted'
+		ORDER BY p.taken_date ASC NULLS LAST, p.created_at ASC`, apiaryID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item timelinePhotoResponse
+		var originalKey, thumbnailKey, mediumKey *string
+		if err := rows.Scan(&item.ID, &item.OwnerType, &item.OwnerID, &originalKey,
+			&thumbnailKey, &mediumKey, &item.TakenDate, &item.Caption, &item.Tags,
+			&item.CreatedAt, &item.StorageBackend, &item.OriginalExternal,
+			&item.ComparisonAngle, &item.MatchedTerms); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		item.OriginalURL = photoOriginalURL(item.ID)
+		item.ThumbnailURL = photoFileURL(thumbnailKey)
+		item.MediumURL = photoFileURL(mediumKey)
+		photos = append(photos, item)
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	candidates := []timelineCandidateResponse{}
+	candidateRows, err := s.pool.Query(r.Context(), `
+		SELECT id, immich_asset_id, original_filename, taken_date, latitude, longitude,
+		       matched_terms, nearby_apiary_ids, review_reason
+		FROM immich_timeline_candidates
+		WHERE apiary_id=$1 AND review_state='pending'
+		ORDER BY taken_date ASC NULLS LAST, last_seen_at DESC`, apiaryID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer candidateRows.Close()
+	for candidateRows.Next() {
+		var item timelineCandidateResponse
+		if err := candidateRows.Scan(&item.ID, &item.ImmichAssetID, &item.OriginalFilename,
+			&item.TakenDate, &item.Latitude, &item.Longitude, &item.MatchedTerms,
+			&item.NearbyApiaryIDs, &item.ReviewReason); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		item.ThumbnailURL = "/api/v1/photos/library/" + item.ImmichAssetID + "/thumb"
+		candidates = append(candidates, item)
+	}
+	if candidateRows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	var latest *photoScanResponse
+	var scan photoScanResponse
+	err = s.pool.QueryRow(r.Context(), `
+		SELECT id, status, matched_count, adopted_count, review_count, error,
+		       requested_at, started_at, completed_at
+		FROM immich_timeline_scans WHERE apiary_id=$1
+		ORDER BY requested_at DESC LIMIT 1`, apiaryID).
+		Scan(&scan.ID, &scan.Status, &scan.MatchedCount, &scan.AdoptedCount,
+			&scan.ReviewCount, &scan.Error, &scan.RequestedAt, &scan.StartedAt, &scan.CompletedAt)
+	if err == nil {
+		latest = &scan
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"photos": photos, "review": candidates, "latestScan": latest,
+	})
+}
+
+// POST /apiaries/{id}/photos/review/{candidateId} {action:"adopt"|"reject"}
+func (s *Server) handleApiaryPhotoReview(w http.ResponseWriter, r *http.Request) {
+	apiaryID, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	candidateID, err := uuid.Parse(chi.URLParam(r, "candidateId"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid candidate id")
+		return
+	}
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	switch req.Action {
+	case "reject":
+		tag, err := s.pool.Exec(r.Context(), `
+			UPDATE immich_timeline_candidates
+			SET review_state='rejected', review_reason='operator_rejected', reviewed_at=now()
+			WHERE id=$1 AND apiary_id=$2 AND review_state<>'adopted'`, candidateID, apiaryID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			writeError(w, http.StatusConflict, "candidate is already adopted or no longer exists")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true})
+		return
+	case "adopt":
+		// Continue below.
+	default:
+		writeError(w, http.StatusBadRequest, "action must be adopt or reject")
+		return
+	}
+	if s.queue == nil {
+		writeError(w, http.StatusInternalServerError, "queue is not configured")
+		return
+	}
+	client := s.immichClient()
+	if client == nil {
+		writeError(w, http.StatusNotFound, "Immich is not configured")
+		return
+	}
+	var assetID string
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT immich_asset_id FROM immich_timeline_candidates
+		WHERE id=$1 AND apiary_id=$2`, candidateID, apiaryID).Scan(&assetID); err != nil {
+		writeError(w, http.StatusNotFound, "candidate not found")
+		return
+	}
+	if err := client.AssetExists(r.Context(), assetID); err != nil {
+		writeError(w, http.StatusBadGateway, "Immich asset is unavailable")
+		return
+	}
+
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var filename *string
+	var takenDate *time.Time
+	var terms []string
+	var existingPhoto *uuid.UUID
+	if err := tx.QueryRow(r.Context(), `
+		SELECT immich_asset_id, original_filename, taken_date, matched_terms, photo_id
+		FROM immich_timeline_candidates
+		WHERE id=$1 AND apiary_id=$2 FOR UPDATE`, candidateID, apiaryID).
+		Scan(&assetID, &filename, &takenDate, &terms, &existingPhoto); err != nil {
+		writeError(w, http.StatusNotFound, "candidate not found")
+		return
+	}
+	if existingPhoto != nil {
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "photoId": existingPhoto})
+		return
+	}
+	tags := append([]string{"immich-timeline"}, terms...)
+	var photoID uuid.UUID
+	var thumbnailKey *string
+	photoCreated := false
+	err = tx.QueryRow(r.Context(), `
+		SELECT id, thumbnail_key FROM photos
+		WHERE owner_type='apiary' AND owner_id=$1
+		  AND storage_backend='immich' AND original_ref=$2
+		ORDER BY created_at ASC LIMIT 1`, apiaryID, assetID).Scan(&photoID, &thumbnailKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(r.Context(), `
+			INSERT INTO photos
+			  (owner_type, owner_id, original_key, original_ref, storage_backend,
+			   original_external, taken_date, caption, tags)
+			VALUES ('apiary',$1,NULL,$2,'immich',true,$3,$4,$5)
+			RETURNING id`, apiaryID, assetID, takenDate, filename, tags).Scan(&photoID)
+		photoCreated = err == nil
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE immich_timeline_candidates
+		SET review_state='adopted', review_reason='adopted', auto_adopted=false,
+		    photo_id=$2, reviewed_at=now()
+		WHERE id=$1`, candidateID, photoID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if thumbnailKey != nil && *thumbnailKey != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "photoId": photoID})
+		return
+	}
+	payload, _ := json.Marshal(jobs.ProcessImagePayload{PhotoID: photoID.String()})
+	if _, err := s.queue.EnqueueContext(r.Context(),
+		asynq.NewTask(jobs.TypeProcessImage, payload), asynq.MaxRetry(3)); err != nil {
+		// Keep candidate and photo state coherent so the operator can retry.
+		cleanupTx, cleanupErr := s.pool.Begin(r.Context())
+		if cleanupErr == nil {
+			_, _ = cleanupTx.Exec(r.Context(), `
+				UPDATE immich_timeline_candidates
+				SET review_state='pending', review_reason='rendition_enqueue_failed',
+				    photo_id=NULL, reviewed_at=NULL WHERE id=$1`, candidateID)
+			if photoCreated {
+				_, _ = cleanupTx.Exec(r.Context(), `DELETE FROM photos WHERE id=$1`, photoID)
+			}
+			_ = cleanupTx.Commit(r.Context())
+		}
+		writeError(w, http.StatusInternalServerError, "failed to enqueue image processing")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"success": true, "photoId": photoID})
+}
+
+// GET /hives/{id}/photos/strip is chronological by taken_date. Unlabelled
+// photos are returned so the UI can assign an angle, but only labelled groups
+// are presented as same-angle comparisons.
+func (s *Server) handleHivePhotoStrip(w http.ResponseWriter, r *http.Request) {
+	hiveID, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT id, owner_type, owner_id, original_key, thumbnail_key, medium_key,
+		       taken_date, caption, tags, created_at, storage_backend::text,
+		       original_external, comparison_angle
+		FROM photos
+		WHERE owner_type='hive' AND owner_id=$1 AND taken_date IS NOT NULL
+		ORDER BY comparison_angle ASC NULLS LAST, taken_date ASC`, hiveID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer rows.Close()
+	list := []photoResponse{}
+	for rows.Next() {
+		var item photoResponse
+		var originalKey, thumbnailKey, mediumKey *string
+		if err := rows.Scan(&item.ID, &item.OwnerType, &item.OwnerID, &originalKey,
+			&thumbnailKey, &mediumKey, &item.TakenDate, &item.Caption, &item.Tags,
+			&item.CreatedAt, &item.StorageBackend, &item.OriginalExternal,
+			&item.ComparisonAngle); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		item.OriginalURL = photoOriginalURL(item.ID)
+		item.ThumbnailURL = photoFileURL(thumbnailKey)
+		item.MediumURL = photoFileURL(mediumKey)
+		list = append(list, item)
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
 }
