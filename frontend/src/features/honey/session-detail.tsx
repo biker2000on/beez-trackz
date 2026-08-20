@@ -50,8 +50,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { useUnits } from "@/lib/use-units";
 
-import { formatDate, formatLbs, parseNum } from "./format";
+import {
+  formatDate,
+  honeyInputDisplay,
+  parseHoneyWeight,
+  parseNum,
+} from "./format";
 import {
   useAddSessionEntries,
   useApiaryOptions,
@@ -71,6 +77,7 @@ export function sessionFinalized(totalExtractedWeight: number | null): boolean {
 }
 
 export function SessionDetail({ id }: { id: string }) {
+  const { formatHoney } = useUnits();
   const session = useHarvestSession(id);
   const apiaries = useApiaryOptions();
   const deleteEntry = useDeleteSessionEntry();
@@ -128,14 +135,14 @@ export function SessionDetail({ id }: { id: string }) {
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard
           label="Calculated total"
-          value={formatLbs(data.calculatedTotal)}
+          value={formatHoney(data.calculatedTotal)}
           sub={`${data.entries.length} hive ${data.entries.length === 1 ? "entry" : "entries"}`}
         />
         <SummaryCard
           label="Actual extracted"
           value={
             data.totalExtractedWeight != null
-              ? formatLbs(data.totalExtractedWeight)
+              ? formatHoney(data.totalExtractedWeight)
               : "—"
           }
           sub={
@@ -148,7 +155,7 @@ export function SessionDetail({ id }: { id: string }) {
           label="Difference"
           value={
             data.difference != null
-              ? `${data.difference > 0 ? "+" : ""}${formatLbs(data.difference)}`
+              ? `${data.difference > 0 ? "+" : ""}${formatHoney(data.difference)}`
               : "—"
           }
           sub="Calculated − extracted"
@@ -203,15 +210,15 @@ export function SessionDetail({ id }: { id: string }) {
                       ) : (
                         <>
                           <TableCell className="text-right tabular-nums">
-                            {formatLbs(entry.superWeightBefore)}
+                            {formatHoney(entry.superWeightBefore)}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {formatLbs(entry.superWeightAfter)}
+                            {formatHoney(entry.superWeightAfter)}
                           </TableCell>
                         </>
                       )}
                       <TableCell className="text-right font-medium tabular-nums">
-                        {formatLbs(entry.calculatedHoneyWeight)}
+                        {formatHoney(entry.calculatedHoneyWeight)}
                       </TableCell>
                       <TableCell className="max-w-48 truncate text-muted-foreground">
                         {entry.notes ?? "—"}
@@ -278,7 +285,7 @@ export function SessionDetail({ id }: { id: string }) {
             <AlertDialogTitle>Remove this entry?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirmEntry
-                ? `The ${formatLbs(confirmEntry.calculatedHoneyWeight)} entry for ${confirmEntry.hiveName} stops counting toward this session. `
+                ? `The ${formatHoney(confirmEntry.calculatedHoneyWeight)} entry for ${confirmEntry.hiveName} stops counting toward this session. `
                 : ""}
               The record is archived with your reason, not destroyed.
             </AlertDialogDescription>
@@ -425,10 +432,14 @@ function emptyLine(): EntryLine {
   return { key: lineKey, hiveId: "", before: "", after: "", weight: "", notes: "" };
 }
 
-function lineHoney(line: EntryLine, mode: MeasureMode): number | null {
-  if (mode === "direct") return parseNum(line.weight);
-  const before = parseNum(line.before);
-  const after = parseNum(line.after);
+function lineHoney(
+  line: EntryLine,
+  mode: MeasureMode,
+  units: ReturnType<typeof useUnits>["units"],
+): number | null {
+  if (mode === "direct") return parseHoneyWeight(line.weight, units);
+  const before = parseHoneyWeight(line.before, units);
+  const after = parseHoneyWeight(line.after, units);
   return before != null && after != null ? before - after : null;
 }
 
@@ -441,6 +452,7 @@ function AddEntriesCard({
   apiaryId: string;
   existingHiveIds: string[];
 }) {
+  const { formatHoney, units, honeySuffix } = useUnits();
   const hives = useHiveOptions();
   const mutation = useAddSessionEntries(sessionId);
   const [mode, setMode] = React.useState<MeasureMode>("supers");
@@ -469,7 +481,7 @@ function AddEntriesCard({
       line.weight.trim(),
   );
   const total = filledLines.reduce(
-    (sum, line) => sum + (lineHoney(line, mode) ?? 0),
+    (sum, line) => sum + (lineHoney(line, mode, units) ?? 0),
     0,
   );
 
@@ -487,7 +499,7 @@ function AddEntriesCard({
         return;
       }
       if (mode === "direct") {
-        const weight = parseNum(line.weight);
+        const weight = parseHoneyWeight(line.weight, units);
         if (weight == null || weight <= 0) {
           setError(`${name}enter the harvested weight.`);
           return;
@@ -499,8 +511,8 @@ function AddEntriesCard({
         });
         continue;
       }
-      const before = parseNum(line.before);
-      const after = parseNum(line.after);
+      const before = parseHoneyWeight(line.before, units);
+      const after = parseHoneyWeight(line.after, units);
       if (before == null || after == null) {
         setError(`${name}enter both super weights.`);
         return;
@@ -556,7 +568,7 @@ function AddEntriesCard({
 
         <div className="grid gap-3">
           {lines.map((line, index) => {
-            const honey = lineHoney(line, mode);
+            const honey = lineHoney(line, mode, units);
             return (
               <div
                 key={line.key}
@@ -615,14 +627,12 @@ function AddEntriesCard({
                           htmlFor={`before-${line.key}`}
                           className="text-xs"
                         >
-                          Super weight before (lbs)
+                          Super weight before ({honeySuffix})
                         </Label>
                         <Input
                           id={`before-${line.key}`}
-                          type="number"
                           inputMode="decimal"
-                          step="0.1"
-                          min={0}
+                          placeholder={honeySuffix}
                           value={line.before}
                           onChange={(event) =>
                             patchLine(line.key, { before: event.target.value })
@@ -634,14 +644,12 @@ function AddEntriesCard({
                           htmlFor={`after-${line.key}`}
                           className="text-xs"
                         >
-                          Super weight after (lbs)
+                          Super weight after ({honeySuffix})
                         </Label>
                         <Input
                           id={`after-${line.key}`}
-                          type="number"
                           inputMode="decimal"
-                          step="0.1"
-                          min={0}
+                          placeholder={honeySuffix}
                           value={line.after}
                           onChange={(event) =>
                             patchLine(line.key, { after: event.target.value })
@@ -655,14 +663,12 @@ function AddEntriesCard({
                         htmlFor={`weight-${line.key}`}
                         className="text-xs"
                       >
-                        Harvested weight (lbs)
+                        Harvested weight ({honeySuffix})
                       </Label>
                       <Input
                         id={`weight-${line.key}`}
-                        type="number"
                         inputMode="decimal"
-                        step="0.1"
-                        min={0}
+                        placeholder={`e.g. 2 kg or 4.4 ${honeySuffix}`}
                         value={line.weight}
                         onChange={(event) =>
                           patchLine(line.key, { weight: event.target.value })
@@ -685,7 +691,7 @@ function AddEntriesCard({
                       variant={honey < 0 ? "destructive" : "accent"}
                       className="shrink-0 tabular-nums"
                     >
-                      {formatLbs(honey)}
+                      {formatHoney(honey)}
                     </Badge>
                   )}
                 </div>
@@ -716,7 +722,7 @@ function AddEntriesCard({
           </Button>
           {filledLines.length > 1 && (
             <span className="text-sm text-muted-foreground tabular-nums">
-              Total {formatLbs(total)}
+              Total {formatHoney(total)}
             </span>
           )}
         </div>
@@ -764,9 +770,10 @@ function TrueUpCard({
   calculatedTotal: number;
   history: SessionTrueUp[];
 }) {
+  const { formatHoney, units, honeySuffix } = useUnits();
   const mutation = useTrueUpSession(sessionId);
   const [weight, setWeight] = React.useState(
-    currentWeight != null ? String(currentWeight) : "",
+    () => honeyInputDisplay(currentWeight, units),
   );
   const [reason, setReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -774,15 +781,15 @@ function TrueUpCard({
   React.useEffect(() => {
     // Sync the input when a save round-trips a new authoritative weight.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setWeight(currentWeight != null ? String(currentWeight) : "");
-  }, [currentWeight]);
+    setWeight(honeyInputDisplay(currentWeight, units));
+  }, [currentWeight, units]);
 
-  const entered = parseNum(weight);
+  const entered = parseHoneyWeight(weight, units);
   const liveDifference = entered != null ? calculatedTotal - entered : null;
 
   const onSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const value = parseNum(weight);
+    const value = parseHoneyWeight(weight, units);
     if (value == null || value <= 0) {
       setError("Enter the extracted weight.");
       return;
@@ -809,13 +816,11 @@ function TrueUpCard({
       <CardContent>
         <ShortcutForm onSubmit={onSubmit} className="grid gap-4">
           <div className="grid gap-1.5">
-            <Label htmlFor="true-up-weight">Total extracted (lbs)</Label>
+            <Label htmlFor="true-up-weight">Total extracted ({honeySuffix})</Label>
             <Input
               id="true-up-weight"
-              type="number"
               inputMode="decimal"
-              step="0.1"
-              min={0}
+              placeholder={`e.g. 2 kg or 4.4 ${honeySuffix}`}
               value={weight}
               onChange={(event) => setWeight(event.target.value)}
             />
@@ -839,7 +844,7 @@ function TrueUpCard({
               Difference vs calculated:{" "}
               <span className="font-medium tabular-nums">
                 {liveDifference > 0 ? "+" : ""}
-                {formatLbs(liveDifference)}
+                {formatHoney(liveDifference)}
               </span>
             </p>
           )}
@@ -866,9 +871,9 @@ function TrueUpCard({
                 <li key={item.id} className="text-xs text-muted-foreground">
                   <span className="font-medium text-foreground tabular-nums">
                     {item.previousWeightLbs != null
-                      ? `${formatLbs(item.previousWeightLbs)} → `
+                      ? `${formatHoney(item.previousWeightLbs)} → `
                       : ""}
-                    {formatLbs(item.newWeightLbs)}
+                    {formatHoney(item.newWeightLbs)}
                   </span>{" "}
                   · {formatDate(item.recordedAt)}
                   {item.recordedBy ? ` · ${item.recordedBy}` : ""}

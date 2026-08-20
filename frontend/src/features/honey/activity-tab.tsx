@@ -39,7 +39,9 @@ import { ApiError } from "@/lib/api";
 import { useBulkSelect } from "@/lib/use-bulk-select";
 import { cn } from "@/lib/utils";
 
-import { formatDate, formatLbs, formatMoney } from "./format";
+import { useUnits } from "@/lib/use-units";
+
+import { formatDate, formatMoney } from "./format";
 import { useDeleteTimelineEntries, useHoneyTimeline } from "./hooks";
 import type { TimelineEntry } from "./types";
 
@@ -92,6 +94,7 @@ const KIND_STYLES: Record<string, KindStyle> = {
 const FALLBACK_STYLE: KindStyle = KIND_STYLES.jar_adjustment;
 
 export function ActivityTab() {
+  const { formatHoney } = useUnits();
   const timeline = useHoneyTimeline(100);
   const deleteEntries = useDeleteTimelineEntries();
 
@@ -268,7 +271,7 @@ export function ActivityTab() {
               )}
               {entry.totalAmount == null && entry.amountLbs != null && (
                 <Badge variant="secondary" className="tabular-nums">
-                  {formatLbs(entry.amountLbs)}
+                  {formatHoney(entry.amountLbs)}
                 </Badge>
               )}
               {!bulkMode && !corrected && (

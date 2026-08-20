@@ -37,6 +37,7 @@ import {
   useHarvestLots,
   useWholesalePriceLists,
 } from "@/features/commerce/api";
+import { useStockLocations } from "@/features/commerce/stock-locations-api";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEquipmentStock } from "@/features/equipment/hooks";
@@ -70,6 +71,7 @@ interface ColonyDraft {
 const saleSchema = z.object({
   date: z.string().min(1, "Date is required"),
   location: z.string(),
+  stockLocationId: z.string(),
   customerName: z.string(),
   customerId: z.string(),
   harvestLotId: z.string(),
@@ -88,6 +90,7 @@ function saleDefaults(): SaleValues {
   return {
     date: todayISO(),
     location: "",
+    stockLocationId: "home",
     customerName: "",
     customerId: "none",
     harvestLotId: "none",
@@ -113,6 +116,7 @@ export function RecordSaleDialog({
 }) {
   const mutation = useRecordSale();
   const locations = useSaleLocations();
+  const stockLocations = useStockLocations();
   const customers = useCustomers();
   const lots = useHarvestLots();
   const priceLists = useWholesalePriceLists();
@@ -326,10 +330,18 @@ export function RecordSaleDialog({
       return;
     }
     setLineError(null);
+    if (values.stockLocationId !== "home" && saleLines.some(
+      (line) => line.kind === "colony" || line.kind === "equipment",
+    )) {
+      setLineError("Colony and equipment sales come off home, not a stock location.");
+      setConfirming(false);
+      return;
+    }
     mutation.mutate(
       {
         date: values.date,
         location: values.location.trim() || undefined,
+        stockLocationId: values.stockLocationId === "home" ? undefined : values.stockLocationId,
         customerId: values.customerId === "none" ? undefined : values.customerId,
         harvestLotId: values.harvestLotId === "none" ? undefined : values.harvestLotId,
         customerName: values.customerName.trim() || undefined,
@@ -401,6 +413,30 @@ export function RecordSaleDialog({
               </datalist>
             </div>
           </div>
+          {(stockLocations.data ?? []).some((location) => !location.isHome && location.isActive && !location.isConsignment) && (
+            <div className="grid gap-1.5">
+              <Label>Stock shelf</Label>
+              <Select
+                value={form.watch("stockLocationId")}
+                onValueChange={(value) => form.setValue("stockLocationId", value)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="home">Home</SelectItem>
+                  {(stockLocations.data ?? [])
+                    .filter((location) => location.isActive && !location.isHome && !location.isConsignment)
+                    .map((location) => (
+                      <SelectItem key={location.id} value={location.id}>
+                        {location.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Jars and hive products come off this shelf. Consignment shops use their report instead.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label>Channel</Label>

@@ -153,6 +153,7 @@ export interface HoneySale {
   harvestLotCode: string | null;
   customerName: string | null;
   location: string | null;
+  stockLocationId: string | null;
   channel: "farm_stand" | "farmers_market" | "wholesale" | "pickup" | "online" | "gift" | "consignment" | "direct";
   paymentMethod: "cash" | "card" | "check" | "venmo" | "paypal" | "invoice" | "other";
   totalAmount: number;

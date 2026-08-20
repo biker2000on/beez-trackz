@@ -33,6 +33,7 @@ import {
   QUEEN_ORIGIN_LABELS,
   QUEEN_STATUSES,
   QUEEN_STATUS_LABELS,
+  useApiaryOptions,
   useCreateQueen,
   useHiveOptions,
   useUpdateQueen,
@@ -51,6 +52,8 @@ const queenSchema = z.object({
   introducedDate: z.string(),
   status: z.enum(QUEEN_STATUSES),
   notes: z.string(),
+  matedAtApiaryId: z.string(),
+  droneSourceNote: z.string(),
 });
 
 type QueenFormValues = z.infer<typeof queenSchema>;
@@ -63,6 +66,8 @@ function toFormValues(queen?: Queen): QueenFormValues {
     introducedDate: queen?.introducedDate?.slice(0, 10) ?? "",
     status: queen?.status ?? "active",
     notes: queen?.notes ?? "",
+    matedAtApiaryId: queen?.matedAtApiaryId ?? NONE,
+    droneSourceNote: queen?.droneSourceNote ?? "",
   };
 }
 
@@ -77,6 +82,8 @@ function toPayload(values: QueenFormValues, existing?: Queen): QueenPayload {
     introducedDate: values.introducedDate || null,
     status: values.status,
     notes: values.notes.trim() || null,
+    matedAtApiaryId: values.matedAtApiaryId === NONE ? null : values.matedAtApiaryId,
+    droneSourceNote: values.droneSourceNote.trim() || null,
   };
 }
 
@@ -103,6 +110,7 @@ export function QueenFormDialog({
   queens: Queen[];
 }) {
   const hives = useHiveOptions();
+  const apiaries = useApiaryOptions();
   const createQueen = useCreateQueen();
   const updateQueen = useUpdateQueen();
   const editing = Boolean(queen);
@@ -251,6 +259,37 @@ export function QueenFormDialog({
                   </SelectContent>
                 </Select>
               )}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="queen-mated">Mating yard</Label>
+            <Controller
+              control={form.control}
+              name="matedAtApiaryId"
+              render={({ field }) => (
+                <Select value={field.value} onValueChange={field.onChange}>
+                  <SelectTrigger id="queen-mated">
+                    <SelectValue placeholder="Where she mated" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE}>Unknown / not recorded</SelectItem>
+                    {(apiaries.data ?? []).map((apiary) => (
+                      <SelectItem key={apiary.id} value={apiary.id}>
+                        {apiary.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="queen-drone-source">Drone source (optional)</Label>
+            <Textarea
+              id="queen-drone-source"
+              rows={2}
+              placeholder="Which yards were flooding drones…"
+              {...form.register("droneSourceNote")}
             />
           </div>
           <div className="grid gap-2">

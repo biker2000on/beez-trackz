@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/features/hives/lib";
 import { usePhotos } from "@/features/photos/hooks";
+import { useUnits } from "@/lib/use-units";
 import { useDeleteInspection, type Inspection } from "./hooks";
 import { InspectionFormDialog } from "./inspection-form-dialog";
 
@@ -39,6 +40,7 @@ export function InspectionCard({
   inspection: Inspection;
   canEdit?: boolean;
 }) {
+  const { formatTemperature, formatWind } = useUnits();
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const deleteInspection = useDeleteInspection();
@@ -102,15 +104,14 @@ export function InspectionCard({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1 font-medium text-foreground">
               <CloudSun className="size-3.5" />
-              {Math.round(inspection.weather.current.temperature_2m)}°F
+              {formatTemperature(inspection.weather.current.temperature_2m)}
             </span>
             <span>
-              Feels {Math.round(inspection.weather.current.apparent_temperature)}
-              °F
+              Feels {formatTemperature(inspection.weather.current.apparent_temperature)}
             </span>
             <span>{inspection.weather.current.relative_humidity_2m}% humidity</span>
             <span>
-              {Math.round(inspection.weather.current.wind_speed_10m)} mph wind
+              {formatWind(inspection.weather.current.wind_speed_10m)} wind
             </span>
           </div>
         ) : null}

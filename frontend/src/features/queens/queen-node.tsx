@@ -99,6 +99,11 @@ export const QueenNode = React.memo(function QueenNode({
           ? `${queen.apiaryName ?? "?"} — ${queen.hiveName}`
           : "Not in a hive"}
       </p>
+      {queen.matedAtApiaryName ? (
+        <p className="truncate text-[10px] text-muted-foreground">
+          Mated at {queen.matedAtApiaryName}
+        </p>
+      ) : null}
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <span
           className={cn(

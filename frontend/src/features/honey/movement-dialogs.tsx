@@ -24,7 +24,9 @@ import { Label } from "@/components/ui/label";
 import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Textarea } from "@/components/ui/textarea";
 
-import { formatLbs, parseNum, todayISO } from "./format";
+import { useUnits } from "@/lib/use-units";
+
+import { parseHoneyWeight, parseNum, todayISO } from "./format";
 import {
   useAdjustJars,
   useRecordBulkMovement,
@@ -64,6 +66,7 @@ export function JarHoneyDialog({
   onOpenChange,
   inventory,
 }: QuickDialogProps) {
+  const { formatHoney, units, honeySuffix } = useUnits();
   const mutation = useRecordJarring();
   const form = useForm<JarringValues>({
     resolver: zodResolver(jarringSchema),
@@ -95,7 +98,7 @@ export function JarHoneyDialog({
         quantity: parseNum(line.quantity) ?? 0,
       }))
       .filter((line) => line.quantity > 0);
-    const lossLbs = parseNum(values.lossLbs);
+    const lossLbs = parseHoneyWeight(values.lossLbs, units);
     const hasLoss = lossLbs != null && lossLbs > 0;
     if (jarLines.length === 0 && !hasLoss) {
       setLineError("Add at least one jar or a loss amount.");
@@ -151,21 +154,18 @@ export function JarHoneyDialog({
             <JarLinesEditor rows={inventory} value={lines} onChange={setLines} />
             {estimatedLbs > 0 && (
               <p className="text-xs text-muted-foreground">
-                ≈ {formatLbs(estimatedLbs)} of bulk honey
+                ≈ {formatHoney(estimatedLbs)} of bulk honey
               </p>
             )}
             <FieldError message={lineError ?? undefined} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="jarring-loss">Loss (lbs, optional)</Label>
+              <Label htmlFor="jarring-loss">Loss ({honeySuffix}, optional)</Label>
               <Input
                 id="jarring-loss"
-                type="number"
                 inputMode="decimal"
-                step="0.1"
-                min={0}
-                placeholder="0"
+                placeholder={`0 ${honeySuffix}`}
                 {...form.register("lossLbs")}
               />
             </div>
@@ -209,9 +209,7 @@ export function JarHoneyDialog({
 
 const bulkSchema = z.object({
   date: z.string().min(1, "Date is required"),
-  amountLbs: z
-    .string()
-    .refine((v) => (parseNum(v) ?? 0) > 0, "Enter an amount greater than zero"),
+  amountLbs: z.string().trim().min(1, "Enter an amount"),
   reason: z.string(),
   notes: z.string(),
 });
@@ -226,6 +224,7 @@ export function BulkMovementDialog({
   onOpenChange: (open: boolean) => void;
   kind: "bulk_use" | "loss";
 }) {
+  const { units, honeySuffix } = useUnits();
   const mutation = useRecordBulkMovement();
   const form = useForm<BulkValues>({
     resolver: zodResolver(bulkSchema),
@@ -240,11 +239,16 @@ export function BulkMovementDialog({
 
   const isLoss = kind === "loss";
   const submitMovement = (resetAfter: boolean) => form.handleSubmit((values) => {
+    const amountLbs = parseHoneyWeight(values.amountLbs, units);
+    if (amountLbs == null || amountLbs <= 0) {
+      form.setError("amountLbs", { message: "Enter an amount greater than zero" });
+      return;
+    }
     mutation.mutate(
       {
         date: values.date,
         kind,
-        amountLbs: parseNum(values.amountLbs)!,
+        amountLbs,
         reason: values.reason.trim() || undefined,
         notes: values.notes.trim() || undefined,
       },
@@ -288,14 +292,11 @@ export function BulkMovementDialog({
               <FieldError message={errors.date?.message} />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor={`${idPrefix}-amount`}>Amount (lbs)</Label>
+              <Label htmlFor={`${idPrefix}-amount`}>Amount ({honeySuffix})</Label>
               <Input
                 id={`${idPrefix}-amount`}
-                type="number"
                 inputMode="decimal"
-                step="0.1"
-                min={0}
-                placeholder="0"
+                placeholder={`e.g. 2 kg or 4.4 ${honeySuffix}`}
                 {...form.register("amountLbs")}
               />
               <FieldError message={errors.amountLbs?.message} />

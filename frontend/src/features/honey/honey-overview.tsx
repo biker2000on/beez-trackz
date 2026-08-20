@@ -27,7 +27,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useLowStock } from "@/features/commerce/api";
 import { ApiError } from "@/lib/api";
 
-import { formatDate, formatLbs, formatMoney } from "./format";
+import { useUnits } from "@/lib/use-units";
+
+import { formatDate, formatMoney } from "./format";
 import {
   useHarvests,
   useHoneyOverview,
@@ -43,6 +45,7 @@ function honeyErrorMessage(error: unknown, fallback: string): string {
 }
 
 export function HoneyOverview() {
+  const { formatHoney } = useUnits();
   const overview = useHoneyOverview();
   const sales = useHoneySales();
   const lowStock = useLowStock();
@@ -82,12 +85,12 @@ export function HoneyOverview() {
         <StatCard
           icon={Droplets}
           label="Bulk on hand"
-          value={data ? formatLbs(data.bulkOnHandLbs) : undefined}
+          value={data ? formatHoney(data.bulkOnHandLbs) : undefined}
           sub={
             data
               ? data.bulkOnHandLbs < 0
                 ? "Jars on the shelf exceed recorded harvests."
-                : `${formatLbs(data.totalHarvestedLbs)} harvested to date`
+                : `${formatHoney(data.totalHarvestedLbs)} harvested to date`
               : undefined
           }
           tone={data && data.bulkOnHandLbs < 0 ? "danger" : "default"}
@@ -188,7 +191,7 @@ export function HoneyOverview() {
                       </span>
                     </span>
                     <span className="shrink-0 tabular-nums">
-                      {formatLbs(harvest.calculatedHoneyWeight)}
+                      {formatHoney(harvest.calculatedHoneyWeight)}
                     </span>
                   </li>
                 ))}
@@ -280,20 +283,21 @@ function NextActions({
   amountOwed: number;
   degraded: boolean;
 }) {
+  const { formatHoney } = useUnits();
   const prompts: { key: string; title: string; detail: string; href: string; cta: string }[] = [];
 
   if (bulkOnHandLbs < 0) {
     prompts.push({
       key: "bulk-short",
       title: "Bulk honey is short of what was jarred",
-      detail: `${formatLbs(Math.abs(bulkOnHandLbs))} more has been jarred than harvested. Record the missing harvests or write off the gap.`,
+      detail: `${formatHoney(Math.abs(bulkOnHandLbs))} more has been jarred than harvested. Record the missing harvests or write off the gap.`,
       href: "/harvest/harvests",
       cta: "Record harvests",
     });
   } else if (bulkOnHandLbs > 0) {
     prompts.push({
       key: "bottle",
-      title: `${formatLbs(bulkOnHandLbs)} awaiting bottling`,
+      title: `${formatHoney(bulkOnHandLbs)} awaiting bottling`,
       detail: "Bulk honey is extracted but not yet in jars.",
       href: "/reports/bottling",
       cta: "See bottling plan",

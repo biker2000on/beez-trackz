@@ -49,6 +49,9 @@ export interface Queen {
   introducedDate: string | null;
   status: QueenStatus;
   notes: string | null;
+  matedAtApiaryId: string | null;
+  matedAtApiaryName: string | null;
+  droneSourceNote: string | null;
   createdAt: string;
   updatedAt: string;
   hiveName: string | null;
@@ -65,6 +68,8 @@ export interface QueenPayload {
   introducedDate: string | null;
   status: QueenStatus;
   notes: string | null;
+  matedAtApiaryId: string | null;
+  droneSourceNote: string | null;
 }
 
 /** Subset of the hive shape needed for hive selects. */
@@ -118,6 +123,18 @@ export function useHiveOptions() {
   return useQuery({
     queryKey: ["hives", "options"],
     queryFn: () => api.get<HiveOption[]>("/hives"),
+  });
+}
+
+export interface ApiaryOption {
+  id: string;
+  name: string;
+}
+
+export function useApiaryOptions() {
+  return useQuery({
+    queryKey: ["apiaries", "options"],
+    queryFn: () => api.get<ApiaryOption[]>("/apiaries"),
   });
 }
 
@@ -184,6 +201,8 @@ export function useBulkUpdateQueens() {
             introducedDate: queen.introducedDate,
             status,
             notes: queen.notes,
+            matedAtApiaryId: queen.matedAtApiaryId,
+            droneSourceNote: queen.droneSourceNote,
           } satisfies QueenPayload),
         ),
       );

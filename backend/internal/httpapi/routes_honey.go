@@ -747,26 +747,27 @@ type honeySaleItemRow struct {
 }
 
 type honeySaleRow struct {
-	ID             uuid.UUID  `json:"id"`
-	Date           time.Time  `json:"date"`
-	CustomerID     *uuid.UUID `json:"customerId"`
-	HarvestLotID   *uuid.UUID `json:"harvestLotId"`
-	HarvestLotCode *string    `json:"harvestLotCode"`
-	CustomerName   *string    `json:"customerName"`
-	Location       *string    `json:"location"`
-	Channel        string     `json:"channel"`
-	PaymentMethod  string     `json:"paymentMethod"`
-	TotalAmount    money      `json:"totalAmount"`
-	DiscountAmount money      `json:"discountAmount"`
-	AmountPaid     money      `json:"amountPaid"`
-	Tax            *money     `json:"tax"`
-	OrderStatus    string     `json:"orderStatus"`
-	OrderNumber    *string    `json:"orderNumber"`
-	DueDate        *time.Time `json:"dueDate"`
-	Notes          *string    `json:"notes"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	CancelledAt    *time.Time `json:"cancelledAt"`
+	ID              uuid.UUID  `json:"id"`
+	Date            time.Time  `json:"date"`
+	CustomerID      *uuid.UUID `json:"customerId"`
+	HarvestLotID    *uuid.UUID `json:"harvestLotId"`
+	HarvestLotCode  *string    `json:"harvestLotCode"`
+	CustomerName    *string    `json:"customerName"`
+	Location        *string    `json:"location"`
+	StockLocationID *uuid.UUID `json:"stockLocationId"`
+	Channel         string     `json:"channel"`
+	PaymentMethod   string     `json:"paymentMethod"`
+	TotalAmount     money      `json:"totalAmount"`
+	DiscountAmount  money      `json:"discountAmount"`
+	AmountPaid      money      `json:"amountPaid"`
+	Tax             *money     `json:"tax"`
+	OrderStatus     string     `json:"orderStatus"`
+	OrderNumber     *string    `json:"orderNumber"`
+	DueDate         *time.Time `json:"dueDate"`
+	Notes           *string    `json:"notes"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+	CancelledAt     *time.Time `json:"cancelledAt"`
 	// PhysicalAppliedAt is set once the colony/feeder/equipment effects of
 	// the sale have been applied (paid/fulfilled); nil for open drafts.
 	PhysicalAppliedAt *time.Time         `json:"physicalAppliedAt"`
@@ -777,7 +778,7 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT s.id, s.date, s.customer_id, s.harvest_lot_id, lot.lot_code,
 			COALESCE(c.name, s.customer_name),
-			s.location, s.channel, s.payment_method, s.total_amount_cents,
+			s.location, s.stock_location_id, s.channel, s.payment_method, s.total_amount_cents,
 			s.discount_amount_cents, s.amount_paid_cents, s.tax_cents,
 			s.order_status, s.order_number,
 			s.due_date, s.notes, s.created_at, s.updated_at, s.cancelled_at,
@@ -794,10 +795,10 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 		var sale honeySaleRow
 		if err := rows.Scan(&sale.ID, &sale.Date, &sale.CustomerID,
 			&sale.HarvestLotID, &sale.HarvestLotCode, &sale.CustomerName,
-			&sale.Location, &sale.Channel, &sale.PaymentMethod, &sale.TotalAmount,
-			&sale.DiscountAmount, &sale.AmountPaid, &sale.Tax, &sale.OrderStatus,
-			&sale.OrderNumber, &sale.DueDate, &sale.Notes, &sale.CreatedAt,
-			&sale.UpdatedAt, &sale.CancelledAt, &sale.PhysicalAppliedAt); err != nil {
+			&sale.Location, &sale.StockLocationID, &sale.Channel, &sale.PaymentMethod,
+			&sale.TotalAmount, &sale.DiscountAmount, &sale.AmountPaid, &sale.Tax,
+			&sale.OrderStatus, &sale.OrderNumber, &sale.DueDate, &sale.Notes,
+			&sale.CreatedAt, &sale.UpdatedAt, &sale.CancelledAt, &sale.PhysicalAppliedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -1031,11 +1032,95 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 	return lines, nil
 }
 
+// honeyResolveSaleLocation maps an optional stockLocationId onto the sale.
+// Home (or omitted) leaves stock_location_id NULL — every pre-location sale
+// already means home. A named non-home location is validated against that
+// shelf; consignment shops still go through their report, not this path.
+func (s *Server) honeyResolveSaleLocation(
+	ctx context.Context,
+	tx pgx.Tx,
+	id *uuid.UUID,
+) (*uuid.UUID, *stockLocationRow, error) {
+	if id == nil {
+		return nil, nil, nil
+	}
+	locations, err := s.stockLoadLocationsTx(ctx, tx, *id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(locations) == 0 {
+		return nil, nil, equipBadRequest("invalid stockLocationId")
+	}
+	location := locations[0]
+	if !location.IsActive {
+		return nil, nil, equipBadRequest("stock location is not active")
+	}
+	if location.IsHome {
+		return nil, &location, nil
+	}
+	if location.IsConsignment {
+		return nil, nil, equipFail(http.StatusConflict,
+			"this is a consignment location: record their report instead, so the "+
+				"counts and the payment land together")
+	}
+	return &location.ID, &location, nil
+}
+
+func (s *Server) honeyCheckLocationShelf(
+	ctx context.Context,
+	tx pgx.Tx,
+	location stockLocationRow,
+	lines []honeySaleLine,
+) error {
+	shelf, _, err := s.stockLocationShelf(ctx, tx, location.ID)
+	if err != nil {
+		return err
+	}
+	available := make(map[string]int, len(shelf))
+	labels := make(map[string]string, len(shelf))
+	for _, row := range shelf {
+		available[row.key()] = row.OnHand
+		labels[row.key()] = row.Label
+	}
+	needed := make(map[string]int, len(lines))
+	for _, line := range lines {
+		var key string
+		switch {
+		case line.Kind == saleKindJar:
+			id := line.JarSizeID
+			key = stockLineKey(stockTransferLine{JarSizeID: &id})
+		case saleKindIsProduct(line.Kind) || line.Kind == "product":
+			id := line.ProductID
+			key = stockLineKey(stockTransferLine{ProductID: &id})
+		default:
+			continue
+		}
+		needed[key] += line.Quantity
+	}
+	keys := make([]string, 0, len(needed))
+	for key := range needed {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if needed[key] > available[key] {
+			label, ok := labels[key]
+			if !ok {
+				label = "units"
+			}
+			return equipBadRequest("Not enough %s at %s: need %d, have %d",
+				label, location.Name, needed[key], available[key])
+		}
+	}
+	return nil
+}
+
 // POST /honey/sales creates either an immediate sale or an order/invoice.
 func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Date                 string               `json:"date"`
 		Location             *string              `json:"location"`
+		StockLocationID      *uuid.UUID           `json:"stockLocationId"`
 		CustomerID           *uuid.UUID           `json:"customerId"`
 		HarvestLotID         *uuid.UUID           `json:"harvestLotId"`
 		CustomerName         *string              `json:"customerName"`
@@ -1114,6 +1199,21 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
+	saleLocationID, saleLocation, err := s.honeyResolveSaleLocation(ctx, tx, req.StockLocationID)
+	if err != nil {
+		equipWriteError(w, err)
+		return
+	}
+	if saleLocationID != nil {
+		for _, line := range lines {
+			if line.Kind == saleKindColony || line.Kind == saleKindEquipment {
+				writeError(w, http.StatusBadRequest,
+					"colony and equipment sales come off home, not a stock location")
+				return
+			}
+		}
+	}
+
 	// Serialize sales that touch the same jar sizes, then validate availability
 	// while holding the locks so this transaction sees sales committed by any
 	// checkout that held them immediately before us.
@@ -1136,9 +1236,11 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid jarSizeId")
 			return
 		}
-		if message := honeyCheckJarAvailability(onHand, labels, needed); message != "" {
-			writeError(w, http.StatusBadRequest, message)
-			return
+		if saleLocationID == nil {
+			if message := honeyCheckJarAvailability(onHand, labels, needed); message != "" {
+				writeError(w, http.StatusBadRequest, message)
+				return
+			}
 		}
 	}
 
@@ -1174,19 +1276,27 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		propolisGrams := 0.0
-		for id := range neededProducts {
-			if kinds[id] == saleKindPropolis {
-				propolisGrams, err = propolisOnHandGrams(ctx, tx)
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, "database error")
-					return
+		if saleLocationID == nil {
+			propolisGrams := 0.0
+			for id := range neededProducts {
+				if kinds[id] == saleKindPropolis {
+					propolisGrams, err = propolisOnHandGrams(ctx, tx)
+					if err != nil {
+						writeError(w, http.StatusInternalServerError, "database error")
+						return
+					}
+					break
 				}
-				break
+			}
+			if message := productCheckAvailabilityGrams(onHand, labels, kinds, catalog.NetGrams, neededProducts, propolisGrams); message != "" {
+				writeError(w, http.StatusBadRequest, message)
+				return
 			}
 		}
-		if message := productCheckAvailabilityGrams(onHand, labels, kinds, catalog.NetGrams, neededProducts, propolisGrams); message != "" {
-			writeError(w, http.StatusBadRequest, message)
+	}
+	if saleLocationID != nil && saleLocation != nil {
+		if err := s.honeyCheckLocationShelf(ctx, tx, *saleLocation, lines); err != nil {
+			equipWriteError(w, err)
 			return
 		}
 	}
@@ -1302,12 +1412,13 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO sales
 			(id, date, customer_id, harvest_lot_id, customer_name, location, channel, payment_method,
 			 total_amount_cents, discount_amount_cents, amount_paid_cents, tax_cents,
-			 order_status, order_number, due_date, wholesale_price_list_id, notes, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+			 order_status, order_number, due_date, wholesale_price_list_id, notes, created_by,
+			 stock_location_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		saleID, date, req.CustomerID, req.HarvestLotID, honeyTrimPtr(req.CustomerName),
 		honeyTrimPtr(req.Location), req.Channel, req.PaymentMethod, totalAmount,
 		req.DiscountAmount, amountPaid, req.Tax, req.OrderStatus, orderNumber, dueDate,
-		req.WholesalePriceListID, honeyTrimPtr(req.Notes), actor); err != nil {
+		req.WholesalePriceListID, honeyTrimPtr(req.Notes), actor, saleLocationID); err != nil {
 		writeDBError(w, err, "order number already exists",
 			"invalid customer, harvest lot, or wholesale price list")
 		return

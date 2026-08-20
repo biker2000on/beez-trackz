@@ -45,8 +45,9 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import { ApiError } from "@/lib/api";
+import { useUnits } from "@/lib/use-units";
 
-import { formatDate, formatLbs, parseNum, todayISO } from "./format";
+import { formatDate, parseHoneyWeight, parseNum, todayISO } from "./format";
 import {
   useApiaryOptions,
   useCreateHarvest,
@@ -85,6 +86,7 @@ function HarvestLoadError({
 }
 
 export function HarvestsTab() {
+  const { formatHoney } = useUnits();
   const sessions = useHarvestSessions();
   const harvests = useHarvests();
   const [sessionDialogOpen, setSessionDialogOpen] = React.useState(false);
@@ -160,11 +162,11 @@ export function HarvestsTab() {
                         {session.entryCount}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {formatLbs(session.calculatedTotal)}
+                        {formatHoney(session.calculatedTotal)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {session.totalExtractedWeight != null
-                          ? formatLbs(session.totalExtractedWeight)
+                          ? formatHoney(session.totalExtractedWeight)
                           : "—"}
                       </TableCell>
                       <TableCell className="text-right">
@@ -246,15 +248,15 @@ export function HarvestsTab() {
                     ) : (
                       <>
                         <TableCell className="text-right tabular-nums">
-                          {formatLbs(harvest.superWeightBefore)}
+                          {formatHoney(harvest.superWeightBefore)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {formatLbs(harvest.superWeightAfter)}
+                          {formatHoney(harvest.superWeightAfter)}
                         </TableCell>
                       </>
                     )}
                     <TableCell className="text-right font-medium tabular-nums">
-                      {formatLbs(harvest.calculatedHoneyWeight)}
+                      {formatHoney(harvest.calculatedHoneyWeight)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -437,6 +439,7 @@ function NewHarvestDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { formatHoney, units, honeySuffix } = useUnits();
   const hives = useHiveOptions();
   const mutation = useCreateHarvest();
   const [mode, setMode] = React.useState<"supers" | "direct">("supers");
@@ -452,9 +455,9 @@ function NewHarvestDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const before = parseNum(form.watch("superWeightBefore"));
-  const after = parseNum(form.watch("superWeightAfter"));
-  const direct = parseNum(form.watch("harvestedWeight"));
+  const before = parseHoneyWeight(form.watch("superWeightBefore"), units);
+  const after = parseHoneyWeight(form.watch("superWeightAfter"), units);
+  const direct = parseHoneyWeight(form.watch("harvestedWeight"), units);
   const calculated =
     mode === "direct"
       ? direct
@@ -472,7 +475,7 @@ function NewHarvestDialog({
   };
   const submitHarvest = (resetAfter: boolean) => form.handleSubmit((values) => {
     if (mode === "direct") {
-      const weight = parseNum(values.harvestedWeight);
+      const weight = parseHoneyWeight(values.harvestedWeight, units);
       if (weight == null || weight <= 0) {
         form.setError("harvestedWeight", {
           message: "Enter the harvested weight",
@@ -490,8 +493,8 @@ function NewHarvestDialog({
       );
       return;
     }
-    const b = parseNum(values.superWeightBefore);
-    const a = parseNum(values.superWeightAfter);
+    const b = parseHoneyWeight(values.superWeightBefore, units);
+    const a = parseHoneyWeight(values.superWeightAfter, units);
     if (b == null) {
       form.setError("superWeightBefore", {
         message: "Enter the super weight before extraction",
@@ -607,26 +610,22 @@ function NewHarvestDialog({
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
                 <Label htmlFor="harvest-before">
-                  Super weight before (lbs)
+                  Super weight before ({honeySuffix})
                 </Label>
                 <Input
                   id="harvest-before"
-                  type="number"
                   inputMode="decimal"
-                  step="0.1"
-                  min={0}
+                  placeholder={`e.g. 20 ${honeySuffix}`}
                   {...form.register("superWeightBefore")}
                 />
                 <FieldError message={errors.superWeightBefore?.message} />
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="harvest-after">Super weight after (lbs)</Label>
+                <Label htmlFor="harvest-after">Super weight after ({honeySuffix})</Label>
                 <Input
                   id="harvest-after"
-                  type="number"
                   inputMode="decimal"
-                  step="0.1"
-                  min={0}
+                  placeholder={`e.g. 5 ${honeySuffix}`}
                   {...form.register("superWeightAfter")}
                 />
                 <FieldError message={errors.superWeightAfter?.message} />
@@ -634,13 +633,11 @@ function NewHarvestDialog({
             </div>
           ) : (
             <div className="grid gap-1.5">
-              <Label htmlFor="harvest-weight">Harvested weight (lbs)</Label>
+              <Label htmlFor="harvest-weight">Harvested weight ({honeySuffix})</Label>
               <Input
                 id="harvest-weight"
-                type="number"
                 inputMode="decimal"
-                step="0.1"
-                min={0}
+                placeholder={`e.g. 2 kg or 4.4 ${honeySuffix}`}
                 {...form.register("harvestedWeight")}
               />
               <FieldError message={errors.harvestedWeight?.message} />
@@ -651,7 +648,7 @@ function NewHarvestDialog({
               variant={calculated < 0 ? "destructive" : "accent"}
               className="justify-self-start tabular-nums"
             >
-              Honey: {formatLbs(calculated)}
+              Honey: {formatHoney(calculated)}
             </Badge>
           )}
           <div className="grid gap-1.5">

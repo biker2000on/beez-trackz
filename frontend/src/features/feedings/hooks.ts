@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { formatFeeding, type UnitsSystem } from "@/lib/units";
 
 // --- types + enums (mirror backend/internal/httpapi/routes_feedings.go) ---
 
@@ -38,6 +39,15 @@ export function feedingTypeLabel(type: string): string {
 export function feederTypeLabel(type: string | null): string | null {
   if (!type) return null;
   return FEEDER_TYPES.find(([value]) => value === type)?.[1] ?? type;
+}
+
+/** Preferred-system display for a stored feeding quantity. */
+export function formatFeedingAmount(
+  quantity: number,
+  unit: string,
+  units: UnitsSystem,
+): string {
+  return formatFeeding(quantity, unit, units)?.text ?? `${quantity} ${unit}`;
 }
 
 /**

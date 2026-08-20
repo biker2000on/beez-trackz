@@ -32,32 +32,37 @@ func (s *Server) mountQueens(r chi.Router) {
 // queenJSON is the queen response shape. HiveName/ApiaryName come from the
 // left join on the queen's current hive.
 type queenJSON struct {
-	ID             string     `json:"id"`
-	HiveID         *string    `json:"hiveId"`
-	Origin         string     `json:"origin"`
-	OriginHiveID   *string    `json:"originHiveId"`
-	ParentQueenID  *string    `json:"parentQueenId"`
-	IntroducedDate *time.Time `json:"introducedDate"`
-	Status         string     `json:"status"`
-	Notes          *string    `json:"notes"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
-	HiveName       *string    `json:"hiveName"`
-	ApiaryName     *string    `json:"apiaryName"`
+	ID                string     `json:"id"`
+	HiveID            *string    `json:"hiveId"`
+	Origin            string     `json:"origin"`
+	OriginHiveID      *string    `json:"originHiveId"`
+	ParentQueenID     *string    `json:"parentQueenId"`
+	IntroducedDate    *time.Time `json:"introducedDate"`
+	Status            string     `json:"status"`
+	Notes             *string    `json:"notes"`
+	MatedAtApiaryID   *string    `json:"matedAtApiaryId"`
+	MatedAtApiaryName *string    `json:"matedAtApiaryName"`
+	DroneSourceNote   *string    `json:"droneSourceNote"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
+	HiveName          *string    `json:"hiveName"`
+	ApiaryName        *string    `json:"apiaryName"`
 }
 
 const queenSelectSQL = `
 	SELECT q.id, q.hive_id, q.origin, q.origin_hive_id, q.parent_queen_id, q.introduced_date,
-	       q.status, q.notes, q.created_at, q.updated_at, h.position_label, a.name
+	       q.status, q.notes, q.mated_at_apiary_id, q.drone_source_note, q.created_at, q.updated_at,
+	       h.position_label, a.name, ma.name
 	FROM queens q
 	LEFT JOIN hives h ON h.id = q.hive_id
-	LEFT JOIN apiaries a ON a.id = h.apiary_id`
+	LEFT JOIN apiaries a ON a.id = h.apiary_id
+	LEFT JOIN apiaries ma ON ma.id = q.mated_at_apiary_id`
 
 func queenScanRow(row pgx.Row) (*queenJSON, error) {
 	var q queenJSON
 	if err := row.Scan(&q.ID, &q.HiveID, &q.Origin, &q.OriginHiveID, &q.ParentQueenID,
-		&q.IntroducedDate, &q.Status, &q.Notes, &q.CreatedAt, &q.UpdatedAt,
-		&q.HiveName, &q.ApiaryName); err != nil {
+		&q.IntroducedDate, &q.Status, &q.Notes, &q.MatedAtApiaryID, &q.DroneSourceNote,
+		&q.CreatedAt, &q.UpdatedAt, &q.HiveName, &q.ApiaryName, &q.MatedAtApiaryName); err != nil {
 		return nil, err
 	}
 	return &q, nil
@@ -99,30 +104,32 @@ func queenValidStatus(v string) bool {
 // queenPayload is the create/update request body. Optional references accept
 // null/omitted (the legacy "__none__" sentinel is gone).
 type queenPayload struct {
-	HiveID         *string `json:"hiveId"`
-	Origin         string  `json:"origin"`
-	OriginHiveID   *string `json:"originHiveId"`
-	ParentQueenID  *string `json:"parentQueenId"`
-	IntroducedDate *string `json:"introducedDate"`
-	Status         *string `json:"status"`
-	Notes          *string `json:"notes"`
+	HiveID          *string `json:"hiveId"`
+	Origin          string  `json:"origin"`
+	OriginHiveID    *string `json:"originHiveId"`
+	ParentQueenID   *string `json:"parentQueenId"`
+	IntroducedDate  *string `json:"introducedDate"`
+	Status          *string `json:"status"`
+	Notes           *string `json:"notes"`
+	MatedAtApiaryID *string `json:"matedAtApiaryId"`
+	DroneSourceNote *string `json:"droneSourceNote"`
 }
 
 // queenResolvePayload validates the payload into insertable values.
-func queenResolvePayload(req *queenPayload) (hiveID, originHiveID, parentQueenID *string,
+func queenResolvePayload(req *queenPayload) (hiveID, originHiveID, parentQueenID, matedAtApiaryID *string,
 	status string, introduced *time.Time, err error) {
 	if strings.TrimSpace(req.Origin) == "" {
-		return nil, nil, nil, "", nil, errors.New("Origin is required")
+		return nil, nil, nil, nil, "", nil, errors.New("Origin is required")
 	}
 	if !queenValidOrigin(req.Origin) {
-		return nil, nil, nil, "", nil, errors.New("invalid origin")
+		return nil, nil, nil, nil, "", nil, errors.New("invalid origin")
 	}
 	status = "active"
 	if req.Status != nil && strings.TrimSpace(*req.Status) != "" {
 		status = strings.TrimSpace(*req.Status)
 	}
 	if !queenValidStatus(status) {
-		return nil, nil, nil, "", nil, errors.New("invalid status")
+		return nil, nil, nil, nil, "", nil, errors.New("invalid status")
 	}
 	for _, ref := range []struct {
 		name string
@@ -132,21 +139,22 @@ func queenResolvePayload(req *queenPayload) (hiveID, originHiveID, parentQueenID
 		{"hiveId", req.HiveID, &hiveID},
 		{"originHiveId", req.OriginHiveID, &originHiveID},
 		{"parentQueenId", req.ParentQueenID, &parentQueenID},
+		{"matedAtApiaryId", req.MatedAtApiaryID, &matedAtApiaryID},
 	} {
 		v := hiveTextOrNil(ref.val)
 		if v == nil {
 			continue
 		}
 		if _, pErr := uuid.Parse(*v); pErr != nil {
-			return nil, nil, nil, "", nil, errors.New("invalid " + ref.name)
+			return nil, nil, nil, nil, "", nil, errors.New("invalid " + ref.name)
 		}
 		*ref.out = v
 	}
 	introduced, dErr := parseDatePtr(req.IntroducedDate)
 	if dErr != nil {
-		return nil, nil, nil, "", nil, errors.New("invalid introducedDate")
+		return nil, nil, nil, nil, "", nil, errors.New("invalid introducedDate")
 	}
-	return hiveID, originHiveID, parentQueenID, status, introduced, nil
+	return hiveID, originHiveID, parentQueenID, matedAtApiaryID, status, introduced, nil
 }
 
 // authorizeQueenLineageRefs checks originHiveId / parentQueenId with the same
@@ -194,6 +202,18 @@ func (s *Server) authorizeQueenLineageRefs(
 	return s.requireHiveRole(w, r, *ref, true)
 }
 
+func (s *Server) authorizeQueenMatingYard(w http.ResponseWriter, r *http.Request, matedAtApiaryID *string) bool {
+	if matedAtApiaryID == nil {
+		return true
+	}
+	value, err := uuid.Parse(*matedAtApiaryID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid matedAtApiaryId")
+		return false
+	}
+	return s.requireApiaryRole(w, r, value, false)
+}
+
 // GET /queens — all queens for the genealogy tree.
 func (s *Server) handleQueenList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(),
@@ -221,7 +241,7 @@ func (s *Server) handleQueenCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	hiveID, originHiveID, parentQueenID, status, introduced, err := queenResolvePayload(&req)
+	hiveID, originHiveID, parentQueenID, matedAtApiaryID, status, introduced, err := queenResolvePayload(&req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -240,15 +260,18 @@ func (s *Server) handleQueenCreate(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeQueenLineageRefs(w, r, originHiveID, parentQueenID) {
 		return
 	}
+	if !s.authorizeQueenMatingYard(w, r, matedAtApiaryID) {
+		return
+	}
 	var id string
 	if err := s.pool.QueryRow(r.Context(), `
 		INSERT INTO queens (hive_id, origin, origin_hive_id, parent_queen_id,
-			introduced_date, status, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+			introduced_date, status, notes, mated_at_apiary_id, drone_source_note)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id`,
 		hiveID, req.Origin, originHiveID, parentQueenID, introduced, status,
-		hiveTextOrNil(req.Notes)).Scan(&id); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		hiveTextOrNil(req.Notes), matedAtApiaryID, hiveTextOrNil(req.DroneSourceNote)).Scan(&id); err != nil {
+		writeDBError(w, err, "database error", "invalid hive, parent queen, or mating yard")
 		return
 	}
 	queen, err := s.queenFetch(r.Context(), id)
@@ -290,7 +313,7 @@ func (s *Server) handleQueenUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	hiveID, originHiveID, parentQueenID, status, introduced, err := queenResolvePayload(&req)
+	hiveID, originHiveID, parentQueenID, matedAtApiaryID, status, introduced, err := queenResolvePayload(&req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -309,14 +332,18 @@ func (s *Server) handleQueenUpdate(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeQueenLineageRefs(w, r, originHiveID, parentQueenID) {
 		return
 	}
+	if !s.authorizeQueenMatingYard(w, r, matedAtApiaryID) {
+		return
+	}
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE queens SET hive_id = $1, origin = $2, origin_hive_id = $3,
-			parent_queen_id = $4, introduced_date = $5, status = $6, notes = $7
-		WHERE id = $8`,
+			parent_queen_id = $4, introduced_date = $5, status = $6, notes = $7,
+			mated_at_apiary_id = $8, drone_source_note = $9
+		WHERE id = $10`,
 		hiveID, req.Origin, originHiveID, parentQueenID, introduced, status,
-		hiveTextOrNil(req.Notes), id)
+		hiveTextOrNil(req.Notes), matedAtApiaryID, hiveTextOrNil(req.DroneSourceNote), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeDBError(w, err, "database error", "invalid hive, parent queen, or mating yard")
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -352,11 +379,12 @@ func (s *Server) handleQueenDelete(w http.ResponseWriter, r *http.Request) {
 
 const queenRecursiveHead = `
 	SELECT q.id, q.hive_id, q.origin, q.origin_hive_id, q.parent_queen_id, q.introduced_date,
-	       q.status, q.notes, q.created_at, q.updated_at,
-	       h.position_label AS hive_name, a.name AS apiary_name
+	       q.status, q.notes, q.mated_at_apiary_id, q.drone_source_note, q.created_at, q.updated_at,
+	       h.position_label AS hive_name, a.name AS apiary_name, ma.name AS mated_at_apiary_name
 	FROM queens q
 	LEFT JOIN hives h ON h.id = q.hive_id
-	LEFT JOIN apiaries a ON a.id = h.apiary_id`
+	LEFT JOIN apiaries a ON a.id = h.apiary_id
+	LEFT JOIN apiaries ma ON ma.id = q.mated_at_apiary_id`
 
 // GET /queens/{id}/lineage — the queen plus her ancestors (recursive CTE up
 // parent_queen_id).

@@ -33,7 +33,10 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useExpenses, useHarvestLots } from "@/features/commerce/api";
-import { formatDate, formatLbs, formatMoney, parseNum, todayISO } from "./format";
+import { GRAMS_PER_OUNCE, parsePropolisMassInput } from "@/lib/units";
+import { useUnits } from "@/lib/use-units";
+
+import { formatDate, formatMoney, parseHoneyWeight, parseNum, todayISO } from "./format";
 import {
   useApiaryOptions,
   useCreateProduct,
@@ -67,6 +70,7 @@ function kindLabel(kind: string) {
 }
 
 export function HiveProductsPage() {
+  const { formatHoney, formatPropolis } = useUnits();
   const catalog = useProductCatalog();
   const harvests = usePropolisHarvests();
   const batches = useProductBatches();
@@ -104,7 +108,7 @@ export function HiveProductsPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Kind</TableHead>
                   <TableHead>Size</TableHead>
-                  <TableHead className="text-right">Net g</TableHead>
+                  <TableHead className="text-right">Net mass</TableHead>
                   <TableHead>Price</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
                 </TableRow>
@@ -115,7 +119,7 @@ export function HiveProductsPage() {
                     <TableCell className="font-medium">{item.name}</TableCell>
                     <TableCell className="capitalize">{kindLabel(item.kind)}</TableCell>
                     <TableCell>{item.sizeLabel ?? item.unit}</TableCell>
-                    <TableCell className="text-right tabular-nums">{item.netGrams != null ? `${item.netGrams} g` : "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums">{item.netGrams != null ? formatPropolis(item.netGrams) : "—"}</TableCell>
                     <TableCell>{formatMoney(item.defaultPrice)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {item.kind === "propolis" && item.netGrams
@@ -130,8 +134,8 @@ export function HiveProductsPage() {
         )}
         {(catalog.data?.propolisOnHandGrams ?? 0) > 0 && (
           <p className="text-sm text-muted-foreground">
-            Raw propolis on hand: {catalog.data?.propolisOnHandGrams.toFixed(1)} g
-            (does not change honey pounds).
+            Raw propolis on hand: {formatPropolis(catalog.data?.propolisOnHandGrams)}
+            (does not change honey stock).
           </p>
         )}
       </section>
@@ -168,7 +172,9 @@ export function HiveProductsPage() {
                         : row.apiaryName ?? "Yard"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {row.amount} {row.unit}
+                      {formatPropolis(
+                        row.unit === "ounces" ? row.amount * GRAMS_PER_OUNCE : row.amount,
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -212,10 +218,14 @@ export function HiveProductsPage() {
                       </span>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {row.honeyLbs != null ? `${formatLbs(row.honeyLbs)} honey` : ""}
+                      {row.honeyLbs != null ? `${formatHoney(row.honeyLbs)} honey` : ""}
                       {row.harvestLotCode ? ` · ${row.harvestLotCode}` : ""}
                       {row.propolisAmount != null
-                        ? `${row.propolisAmount} ${row.propolisUnit ?? "g"} propolis`
+                        ? ` · ${formatPropolis(
+                            row.propolisUnit === "ounces"
+                              ? row.propolisAmount * GRAMS_PER_OUNCE
+                              : row.propolisAmount,
+                          )} propolis`
                         : ""}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{row.quantityOut}</TableCell>
@@ -231,6 +241,7 @@ export function HiveProductsPage() {
 }
 
 function AddProductDialog() {
+  const { units, propolisSuffix } = useUnits();
   const create = useCreateProduct();
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
@@ -240,7 +251,7 @@ function AddProductDialog() {
   const [sizeLabel, setSizeLabel] = React.useState("");
   const [netGrams, setNetGrams] = React.useState("");
   const showNetGrams = kind === "propolis" || kind === "tincture";
-  const parsedNetGrams = parseNum(netGrams);
+  const parsedNetGrams = parsePropolisMassInput(netGrams, units);
   const netGramsInvalid =
     showNetGrams &&
     (kind === "propolis"
@@ -338,22 +349,19 @@ function AddProductDialog() {
             </div>
             {showNetGrams && (
               <div className="grid gap-1.5">
-                <Label>Net grams {kind === "propolis" ? "" : "(optional)"}</Label>
+                <Label>Net mass {kind === "propolis" ? "" : "(optional)"} ({propolisSuffix})</Label>
                 <Input
-                  type="number"
-                  min="0"
-                  step="0.1"
                   inputMode="decimal"
                   required={kind === "propolis"}
                   value={netGrams}
                   onChange={(event) => setNetGrams(event.target.value)}
-                  placeholder="10"
+                  placeholder={`e.g. 10 ${propolisSuffix}`}
                   aria-invalid={netGramsInvalid || undefined}
                 />
                 <p className="text-xs text-muted-foreground">
                   {kind === "propolis"
-                    ? "Grams of raw propolis per unit sold; each sale takes this much off propolis on hand."
-                    : "Grams of propolis per bottle, for reference."}
+                    ? "Raw propolis per unit sold; each sale takes this much off propolis on hand. Suffixes like 2 oz are accepted."
+                    : "Propolis per bottle, for reference. Suffixes like 2 oz are accepted."}
                 </p>
               </div>
             )}
@@ -368,6 +376,7 @@ function AddProductDialog() {
 }
 
 function AddPropolisDialog() {
+  const { units, propolisSuffix } = useUnits();
   const create = useCreatePropolisHarvest();
   const hives = useHiveOptions();
   const apiaries = useApiaryOptions();
@@ -376,20 +385,19 @@ function AddPropolisDialog() {
   const [hiveId, setHiveId] = React.useState("none");
   const [apiaryId, setApiaryId] = React.useState("none");
   const [amount, setAmount] = React.useState("");
-  const [unit, setUnit] = React.useState<"grams" | "ounces">("grams");
   const [notes, setNotes] = React.useState("");
 
   function submit() {
-    const parsed = parseNum(amount);
-    if (parsed === null || parsed <= 0) return;
+    const grams = parsePropolisMassInput(amount, units);
+    if (grams === null || grams <= 0) return;
     if (hiveId === "none" && apiaryId === "none") return;
     create.mutate(
       {
         date,
         hiveId: hiveId === "none" ? undefined : hiveId,
         apiaryId: apiaryId === "none" ? undefined : apiaryId,
-        amount: parsed,
-        unit,
+        amount: grams,
+        unit: "grams",
         notes: notes.trim() || undefined,
       },
       { onSuccess: () => setOpen(false) },
@@ -448,21 +456,17 @@ function AddPropolisDialog() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-1.5">
-                <Label>Amount</Label>
-                <Input type="number" min="0" step="0.1" value={amount} onChange={(event) => setAmount(event.target.value)} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Unit</Label>
-                <Select value={unit} onValueChange={(value) => setUnit(value as "grams" | "ounces")}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="grams">grams</SelectItem>
-                    <SelectItem value="ounces">ounces</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="grid gap-1.5">
+              <Label>Amount ({propolisSuffix})</Label>
+              <Input
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+                placeholder={`e.g. 10 ${propolisSuffix} or 0.5 oz`}
+              />
+              <p className="text-xs text-muted-foreground">
+                Stored in grams. Type a suffix to override the preferred unit.
+              </p>
             </div>
             <div className="grid gap-1.5">
               <Label>Notes</Label>
@@ -483,6 +487,7 @@ function AddBatchDialog({
 }: {
   products: { id: string; name: string; kind: string; sizeLabel: string | null }[];
 }) {
+  const { units, honeySuffix, propolisSuffix, formatPropolis } = useUnits();
   const create = useCreateProductBatch();
   const lots = useHarvestLots();
   const harvests = usePropolisHarvests();
@@ -498,7 +503,6 @@ function AddBatchDialog({
   const [vessel, setVessel] = React.useState("");
   const [propolisHarvestId, setPropolisHarvestId] = React.useState("");
   const [propolisAmount, setPropolisAmount] = React.useState("");
-  const [propolisUnit, setPropolisUnit] = React.useState<"grams" | "ounces">("grams");
   const [quantityOut, setQuantityOut] = React.useState("");
   const [expenseId, setExpenseId] = React.useState("none");
   const [notes, setNotes] = React.useState("");
@@ -513,11 +517,11 @@ function AddBatchDialog({
     const out = parseNum(quantityOut);
     if (!selectedProductId || out === null || out <= 0) return;
     if (honeyKind) {
-      const lbs = parseNum(honeyLbs);
+      const lbs = parseHoneyWeight(honeyLbs, units);
       if (lbs === null || lbs <= 0) return;
       if (kind === "creamed_honey" && lotId === "none") return;
     } else {
-      const grams = parseNum(propolisAmount);
+      const grams = parsePropolisMassInput(propolisAmount, units);
       if (!propolisHarvestId || grams === null || grams <= 0) return;
     }
     create.mutate(
@@ -526,13 +530,13 @@ function AddBatchDialog({
         productId: selectedProductId,
         harvestLotId: lotId === "none" ? undefined : lotId,
         startedAt,
-        honeyLbs: honeyKind ? parseNum(honeyLbs) ?? undefined : undefined,
+        honeyLbs: honeyKind ? parseHoneyWeight(honeyLbs, units) ?? undefined : undefined,
         waterLiters: kind === "mead" ? parseNum(waterLiters) ?? undefined : undefined,
         yeast: kind === "mead" ? yeast.trim() || undefined : undefined,
         vessel: kind === "mead" ? vessel.trim() || undefined : undefined,
         propolisHarvestId: kind === "tincture" ? propolisHarvestId : undefined,
-        propolisAmount: kind === "tincture" ? parseNum(propolisAmount) ?? undefined : undefined,
-        propolisUnit: kind === "tincture" ? propolisUnit : undefined,
+        propolisAmount: kind === "tincture" ? parsePropolisMassInput(propolisAmount, units) ?? undefined : undefined,
+        propolisUnit: kind === "tincture" ? "grams" : undefined,
         quantityOut: out,
         notes: notes.trim() || undefined,
         expenseIds: expenseId === "none" ? undefined : [expenseId],
@@ -596,8 +600,13 @@ function AddBatchDialog({
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="grid gap-1.5">
-                    <Label>Honey lbs</Label>
-                    <Input type="number" min="0" step="0.1" value={honeyLbs} onChange={(event) => setHoneyLbs(event.target.value)} />
+                    <Label>Honey ({honeySuffix})</Label>
+                    <Input
+                      inputMode="decimal"
+                      value={honeyLbs}
+                      onChange={(event) => setHoneyLbs(event.target.value)}
+                      placeholder={`e.g. 2 kg or 4.4 ${honeySuffix}`}
+                    />
                   </div>
                   <div className="grid gap-1.5">
                     <Label>Harvest lot{kind === "creamed_honey" ? "" : " (optional)"}</Label>
@@ -631,7 +640,7 @@ function AddBatchDialog({
               </>
             )}
             {kind === "tincture" && (
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-1.5">
                   <Label>Propolis harvest</Label>
                   <Select value={propolisHarvestId} onValueChange={setPropolisHarvestId}>
@@ -639,25 +648,22 @@ function AddBatchDialog({
                     <SelectContent>
                       {(harvests.data ?? []).map((row) => (
                         <SelectItem key={row.id} value={row.id}>
-                          {formatDate(row.date)} · {row.amount} {row.unit}
+                          {formatDate(row.date)} · {formatPropolis(
+                            row.unit === "ounces" ? row.amount * GRAMS_PER_OUNCE : row.amount,
+                          )}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="grid gap-1.5">
-                  <Label>Amount used</Label>
-                  <Input type="number" min="0" step="0.1" value={propolisAmount} onChange={(event) => setPropolisAmount(event.target.value)} />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>Unit</Label>
-                  <Select value={propolisUnit} onValueChange={(value) => setPropolisUnit(value as "grams" | "ounces")}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="grams">grams</SelectItem>
-                      <SelectItem value="ounces">ounces</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-1.5 col-span-2">
+                  <Label>Amount used ({propolisSuffix})</Label>
+                  <Input
+                    inputMode="decimal"
+                    value={propolisAmount}
+                    onChange={(event) => setPropolisAmount(event.target.value)}
+                    placeholder={`e.g. 10 ${propolisSuffix}`}
+                  />
                 </div>
               </div>
             )}

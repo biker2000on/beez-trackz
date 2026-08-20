@@ -19,7 +19,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { useQueenPerformance } from "./api";
+import { useQueenPerformance, useQueens } from "./api";
+import { useUnits } from "@/lib/use-units";
 
 function scoreTone(score: number) {
   if (score >= 80) return "text-emerald-700 dark:text-emerald-400";
@@ -28,7 +29,9 @@ function scoreTone(score: number) {
 }
 
 export function QueenPerformancePanel() {
+  const { formatHoney } = useUnits();
   const performance = useQueenPerformance();
+  const queens = useQueens();
 
   if (performance.isPending) return <Skeleton className="h-56 rounded-xl" />;
   if (performance.isError || !performance.data) {
@@ -41,6 +44,9 @@ export function QueenPerformancePanel() {
     );
   }
 
+  const matingById = new Map(
+    (queens.data ?? []).map((queen) => [queen.id, queen] as const),
+  );
   const ranked = [...performance.data.queens]
     .filter((queen) => queen.inspectionCount > 0)
     .sort((a, b) => b.overallScore - a.overallScore);
@@ -77,6 +83,7 @@ export function QueenPerformancePanel() {
             <TableHeader>
               <TableRow>
                 <TableHead>Queen / hive</TableHead>
+                <TableHead>Mated at</TableHead>
                 <TableHead className="text-right">Overall</TableHead>
                 <TableHead className="text-right">Brood</TableHead>
                 <TableHead className="text-right">Temperament</TableHead>
@@ -97,6 +104,9 @@ export function QueenPerformancePanel() {
                       {queen.status}
                     </p>
                   </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {matingById.get(queen.id)?.matedAtApiaryName ?? "—"}
+                  </TableCell>
                   <TableCell
                     className={`text-right text-base font-bold ${scoreTone(queen.overallScore)}`}
                   >
@@ -109,7 +119,7 @@ export function QueenPerformancePanel() {
                     {queen.temperamentScore.toFixed(0)}
                   </TableCell>
                   <TableCell className="text-right">
-                    {queen.yieldPounds.toFixed(1)} lb
+                    {formatHoney(queen.yieldPounds)}
                   </TableCell>
                   <TableCell className="text-right">
                     {queen.inspectionCount}

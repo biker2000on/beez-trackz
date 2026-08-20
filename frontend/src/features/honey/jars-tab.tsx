@@ -28,6 +28,7 @@ import {
 } from "@/features/commerce/stock-locations-api";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useUnits } from "@/lib/use-units";
 
 import { formatMoney } from "./format";
 import { useJarInventory } from "./hooks";
@@ -53,6 +54,7 @@ function splitByLocation(inventory: StockInventory | undefined) {
 }
 
 export function JarsTab() {
+  const { formatHoney } = useUnits();
   const inventory = useJarInventory();
   const locations = useStockInventory();
 
@@ -120,7 +122,7 @@ export function JarsTab() {
                     {row.label}
                     {row.honeyOz != null && (
                       <span className="ml-2 text-xs text-muted-foreground">
-                        {row.honeyOz} oz
+                        {formatHoney(row.honeyOz / 16)}
                       </span>
                     )}
                     {row.isActive === false && (

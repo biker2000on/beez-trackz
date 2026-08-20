@@ -66,6 +66,14 @@ function qty(value: number, unit: string, other: string): FormattedQuantity {
   return { value, unit, text, dual: `${text} (${other})` };
 }
 
+/** Dual honey label for print/legal slots, e.g. "1 lb (454 g)". */
+export function formatHoneyDual(
+  pounds: number | null | undefined,
+  units: UnitsSystem,
+): string | null {
+  return formatHoneyMass(pounds, units)?.dual ?? null;
+}
+
 /** Honey / lot weight. Canonical: pounds. */
 export function formatHoneyMass(
   pounds: number | null | undefined,
@@ -300,4 +308,67 @@ export function resolveUnitsPreference(input: {
 export function preferredMassSuffix(units: UnitsSystem, kind: "honey" | "propolis"): string {
   if (kind === "propolis") return units === "us" ? "oz" : "g";
   return units === "metric" ? "kg" : "lb";
+}
+
+/**
+ * Parse a honey/lot weight typed in the preferred system. Bare numbers are
+ * kilograms when metric and pounds when US; a suffix always wins.
+ */
+export function parseHoneyMassInput(
+  raw: string,
+  preferred: UnitsSystem,
+): number | null {
+  const parsed = parseMass(raw, "pounds");
+  if (!parsed) return null;
+  if (parsed.suffix) return parsed.pounds;
+  if (preferred === "metric") return (parsed.pounds * 1000) / GRAMS_PER_POUND;
+  return parsed.pounds;
+}
+
+/** Parse propolis typed in the preferred system. Returns canonical grams. */
+export function parsePropolisMassInput(
+  raw: string,
+  preferred: UnitsSystem,
+): number | null {
+  const parsed = parseMass(raw, "grams");
+  if (!parsed) return null;
+  if (parsed.suffix) return parsed.grams;
+  if (preferred === "us") return parsed.grams * GRAMS_PER_OUNCE;
+  return parsed.grams;
+}
+
+const ELEVATION_PATTERN = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*(m|meters?|ft|feet|foot)?$/i;
+
+export type ParsedElevation = {
+  meters: number;
+  suffix: string | null;
+};
+
+/** Parse elevation ("2100 ft", "640 m", "2100"). Canonical: meters. */
+export function parseElevation(
+  raw: string,
+  preferred: UnitsSystem,
+): ParsedElevation | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const match = ELEVATION_PATTERN.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  const suffix = match[2]?.toLowerCase() ?? null;
+  if (suffix && (suffix === "ft" || suffix === "feet" || suffix === "foot")) {
+    return { meters: value * METERS_PER_FOOT, suffix: "ft" };
+  }
+  if (suffix && (suffix === "m" || suffix.startsWith("meter"))) {
+    return { meters: value, suffix: "m" };
+  }
+  if (preferred === "us") {
+    return { meters: value * METERS_PER_FOOT, suffix: null };
+  }
+  return { meters: value, suffix: null };
+}
+
+/** Preferred elevation input suffix shown on forms. */
+export function preferredElevationSuffix(units: UnitsSystem): string {
+  return units === "us" ? "ft" : "m";
 }

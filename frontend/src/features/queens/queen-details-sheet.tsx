@@ -156,6 +156,14 @@ export function QueenDetailsSheet({
                     : "None"}
               </DetailRow>
               <DetailRow label="Daughters">{daughters.length}</DetailRow>
+              <DetailRow label="Mated at">
+                {queen.matedAtApiaryName ?? "—"}
+              </DetailRow>
+              {queen.droneSourceNote && (
+                <DetailRow label="Drone source">
+                  {queen.droneSourceNote}
+                </DetailRow>
+              )}
               {queen.notes && (
                 <>
                   <Separator />

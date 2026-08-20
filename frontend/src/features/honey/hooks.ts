@@ -243,6 +243,7 @@ export interface SaleLineBody {
 export interface SaleBody {
   date: string;
   location?: string;
+  stockLocationId?: string;
   customerId?: string;
   harvestLotId?: string;
   customerName?: string;

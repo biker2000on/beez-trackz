@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { todayInput } from "@/features/hives/lib";
+import { parseFeedingQuantity } from "@/lib/units";
+import { useUnits } from "@/lib/use-units";
 import {
   FEEDER_TYPES,
   FEEDING_TYPES,
@@ -38,12 +40,7 @@ import {
 const feedingSchema = z.object({
   dateFed: z.string().min(1, "Date is required"),
   type: z.string().min(1, "Feed type is required"),
-  quantity: z
-    .string()
-    .trim()
-    .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, {
-      message: "Quantity must be greater than zero",
-    }),
+  quantity: z.string().trim().min(1, "Quantity is required"),
   quantityUnit: z.string().min(1, "Unit is required"),
   feederType: z.string(),
   notes: z.string(),
@@ -62,6 +59,7 @@ export function FeedingDialog({
   onOpenChange: (open: boolean) => void;
   hiveId: string;
 }) {
+  const { units, formatFeeding } = useUnits();
   const createFeeding = useCreateFeeding();
 
   const form = useForm<FeedingValues>({
@@ -92,13 +90,23 @@ export function FeedingDialog({
   const watched = form.watch();
 
   async function onSubmit(values: FeedingValues, resetAfter = false) {
+    const parsed = parseFeedingQuantity(values.quantity, units);
+    const hasSuffix = /\s*[a-zA-Z]+$/.test(values.quantity.trim());
+    const quantity = hasSuffix && parsed
+      ? parsed.quantity
+      : Number(values.quantity);
+    const quantityUnit = hasSuffix && parsed ? parsed.unit : values.quantityUnit;
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      form.setError("quantity", { message: "Quantity must be greater than zero" });
+      return;
+    }
     try {
       await createFeeding.mutateAsync({
         hiveId,
         dateFed: values.dateFed,
         type: values.type,
-        quantity: Number(values.quantity),
-        quantityUnit: values.quantityUnit,
+        quantity,
+        quantityUnit,
         feederType: values.feederType === NO_FEEDER ? null : values.feederType,
         notes: values.notes.trim() === "" ? null : values.notes,
       });
@@ -178,9 +186,8 @@ export function FeedingDialog({
               <Label htmlFor="feeding-quantity">Quantity</Label>
               <Input
                 id="feeding-quantity"
-                type="number"
-                min="0"
-                step="0.1"
+                inputMode="decimal"
+                placeholder="e.g. 2 kg or 2 L"
                 aria-invalid={
                   form.formState.errors.quantity ? true : undefined
                 }
@@ -191,6 +198,15 @@ export function FeedingDialog({
                   {form.formState.errors.quantity.message}
                 </p>
               )}
+              {(() => {
+                const parsed = parseFeedingQuantity(watched.quantity, units);
+                const hasSuffix = /\s*[a-zA-Z]+$/.test(watched.quantity.trim());
+                if (!hasSuffix || !parsed) return null;
+                const preview = formatFeeding(parsed.quantity, parsed.unit);
+                return preview ? (
+                  <p className="text-xs text-muted-foreground">Records as {preview}</p>
+                ) : null;
+              })()}
             </div>
             <div className="grid gap-2">
               <Label>Unit</Label>

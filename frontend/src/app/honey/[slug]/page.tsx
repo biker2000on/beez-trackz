@@ -5,6 +5,11 @@ import { notFound } from "next/navigation";
 import { CalendarDays, ExternalLink, MapPin, PackageCheck, Sprout } from "lucide-react";
 
 import { HoneyStorySignup } from "@/features/commerce/honey-story-signup";
+import {
+  formatHoneyDual,
+  formatHoneyMass,
+  resolveUnitsPreference,
+} from "@/lib/units";
 
 type StoryPhoto = {
   id: string;
@@ -18,6 +23,11 @@ type HoneyStory = {
   lotCode: string;
   description?: string | null;
   floralSource?: string | null;
+  floralClaim?: string | null;
+  claimSpecies?: string | null;
+  claimYear?: number | null;
+  claimApiaryName?: string | null;
+  claimElevationM?: number | null;
   apiaryRegion?: string | null;
   harvestDate?: string | null;
   harvestedPounds?: number | null;
@@ -31,6 +41,8 @@ type HoneyStory = {
     quantity: number;
   }[];
   reorderUrl?: string | null;
+  units?: string | null;
+  temperatureUnit?: string | null;
 };
 
 let warnedAboutLegacyAPIURL = false;
@@ -118,6 +130,17 @@ export default async function HoneyStoryPage({
     ? formatStoryDate(story.bottlingRuns[0].bottledDate)
     : null;
   const reorderUrl = safeReorderUrl(story.reorderUrl);
+  // Operator preference, never the viewer's locale. Unset units resolve as
+  // US customary so a public QR visitor cannot flip the jar's printed claim.
+  const preference = resolveUnitsPreference({
+    units: story.units,
+    temperatureUnit: story.temperatureUnit,
+    locale: "en-US",
+  });
+  const harvestMass = formatHoneyMass(story.harvestedPounds, preference.units);
+  const harvestLabel =
+    formatHoneyDual(story.harvestedPounds, preference.units) ?? harvestMass?.text ?? null;
+  const floralClaim = story.floralClaim || story.floralSource;
 
   return (
     <main className="min-h-screen bg-[#fffaf0] text-stone-900">
@@ -167,14 +190,14 @@ export default async function HoneyStoryPage({
           {harvestDate && (
             <StoryFact icon={<CalendarDays />} label="Harvested" value={harvestDate} />
           )}
-          {story.floralSource && (
-            <StoryFact icon={<Sprout />} label="Floral notes" value={story.floralSource} />
+          {floralClaim && (
+            <StoryFact icon={<Sprout />} label="Floral source" value={floralClaim} />
           )}
-          {story.harvestedPounds != null && (
+          {harvestLabel && (
             <StoryFact
-              icon={<span className="font-serif text-lg font-bold">lb</span>}
+              icon={<span className="font-serif text-lg font-bold">{harvestMass?.unit ?? "lb"}</span>}
               label="Harvest"
-              value={`${story.harvestedPounds.toLocaleString()} pounds`}
+              value={harvestLabel}
             />
           )}
           {latestBottlingDate && (

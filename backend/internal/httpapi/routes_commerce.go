@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -88,6 +89,7 @@ type harvestLotPayload struct {
 	PublicSlug          string         `json:"publicSlug"`
 	ExtractionDate      string         `json:"extractionDate"`
 	HoneyWeightLbs      float64        `json:"honeyWeightLbs"`
+	HoneyWeightEntered  *string        `json:"honeyWeightEntered"`
 	HoneyVariety        *string        `json:"honeyVariety"`
 	Season              *string        `json:"season"`
 	ApiaryRegion        *string        `json:"apiaryRegion"`
@@ -100,6 +102,10 @@ type harvestLotPayload struct {
 	PhotoIDs            []uuid.UUID    `json:"photoIds"`
 	MoisturePct         *float64       `json:"moisturePct"`
 	BottlingMoisturePct *float64       `json:"bottlingMoisturePct"`
+	ClaimSpecies        *string        `json:"claimSpecies"`
+	ClaimYear           *int           `json:"claimYear"`
+	ClaimApiaryID       *uuid.UUID     `json:"claimApiaryId"`
+	ClaimElevationM     *float64       `json:"claimElevationM"`
 }
 
 type harvestLotRow struct {
@@ -108,6 +114,7 @@ type harvestLotRow struct {
 	PublicSlug          string           `json:"publicSlug"`
 	ExtractionDate      time.Time        `json:"extractionDate"`
 	HoneyWeightLbs      float64          `json:"honeyWeightLbs"`
+	HoneyWeightEntered  *string          `json:"honeyWeightEntered"`
 	HoneyVariety        *string          `json:"honeyVariety"`
 	Season              *string          `json:"season"`
 	ApiaryRegion        *string          `json:"apiaryRegion"`
@@ -118,6 +125,12 @@ type harvestLotRow struct {
 	IsPublic            bool             `json:"isPublic"`
 	MoisturePct         *float64         `json:"moisturePct"`
 	BottlingMoisturePct *float64         `json:"bottlingMoisturePct"`
+	ClaimSpecies        *string          `json:"claimSpecies"`
+	ClaimYear           *int             `json:"claimYear"`
+	ClaimApiaryID       *uuid.UUID       `json:"claimApiaryId"`
+	ClaimApiaryName     *string          `json:"claimApiaryName"`
+	ClaimElevationM     *float64         `json:"claimElevationM"`
+	FloralClaim         string           `json:"floralClaim"`
 	Lockout             *hiveLockoutJSON `json:"lockout,omitempty"`
 	SourceHarvestIDs    []uuid.UUID      `json:"sourceHarvestIds"`
 	SourceApiaries      []string         `json:"sourceApiaries"`
@@ -128,16 +141,110 @@ type harvestLotRow struct {
 }
 
 const harvestLotSelect = `
-	SELECT id, lot_code, public_slug, extraction_date, honey_weight_lbs,
-		honey_variety, season, apiary_region, bloom_notes, beekeeper_story,
-		COALESCE(testing_data, '{}'::jsonb), reorder_url, is_public,
-		moisture_pct, bottling_moisture_pct, created_at, updated_at
-	FROM harvest_lots`
+	SELECT lot.id, lot.lot_code, lot.public_slug, lot.extraction_date, lot.honey_weight_lbs,
+		lot.honey_weight_entered, lot.honey_variety, lot.season, lot.apiary_region, lot.bloom_notes,
+		lot.beekeeper_story, COALESCE(lot.testing_data, '{}'::jsonb), lot.reorder_url, lot.is_public,
+		lot.moisture_pct, lot.bottling_moisture_pct,
+		lot.claim_species, lot.claim_year, lot.claim_apiary_id, claim_apiary.name, lot.claim_elevation_m,
+		lot.created_at, lot.updated_at
+	FROM harvest_lots lot
+	LEFT JOIN apiaries claim_apiary ON claim_apiary.id = lot.claim_apiary_id`
+
+const metersPerFoot = 0.3048
+
+func operatorUnitsSystem(ctx context.Context, q inspectionQuerier) string {
+	var units *string
+	if err := q.QueryRow(ctx, `SELECT units FROM user_settings LIMIT 1`).Scan(&units); err != nil {
+		return "us"
+	}
+	if units != nil && (*units == "metric" || *units == "us") {
+		return *units
+	}
+	return "us"
+}
+
+func formatClaimElevation(meters float64, units string) string {
+	if units == "metric" {
+		return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(meters, 'f', 1, 64), "0"), ".") + " m"
+	}
+	feet := meters / metersPerFoot
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(feet, 'f', 0, 64), "0"), ".") + " ft"
+}
+
+// formatFloralClaim builds the declared source shared by lot, label, and
+// Honey Story, e.g. "Sourwood 2026, Yard B, 2100 ft".
+func formatFloralClaim(species *string, year *int, apiaryName *string, elevationM *float64, units string) string {
+	head := strings.TrimSpace(ptrString(species))
+	if year != nil {
+		if head != "" {
+			head = fmt.Sprintf("%s %d", head, *year)
+		} else {
+			head = strconv.Itoa(*year)
+		}
+	}
+	parts := make([]string, 0, 3)
+	if head != "" {
+		parts = append(parts, head)
+	}
+	if name := strings.TrimSpace(ptrString(apiaryName)); name != "" {
+		parts = append(parts, name)
+	}
+	if elevationM != nil {
+		parts = append(parts, formatClaimElevation(*elevationM, units))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func ptrString(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func resolveLotClaim(req harvestLotPayload) (species *string, year *int, apiaryID *uuid.UUID, elevation *float64, err error) {
+	species = honeyTrimPtr(req.ClaimSpecies)
+	if req.ClaimYear != nil {
+		if *req.ClaimYear < 1900 || *req.ClaimYear > 2100 {
+			return nil, nil, nil, nil, errors.New("claimYear must be between 1900 and 2100")
+		}
+		year = req.ClaimYear
+	}
+	if req.ClaimApiaryID != nil {
+		apiaryID = req.ClaimApiaryID
+	}
+	if req.ClaimElevationM != nil {
+		if *req.ClaimElevationM < -500 || *req.ClaimElevationM > 9000 {
+			return nil, nil, nil, nil, errors.New("claimElevationM is out of range")
+		}
+		elevation = req.ClaimElevationM
+	}
+	return species, year, apiaryID, elevation, nil
+}
+
+// fillClaimElevation copies the yard pin's elevation onto the claim when the
+// operator named a yard but did not type an elevation. Elevation stays
+// canonical meters; display converts.
+func fillClaimElevation(ctx context.Context, q inspectionQuerier, apiaryID *uuid.UUID, elevation *float64) (*float64, error) {
+	if elevation != nil || apiaryID == nil {
+		return elevation, nil
+	}
+	var meters *float64
+	err := q.QueryRow(ctx, `SELECT elevation_m FROM apiaries WHERE id=$1`, *apiaryID).Scan(&meters)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("invalid claimApiaryId")
+		}
+		return nil, err
+	}
+	return meters, nil
+}
 
 func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]harvestLotRow, error) {
 	if s.pool == nil {
 		return nil, errors.New("database unavailable")
 	}
+	units := operatorUnitsSystem(r.Context(), s.pool)
 	rows, err := s.pool.Query(r.Context(), harvestLotSelect+" "+where, args...)
 	if err != nil {
 		return nil, err
@@ -147,12 +254,15 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 	for rows.Next() {
 		var item harvestLotRow
 		if err := rows.Scan(&item.ID, &item.LotCode, &item.PublicSlug, &item.ExtractionDate,
-			&item.HoneyWeightLbs, &item.HoneyVariety, &item.Season, &item.ApiaryRegion,
-			&item.BloomNotes, &item.BeekeeperStory, &item.TestingData, &item.ReorderURL,
-			&item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
-			&item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyVariety, &item.Season,
+			&item.ApiaryRegion, &item.BloomNotes, &item.BeekeeperStory, &item.TestingData,
+			&item.ReorderURL, &item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
+			&item.ClaimSpecies, &item.ClaimYear, &item.ClaimApiaryID, &item.ClaimApiaryName,
+			&item.ClaimElevationM, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item.FloralClaim = formatFloralClaim(item.ClaimSpecies, item.ClaimYear,
+			item.ClaimApiaryName, item.ClaimElevationM, units)
 		item.SourceHarvestIDs = []uuid.UUID{}
 		item.SourceApiaries = []string{}
 		item.Photos = []map[string]any{}
@@ -269,7 +379,7 @@ func (s *Server) attachLotLockouts(r *http.Request, items []harvestLotRow) error
 }
 
 func (s *Server) harvestLotList(w http.ResponseWriter, r *http.Request) {
-	items, err := s.harvestLotRows(r, "ORDER BY extraction_date DESC, lot_code DESC")
+	items, err := s.harvestLotRows(r, "ORDER BY lot.extraction_date DESC, lot.lot_code DESC")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -287,7 +397,7 @@ func (s *Server) harvestLotGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	items, err := s.harvestLotRows(r, "WHERE id = $1", id)
+	items, err := s.harvestLotRows(r, "WHERE lot.id = $1", id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -334,6 +444,11 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "reorderUrl must be an http or https URL")
 		return
 	}
+	claimSpecies, claimYear, claimApiaryID, claimElevation, err := resolveLotClaim(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	slug := commerceSlug(req.PublicSlug)
 	if strings.TrimSpace(req.PublicSlug) == "" {
 		slug = commerceSlug(req.LotCode)
@@ -344,18 +459,30 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	claimElevation, err = fillClaimElevation(r.Context(), tx, claimApiaryID, claimElevation)
+	if err != nil {
+		if err.Error() == "invalid claimApiaryId" {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	var id uuid.UUID
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO harvest_lots
-			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_variety,
-			 season, apiary_region, bloom_notes, beekeeper_story, testing_data,
-			 reorder_url, is_public, moisture_pct, bottling_moisture_pct, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_weight_entered,
+			 honey_variety, season, apiary_region, bloom_notes, beekeeper_story, testing_data,
+			 reorder_url, is_public, moisture_pct, bottling_moisture_pct,
+			 claim_species, claim_year, claim_apiary_id, claim_elevation_m, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
 		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
+		honeyTrimPtr(req.HoneyWeightEntered),
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct, actorID(r)).Scan(&id)
+		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
+		claimSpecies, claimYear, claimApiaryID, claimElevation, actorID(r)).Scan(&id)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -423,6 +550,11 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "reorderUrl must be an http or https URL")
 		return
 	}
+	claimSpecies, claimYear, claimApiaryID, claimElevation, err := resolveLotClaim(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	slug := commerceSlug(req.PublicSlug)
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
@@ -430,6 +562,15 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	claimElevation, err = fillClaimElevation(r.Context(), tx, claimApiaryID, claimElevation)
+	if err != nil {
+		if err.Error() == "invalid claimApiaryId" {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	// The lot's weight cannot drop below what its runs already bottled —
 	// existing runs would exceed capacity and every future run would 400.
 	var alreadyBottledLbs float64
@@ -450,14 +591,18 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	tag, err := tx.Exec(r.Context(), `
 		UPDATE harvest_lots SET lot_code=$1, public_slug=$2, extraction_date=$3,
-			honey_weight_lbs=$4, honey_variety=$5, season=$6, apiary_region=$7,
-			bloom_notes=$8, beekeeper_story=$9, testing_data=$10, reorder_url=$11,
-			is_public=$12, moisture_pct=$13, bottling_moisture_pct=$14 WHERE id=$15`,
+			honey_weight_lbs=$4, honey_weight_entered=$5, honey_variety=$6, season=$7,
+			apiary_region=$8, bloom_notes=$9, beekeeper_story=$10, testing_data=$11,
+			reorder_url=$12, is_public=$13, moisture_pct=$14, bottling_moisture_pct=$15,
+			claim_species=$16, claim_year=$17, claim_apiary_id=$18, claim_elevation_m=$19
+		WHERE id=$20`,
 		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
+		honeyTrimPtr(req.HoneyWeightEntered),
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct, id)
+		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
+		claimSpecies, claimYear, claimApiaryID, claimElevation, id)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -887,7 +1032,7 @@ func (s *Server) writeHoneyStoryQR(w http.ResponseWriter, slug string) {
 
 func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
-	rows, err := s.harvestLotRows(r, "WHERE public_slug=$1 AND is_public", slug)
+	rows, err := s.harvestLotRows(r, "WHERE lot.public_slug=$1 AND lot.is_public", slug)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -918,17 +1063,31 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 			"quantity":     run["quantity"],
 		})
 	}
+	floralSource := item.HoneyVariety
+	if item.FloralClaim != "" {
+		floralSource = &item.FloralClaim
+	}
+	units := operatorUnitsSystem(r.Context(), s.pool)
+	var temperatureUnit *string
+	_ = s.pool.QueryRow(r.Context(), `
+		SELECT temperature_unit FROM user_settings LIMIT 1`).Scan(&temperatureUnit)
 	// Deliberately curated response: no hive IDs, apiary IDs, coordinates,
 	// inspection data, expenses, or customer data can cross this boundary.
+	// Units are the operator's stored preference so Honey Story does not
+	// follow the viewer's locale.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"slug": item.PublicSlug, "name": name,
 		"lotCode": item.LotCode, "season": item.Season,
-		"description": item.BloomNotes, "floralSource": item.HoneyVariety,
+		"description": item.BloomNotes, "floralSource": floralSource,
+		"floralClaim": item.FloralClaim,
+		"claimSpecies": item.ClaimSpecies, "claimYear": item.ClaimYear,
+		"claimApiaryName": item.ClaimApiaryName, "claimElevationM": item.ClaimElevationM,
 		"apiaryRegion": item.ApiaryRegion, "sourceApiaries": item.SourceApiaries,
 		"harvestDate": item.ExtractionDate, "harvestedPounds": item.HoneyWeightLbs,
 		"beekeeperNotes": item.BeekeeperStory, "testingData": item.TestingData,
 		"reorderUrl": item.ReorderURL, "photos": publicPhotos,
 		"bottlingRuns": publicBottlingRuns,
+		"units": units, "temperatureUnit": temperatureUnit,
 	})
 }
 

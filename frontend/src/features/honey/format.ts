@@ -1,5 +1,11 @@
 /** Formatting helpers shared across the honey feature. */
 
+import {
+  formatHoneyMass,
+  parseHoneyMassInput,
+  type UnitsSystem,
+} from "@/lib/units";
+
 /** Today's date in local time as a YYYY-MM-DD string (for date inputs). */
 export function todayISO(): string {
   const now = new Date();
@@ -23,8 +29,26 @@ export function formatDate(iso: string): string {
   });
 }
 
-export function formatLbs(value: number): string {
+export function formatLbs(value: number, units?: UnitsSystem): string {
+  if (units) {
+    return formatHoneyMass(value, units)?.text ?? "";
+  }
   return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} lbs`;
+}
+
+/** Typed honey/lot weight with optional suffix. Canonical pounds. */
+export function parseHoneyWeight(raw: string, units: UnitsSystem): number | null {
+  return parseHoneyMassInput(raw, units);
+}
+
+/** Preferred-system number to put in a mass input (no unit suffix). */
+export function honeyInputDisplay(
+  pounds: number | null | undefined,
+  units: UnitsSystem,
+): string {
+  const formatted = formatHoneyMass(pounds, units);
+  if (!formatted) return "";
+  return formatted.text.replace(/\s+\S+$/, "");
 }
 
 export function formatMoney(value: number): string {
