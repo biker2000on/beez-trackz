@@ -6,16 +6,42 @@ import { api } from "@/lib/api";
 
 // --- Preferences -----------------------------------------------------------
 
+export const NTFY_EVENT_KINDS = [
+  "mite_check_due",
+  "feeder_empty",
+  "treatment_off_date",
+  "flow_started",
+] as const;
+export type NtfyEventKind = (typeof NTFY_EVENT_KINDS)[number];
+
+export const NTFY_EVENT_LABELS: Record<NtfyEventKind, string> = {
+  mite_check_due: "Mite check due",
+  feeder_empty: "Feeder empty",
+  treatment_off_date: "Treatment off-date",
+  flow_started: "Flow started",
+};
+
+export interface NtfySettings {
+  serverUrl: string;
+  topic: string;
+  enabled: boolean;
+  eventKinds: NtfyEventKind[];
+}
+
 export interface Preferences {
   displayName: string | null;
   theme: string;
   defaultApiaryId: string | null;
   dateFormat: string;
   weightUnit: string;
+  units: "metric" | "us" | null;
+  temperatureUnit: "c" | "f" | null;
+  laborTrackingEnabled: boolean;
   miteThresholdPer100: number | null;
   miteThresholdPerDay: number | null;
   miteCheckIntervalDays: number | null;
   moistureThresholdPct: number | null;
+  ntfy: NtfySettings;
 }
 
 export interface PreferencesPayload {
@@ -23,6 +49,9 @@ export interface PreferencesPayload {
   defaultApiaryId: string | null;
   dateFormat: string;
   weightUnit: string;
+  units?: "metric" | "us" | null;
+  temperatureUnit?: "c" | "f" | "" | null;
+  laborTrackingEnabled?: boolean;
   miteThresholdPer100?: number | null;
   miteThresholdPerDay?: number | null;
   miteCheckIntervalDays?: number | null;
@@ -56,6 +85,87 @@ export function useUpdatePreferences() {
       api.put<{ success: boolean }>("/settings/preferences", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
+      queryClient.invalidateQueries({ queryKey: ["ops", "units"] });
+    },
+  });
+}
+
+export function useUpdateNtfy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: NtfySettings) =>
+      api.put<{ success: boolean; ntfy: NtfySettings }>("/settings/ntfy", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
+    },
+  });
+}
+
+export function useTestNtfy() {
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ success?: boolean; error?: string }>("/ops/ntfy/test"),
+  });
+}
+
+export function useDispatchNtfy() {
+  return useMutation({
+    mutationFn: () =>
+      api.post<{
+        published: number;
+        skipped: number;
+        errors: string[];
+        reason?: string;
+      }>("/ops/ntfy/dispatch"),
+  });
+}
+
+export interface LaborSession {
+  id: string;
+  apiaryId: string | null;
+  apiaryName: string | null;
+  startedAt: string;
+  stoppedAt: string | null;
+  minutes: number;
+  notes: string | null;
+  open: boolean;
+}
+
+export function useLaborCurrent() {
+  return useQuery({
+    queryKey: ["ops", "labor", "current"],
+    queryFn: () =>
+      api.get<{ enabled: boolean; current: LaborSession | null }>(
+        "/ops/labor/current",
+      ),
+  });
+}
+
+export function useLaborList() {
+  return useQuery({
+    queryKey: ["ops", "labor"],
+    queryFn: () => api.get<{ items: LaborSession[] }>("/ops/labor"),
+  });
+}
+
+export function useLaborStart() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload?: { apiaryId?: string | null; notes?: string }) =>
+      api.post<LaborSession>("/ops/labor/start", payload ?? {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ops", "labor"] });
+    },
+  });
+}
+
+export function useLaborStop() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload?: { id?: string; notes?: string }) =>
+      api.post<LaborSession>("/ops/labor/stop", payload ?? {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ops", "labor"] });
     },
   });
 }

@@ -1,20 +1,26 @@
 "use client";
 
 import {
+  Bell,
   Bot,
+  ClipboardList,
   Images,
   KeyRound,
   Lock,
   Milk,
   MonitorSmartphone,
   SlidersHorizontal,
+  Timer,
 } from "lucide-react";
 
 import { AccessSection } from "@/features/access/access-section";
 import { useAccessProfile } from "@/features/access/api";
 import { AISection } from "./ai-section";
+import { ComplianceSection } from "./compliance-section";
 import { InstallSection } from "./install-section";
 import { JarSizesSection } from "./jar-sizes-section";
+import { LaborControl } from "./labor-control";
+import { NtfySection } from "./ntfy-section";
 import { PasswordSection } from "./password-section";
 import { PreferencesSection } from "./preferences-section";
 import { SettingsSection } from "./settings-section";
@@ -29,7 +35,8 @@ export function SettingsView() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          Preferences, sign-in, AI providers, jar sizes, and app install.
+          Preferences, sign-in, AI providers, jar sizes, ntfy, labor, and app
+          install.
         </p>
       </div>
       <SettingsSection
@@ -79,6 +86,30 @@ export function SettingsView() {
             defaultOpen={false}
           >
             <StorageSection />
+          </SettingsSection>
+          <SettingsSection
+            title="Phone push (ntfy)"
+            description="Optional webhook for mite checks, empty feeders, treatment off-dates, and flow start."
+            icon={Bell}
+            defaultOpen={false}
+          >
+            <NtfySection />
+          </SettingsSection>
+          <SettingsSection
+            title="Yard-visit labor"
+            description="Optional start/stop timer for Saturday minutes. Off until enabled in Preferences."
+            icon={Timer}
+            defaultOpen={false}
+          >
+            <LaborControl />
+          </SettingsSection>
+          <SettingsSection
+            title="Compliance packet"
+            description="Authenticated export: hives, treatments, lots, sales, withdrawal windows."
+            icon={ClipboardList}
+            defaultOpen={false}
+          >
+            <ComplianceSection />
           </SettingsSection>
         </>
       ) : null}

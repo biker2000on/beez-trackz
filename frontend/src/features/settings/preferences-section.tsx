@@ -18,6 +18,15 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 
 import {
+  detectLocaleUnits,
+  formatElevation,
+  formatHoneyMass,
+  formatPropolisMass,
+  formatTemperatureF,
+  resolveUnitsPreference,
+} from "@/lib/units";
+
+import {
   useApiaryOptions,
   usePreferences,
   useUpdatePreferences,
@@ -41,6 +50,17 @@ const WEIGHT_UNITS = [
   { value: "g", label: "Grams (g)" },
   { value: "kg", label: "Kilograms (kg)" },
 ];
+
+const UNIT_SYSTEMS = [
+  { value: "metric", label: "Metric (kg, g, m, °C)" },
+  { value: "us", label: "US (lb, oz, ft, °F)" },
+] as const;
+
+const TEMPERATURE_UNITS = [
+  { value: "follow", label: "Match units" },
+  { value: "c", label: "Celsius (°C)" },
+  { value: "f", label: "Fahrenheit (°F)" },
+] as const;
 
 function PreferenceField({
   label,
@@ -89,12 +109,19 @@ export function PreferencesSection() {
       miteThresholdPerDay: current.miteThresholdPerDay,
       miteCheckIntervalDays: current.miteCheckIntervalDays,
       moistureThresholdPct: current.moistureThresholdPct,
+      units: current.units,
+      temperatureUnit: current.temperatureUnit,
+      laborTrackingEnabled: current.laborTrackingEnabled,
       ...patch,
     };
     // Optimistic cache write so the selects don't snap back while saving.
     queryClient.setQueryData<Preferences>(["settings", "preferences"], {
       ...current,
       ...patch,
+      temperatureUnit:
+        patch.temperatureUnit === ""
+          ? null
+          : (patch.temperatureUnit ?? current.temperatureUnit),
     });
     updatePrefs.mutate(payload, {
       onSuccess: () => toast.success("Preferences saved"),
@@ -136,6 +163,16 @@ export function PreferencesSection() {
   }
 
   const data = prefs.data;
+  const localeDefault = detectLocaleUnits();
+  const unitsValue = data.units ?? localeDefault;
+  const resolved = resolveUnitsPreference({
+    units: data.units ?? localeDefault,
+    temperatureUnit: data.temperatureUnit,
+  });
+  const honeyPreview = formatHoneyMass(1, resolved.units);
+  const elevationPreview = formatElevation(640, resolved.units);
+  const tempPreview = formatTemperatureF(50, resolved.temperature);
+  const propolisPreview = formatPropolisMass(28.35, resolved.units);
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -201,7 +238,56 @@ export function PreferencesSection() {
         </Select>
       </PreferenceField>
 
-      <PreferenceField label="Weight unit" htmlFor="pref-weight-unit">
+      <PreferenceField label="Units" htmlFor="pref-units">
+        <Select
+          value={unitsValue}
+          onValueChange={(value) =>
+            save({ units: value === "metric" ? "metric" : "us" })
+          }
+        >
+          <SelectTrigger id="pref-units">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {UNIT_SYSTEMS.map((system) => (
+              <SelectItem key={system.value} value={system.value}>
+                {system.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {!data.units ? (
+          <p className="text-xs text-muted-foreground">
+            Defaulted from this browser ({localeDefault === "us" ? "US" : "metric"}).
+            Saving stores it for Honey Story and labels too.
+          </p>
+        ) : null}
+      </PreferenceField>
+
+      <PreferenceField label="Temperature" htmlFor="pref-temperature">
+        <Select
+          value={data.temperatureUnit ?? "follow"}
+          onValueChange={(value) =>
+            save({
+              temperatureUnit:
+                value === "c" || value === "f" ? value : "",
+            })
+          }
+        >
+          <SelectTrigger id="pref-temperature">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {TEMPERATURE_UNITS.map((unit) => (
+              <SelectItem key={unit.value} value={unit.value}>
+                {unit.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </PreferenceField>
+
+      <PreferenceField label="Jar weight unit" htmlFor="pref-weight-unit">
         <Select
           value={data.weightUnit}
           onValueChange={(value) => save({ weightUnit: value })}
@@ -218,6 +304,35 @@ export function PreferencesSection() {
           </SelectContent>
         </Select>
       </PreferenceField>
+
+      <div className="grid gap-2 sm:col-span-2">
+        <Label htmlFor="pref-labor">Yard-visit labor minutes</Label>
+        <label className="flex items-start gap-3 text-sm">
+          <input
+            id="pref-labor"
+            type="checkbox"
+            className="mt-1 size-4 accent-primary"
+            checked={data.laborTrackingEnabled}
+            onChange={(event) =>
+              save({ laborTrackingEnabled: event.target.checked })
+            }
+          />
+          <span>
+            Track start/stop on a Saturday walk. Off by default — this is
+            optional, not a scorecard.
+          </span>
+        </label>
+      </div>
+
+      <div className="rounded-lg border bg-muted/40 p-3 text-sm sm:col-span-2">
+        <p className="font-medium">Display preview</p>
+        <p className="mt-1 text-muted-foreground">
+          Honey {honeyPreview?.dual} · elevation {elevationPreview?.dual} ·{" "}
+          {tempPreview?.dual} · propolis {propolisPreview?.dual}. Typed inputs
+          like <span className="font-mono">2 kg</span> or{" "}
+          <span className="font-mono">4.4 lb</span> convert to the stored unit.
+        </p>
+      </div>
 
       <PreferenceField label="Varroa wash threshold (per 100)" htmlFor="pref-mite-100">
         <Input

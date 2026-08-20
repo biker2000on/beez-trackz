@@ -3,10 +3,13 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/notify"
 )
 
 // mountSettings wires the preference settings endpoints. (AI provider settings
@@ -15,6 +18,7 @@ func (s *Server) mountSettings(r chi.Router) {
 	admin := r.With(s.requireAdmin)
 	admin.Get("/settings", s.handleSettingsGet)
 	admin.Put("/settings/preferences", s.handleSettingsUpdatePreferences)
+	admin.Put("/settings/ntfy", s.handleSettingsUpdateNtfy)
 	admin.Get("/settings/storage", s.handleSettingsStorage)
 }
 
@@ -24,16 +28,27 @@ const (
 	prefsDefaultWeightUnit = "oz"
 )
 
+type ntfyPrefsJSON struct {
+	ServerURL  string   `json:"serverUrl"`
+	Topic      string   `json:"topic"`
+	Enabled    bool     `json:"enabled"`
+	EventKinds []string `json:"eventKinds"`
+}
+
 type prefsJSON struct {
-	DisplayName           *string    `json:"displayName"`
-	Theme                 string     `json:"theme"`
-	DefaultApiaryID       *uuid.UUID `json:"defaultApiaryId"`
-	DateFormat            string     `json:"dateFormat"`
-	WeightUnit            string     `json:"weightUnit"`
-	MiteThresholdPer100   *float64   `json:"miteThresholdPer100"`
-	MiteThresholdPerDay   *float64   `json:"miteThresholdPerDay"`
-	MiteCheckIntervalDays *int       `json:"miteCheckIntervalDays"`
-	MoistureThresholdPct  *float64   `json:"moistureThresholdPct"`
+	DisplayName           *string       `json:"displayName"`
+	Theme                 string        `json:"theme"`
+	DefaultApiaryID       *uuid.UUID    `json:"defaultApiaryId"`
+	DateFormat            string        `json:"dateFormat"`
+	WeightUnit            string        `json:"weightUnit"`
+	Units                 *string       `json:"units"`
+	TemperatureUnit       *string       `json:"temperatureUnit"`
+	LaborTrackingEnabled  bool          `json:"laborTrackingEnabled"`
+	MiteThresholdPer100   *float64      `json:"miteThresholdPer100"`
+	MiteThresholdPerDay   *float64      `json:"miteThresholdPerDay"`
+	MiteCheckIntervalDays *int          `json:"miteCheckIntervalDays"`
+	MoistureThresholdPct  *float64      `json:"moistureThresholdPct"`
+	Ntfy                  ntfyPrefsJSON `json:"ntfy"`
 }
 
 func prefsOr(v *string, def string) string {
@@ -43,26 +58,92 @@ func prefsOr(v *string, def string) string {
 	return *v
 }
 
+func normalizeUnits(raw *string) (*string, string) {
+	if raw == nil {
+		return nil, ""
+	}
+	v := strings.ToLower(strings.TrimSpace(*raw))
+	if v == "" {
+		return nil, ""
+	}
+	if v != "metric" && v != "us" {
+		return nil, "units must be metric or us"
+	}
+	return &v, ""
+}
+
+func normalizeTemperatureUnit(raw *string) (*string, string) {
+	if raw == nil {
+		return nil, ""
+	}
+	v := strings.ToLower(strings.TrimSpace(*raw))
+	if v == "" {
+		// Empty string clears the override so temperature follows units.
+		return nil, ""
+	}
+	if v != "c" && v != "f" {
+		return nil, "temperatureUnit must be c or f"
+	}
+	return &v, ""
+}
+
+func normalizeNtfyPrefs(serverURL, topic *string, enabled *bool, kinds []string) (ntfyPrefsJSON, string) {
+	out := ntfyPrefsJSON{EventKinds: []string{}}
+	if serverURL != nil {
+		out.ServerURL = strings.TrimRight(strings.TrimSpace(*serverURL), "/")
+	}
+	if topic != nil {
+		out.Topic = strings.TrimSpace(*topic)
+	}
+	if enabled != nil {
+		out.Enabled = *enabled
+	}
+	normalized, err := notify.NormalizeKinds(kinds)
+	if err != nil {
+		return out, err.Error()
+	}
+	out.EventKinds = normalized
+	if out.ServerURL != "" && !notify.ValidServerURL(out.ServerURL) {
+		return out, "ntfy serverUrl must be an http or https URL"
+	}
+	if out.Topic != "" && !notify.ValidTopic(out.Topic) {
+		return out, "ntfy topic must be 1–64 letters, digits, underscore, or hyphen"
+	}
+	return out, ""
+}
+
 // GET /settings — the single user_settings row; defaults when missing
 // (pre-setup instances should still render a settings page).
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	var (
 		displayName, theme, dateFormat, weightUnit *string
+		units, temperatureUnit                     *string
 		defaultApiaryID                            *uuid.UUID
+		laborTracking                              bool
+		ntfyURL, ntfyTopic                         *string
+		ntfyEnabled                                bool
+		ntfyKinds                                  []string
 		thresholdPer100, thresholdPerDay           *float64
 		checkInterval                              *int
 		moistureThreshold                          *float64
 	)
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT display_name, theme, default_apiary_id, date_format, weight_unit,
+			units, temperature_unit, labor_tracking_enabled,
+			ntfy_server_url, ntfy_topic, ntfy_enabled, ntfy_event_kinds,
 			mite_threshold_per_100, mite_threshold_per_day, mite_check_interval_days,
 			moisture_threshold_pct
 		FROM user_settings LIMIT 1`).
 		Scan(&displayName, &theme, &defaultApiaryID, &dateFormat, &weightUnit,
+			&units, &temperatureUnit, &laborTracking,
+			&ntfyURL, &ntfyTopic, &ntfyEnabled, &ntfyKinds,
 			&thresholdPer100, &thresholdPerDay, &checkInterval, &moistureThreshold)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
+	}
+	if ntfyKinds == nil {
+		ntfyKinds = []string{}
 	}
 	writeJSON(w, http.StatusOK, prefsJSON{
 		DisplayName:           displayName,
@@ -70,24 +151,43 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		DefaultApiaryID:       defaultApiaryID,
 		DateFormat:            prefsOr(dateFormat, prefsDefaultDateFormat),
 		WeightUnit:            prefsOr(weightUnit, prefsDefaultWeightUnit),
+		Units:                 units,
+		TemperatureUnit:       temperatureUnit,
+		LaborTrackingEnabled:  laborTracking,
 		MiteThresholdPer100:   thresholdPer100,
 		MiteThresholdPerDay:   thresholdPerDay,
 		MiteCheckIntervalDays: checkInterval,
 		MoistureThresholdPct:  moistureThreshold,
+		Ntfy: ntfyPrefsJSON{
+			ServerURL:  prefsOr(ntfyURL, ""),
+			Topic:      prefsOr(ntfyTopic, ""),
+			Enabled:    ntfyEnabled,
+			EventKinds: ntfyKinds,
+		},
 	})
 }
 
-// PUT /settings/preferences {theme, defaultApiaryId?, dateFormat, weightUnit}
+// PUT /settings/preferences — omitted units/temperature/labor/ntfy fields keep
+// the stored value so the theme toggle does not wipe them.
 func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Theme                 string   `json:"theme"`
 		DefaultApiaryID       *string  `json:"defaultApiaryId"`
 		DateFormat            string   `json:"dateFormat"`
 		WeightUnit            string   `json:"weightUnit"`
+		Units                 *string  `json:"units"`
+		TemperatureUnit       *string  `json:"temperatureUnit"`
+		LaborTrackingEnabled  *bool    `json:"laborTrackingEnabled"`
 		MiteThresholdPer100   *float64 `json:"miteThresholdPer100"`
 		MiteThresholdPerDay   *float64 `json:"miteThresholdPerDay"`
 		MiteCheckIntervalDays *int     `json:"miteCheckIntervalDays"`
 		MoistureThresholdPct  *float64 `json:"moistureThresholdPct"`
+		Ntfy                  *struct {
+			ServerURL  *string  `json:"serverUrl"`
+			Topic      *string  `json:"topic"`
+			Enabled    *bool    `json:"enabled"`
+			EventKinds []string `json:"eventKinds"`
+		} `json:"ntfy"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -119,6 +219,33 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		return
 	}
 
+	units, msg := normalizeUnits(req.Units)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	temperatureUnit, msg := normalizeTemperatureUnit(req.TemperatureUnit)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	clearTemperature := req.TemperatureUnit != nil && strings.TrimSpace(*req.TemperatureUnit) == ""
+
+	var ntfy ntfyPrefsJSON
+	patchNtfy := req.Ntfy != nil
+	if patchNtfy {
+		var kinds []string
+		if req.Ntfy.EventKinds != nil {
+			kinds = req.Ntfy.EventKinds
+		}
+		var errMsg string
+		ntfy, errMsg = normalizeNtfyPrefs(req.Ntfy.ServerURL, req.Ntfy.Topic, req.Ntfy.Enabled, kinds)
+		if errMsg != "" {
+			writeError(w, http.StatusBadRequest, errMsg)
+			return
+		}
+	}
+
 	theme := prefsOr(&req.Theme, prefsDefaultTheme)
 	dateFormat := prefsOr(&req.DateFormat, prefsDefaultDateFormat)
 	weightUnit := prefsOr(&req.WeightUnit, prefsDefaultWeightUnit)
@@ -127,11 +254,23 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		UPDATE user_settings
 		SET theme = $1, default_apiary_id = $2, date_format = $3, weight_unit = $4,
 			mite_threshold_per_100 = $5, mite_threshold_per_day = $6,
-			mite_check_interval_days = $7, moisture_threshold_pct = $8
+			mite_check_interval_days = $7, moisture_threshold_pct = $8,
+			units = COALESCE($9, units),
+			temperature_unit = CASE
+				WHEN $10::boolean THEN NULL
+				ELSE COALESCE($11, temperature_unit)
+			END,
+			labor_tracking_enabled = COALESCE($12, labor_tracking_enabled),
+			ntfy_server_url = CASE WHEN $13::boolean THEN $14 ELSE ntfy_server_url END,
+			ntfy_topic = CASE WHEN $13::boolean THEN $15 ELSE ntfy_topic END,
+			ntfy_enabled = CASE WHEN $13::boolean THEN $16 ELSE ntfy_enabled END,
+			ntfy_event_kinds = CASE WHEN $13::boolean THEN $17 ELSE ntfy_event_kinds END
 		WHERE id = (SELECT id FROM user_settings LIMIT 1)`,
 		theme, defaultApiaryID, dateFormat, weightUnit,
 		req.MiteThresholdPer100, req.MiteThresholdPerDay, req.MiteCheckIntervalDays,
-		req.MoistureThresholdPct)
+		req.MoistureThresholdPct,
+		units, clearTemperature, temperatureUnit, req.LaborTrackingEnabled,
+		patchNtfy, ntfy.ServerURL, ntfy.Topic, ntfy.Enabled, ntfy.EventKinds)
 	if err != nil {
 		if inspectionIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "Apiary not found")
@@ -145,6 +284,40 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// PUT /settings/ntfy — ntfy webhook. Empty server/topic is stored and is a
+// fail-soft no-op at publish time.
+func (s *Server) handleSettingsUpdateNtfy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServerURL  string   `json:"serverUrl"`
+		Topic      string   `json:"topic"`
+		Enabled    bool     `json:"enabled"`
+		EventKinds []string `json:"eventKinds"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	ntfy, msg := normalizeNtfyPrefs(&req.ServerURL, &req.Topic, &req.Enabled, req.EventKinds)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE user_settings
+		SET ntfy_server_url = $1, ntfy_topic = $2, ntfy_enabled = $3, ntfy_event_kinds = $4
+		WHERE id = (SELECT id FROM user_settings LIMIT 1)`,
+		nullIfEmpty(ntfy.ServerURL), nullIfEmpty(ntfy.Topic), ntfy.Enabled, ntfy.EventKinds)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "No settings found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "ntfy": ntfy})
 }
 
 // GET /settings/storage — default backend, fallback, Immich health, counts.

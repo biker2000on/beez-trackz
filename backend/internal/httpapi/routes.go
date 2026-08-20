@@ -38,4 +38,8 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountStockLocations(r)
 	s.mountFieldIntelligence(r)
 	s.mountMCP(r)
+
+	// Units + weekly operations (ntfy, labor minutes, compliance packet).
+	// Separate from mountOperations (treatments / varroa / yard queue).
+	s.mountOps(r)
 }

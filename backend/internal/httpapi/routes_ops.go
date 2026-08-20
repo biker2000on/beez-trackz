@@ -1,0 +1,856 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/notify"
+)
+
+// mountOps wires units-adjacent operations: ntfy dispatch, yard-visit labor
+// minutes, and the authenticated compliance packet. Distinct from
+// mountOperations (treatments / varroa / yard queue).
+func (s *Server) mountOps(r chi.Router) {
+	r.Get("/ops/units", s.handleUnitsGet)
+	r.Get("/ops/labor/current", s.handleLaborCurrent)
+	r.Get("/ops/labor", s.handleLaborList)
+	r.Post("/ops/labor/start", s.handleLaborStart)
+	r.Post("/ops/labor/stop", s.handleLaborStop)
+
+	admin := r.With(s.requireAdmin)
+	admin.Get("/ops/compliance-packet", s.handleCompliancePacket)
+	admin.Post("/ops/ntfy/dispatch", s.handleNtfyDispatch)
+	admin.Post("/ops/ntfy/test", s.handleNtfyTest)
+}
+
+// GET /ops/units — canonical display preference for any authenticated user.
+// Admin settings remains the writer; API payloads stay in storage units.
+func (s *Server) handleUnitsGet(w http.ResponseWriter, r *http.Request) {
+	var units, temperature *string
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT units, temperature_unit FROM user_settings LIMIT 1`).
+		Scan(&units, &temperature)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"units":           units,
+		"temperatureUnit": temperature,
+	})
+}
+
+func laborElapsedMinutes(started time.Time, stopped *time.Time, now time.Time) int {
+	end := now
+	if stopped != nil {
+		end = *stopped
+	}
+	d := end.Sub(started)
+	if d < 0 {
+		return 0
+	}
+	return int(math.Round(d.Minutes()))
+}
+
+type laborSessionJSON struct {
+	ID         uuid.UUID  `json:"id"`
+	ApiaryID   *uuid.UUID `json:"apiaryId"`
+	ApiaryName *string    `json:"apiaryName"`
+	StartedAt  time.Time  `json:"startedAt"`
+	StoppedAt  *time.Time `json:"stoppedAt"`
+	Minutes    int        `json:"minutes"`
+	Notes      *string    `json:"notes"`
+	Open       bool       `json:"open"`
+}
+
+func laborScan(row pgx.Row, now time.Time) (laborSessionJSON, error) {
+	var v laborSessionJSON
+	err := row.Scan(&v.ID, &v.ApiaryID, &v.ApiaryName, &v.StartedAt, &v.StoppedAt, &v.Notes)
+	if err != nil {
+		return v, err
+	}
+	v.Open = v.StoppedAt == nil
+	v.Minutes = laborElapsedMinutes(v.StartedAt, v.StoppedAt, now)
+	return v, nil
+}
+
+const laborSelectSQL = `
+	SELECT s.id, s.apiary_id, a.name, s.started_at, s.stopped_at, s.notes
+	FROM yard_labor_sessions s
+	LEFT JOIN apiaries a ON a.id = s.apiary_id`
+
+func (s *Server) laborTrackingOn(ctx context.Context) (bool, error) {
+	var enabled bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT labor_tracking_enabled FROM user_settings LIMIT 1`).Scan(&enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return enabled, err
+}
+
+func (s *Server) laborOpenFor(ctx context.Context, userID uuid.UUID, now time.Time) (*laborSessionJSON, error) {
+	v, err := laborScan(s.pool.QueryRow(ctx, laborSelectSQL+`
+		WHERE s.deleted_at IS NULL AND s.stopped_at IS NULL AND s.created_by = $1
+		ORDER BY s.started_at DESC LIMIT 1`, userID), now)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func (s *Server) handleLaborCurrent(w http.ResponseWriter, r *http.Request) {
+	user := principalFrom(r)
+	now := time.Now()
+	session, err := s.laborOpenFor(r.Context(), user.ID, now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	enabled, err := s.laborTrackingOn(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": enabled,
+		"current": session,
+	})
+}
+
+func (s *Server) handleLaborList(w http.ResponseWriter, r *http.Request) {
+	user := principalFrom(r)
+	now := time.Now()
+	rows, err := s.pool.Query(r.Context(), laborSelectSQL+`
+		WHERE s.deleted_at IS NULL
+		  AND (
+			$1::boolean
+			OR s.created_by = $2
+			OR (s.apiary_id IS NOT NULL AND EXISTS (
+				SELECT 1 FROM apiary_memberships membership
+				WHERE membership.user_id = $2 AND membership.apiary_id = s.apiary_id
+			))
+		  )
+		ORDER BY s.started_at DESC
+		LIMIT 100`, user.IsAdmin, user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer rows.Close()
+	items := make([]laborSessionJSON, 0)
+	for rows.Next() {
+		item, err := laborScan(rows, now)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		items = append(items, item)
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleLaborStart(w http.ResponseWriter, r *http.Request) {
+	enabled, err := s.laborTrackingOn(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !enabled {
+		writeError(w, http.StatusBadRequest, "labor tracking is off")
+		return
+	}
+	var req struct {
+		ApiaryID *string `json:"apiaryId"`
+		Notes    *string `json:"notes"`
+	}
+	if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	var apiaryID *uuid.UUID
+	if req.ApiaryID != nil && strings.TrimSpace(*req.ApiaryID) != "" {
+		id, err := uuid.Parse(strings.TrimSpace(*req.ApiaryID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid apiaryId")
+			return
+		}
+		if !s.requireApiaryRole(w, r, id, true) {
+			return
+		}
+		apiaryID = &id
+	}
+	user := principalFrom(r)
+	now := time.Now()
+	open, err := s.laborOpenFor(r.Context(), user.ID, now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if open != nil {
+		writeError(w, http.StatusConflict, "a yard visit is already running")
+		return
+	}
+	session, err := laborScan(s.pool.QueryRow(r.Context(), `
+		INSERT INTO yard_labor_sessions (apiary_id, started_at, notes, created_by)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, apiary_id,
+			(SELECT name FROM apiaries WHERE id = $1),
+			started_at, stopped_at, notes`,
+		apiaryID, now, honeyTrimPtr(req.Notes), user.ID), now)
+	if err != nil {
+		if inspectionIsFKViolation(err) {
+			writeError(w, http.StatusBadRequest, "Apiary not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, session)
+}
+
+func (s *Server) handleLaborStop(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID    *string `json:"id"`
+		Notes *string `json:"notes"`
+	}
+	if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	user := principalFrom(r)
+	now := time.Now()
+	var id uuid.UUID
+	if req.ID != nil && strings.TrimSpace(*req.ID) != "" {
+		parsed, err := uuid.Parse(strings.TrimSpace(*req.ID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		id = parsed
+	} else {
+		open, err := s.laborOpenFor(r.Context(), user.ID, now)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if open == nil {
+			writeError(w, http.StatusNotFound, "no running yard visit")
+			return
+		}
+		id = open.ID
+	}
+	session, err := laborScan(s.pool.QueryRow(r.Context(), `
+		UPDATE yard_labor_sessions
+		SET stopped_at = $2,
+			notes = COALESCE($3, notes)
+		WHERE id = $1 AND deleted_at IS NULL AND stopped_at IS NULL
+		  AND ($4::boolean OR created_by = $5)
+		RETURNING id, apiary_id,
+			(SELECT name FROM apiaries WHERE id = yard_labor_sessions.apiary_id),
+			started_at, stopped_at, notes`,
+		id, now, honeyTrimPtr(req.Notes), user.IsAdmin, user.ID), now)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "running yard visit not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
+type ntfySettings struct {
+	cfg     notify.Config
+	enabled bool
+	kinds   map[string]bool
+}
+
+func (s *Server) loadNtfySettings(ctx context.Context) (ntfySettings, error) {
+	var (
+		out           ntfySettings
+		server, topic *string
+		kinds         []string
+	)
+	err := s.pool.QueryRow(ctx, `
+		SELECT ntfy_server_url, ntfy_topic, ntfy_enabled, ntfy_event_kinds
+		FROM user_settings LIMIT 1`).
+		Scan(&server, &topic, &out.enabled, &kinds)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	out.cfg.ServerURL = prefsOr(server, "")
+	out.cfg.Topic = prefsOr(topic, "")
+	out.kinds = map[string]bool{}
+	if len(kinds) == 0 {
+		if out.enabled {
+			for _, kind := range notify.KnownKinds {
+				out.kinds[kind] = true
+			}
+		}
+		return out, nil
+	}
+	for _, kind := range kinds {
+		if notify.ValidKind(kind) {
+			out.kinds[kind] = true
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) ntfyClient() *notify.Client {
+	return notify.New(nil)
+}
+
+type ntfyCandidate struct {
+	Kind     string
+	Key      string
+	Title    string
+	Body     string
+	Priority int
+	Tags     string
+}
+
+func ntfyPriority(recPriority string) int {
+	switch recPriority {
+	case "urgent":
+		return 5
+	case "high":
+		return 4
+	default:
+		return 3
+	}
+}
+
+// collectNtfyCandidates is the same event set the yard queue surfaces:
+// mite check due, feeder empty, treatment off-date, flow started.
+func (s *Server) collectNtfyCandidates(ctx context.Context, now time.Time) ([]ntfyCandidate, error) {
+	out := make([]ntfyCandidate, 0)
+
+	recRows, err := s.pool.Query(ctx, `
+		SELECT rec.id, rec.message, rec.priority, h.position_label, a.name
+		FROM ai_recommendations rec
+		LEFT JOIN hives h ON h.id = rec.hive_id
+		LEFT JOIN apiaries a ON a.id = h.apiary_id
+		WHERE `+recPendingWhere+`
+		  AND rec.type = 'mite_check_due'`)
+	if err != nil {
+		return nil, err
+	}
+	for recRows.Next() {
+		var (
+			id       uuid.UUID
+			message  string
+			priority string
+			hiveName *string
+			apiary   *string
+		)
+		if err := recRows.Scan(&id, &message, &priority, &hiveName, &apiary); err != nil {
+			recRows.Close()
+			return nil, err
+		}
+		body := message
+		if hiveName != nil && *hiveName != "" {
+			body = *hiveName + " — " + message
+		}
+		if apiary != nil && *apiary != "" {
+			body = *apiary + ": " + body
+		}
+		out = append(out, ntfyCandidate{
+			Kind: notify.KindMiteCheckDue, Key: id.String(),
+			Title: "Sample for mites", Body: body,
+			Priority: ntfyPriority(priority), Tags: "bee,warning",
+		})
+	}
+	recErr := recRows.Err()
+	recRows.Close()
+	if recErr != nil {
+		return nil, recErr
+	}
+
+	user := &principal{IsAdmin: true}
+	feedRows, err := s.listFeedingStatus(ctx, user)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range feedRows {
+		if row.State == feedingStateOK || row.Action == "" {
+			continue
+		}
+		key := row.HiveID.String()
+		if row.OldestOpenAt != nil {
+			key += ":" + row.OldestOpenAt.UTC().Format("2006-01-02")
+		}
+		title := row.Action
+		if title == "" {
+			title = "Check feeder"
+		}
+		body := row.ApiaryName + " / " + row.HiveName
+		if row.Evidence != "" {
+			body += " — " + row.Evidence
+		}
+		priority := 4
+		if row.State == feedingStateAttention {
+			priority = 5
+		}
+		out = append(out, ntfyCandidate{
+			Kind: notify.KindFeederEmpty, Key: key,
+			Title: title, Body: body, Priority: priority, Tags: "bee,droplet",
+		})
+	}
+
+	treatRows, err := s.pool.Query(ctx, `
+		SELECT t.id, t.product, t.date_removed, h.position_label, a.name
+		FROM treatment_events t
+		JOIN hives h ON h.id = t.hive_id
+		JOIN apiaries a ON a.id = h.apiary_id
+		WHERE t.date_removed IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	today := calendarDate(now)
+	yesterday := today.AddDate(0, 0, -1)
+	for treatRows.Next() {
+		var (
+			id       uuid.UUID
+			product  string
+			removed  time.Time
+			hiveName string
+			apiary   string
+		)
+		if err := treatRows.Scan(&id, &product, &removed, &hiveName, &apiary); err != nil {
+			treatRows.Close()
+			return nil, err
+		}
+		off := calendarDate(removed)
+		if off.Before(yesterday) || off.After(today) {
+			continue
+		}
+		if product == "" {
+			product = "Treatment"
+		}
+		out = append(out, ntfyCandidate{
+			Kind: notify.KindTreatmentOffDate, Key: id.String(),
+			Title:    "Treatment off-date",
+			Body:     fmt.Sprintf("%s / %s — %s off %s", apiary, hiveName, product, off.Format("2006-01-02")),
+			Priority: 4, Tags: "bee,pill",
+		})
+	}
+	treatErr := treatRows.Err()
+	treatRows.Close()
+	if treatErr != nil {
+		return nil, treatErr
+	}
+
+	bloomRows, err := s.pool.Query(ctx, `
+		SELECT b.id, b.species, b.date_first_seen, a.name
+		FROM bloom_observations b
+		JOIN apiaries a ON a.id = b.apiary_id
+		WHERE b.date_last_seen IS NULL
+		  AND b.date_first_seen >= $1::date`, today.AddDate(0, 0, -2))
+	if err != nil {
+		return nil, err
+	}
+	for bloomRows.Next() {
+		var (
+			id      uuid.UUID
+			species string
+			first   time.Time
+			apiary  string
+		)
+		if err := bloomRows.Scan(&id, &species, &first, &apiary); err != nil {
+			bloomRows.Close()
+			return nil, err
+		}
+		out = append(out, ntfyCandidate{
+			Kind: notify.KindFlowStarted, Key: id.String(),
+			Title:    "Flow started",
+			Body:     fmt.Sprintf("Flow started at %s (%s)", apiary, species),
+			Priority: 3, Tags: "bee,blossom",
+		})
+	}
+	bloomErr := bloomRows.Err()
+	bloomRows.Close()
+	if bloomErr != nil {
+		return nil, bloomErr
+	}
+
+	return out, nil
+}
+
+func (s *Server) handleNtfyDispatch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	settings, err := s.loadNtfySettings(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !settings.enabled || !settings.cfg.Configured() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"published": 0, "skipped": 0, "errors": []string{},
+			"reason": "ntfy is not configured",
+		})
+		return
+	}
+	candidates, err := s.collectNtfyCandidates(ctx, time.Now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	client := s.ntfyClient()
+	published := 0
+	skipped := 0
+	errs := make([]string, 0)
+	for _, item := range candidates {
+		if !settings.kinds[item.Kind] {
+			skipped++
+			continue
+		}
+		var dispatchID uuid.UUID
+		err := s.pool.QueryRow(ctx, `
+			INSERT INTO ntfy_dispatches (event_kind, event_key, title, body)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (event_kind, event_key) DO NOTHING
+			RETURNING id`,
+			item.Kind, item.Key, item.Title, item.Body).Scan(&dispatchID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			skipped++
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		if pubErr := client.Publish(ctx, settings.cfg, notify.Message{
+			Title: item.Title, Body: item.Body,
+			Priority: item.Priority, Tags: item.Tags, Kind: item.Kind,
+		}); pubErr != nil {
+			// Drop the receipt so a later dispatch retries; fail-soft here.
+			_, _ = s.pool.Exec(ctx, `DELETE FROM ntfy_dispatches WHERE id = $1`, dispatchID)
+			slog.Warn("ntfy publish failed", "kind", item.Kind, "err", pubErr)
+			errs = append(errs, item.Kind+": "+pubErr.Error())
+			continue
+		}
+		published++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"published": published,
+		"skipped":   skipped,
+		"errors":    errs,
+	})
+}
+
+func (s *Server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
+	settings, err := s.loadNtfySettings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !settings.cfg.Configured() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": false,
+			"error":   "ntfy is not configured",
+		})
+		return
+	}
+	err = s.ntfyClient().Publish(r.Context(), settings.cfg, notify.Message{
+		Title:    "Beez Trackz",
+		Body:     "Test notification from Beez Trackz.",
+		Priority: 3,
+		Tags:     "bee",
+	})
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+type complianceHive struct {
+	ID            uuid.UUID  `json:"id"`
+	ApiaryID      uuid.UUID  `json:"apiaryId"`
+	ApiaryName    string     `json:"apiaryName"`
+	PositionLabel string     `json:"positionLabel"`
+	Status        string     `json:"status"`
+	InstalledDate *time.Time `json:"installedDate"`
+	DeadoutDate   *time.Time `json:"deadoutDate"`
+	IsArchived    bool       `json:"isArchived"`
+}
+
+type complianceTreatment struct {
+	ID             uuid.UUID  `json:"id"`
+	HiveID         uuid.UUID  `json:"hiveId"`
+	HiveName       string     `json:"hiveName"`
+	ApiaryName     string     `json:"apiaryName"`
+	Product        string     `json:"product"`
+	Method         *string    `json:"method"`
+	DateApplied    time.Time  `json:"dateApplied"`
+	DateRemoved    *time.Time `json:"dateRemoved"`
+	WithdrawalDays int        `json:"withdrawalDays"`
+}
+
+type complianceLot struct {
+	ID             uuid.UUID `json:"id"`
+	LotCode        string    `json:"lotCode"`
+	ExtractionDate time.Time `json:"extractionDate"`
+	HoneyWeightLbs float64   `json:"honeyWeightLbs"`
+	HoneyVariety   *string   `json:"honeyVariety"`
+	Season         *string   `json:"season"`
+	MoisturePct    *float64  `json:"moisturePct"`
+	IsPublic       bool      `json:"isPublic"`
+}
+
+type complianceSaleLine struct {
+	Kind      string `json:"kind"`
+	Quantity  int    `json:"quantity"`
+	Label     string `json:"label"`
+	UnitPrice money  `json:"unitPrice"`
+}
+
+type complianceSale struct {
+	ID          uuid.UUID            `json:"id"`
+	Date        time.Time            `json:"date"`
+	Channel     string               `json:"channel"`
+	OrderNumber *string              `json:"orderNumber"`
+	OrderStatus string               `json:"orderStatus"`
+	Customer    *string              `json:"customerName"`
+	LotCode     *string              `json:"harvestLotCode"`
+	TotalAmount money                `json:"totalAmount"`
+	AmountPaid  money                `json:"amountPaid"`
+	Lines       []complianceSaleLine `json:"lines"`
+}
+
+type complianceWindow struct {
+	HiveID         uuid.UUID  `json:"hiveId"`
+	HiveName       string     `json:"hiveName"`
+	ApiaryName     string     `json:"apiaryName"`
+	Product        string     `json:"product"`
+	TreatmentOn    bool       `json:"treatmentOn"`
+	Locked         bool       `json:"locked"`
+	DateApplied    time.Time  `json:"dateApplied"`
+	DateRemoved    *time.Time `json:"dateRemoved"`
+	LockoutUntil   *time.Time `json:"lockoutUntil"`
+	WithdrawalDays int        `json:"withdrawalDays"`
+	Message        string     `json:"message"`
+}
+
+func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	now := time.Now().UTC()
+
+	hiveRows, err := s.pool.Query(ctx, `
+		SELECT h.id, h.apiary_id, a.name, h.position_label, h.status::text,
+			h.installed_date, h.deadout_date, h.is_archived
+		FROM hives h
+		JOIN apiaries a ON a.id = h.apiary_id
+		ORDER BY a.name, h.position_label`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	hives := make([]complianceHive, 0)
+	hiveIDs := make([]uuid.UUID, 0)
+	for hiveRows.Next() {
+		var hive complianceHive
+		if err := hiveRows.Scan(&hive.ID, &hive.ApiaryID, &hive.ApiaryName,
+			&hive.PositionLabel, &hive.Status, &hive.InstalledDate,
+			&hive.DeadoutDate, &hive.IsArchived); err != nil {
+			hiveRows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		hives = append(hives, hive)
+		hiveIDs = append(hiveIDs, hive.ID)
+	}
+	hiveErr := hiveRows.Err()
+	hiveRows.Close()
+	if hiveErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	treatRows, err := s.pool.Query(ctx, `
+		SELECT t.id, t.hive_id, h.position_label, a.name, t.product, t.method,
+			t.date_applied, t.date_removed, t.withdrawal_days
+		FROM treatment_events t
+		JOIN hives h ON h.id = t.hive_id
+		JOIN apiaries a ON a.id = h.apiary_id
+		ORDER BY t.date_applied DESC, h.position_label`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	treatments := make([]complianceTreatment, 0)
+	for treatRows.Next() {
+		var item complianceTreatment
+		if err := treatRows.Scan(&item.ID, &item.HiveID, &item.HiveName, &item.ApiaryName,
+			&item.Product, &item.Method, &item.DateApplied, &item.DateRemoved,
+			&item.WithdrawalDays); err != nil {
+			treatRows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		treatments = append(treatments, item)
+	}
+	treatErr := treatRows.Err()
+	treatRows.Close()
+	if treatErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	lotRows, err := s.pool.Query(ctx, `
+		SELECT id, lot_code, extraction_date, honey_weight_lbs, honey_variety,
+			season, moisture_pct, is_public
+		FROM harvest_lots
+		ORDER BY extraction_date DESC, lot_code`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	lots := make([]complianceLot, 0)
+	for lotRows.Next() {
+		var lot complianceLot
+		if err := lotRows.Scan(&lot.ID, &lot.LotCode, &lot.ExtractionDate,
+			&lot.HoneyWeightLbs, &lot.HoneyVariety, &lot.Season,
+			&lot.MoisturePct, &lot.IsPublic); err != nil {
+			lotRows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		lots = append(lots, lot)
+	}
+	lotErr := lotRows.Err()
+	lotRows.Close()
+	if lotErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	saleRows, err := s.pool.Query(ctx, `
+		SELECT s.id, s.date, s.channel, s.order_number, s.order_status,
+			COALESCE(c.name, s.customer_name), lot.lot_code,
+			s.total_amount_cents, s.amount_paid_cents
+		FROM sales s
+		LEFT JOIN customers c ON c.id = s.customer_id
+		LEFT JOIN harvest_lots lot ON lot.id = s.harvest_lot_id
+		WHERE s.order_status <> 'cancelled'
+		ORDER BY s.date DESC, s.created_at DESC`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	sales := make([]complianceSale, 0)
+	saleIndex := map[uuid.UUID]int{}
+	for saleRows.Next() {
+		var sale complianceSale
+		if err := saleRows.Scan(&sale.ID, &sale.Date, &sale.Channel, &sale.OrderNumber,
+			&sale.OrderStatus, &sale.Customer, &sale.LotCode,
+			&sale.TotalAmount, &sale.AmountPaid); err != nil {
+			saleRows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		sale.Lines = []complianceSaleLine{}
+		saleIndex[sale.ID] = len(sales)
+		sales = append(sales, sale)
+	}
+	saleErr := saleRows.Err()
+	saleRows.Close()
+	if saleErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	lineRows, err := s.pool.Query(ctx, `
+		SELECT i.sale_id, i.kind, i.quantity, i.unit_price_cents,
+			COALESCE(js.label, p.name, h.position_label, 'line')
+		FROM sale_items i
+		JOIN sales s ON s.id = i.sale_id AND s.order_status <> 'cancelled'
+		LEFT JOIN jar_sizes js ON js.id = i.jar_size_id
+		LEFT JOIN product_catalog p ON p.id = i.product_id
+		LEFT JOIN hives h ON h.id = i.hive_id
+		ORDER BY i.sale_id, i.id`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	for lineRows.Next() {
+		var (
+			saleID uuid.UUID
+			line   complianceSaleLine
+		)
+		if err := lineRows.Scan(&saleID, &line.Kind, &line.Quantity, &line.UnitPrice, &line.Label); err != nil {
+			lineRows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		idx, ok := saleIndex[saleID]
+		if !ok {
+			continue
+		}
+		sales[idx].Lines = append(sales[idx].Lines, line)
+	}
+	lineErr := lineRows.Err()
+	lineRows.Close()
+	if lineErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	lockouts, err := loadHiveLockouts(ctx, s.pool, hiveIDs, now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	windows := make([]complianceWindow, 0)
+	for _, hive := range hives {
+		st := lockouts[hive.ID]
+		if !st.Locked && st.Product == "" {
+			continue
+		}
+		windows = append(windows, complianceWindow{
+			HiveID: hive.ID, HiveName: hive.PositionLabel, ApiaryName: hive.ApiaryName,
+			Product: st.Product, TreatmentOn: st.TreatmentOn, Locked: st.Locked,
+			DateApplied: st.DateApplied, DateRemoved: st.DateRemoved,
+			LockoutUntil: st.Until, WithdrawalDays: st.WithdrawalDays,
+			Message: lockoutMessage(st),
+		})
+	}
+
+	w.Header().Set("Content-Disposition",
+		`attachment; filename="beez-trackz-compliance-`+now.Format("2006-01-02")+`.json"`)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"exportedAt":        now,
+		"hives":             hives,
+		"treatments":        treatments,
+		"lots":              lots,
+		"sales":             sales,
+		"withdrawalWindows": windows,
+	})
+}
