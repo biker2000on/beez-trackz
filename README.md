@@ -28,9 +28,13 @@ Start infrastructure (Postgres, Redis, MinIO):
 docker compose up -d
 ```
 
-Run the API and worker (from `backend/`):
+Run the API and worker (from `backend/`). The server no longer reads a
+`.env` file itself (only `cmd/set-password` does), so export the variables
+first — e.g. from the repo root:
 
 ```bash
+set -a; source .env.local; set +a
+cd backend
 go run ./cmd/server
 go run ./cmd/worker
 ```

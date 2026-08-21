@@ -245,9 +245,13 @@ func canvasSyncYardGps(ctx context.Context, db canvasDB, apiaryID uuid.UUID, sta
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	// The layout is authoritative only for PLACED hives — a stand slot derives
+	// their position. An unplaced hive's coordinates came from an operator's
+	// explicit capture (PATCH /hives/{id}/gps) and must survive a layout save.
 	if _, err := db.Exec(ctx, `
 		UPDATE hives SET latitude = NULL, longitude = NULL
-		WHERE apiary_id = $1`, apiaryID); err != nil {
+		WHERE apiary_id = $1 AND stand_id IS NOT NULL
+		  AND slot_row IS NOT NULL AND slot_col IS NOT NULL`, apiaryID); err != nil {
 		return err
 	}
 	for _, u := range updates {

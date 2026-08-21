@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -222,8 +224,13 @@ func (s *Server) handleTranscriptionDelete(w http.ResponseWriter, r *http.Reques
 	if _, err := tx.Exec(ctx, `DELETE FROM media_files WHERE id = $1`, id); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			writeError(w, http.StatusConflict,
-				"recording still has confirmed inspections, feedings, treatments, or mite counts")
+			// The named cause holds only for direct source_media_file_id FKs;
+			// a cascade through transcript versions is a different constraint.
+			msg := "recording is still referenced and cannot be deleted"
+			if strings.Contains(pgErr.ConstraintName, "source_media_file_id") {
+				msg = "recording still has confirmed inspections, feedings, treatments, or mite counts"
+			}
+			writeError(w, http.StatusConflict, msg)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "database error")

@@ -161,6 +161,13 @@ function dateFromScrubber(
     return new Date(year, month - 1, date, hour, minute, 0, 0);
   }
   let utc = Date.UTC(year, month - 1, date, hour, minute, 0);
+  try {
+    // An unknown zone name (the value is Open-Meteo's echo, not ours) makes
+    // Intl throw; fall back to the device zone rather than crash the page.
+    new Intl.DateTimeFormat("en-US", { timeZone });
+  } catch {
+    return new Date(year, month - 1, date, hour, minute, 0, 0);
+  }
   for (let i = 0; i < 3; i++) {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -397,10 +404,12 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   }, [handleSave]);
 
   useEffect(() => {
-    if (!dirty) return;
+    // Viewers cannot save; without the gate a mount-time hydration marks the
+    // layout dirty and fires a PUT that can only fail (or, worse, sync GPS).
+    if (!dirty || !canEdit) return;
     const timer = setTimeout(() => void handleSaveRef.current(), 1000);
     return () => clearTimeout(timer);
-  }, [dirty, generation]);
+  }, [dirty, generation, canEdit]);
 
   const saveState: SaveState = saving ? "saving" : dirty ? "dirty" : "saved";
 

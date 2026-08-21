@@ -523,6 +523,22 @@ func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Reque
 	}
 	defer tx.Rollback(ctx)
 
+	// Hold the media row for the whole confirm so a concurrent DELETE
+	// /transcriptions/{id} (FOR UPDATE) serializes against it — otherwise the
+	// delete can land between the count check above and the inserts below and
+	// turn the FK into a 500.
+	var one int
+	err = tx.QueryRow(ctx,
+		`SELECT 1 FROM media_files WHERE id = $1 FOR KEY SHARE`, row.ID).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "Media file not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
 	now := time.Now()
 	inspectionIDs := make([]uuid.UUID, 0, len(req.Inspections))
 	inspectionHiveIDs := make([]uuid.UUID, 0, len(req.Inspections))

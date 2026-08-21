@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -540,11 +541,27 @@ func (s *Server) handleHiveGps(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var req struct {
-		Latitude  *float64 `json:"latitude"`
-		Longitude *float64 `json:"longitude"`
+	// Raw keys first: an omitted field and an explicit null both decode to a
+	// nil pointer, but only {latitude: null, longitude: null} may CLEAR the
+	// coordinates — an empty or partial PATCH body must not wipe data.
+	var raw map[string]json.RawMessage
+	if err := decodeJSON(r, &raw); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
 	}
-	if err := decodeJSON(r, &req); err != nil {
+	latRaw, hasLat := raw["latitude"]
+	lngRaw, hasLng := raw["longitude"]
+	if !hasLat || !hasLng {
+		writeError(w, http.StatusBadRequest,
+			"latitude and longitude are both required (null to clear)")
+		return
+	}
+	var req struct {
+		Latitude  *float64
+		Longitude *float64
+	}
+	if json.Unmarshal(latRaw, &req.Latitude) != nil ||
+		json.Unmarshal(lngRaw, &req.Longitude) != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
