@@ -33,7 +33,16 @@ func (h *Handlers) handleGenerateRecs(ctx context.Context, _ *asynq.Task) error 
 		return errs[0]
 	}
 	if h.postRecs != nil {
-		h.postRecs(ctx)
+		// The hook is best-effort by contract; a panic in it must not fail
+		// (or retry) the recommendation task whose writes already landed.
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					slog.Error("post-recs hook panicked", "panic", rec)
+				}
+			}()
+			h.postRecs(ctx)
+		}()
 	}
 	return nil
 }

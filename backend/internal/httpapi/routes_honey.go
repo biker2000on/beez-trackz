@@ -1277,6 +1277,19 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if saleLocationID == nil {
+			// A home sale clears home stock, not the world: units standing on a
+			// consignment shelf are not available here, or the same jar sells
+			// twice (once at home, once on the shop's report).
+			away, err := stockAwayProductTotals(ctx, tx)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			for id, n := range away {
+				if _, ok := onHand[id]; ok {
+					onHand[id] -= n
+				}
+			}
 			propolisGrams := 0.0
 			for id := range neededProducts {
 				if kinds[id] == saleKindPropolis {

@@ -24,10 +24,18 @@ export const NTFY_EVENT_LABELS: Record<NtfyEventKind, string> = {
 export interface NtfySettings {
   serverUrl: string;
   topic: string;
-  accessToken: string;
+  /** Whether a token is stored. The token itself is never returned (same
+   * masked pattern as AISettings.apiKeys). */
+  hasAccessToken?: boolean;
   enabled: boolean;
   eventKinds: NtfyEventKind[];
 }
+
+/** PUT /settings/ntfy: omit accessToken to keep the stored one, send "" to
+ * clear it, send a value to replace it. */
+export type NtfyPayload = Omit<NtfySettings, "hasAccessToken"> & {
+  accessToken?: string;
+};
 
 export interface Preferences {
   displayName: string | null;
@@ -96,8 +104,8 @@ export function useUpdatePreferences() {
 export function useUpdateNtfy() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: NtfySettings) =>
-      api.put<{ success: boolean; ntfy: NtfySettings }>("/settings/ntfy", payload),
+    mutationFn: (payload: NtfyPayload) =>
+      api.put<{ success: boolean }>("/settings/ntfy", payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
     },

@@ -204,6 +204,7 @@ func (s *Server) handleLaborStart(w http.ResponseWriter, r *http.Request) {
 	}
 	user := principalFrom(r)
 	now := time.Now()
+	startedAt := laborEventTime(r, now)
 	open, err := s.laborOpenFor(r.Context(), user.ID, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -219,7 +220,7 @@ func (s *Server) handleLaborStart(w http.ResponseWriter, r *http.Request) {
 		RETURNING id, apiary_id,
 			(SELECT name FROM apiaries WHERE id = $1),
 			started_at, stopped_at, notes`,
-		apiaryID, now, honeyTrimPtr(req.Notes), user.ID), now)
+		apiaryID, startedAt, honeyTrimPtr(req.Notes), user.ID), now)
 	if err != nil {
 		if inspectionIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "Apiary not found")
@@ -229,6 +230,25 @@ func (s *Server) handleLaborStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
+}
+
+// laborEventTime is the moment the operator actually tapped the clock. An
+// offline-queued request replays hours after the tap; booking the reconnect
+// time would record hours not worked. Bounds keep a bad client clock from
+// writing far-past or future rows.
+func laborEventTime(r *http.Request, now time.Time) time.Time {
+	raw := strings.TrimSpace(r.Header.Get("X-Offline-Queued-At"))
+	if raw == "" {
+		return now
+	}
+	queued, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return now
+	}
+	if queued.After(now.Add(5*time.Minute)) || queued.Before(now.Add(-7*24*time.Hour)) {
+		return now
+	}
+	return queued
 }
 
 func (s *Server) handleLaborStop(w http.ResponseWriter, r *http.Request) {
@@ -262,16 +282,17 @@ func (s *Server) handleLaborStop(w http.ResponseWriter, r *http.Request) {
 		}
 		id = open.ID
 	}
+	stoppedAt := laborEventTime(r, now)
 	session, err := laborScan(s.pool.QueryRow(r.Context(), `
 		UPDATE yard_labor_sessions
-		SET stopped_at = $2,
+		SET stopped_at = GREATEST($2::timestamptz, started_at),
 			notes = COALESCE($3, notes)
 		WHERE id = $1 AND deleted_at IS NULL AND stopped_at IS NULL
 		  AND ($4::boolean OR created_by = $5)
 		RETURNING id, apiary_id,
 			(SELECT name FROM apiaries WHERE id = yard_labor_sessions.apiary_id),
 			started_at, stopped_at, notes`,
-		id, now, honeyTrimPtr(req.Notes), user.IsAdmin, user.ID), now)
+		id, stoppedAt, honeyTrimPtr(req.Notes), user.IsAdmin, user.ID), now)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "running yard visit not found")
 		return
@@ -555,8 +576,13 @@ func (s *Server) runNtfyDispatch(ctx context.Context, now time.Time) (ntfyDispat
 			Title: item.Title, Body: item.Body,
 			Priority: item.Priority, Tags: item.Tags, Kind: item.Kind,
 		}); pubErr != nil {
-			// Drop the receipt so a later dispatch retries; fail-soft here.
-			_, _ = s.pool.Exec(ctx, `DELETE FROM ntfy_dispatches WHERE id = $1`, dispatchID)
+			// Drop the receipt so a later dispatch retries; fail-soft here —
+			// but a failed drop suppresses every future retry, so it is at
+			// least loud.
+			if _, delErr := s.pool.Exec(ctx, `DELETE FROM ntfy_dispatches WHERE id = $1`, dispatchID); delErr != nil {
+				slog.Error("ntfy receipt cleanup failed; this event will not retry",
+					"kind", item.Kind, "key", item.Key, "err", delErr)
+			}
 			slog.Warn("ntfy publish failed", "kind", item.Kind, "err", pubErr)
 			result.Errors = append(result.Errors, item.Kind+": "+pubErr.Error())
 			continue
@@ -993,6 +1019,8 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 		ExportedAt: now, Hives: hives, Treatments: treatments, Lots: lots,
 		Sales: sales, WithdrawalWindows: windows,
 	}
+	// Customer and sales data; keep it out of shared browser caches.
+	w.Header().Set("Cache-Control", "no-store, private")
 	if strings.HasSuffix(r.URL.Path, "/print") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Content-Disposition", "inline")

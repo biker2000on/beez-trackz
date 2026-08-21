@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -102,7 +103,8 @@ func TestPublishPostsToTopic(t *testing.T) {
 		gotBody     string
 		gotAuth     string
 	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// TLS: a token over plain HTTP is refused outright.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotTitle = r.Header.Get("Title")
 		gotPriority = r.Header.Get("Priority")
@@ -138,6 +140,20 @@ func TestPublishPostsToTopic(t *testing.T) {
 	}
 	if gotAuth != "Bearer secret-token" {
 		t.Errorf("authorization = %q, want bearer token", gotAuth)
+	}
+}
+
+func TestPublishRefusesTokenOverPlainHTTP(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request must not be sent")
+	}))
+	defer server.Close()
+	err := New(server.Client()).Publish(context.Background(), Config{
+		ServerURL: server.URL, Topic: "yard", AccessToken: "secret",
+	}, Message{Body: "hello"})
+	if err == nil || !strings.Contains(err.Error(), "plain HTTP") {
+		t.Fatalf("err = %v, want plain-HTTP refusal", err)
 	}
 }
 

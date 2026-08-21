@@ -59,6 +59,10 @@ CREATE INDEX product_adjustments_created_by_idx ON product_adjustments (created_
 CREATE UNIQUE INDEX product_adjustments_idempotency_idx
   ON product_adjustments (idempotency_key)
   WHERE idempotency_key IS NOT NULL;
+-- Covers the per-SKU SUM(delta) aggregate every inventory read runs.
+CREATE INDEX product_adjustments_live_product_idx
+  ON product_adjustments (product_id)
+  WHERE deleted_at IS NULL;
 
 COMMENT ON TABLE product_adjustments IS
   'Shrink and found stock for product_catalog SKUs. onHand(SKU) = batches out + SUM(delta) - sold.';
@@ -82,10 +86,24 @@ COMMENT ON COLUMN product_batches.voided_at IS
 
 -- +goose Down
 
+-- Refuse to roll back over a voided batch: dropping voided_at would
+-- resurrect its output while the negating honey_movements rows survive,
+-- leaving a plausible-looking wrong ledger. Fail loudly instead.
+-- +goose StatementBegin
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM product_batches WHERE voided_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'cannot roll back 00030: voided product batches exist; '
+      'their honey reversal rows would desynchronise the ledger';
+  END IF;
+END $$;
+-- +goose StatementEnd
+
 DROP INDEX IF EXISTS product_batches_live_idx;
 ALTER TABLE product_batches
   DROP COLUMN IF EXISTS void_reason,
   DROP COLUMN IF EXISTS voided_by,
   DROP COLUMN IF EXISTS voided_at;
 
+DROP INDEX IF EXISTS product_adjustments_live_product_idx;
 DROP TABLE IF EXISTS product_adjustments;

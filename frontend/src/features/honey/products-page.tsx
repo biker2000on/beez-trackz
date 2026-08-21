@@ -831,6 +831,11 @@ function AdjustProductDialog({ product }: { product: CatalogProduct }) {
   const [delta, setDelta] = React.useState("-1");
   const [reason, setReason] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  // One key per dialog session: a double-click or retried request lands on the
+  // same key and the API refuses the duplicate instead of shrinking twice.
+  const [idempotencyKey, setIdempotencyKey] = React.useState(() =>
+    crypto.randomUUID(),
+  );
 
   const parsedDelta = parseNum(delta);
   const invalid = parsedDelta === null || !Number.isInteger(parsedDelta) || parsedDelta === 0;
@@ -844,12 +849,14 @@ function AdjustProductDialog({ product }: { product: CatalogProduct }) {
         date,
         delta: parsedDelta,
         reason: reason.trim() || undefined,
+        idempotencyKey,
       },
       {
         onSuccess: () => {
           setDelta("-1");
           setReason("");
           setOpen(false);
+          setIdempotencyKey(crypto.randomUUID());
         },
         onError: (cause) =>
           setError(cause instanceof Error ? cause.message : "Adjustment failed"),

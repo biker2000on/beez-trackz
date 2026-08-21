@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -17,6 +18,7 @@ import {
   useTestNtfy,
   useUpdateNtfy,
   type NtfyEventKind,
+  type NtfyPayload,
   type NtfySettings,
   type Preferences,
 } from "./api";
@@ -24,7 +26,6 @@ import {
 const EMPTY_NTFY: NtfySettings = {
   serverUrl: "",
   topic: "",
-  accessToken: "",
   enabled: false,
   eventKinds: [],
 };
@@ -35,6 +36,9 @@ export function NtfySection() {
   const update = useUpdateNtfy();
   const test = useTestNtfy();
   const dispatch = useDispatchNtfy();
+  // The stored token is never returned by the API; this is only the draft of
+  // a replacement, kept out of the query cache.
+  const [tokenDraft, setTokenDraft] = useState("");
 
   if (prefs.isError) {
     return (
@@ -54,10 +58,17 @@ export function NtfySection() {
     eventKinds: data.ntfy?.eventKinds ?? [],
   };
 
-  function save(next: NtfySettings) {
+  function save(next: NtfyPayload) {
+    const { accessToken, ...display } = next;
     queryClient.setQueryData<Preferences>(["settings", "preferences"], {
       ...data,
-      ntfy: next,
+      ntfy: {
+        ...display,
+        hasAccessToken:
+          accessToken === undefined
+            ? ntfy.hasAccessToken
+            : accessToken !== "",
+      },
     });
     update.mutate(next, {
       onSuccess: () => toast.success("ntfy settings saved"),
@@ -121,24 +132,42 @@ export function NtfySection() {
       </div>
       <div className="grid gap-2">
         <Label htmlFor="ntfy-access-token">Access token</Label>
-        <Input
-          id="ntfy-access-token"
-          type="password"
-          autoComplete="off"
-          placeholder="Optional token for protected topics"
-          value={ntfy.accessToken}
-          onChange={(event) =>
-            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
-              ...data,
-              ntfy: { ...ntfy, accessToken: event.target.value },
-            })
-          }
-          onBlur={(event) =>
-            save({ ...ntfy, accessToken: event.target.value })
-          }
-        />
+        <div className="flex gap-2">
+          <Input
+            id="ntfy-access-token"
+            type="password"
+            autoComplete="off"
+            placeholder={
+              ntfy.hasAccessToken
+                ? "Token saved — type to replace"
+                : "Optional token for protected topics"
+            }
+            value={tokenDraft}
+            onChange={(event) => setTokenDraft(event.target.value)}
+            onBlur={() => {
+              const value = tokenDraft.trim();
+              if (value === "") return;
+              save({ ...ntfy, accessToken: value });
+              setTokenDraft("");
+            }}
+          />
+          {ntfy.hasAccessToken ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setTokenDraft("");
+                save({ ...ntfy, accessToken: "" });
+              }}
+            >
+              Clear
+            </Button>
+          ) : null}
+        </div>
         <p className="text-xs text-muted-foreground">
-          Sent only as an Authorization bearer token when publishing.
+          Sent only as an Authorization bearer token when publishing (HTTPS
+          server URLs only). The saved token is never shown again.
         </p>
       </div>
       <label className="flex items-start gap-3 text-sm">

@@ -259,7 +259,10 @@ func productCheckAvailabilityGrams(
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 	remaining := propolisGrams
 	for _, id := range ids {
-		if kinds[id] == saleKindPropolis && onHand[id] <= 0 {
+		// Always the grams path for propolis: adjustments can push a propolis
+		// SKU's unit count positive, but the stock it draws down is harvested
+		// grams, and only this branch consults (and depletes) those.
+		if kinds[id] == saleKindPropolis {
 			label := labels[id]
 			if label == "" {
 				label = "propolis"
@@ -861,6 +864,12 @@ func (s *Server) productBatchList(w http.ResponseWriter, r *http.Request) {
 // a ratio, so it is the only float in the calculation: it is turned into exact
 // cents once, and every sum and division after that is integer arithmetic.
 func productBatchApplyCost(row *productBatchRow, costPerLb float64) {
+	// A voided batch consumed nothing in the end; reporting a cost for it
+	// would read as money spent on inventory that does not exist.
+	if row.VoidedAt != nil {
+		row.IngredientCost = 0
+		return
+	}
 	if row.HoneyLbs != nil && *row.HoneyLbs > 0 && costPerLb > 0 {
 		row.HoneyCost = money(dollarsToCents(*row.HoneyLbs * costPerLb))
 	}
@@ -1236,12 +1245,13 @@ func (s *Server) productAdjustmentList(w http.ResponseWriter, r *http.Request) {
 // halves together.
 func (s *Server) productAdjustmentCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ProductID  string     `json:"productId"`
-		Date       string     `json:"date"`
-		Delta      int        `json:"delta"`
-		Reason     *string    `json:"reason"`
-		Notes      *string    `json:"notes"`
-		LocationID *uuid.UUID `json:"locationId"`
+		ProductID      string     `json:"productId"`
+		Date           string     `json:"date"`
+		Delta          int        `json:"delta"`
+		Reason         *string    `json:"reason"`
+		Notes          *string    `json:"notes"`
+		LocationID     *uuid.UUID `json:"locationId"`
+		IdempotencyKey *string    `json:"idempotencyKey"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1283,6 +1293,27 @@ func (s *Server) productAdjustmentCreate(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid productId")
 		return
 	}
+	if info.Kinds[productID] == saleKindPropolis {
+		// Propolis stock is measured in harvested grams; a unit-count
+		// adjustment here would move a number no availability check reads.
+		writeError(w, http.StatusBadRequest,
+			"propolis is tracked in grams; correct the propolis harvest instead")
+		return
+	}
+	if req.LocationID != nil {
+		homeID, err := stockHomeLocationID(ctx, tx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if *req.LocationID != homeID {
+			// This endpoint writes only the global half; a loss on another
+			// location's shelf needs both halves, which the settlement writes.
+			writeError(w, http.StatusBadRequest,
+				"shrink at a consignment location is recorded by its settlement")
+			return
+		}
+	}
 	if req.Delta < 0 {
 		home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
 		if err != nil {
@@ -1300,8 +1331,8 @@ func (s *Server) productAdjustmentCreate(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	id, err := productInsertAdjustment(ctx, tx, productID, date, req.Delta,
-		honeyTrimPtr(req.Reason), honeyTrimPtr(req.Notes), req.LocationID, nil, nil,
-		actorID(r))
+		honeyTrimPtr(req.Reason), honeyTrimPtr(req.Notes), req.LocationID, nil,
+		honeyTrimPtr(req.IdempotencyKey), actorID(r))
 	if err != nil {
 		equipWriteError(w, err)
 		return
@@ -1325,10 +1356,21 @@ func (s *Server) productAdjustmentDelete(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	var settlementID *uuid.UUID
-	err = s.pool.QueryRow(r.Context(),
-		`SELECT settlement_id FROM product_adjustments
-		 WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&settlementID)
+	var productID uuid.UUID
+	var delta int
+	err = tx.QueryRow(ctx,
+		`SELECT settlement_id, product_id, delta FROM product_adjustments
+		 WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).
+		Scan(&settlementID, &productID, &delta)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "adjustment not found")
 		return
@@ -1342,7 +1384,32 @@ func (s *Server) productAdjustmentDelete(w http.ResponseWriter, r *http.Request)
 			"this adjustment belongs to a settlement; void the settlement instead")
 		return
 	}
-	tag, err := s.pool.Exec(r.Context(), `
+	// Undoing a positive ("stock found") adjustment is a withdrawal of that
+	// many units, so it clears the same home-availability bar a shrink does —
+	// the units may have been transferred away since.
+	if delta > 0 {
+		info, unknown, err := productLockCatalogInfo(ctx, tx, []uuid.UUID{productID})
+		if err != nil || unknown {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if delta > home {
+			label := info.Labels[productID]
+			if label == "" {
+				label = "product"
+			}
+			writeError(w, http.StatusConflict, fmt.Sprintf(
+				"undoing this adjustment removes %d %s but only %d remain at home; "+
+					"return or un-transfer the stock first", delta, label, home))
+			return
+		}
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE product_adjustments SET deleted_at=now(), deleted_by=$2
 		WHERE id=$1 AND deleted_at IS NULL`, id, actorID(r))
 	if err != nil {
@@ -1351,6 +1418,10 @@ func (s *Server) productAdjustmentDelete(w http.ResponseWriter, r *http.Request)
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "adjustment not found")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": id})

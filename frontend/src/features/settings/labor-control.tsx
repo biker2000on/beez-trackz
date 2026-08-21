@@ -3,7 +3,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import { ApiError } from "@/lib/api";
+import { ApiError, OfflineQueuedError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -99,12 +99,17 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
                 {
                   onSuccess: (stopped) =>
                     toast.success(`Stopped at ${stopped.minutes} min`),
-                  onError: (error) =>
+                  onError: (error) => {
+                    if (error instanceof OfflineQueuedError) {
+                      toast.message("Stop saved offline — syncs on reconnect");
+                      return;
+                    }
                     toast.error(
                       error instanceof ApiError
                         ? error.message
                         : "Could not stop labor",
-                    ),
+                    );
+                  },
                 },
               )
             }
@@ -138,12 +143,17 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
                 { apiaryId: apiaryId === NONE ? null : apiaryId },
                 {
                   onSuccess: () => toast.success("Yard visit started"),
-                  onError: (error) =>
+                  onError: (error) => {
+                    if (error instanceof OfflineQueuedError) {
+                      toast.message("Start saved offline — syncs on reconnect");
+                      return;
+                    }
                     toast.error(
                       error instanceof ApiError
                         ? error.message
                         : "Could not start labor",
-                    ),
+                    );
+                  },
                 },
               )
             }

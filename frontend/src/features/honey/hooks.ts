@@ -345,7 +345,13 @@ export function useVoidProductBatch() {
       api.post(`/product-batches/${id}/void`, { reason }),
     successMessage: "Batch voided",
     silentError: true,
-    invalidate: [["product-batches"], ["products"], ["honey"], ["propolis-harvests"]],
+    invalidate: [
+      ["product-batches"],
+      ["products"],
+      ["honey"],
+      ["propolis-harvests"],
+      ["stock-locations"],
+    ],
   });
 }
 
@@ -358,10 +364,12 @@ export function useAdjustProduct() {
       delta: number;
       reason?: string;
       notes?: string;
+      /** Guards a double-submit from shrinking twice; one per dialog open. */
+      idempotencyKey?: string;
     }) => api.post("/product-adjustments", body),
     successMessage: "Adjustment recorded",
     silentError: true,
-    invalidate: [["product-adjustments"], ["products"]],
+    invalidate: [["product-adjustments"], ["products"], ["stock-locations"]],
   });
 }
 

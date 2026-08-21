@@ -29,11 +29,14 @@ const (
 )
 
 type ntfyPrefsJSON struct {
-	ServerURL   string   `json:"serverUrl"`
-	Topic       string   `json:"topic"`
-	AccessToken string   `json:"accessToken"`
-	Enabled     bool     `json:"enabled"`
-	EventKinds  []string `json:"eventKinds"`
+	ServerURL string `json:"serverUrl"`
+	Topic     string `json:"topic"`
+	// The token is write-only: it is never serialized back to any client.
+	// hasAccessToken tells the settings UI whether one is stored.
+	AccessToken    string   `json:"-"`
+	HasAccessToken bool     `json:"hasAccessToken"`
+	Enabled        bool     `json:"enabled"`
+	EventKinds     []string `json:"eventKinds"`
 }
 
 type prefsJSON struct {
@@ -161,11 +164,11 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		MiteCheckIntervalDays: checkInterval,
 		MoistureThresholdPct:  moistureThreshold,
 		Ntfy: ntfyPrefsJSON{
-			ServerURL:   prefsOr(ntfyURL, ""),
-			Topic:       prefsOr(ntfyTopic, ""),
-			AccessToken: prefsOr(ntfyAccessToken, ""),
-			Enabled:     ntfyEnabled,
-			EventKinds:  ntfyKinds,
+			ServerURL:      prefsOr(ntfyURL, ""),
+			Topic:          prefsOr(ntfyTopic, ""),
+			HasAccessToken: prefsOr(ntfyAccessToken, "") != "",
+			Enabled:        ntfyEnabled,
+			EventKinds:     ntfyKinds,
 		},
 	})
 }
@@ -301,9 +304,11 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 // fail-soft no-op at publish time.
 func (s *Server) handleSettingsUpdateNtfy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ServerURL   string   `json:"serverUrl"`
-		Topic       string   `json:"topic"`
-		AccessToken string   `json:"accessToken"`
+		ServerURL string `json:"serverUrl"`
+		Topic     string `json:"topic"`
+		// Pointer, so an omitted token preserves the stored one; an explicit
+		// empty string clears it. The token is never echoed back.
+		AccessToken *string  `json:"accessToken"`
 		Enabled     bool     `json:"enabled"`
 		EventKinds  []string `json:"eventKinds"`
 	}
@@ -316,14 +321,19 @@ func (s *Server) handleSettingsUpdateNtfy(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	ntfy.AccessToken = strings.TrimSpace(req.AccessToken)
+	patchToken := req.AccessToken != nil
+	token := ""
+	if patchToken {
+		token = strings.TrimSpace(*req.AccessToken)
+	}
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE user_settings
-		SET ntfy_server_url = $1, ntfy_topic = $2, ntfy_access_token = $3,
-			ntfy_enabled = $4, ntfy_event_kinds = $5
+		SET ntfy_server_url = $1, ntfy_topic = $2,
+			ntfy_access_token = CASE WHEN $3::boolean THEN $4 ELSE ntfy_access_token END,
+			ntfy_enabled = $5, ntfy_event_kinds = $6
 		WHERE id = (SELECT id FROM user_settings LIMIT 1)`,
 		nullIfEmpty(ntfy.ServerURL), nullIfEmpty(ntfy.Topic),
-		nullIfEmpty(ntfy.AccessToken), ntfy.Enabled, ntfy.EventKinds)
+		patchToken, nullIfEmpty(token), ntfy.Enabled, ntfy.EventKinds)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -332,7 +342,7 @@ func (s *Server) handleSettingsUpdateNtfy(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "No settings found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "ntfy": ntfy})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // GET /settings/storage — default backend, fallback, Immich health, counts.

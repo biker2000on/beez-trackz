@@ -148,6 +148,16 @@ func (c *Client) Publish(ctx context.Context, cfg Config, msg Message) error {
 	if !ValidTopic(topic) {
 		return fmt.Errorf("invalid ntfy topic")
 	}
+	token := strings.TrimSpace(cfg.AccessToken)
+	parsed, err := url.Parse(server)
+	if err != nil {
+		return fmt.Errorf("invalid ntfy server URL")
+	}
+	// A bearer token is a reusable credential; plain HTTP (or a redirect off
+	// https or off the configured host) would hand it to the network.
+	if token != "" && parsed.Scheme != "https" {
+		return fmt.Errorf("ntfy: refusing to send the access token over plain HTTP; use an https server URL")
+	}
 
 	endpoint := server + "/" + url.PathEscape(topic)
 	body := strings.TrimSpace(msg.Body)
@@ -159,7 +169,7 @@ func (c *Client) Publish(ctx context.Context, cfg Config, msg Message) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if token := strings.TrimSpace(cfg.AccessToken); token != "" {
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if title := strings.TrimSpace(msg.Title); title != "" {
@@ -172,7 +182,19 @@ func (c *Client) Publish(ctx context.Context, cfg Config, msg Message) error {
 		req.Header.Set("Tags", tags)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	httpClient := c.httpClient
+	if token != "" {
+		guarded := *httpClient
+		host := parsed.Host
+		guarded.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+			if next.URL.Scheme != "https" || next.URL.Host != host {
+				return fmt.Errorf("ntfy: refusing redirect to %s with an access token", next.URL.Redacted())
+			}
+			return nil
+		}
+		httpClient = &guarded
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}

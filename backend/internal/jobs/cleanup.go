@@ -22,5 +22,18 @@ func (h *Handlers) handleCleanupReceipts(ctx context.Context, _ *asynq.Task) err
 	if deleted := tag.RowsAffected(); deleted > 0 {
 		slog.Info("cleanup receipts: done", "deleted", deleted)
 	}
+	// ntfy dispatch receipts must KEEP their (event_kind, event_key) rows —
+	// deleting one re-sends its still-open event — but the notification text
+	// has no reason to live forever.
+	tag, err = h.pool.Exec(ctx, `
+		UPDATE ntfy_dispatches SET title = NULL, body = NULL
+		WHERE dispatched_at < now() - interval '30 days'
+		  AND (title IS NOT NULL OR body IS NOT NULL)`)
+	if err != nil {
+		return fmt.Errorf("cleanup ntfy dispatch text: %w", err)
+	}
+	if scrubbed := tag.RowsAffected(); scrubbed > 0 {
+		slog.Info("cleanup receipts: ntfy text scrubbed", "rows", scrubbed)
+	}
 	return nil
 }
