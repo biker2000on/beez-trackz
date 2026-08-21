@@ -276,6 +276,80 @@ func replaceInspectionMiteCounts(
 	return nil
 }
 
+// syncInspectionTreatmentEvents reconciles the treatment_events rows this
+// inspection owns with the treatments jsonb just submitted. The create path
+// writes one event per treatment; a PATCH that rewrote the jsonb used to leave
+// those events untouched, so a corrected product kept locking the hive on the
+// old withdrawal days and a removed treatment locked it forever.
+//
+// Rows are matched by product, case-insensitively, the same key
+// resolveWithdrawalDays uses. A resubmitted product keeps its row id and its
+// date_removed, so an in-progress withdrawal window is not reset by an
+// unrelated edit to the same inspection; only products dropped from the array
+// are deleted. withdrawal_days is re-resolved on every pass because the
+// catalog (or the product spelling) may have changed since the event was
+// written.
+func (s *Server) syncInspectionTreatmentEvents(
+	ctx context.Context,
+	q inspectionQuerier,
+	inspectionID, hiveID uuid.UUID,
+	date time.Time,
+	treatments []inspectionTreatment,
+) error {
+	keys := make([]string, 0, len(treatments))
+	seen := make(map[string]bool, len(treatments))
+	kept := make([]inspectionTreatment, 0, len(treatments))
+	for _, treatment := range treatments {
+		product := strings.TrimSpace(treatment.Product)
+		if product == "" {
+			continue
+		}
+		key := strings.ToLower(product)
+		if seen[key] {
+			// The jsonb allows duplicates; treatment_events is keyed by
+			// product here, so the first spelling wins.
+			continue
+		}
+		seen[key] = true
+		keys = append(keys, key)
+		treatment.Product = product
+		kept = append(kept, treatment)
+	}
+	if _, err := q.Exec(ctx, `
+		DELETE FROM treatment_events
+		WHERE inspection_id = $1 AND lower(btrim(product)) <> ALL($2)`,
+		inspectionID, keys); err != nil {
+		return err
+	}
+	for _, treatment := range kept {
+		days, err := s.resolveWithdrawalDays(ctx, treatment.Product)
+		if err != nil {
+			return err
+		}
+		tag, err := q.Exec(ctx, `
+			UPDATE treatment_events
+			SET product = $3, method = $4, date_applied = $5, withdrawal_days = $6
+			WHERE inspection_id = $1 AND lower(btrim(product)) = $2`,
+			inspectionID, strings.ToLower(treatment.Product), treatment.Product,
+			inspectionTrimPtr(treatment.Method), date, days)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			continue
+		}
+		if _, err := q.Exec(ctx, `
+			INSERT INTO treatment_events
+				(hive_id, inspection_id, date_applied, product, method, withdrawal_days)
+			VALUES ($1,$2,$3,$4,$5,$6)`,
+			hiveID, inspectionID, date, treatment.Product,
+			inspectionTrimPtr(treatment.Method), days); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // inspectionMarshal marshals an optional typed slice/object to jsonb bytes; nil in → nil out.
 func inspectionMarshal(v any, present bool) []byte {
 	if !present {
@@ -414,24 +488,12 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	for _, treatment := range req.Treatments {
-		if strings.TrimSpace(treatment.Product) == "" {
-			continue
-		}
-		days, err := s.resolveWithdrawalDays(r.Context(), treatment.Product)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if _, err := tx.Exec(r.Context(), `
-			INSERT INTO treatment_events
-				(hive_id, inspection_id, date_applied, product, method, withdrawal_days)
-			VALUES ($1,$2,$3,$4,$5,$6)`,
-			hiveID, id, date, strings.TrimSpace(treatment.Product),
-			inspectionTrimPtr(treatment.Method), days); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid treatment")
-			return
-		}
+	// Same reconcile the PATCH path runs; on a brand-new inspection it is
+	// pure inserts, so create and update can never drift apart.
+	if err := s.syncInspectionTreatmentEvents(
+		r.Context(), tx, id, hiveID, date, req.Treatments); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid treatment")
+		return
 	}
 	if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, req.MiteCounts); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid mite count")
@@ -507,6 +569,8 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	var miteCounts []miteCountPayload
 	var miteCountsSet bool
+	var treatments []inspectionTreatment
+	var treatmentsSet bool
 	if raw, ok := body["miteCounts"]; ok {
 		if string(raw) != "null" {
 			if err := json.Unmarshal(raw, &miteCounts); err != nil {
@@ -587,6 +651,9 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 				writeError(w, http.StatusBadRequest, "treatments must be an array of {product, method?}")
 				return
 			}
+			// Whatever lands in the jsonb also has to land in
+			// treatment_events, which is what actually drives the lockout.
+			treatments, treatmentsSet = v, true
 			vals = append(vals, inspectionMarshal(v, !isNull && v != nil))
 		case "sourceMedia":
 			if isNull {
@@ -643,6 +710,21 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 			`UPDATE mite_counts SET date = $2 WHERE inspection_id = $1`,
 			id, date); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		// A treatment's lockout is anchored to date_applied, so moving the
+		// inspection has to move its events with it.
+		if _, err := tx.Exec(r.Context(),
+			`UPDATE treatment_events SET date_applied = $2 WHERE inspection_id = $1`,
+			id, date); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	}
+	if treatmentsSet {
+		if err := s.syncInspectionTreatmentEvents(
+			r.Context(), tx, id, hiveID, date, treatments); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid treatment")
 			return
 		}
 	}

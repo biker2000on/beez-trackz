@@ -45,7 +45,10 @@ type treatmentLockoutRow struct {
 }
 
 type lockoutStatus struct {
-	TreatmentID    uuid.UUID
+	TreatmentID uuid.UUID
+	// HiveID is the hive the tainting treatment was applied to, so a refusal
+	// can name the box the operator has to go look at.
+	HiveID         uuid.UUID
 	Locked         bool
 	TreatmentOn    bool
 	Until          *time.Time
@@ -76,6 +79,7 @@ func lockoutEndDate(removed time.Time, days int) time.Time {
 func evaluateTreatment(row treatmentLockoutRow, asOf time.Time) lockoutStatus {
 	st := lockoutStatus{
 		TreatmentID:    row.ID,
+		HiveID:         row.HiveID,
 		Product:        row.Product,
 		DateApplied:    row.DateApplied,
 		DateRemoved:    row.DateRemoved,
@@ -413,6 +417,169 @@ func (s *Server) refuseHarvestMoisture(ctx context.Context, pct *float64) (strin
 		return "", err
 	}
 	return moistureOverThreshold(pct, threshold), nil
+}
+
+// --- bottling lockout ---------------------------------------------------
+//
+// Jar lines are not traced back to a lot, so a jar sale off a locked lot can
+// only be caught at the moment the jars are created. Bottling is lot-traced,
+// which makes the bottling run the one chokepoint where the withdrawal window
+// can still be enforced: refuse there and the tainted honey never becomes
+// untraceable jars.
+
+// bottlingLockoutMessage names the hive, the product, and the date the honey
+// clears, which is what the operator needs to decide what to do next.
+func bottlingLockoutMessage(st lockoutStatus, lotCode, hiveLabel string) string {
+	if !st.Locked {
+		return ""
+	}
+	product := strings.TrimSpace(st.Product)
+	if product == "" {
+		product = "a treatment"
+	}
+	where := "the source hive"
+	if label := strings.TrimSpace(hiveLabel); label != "" {
+		where = "hive " + label
+	}
+	lot := strings.TrimSpace(lotCode)
+	if lot == "" {
+		lot = "This lot"
+	} else {
+		lot = "Lot " + lot
+	}
+	if st.TreatmentOn {
+		if st.WithdrawalDays > 0 {
+			return fmt.Sprintf(
+				"%s cannot be bottled: %s is still on %s; this honey clears %d days after it is removed",
+				lot, product, where, st.WithdrawalDays)
+		}
+		return fmt.Sprintf(
+			"%s cannot be bottled: %s is still on %s; this honey clears once it is removed",
+			lot, product, where)
+	}
+	if st.Until != nil {
+		return fmt.Sprintf(
+			"%s cannot be bottled: %s was applied to %s; this honey clears %s",
+			lot, product, where, calendarDate(*st.Until).Format("2006-01-02"))
+	}
+	return fmt.Sprintf(
+		"%s cannot be bottled: %s was applied to %s and the withdrawal window has not ended",
+		lot, product, where)
+}
+
+// hiveLabelFor resolves a hive's position label for a refusal message. A
+// missing label is not an error — the message falls back to "the source hive".
+func hiveLabelFor(ctx context.Context, q queryRower, hiveID uuid.UUID) string {
+	if hiveID == uuid.Nil {
+		return ""
+	}
+	var label *string
+	if err := q.QueryRow(ctx,
+		`SELECT position_label FROM hives WHERE id = $1`, hiveID).Scan(&label); err != nil {
+		return ""
+	}
+	if label == nil {
+		return ""
+	}
+	return *label
+}
+
+// refuseLotBottling applies the same rule refuseLotSale applies to sales: if
+// any hive that fed the lot was inside a treatment withdrawal window when the
+// honey was pulled, the honey cannot be bottled. Empty message = allowed.
+func refuseLotBottling(ctx context.Context, q queryRower, lotID uuid.UUID, lotCode string, asOf time.Time) (string, error) {
+	st, err := lotLockoutAsOf(ctx, q, lotID, asOf)
+	if err != nil {
+		return "", err
+	}
+	if !st.Locked {
+		return "", nil
+	}
+	return bottlingLockoutMessage(st, lotCode, hiveLabelFor(ctx, q, st.HiveID)), nil
+}
+
+// --- moisture override ---------------------------------------------------
+
+// maxMoistureOverrideReason bounds the free-text reason so a stray paste
+// cannot become an unbounded column write.
+const maxMoistureOverrideReason = 500
+
+// moistureOverrideReq is the request-side shape of the override. Embed it in a
+// handler's request struct so every moisture entry point spells it the same
+// way.
+type moistureOverrideReq struct {
+	MoistureOverride       bool    `json:"moistureOverride"`
+	MoistureOverrideReason *string `json:"moistureOverrideReason"`
+}
+
+// moistureOverrideDecision is the pure rule behind the override tier. It
+// returns a refusal message (empty = accept) and, on an accepted override, the
+// trimmed reason to record. Under threshold the override is dropped: there is
+// nothing to justify, so no reason is stamped.
+func moistureOverrideDecision(pct *float64, threshold float64, ov moistureOverrideReq) (string, *string) {
+	if msg := validateMoisturePct(pct); msg != "" {
+		return msg, nil
+	}
+	over := moistureOverThreshold(pct, threshold)
+	if over == "" {
+		return "", nil
+	}
+	if !ov.MoistureOverride {
+		// Unchanged behaviour: without an explicit override this is a hard
+		// reject, so nobody drifts past the threshold by accident.
+		return over, nil
+	}
+	reason := ""
+	if ov.MoistureOverrideReason != nil {
+		reason = strings.TrimSpace(*ov.MoistureOverrideReason)
+	}
+	if reason == "" {
+		return over + ". Set moistureOverrideReason to record why it is being accepted anyway", nil
+	}
+	if len(reason) > maxMoistureOverrideReason {
+		return fmt.Sprintf("moistureOverrideReason cannot exceed %d characters",
+			maxMoistureOverrideReason), nil
+	}
+	return "", &reason
+}
+
+// refuseLotMoisture is the server-side wrapper: it reads the operator's
+// threshold and applies moistureOverrideDecision.
+func (s *Server) refuseLotMoisture(ctx context.Context, pct *float64, ov moistureOverrideReq) (string, *string, error) {
+	if msg := validateMoisturePct(pct); msg != "" {
+		return msg, nil, nil
+	}
+	if pct == nil {
+		return "", nil, nil
+	}
+	threshold, err := s.moistureThreshold(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	msg, reason := moistureOverrideDecision(pct, threshold, ov)
+	return msg, reason, nil
+}
+
+// stampMoistureOverride records an accepted override on the lot, or clears a
+// previous one when reason is nil. Writing the whole triple together keeps the
+// "reason present iff overridden" invariant the table CHECK enforces.
+func stampMoistureOverride(ctx context.Context, q inspectionQuerier, lotID uuid.UUID, reason *string, actor *uuid.UUID) error {
+	if reason == nil {
+		_, err := q.Exec(ctx, `
+			UPDATE harvest_lots
+			SET moisture_override_reason = NULL,
+			    moisture_override_by = NULL,
+			    moisture_override_at = NULL
+			WHERE id = $1`, lotID)
+		return err
+	}
+	_, err := q.Exec(ctx, `
+		UPDATE harvest_lots
+		SET moisture_override_reason = $2,
+		    moisture_override_by = $3,
+		    moisture_override_at = now()
+		WHERE id = $1`, lotID, *reason, actor)
+	return err
 }
 
 // compile-time check that the pool satisfies queryRower
