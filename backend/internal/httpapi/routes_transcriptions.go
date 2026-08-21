@@ -59,6 +59,7 @@ type transcriptVersionRow struct {
 	Model          *string
 	PromptRevision *string
 	ProducedAt     time.Time
+	CreatedAt      time.Time
 	Text           string
 }
 
@@ -78,7 +79,7 @@ func (s *Server) transcriptionLoad(ctx context.Context, id uuid.UUID) (*transcri
 
 func (s *Server) transcriptionVersions(ctx context.Context, mediaID uuid.UUID) ([]transcriptVersionRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, provider, model, prompt_revision, produced_at, text
+		SELECT id, provider, model, prompt_revision, produced_at, created_at, text
 		FROM transcript_versions
 		WHERE media_file_id = $1
 		ORDER BY produced_at DESC, created_at DESC`, mediaID)
@@ -89,7 +90,7 @@ func (s *Server) transcriptionVersions(ctx context.Context, mediaID uuid.UUID) (
 	list := []transcriptVersionRow{}
 	for rows.Next() {
 		var v transcriptVersionRow
-		if err := rows.Scan(&v.ID, &v.Provider, &v.Model, &v.PromptRevision, &v.ProducedAt, &v.Text); err != nil {
+		if err := rows.Scan(&v.ID, &v.Provider, &v.Model, &v.PromptRevision, &v.ProducedAt, &v.CreatedAt, &v.Text); err != nil {
 			return nil, err
 		}
 		list = append(list, v)
@@ -104,6 +105,7 @@ func transcriptVersionJSON(v transcriptVersionRow) map[string]any {
 		"model":          v.Model,
 		"promptRevision": v.PromptRevision,
 		"producedAt":     v.ProducedAt,
+		"createdAt":      v.CreatedAt,
 		"text":           v.Text,
 	}
 }

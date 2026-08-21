@@ -129,12 +129,35 @@ func (s *Server) handleTranscriptionRetranscribe(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusInternalServerError, "queue is not configured")
 		return
 	}
+	// Persist the operator's intent before enqueueing. Original-task retries
+	// observe this flag and stand down, even when they run in another process.
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE media_files
+		SET retranscription_requested_at = now()
+		WHERE id = $1
+		  AND transcription_status NOT IN ('pending', 'processing')
+		  AND (retranscription_requested_at IS NULL
+		    OR retranscription_requested_at < now() - interval '15 minutes')`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusConflict, "transcription is already in progress")
+		return
+	}
 	task, err := jobs.NewRetranscribeAudioTask(id.String())
 	if err != nil {
+		_, _ = s.pool.Exec(context.WithoutCancel(r.Context()), `
+			UPDATE media_files SET retranscription_requested_at = NULL
+			WHERE id = $1 AND transcription_status <> 'processing'`, id)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue transcription job")
 		return
 	}
 	if _, err := s.queue.Enqueue(task, asynq.MaxRetry(3)); err != nil {
+		_, _ = s.pool.Exec(context.WithoutCancel(r.Context()), `
+			UPDATE media_files SET retranscription_requested_at = NULL
+			WHERE id = $1 AND transcription_status <> 'processing'`, id)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue transcription job")
 		return
 	}
@@ -262,46 +285,46 @@ type reparseDiff struct {
 }
 
 type existingInspection struct {
-	ID             uuid.UUID
-	HiveID         uuid.UUID
-	QueenSeen      *bool
-	QueenHealth    *string
-	BroodPattern   *string
-	StoresHoney    *int
-	StoresPollen   *int
-	Temperament    *int
-	FramesOfBees   *int
-	FramesOfBrood  *int
-	FramesOfStores *int
-	Pests          []byte
-	Treatments     []byte
-	Notes          *string
+	ID             uuid.UUID       `json:"-"`
+	HiveID         uuid.UUID       `json:"-"`
+	QueenSeen      *bool           `json:"queenSeen"`
+	QueenHealth    *string         `json:"queenHealth"`
+	BroodPattern   *string         `json:"broodPattern"`
+	StoresHoney    *int            `json:"storesHoney"`
+	StoresPollen   *int            `json:"storesPollen"`
+	Temperament    *int            `json:"temperament"`
+	FramesOfBees   *int            `json:"framesOfBees"`
+	FramesOfBrood  *int            `json:"framesOfBrood"`
+	FramesOfStores *int            `json:"framesOfStores"`
+	Pests          json.RawMessage `json:"pests"`
+	Treatments     json.RawMessage `json:"treatments"`
+	Notes          *string         `json:"notes"`
 }
 
 type existingFeeding struct {
-	ID           uuid.UUID
-	HiveID       uuid.UUID
-	Type         string
-	Quantity     float64
-	QuantityUnit string
-	FeederType   *string
-	Notes        *string
+	ID           uuid.UUID `json:"-"`
+	HiveID       uuid.UUID `json:"-"`
+	Type         string    `json:"type"`
+	Quantity     float64   `json:"quantity"`
+	QuantityUnit string    `json:"quantityUnit"`
+	FeederType   *string   `json:"feederType"`
+	Notes        *string   `json:"notes"`
 }
 
 type existingTreatment struct {
-	ID      uuid.UUID
-	HiveID  uuid.UUID
-	Product string
-	Method  *string
+	ID      uuid.UUID `json:"-"`
+	HiveID  uuid.UUID `json:"-"`
+	Product string    `json:"product"`
+	Method  *string   `json:"method"`
 }
 
 type existingMite struct {
-	ID         uuid.UUID
-	HiveID     uuid.UUID
-	Method     string
-	MitesCount int
-	SampleSize *int
-	Notes      *string
+	ID         uuid.UUID `json:"-"`
+	HiveID     uuid.UUID `json:"-"`
+	Method     string    `json:"method"`
+	MitesCount int       `json:"mitesCount"`
+	SampleSize *int      `json:"sampleSize"`
+	Notes      *string   `json:"notes"`
 }
 
 func (s *Server) transcriptionReparseDiff(ctx context.Context, mediaID uuid.UUID, parsed []ai.MatchedInspection) (reparseDiff, error) {

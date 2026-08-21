@@ -278,6 +278,26 @@ export function useUpdatePhoto(ownerType: PhotoOwnerType, ownerId: string) {
   });
 }
 
+export function useReprocessPhoto(
+  ownerType: PhotoOwnerType,
+  ownerId: string,
+) {
+  const invalidate = useInvalidatePhotos();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ queued: boolean }>(`/photos/${id}/reprocess`),
+    onSuccess: () => {
+      invalidate(ownerType, ownerId);
+      if (ownerType === "hive") {
+        void queryClient.invalidateQueries({
+          queryKey: ["photos", "strip", ownerId],
+        });
+      }
+    },
+  });
+}
+
 export function useDeletePhoto(ownerType: PhotoOwnerType, ownerId: string) {
   const invalidate = useInvalidatePhotos();
   return useMutation({

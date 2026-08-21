@@ -1,19 +1,10 @@
 "use client";
 
-import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Check, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 import {
   retranscribeRecording,
@@ -32,8 +23,7 @@ export function TranscriptSourceControls({
 }) {
   const queryClient = useQueryClient();
   const versions = transcription.versions ?? [];
-  const current =
-    transcription.currentVersionId ?? versions[0]?.id ?? "";
+  const current = transcription.currentVersionId ?? versions[0]?.id ?? "";
 
   const selectVersion = useMutation({
     mutationFn: (versionId: string) =>
@@ -62,26 +52,49 @@ export function TranscriptSourceControls({
   return (
     <div className="grid gap-3">
       {versions.length > 0 && (
-        <div className="grid gap-1.5">
-          <Label className="text-xs">Transcript version</Label>
-          <Select
-            value={current || undefined}
-            disabled={disabled || selectVersion.isPending}
-            onValueChange={(value) => selectVersion.mutate(value)}
-          >
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue placeholder="Select a version" />
-            </SelectTrigger>
-            <SelectContent>
-              {versions.map((version) => (
-                <SelectItem key={version.id} value={version.id}>
-                  {new Date(version.producedAt).toLocaleString()} ·{" "}
-                  {version.provider}
-                  {version.model ? ` / ${version.model}` : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="grid gap-2">
+          <p className="text-xs font-medium">Transcript versions</p>
+          <div className="grid gap-2" role="list">
+            {versions.map((version) => {
+              const isCurrent = version.id === current;
+              const source = `${version.provider}${version.model ? ` / ${version.model}` : ""}`;
+              return (
+                <div
+                  key={version.id}
+                  role="listitem"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2"
+                >
+                  <div className="grid min-w-0 gap-0.5 text-xs">
+                    <span className="font-medium">
+                      Created {new Date(version.createdAt).toLocaleString()}
+                    </span>
+                    <span className="truncate text-muted-foreground">
+                      Source: {source}
+                    </span>
+                  </div>
+                  {isCurrent ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-primary">
+                      <Check className="size-3.5" /> Current
+                    </span>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={disabled || selectVersion.isPending}
+                      onClick={() => selectVersion.mutate(version.id)}
+                    >
+                      {selectVersion.isPending &&
+                      selectVersion.variables === version.id ? (
+                        <Loader2 className="animate-spin" />
+                      ) : null}
+                      Select
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
       <Button

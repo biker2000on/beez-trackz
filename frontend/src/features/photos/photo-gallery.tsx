@@ -1,7 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Check, CheckSquare, ImageOff, Trash2, X } from "lucide-react";
+import {
+  Check,
+  CheckSquare,
+  ImageOff,
+  Loader2,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
@@ -35,6 +43,7 @@ import {
   usePhotos,
   useBulkDeletePhotos,
   useDeletePhoto,
+  useReprocessPhoto,
   useUpdatePhoto,
   type Photo,
   type PhotoOwnerType,
@@ -247,6 +256,7 @@ function PhotoDetailDialog({
 }) {
   const updatePhoto = useUpdatePhoto(ownerType, ownerId);
   const deletePhoto = useDeletePhoto(ownerType, ownerId);
+  const reprocessPhoto = useReprocessPhoto(ownerType, ownerId);
   const [caption, setCaption] = React.useState("");
   const [tags, setTags] = React.useState("");
 
@@ -288,6 +298,20 @@ function PhotoDetailDialog({
     } catch (error) {
       toast.error(
         error instanceof ApiError ? error.message : "Could not delete photo",
+      );
+    }
+  }
+
+  async function onReprocess() {
+    if (!photo) return;
+    try {
+      await reprocessPhoto.mutateAsync(photo.id);
+      toast.success("Photo reprocessing queued");
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError
+          ? error.message
+          : "Could not reprocess photo",
       );
     }
   }
@@ -338,18 +362,33 @@ function PhotoDetailDialog({
               />
             </div> : null}
             {canEdit ? <DialogFooter className="sm:justify-between">
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={onDelete}
-                disabled={deletePhoto.isPending}
-              >
-                <Trash2 className="size-4" />
-                {deletePhoto.isPending ? "Deleting…" : "Delete"}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={onDelete}
+                  disabled={deletePhoto.isPending || reprocessPhoto.isPending}
+                >
+                  <Trash2 className="size-4" />
+                  {deletePhoto.isPending ? "Deleting…" : "Delete"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void onReprocess()}
+                  disabled={deletePhoto.isPending || reprocessPhoto.isPending}
+                >
+                  {reprocessPhoto.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="size-4" />
+                  )}
+                  {reprocessPhoto.isPending ? "Queueing…" : "Reprocess"}
+                </Button>
+              </div>
               <Button
                 type="submit"
-                disabled={updatePhoto.isPending}
+                disabled={updatePhoto.isPending || reprocessPhoto.isPending}
               >
                 {updatePhoto.isPending ? "Saving…" : "Save"}
               </Button>

@@ -89,6 +89,7 @@ export interface TranscriptVersion {
   model?: string | null;
   promptRevision?: string | null;
   producedAt: string;
+  createdAt: string;
   text: string;
 }
 
