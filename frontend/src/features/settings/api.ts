@@ -24,6 +24,7 @@ export const NTFY_EVENT_LABELS: Record<NtfyEventKind, string> = {
 export interface NtfySettings {
   serverUrl: string;
   topic: string;
+  accessToken: string;
   enabled: boolean;
   eventKinds: NtfyEventKind[];
 }

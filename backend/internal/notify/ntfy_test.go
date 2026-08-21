@@ -100,12 +100,14 @@ func TestPublishPostsToTopic(t *testing.T) {
 		gotPriority string
 		gotTags     string
 		gotBody     string
+		gotAuth     string
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotTitle = r.Header.Get("Title")
 		gotPriority = r.Header.Get("Priority")
 		gotTags = r.Header.Get("Tags")
+		gotAuth = r.Header.Get("Authorization")
 		body, _ := io.ReadAll(r.Body)
 		gotBody = string(body)
 		w.WriteHeader(http.StatusOK)
@@ -114,7 +116,7 @@ func TestPublishPostsToTopic(t *testing.T) {
 
 	client := New(server.Client())
 	err := client.Publish(context.Background(), Config{
-		ServerURL: server.URL, Topic: "beez-yard",
+		ServerURL: server.URL, Topic: "beez-yard", AccessToken: "secret-token",
 	}, Message{
 		Title:    "Sample for mites",
 		Body:     "Hive A1 is due",
@@ -133,6 +135,27 @@ func TestPublishPostsToTopic(t *testing.T) {
 	}
 	if gotPriority != "4" || gotTags != "bee,warning" {
 		t.Errorf("priority/tags = %q %q", gotPriority, gotTags)
+	}
+	if gotAuth != "Bearer secret-token" {
+		t.Errorf("authorization = %q, want bearer token", gotAuth)
+	}
+}
+
+func TestPublishOmitsAuthorizationWithoutToken(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("authorization = %q, want empty", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	err := New(server.Client()).Publish(context.Background(), Config{
+		ServerURL: server.URL, Topic: "yard",
+	}, Message{Body: "hello"})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
 	}
 }
 

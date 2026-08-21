@@ -45,6 +45,8 @@ type Message struct {
 type Config struct {
 	ServerURL string
 	Topic     string
+	// AccessToken authenticates reserved/protected topics. It is never logged.
+	AccessToken string
 }
 
 // Client posts to an ntfy server. httpClient may be nil (a default is used).
@@ -157,6 +159,9 @@ func (c *Client) Publish(ctx context.Context, cfg Config, msg Message) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	if token := strings.TrimSpace(cfg.AccessToken); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if title := strings.TrimSpace(msg.Title); title != "" {
 		req.Header.Set("Title", title)
 	}

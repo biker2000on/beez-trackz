@@ -126,6 +126,20 @@ export const OFFLINE_ROUTE_MANIFEST: OfflineRouteManifest = {
       "methods": [
         "DELETE"
       ]
+    },
+    {
+      "prefix": "/api/v1/ops/labor/start",
+      "exact": true,
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "prefix": "/api/v1/ops/labor/stop",
+      "exact": true,
+      "methods": [
+        "POST"
+      ]
     }
   ],
   "postExclusions": [

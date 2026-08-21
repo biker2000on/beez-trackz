@@ -29,10 +29,11 @@ const (
 )
 
 type ntfyPrefsJSON struct {
-	ServerURL  string   `json:"serverUrl"`
-	Topic      string   `json:"topic"`
-	Enabled    bool     `json:"enabled"`
-	EventKinds []string `json:"eventKinds"`
+	ServerURL   string   `json:"serverUrl"`
+	Topic       string   `json:"topic"`
+	AccessToken string   `json:"accessToken"`
+	Enabled     bool     `json:"enabled"`
+	EventKinds  []string `json:"eventKinds"`
 }
 
 type prefsJSON struct {
@@ -120,7 +121,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		units, temperatureUnit                     *string
 		defaultApiaryID                            *uuid.UUID
 		laborTracking                              bool
-		ntfyURL, ntfyTopic                         *string
+		ntfyURL, ntfyTopic, ntfyAccessToken        *string
 		ntfyEnabled                                bool
 		ntfyKinds                                  []string
 		thresholdPer100, thresholdPerDay           *float64
@@ -130,13 +131,14 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT display_name, theme, default_apiary_id, date_format, weight_unit,
 			units, temperature_unit, labor_tracking_enabled,
-			ntfy_server_url, ntfy_topic, ntfy_enabled, ntfy_event_kinds,
+			ntfy_server_url, ntfy_topic, ntfy_access_token,
+			ntfy_enabled, ntfy_event_kinds,
 			mite_threshold_per_100, mite_threshold_per_day, mite_check_interval_days,
 			moisture_threshold_pct
 		FROM user_settings LIMIT 1`).
 		Scan(&displayName, &theme, &defaultApiaryID, &dateFormat, &weightUnit,
 			&units, &temperatureUnit, &laborTracking,
-			&ntfyURL, &ntfyTopic, &ntfyEnabled, &ntfyKinds,
+			&ntfyURL, &ntfyTopic, &ntfyAccessToken, &ntfyEnabled, &ntfyKinds,
 			&thresholdPer100, &thresholdPerDay, &checkInterval, &moistureThreshold)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -159,10 +161,11 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 		MiteCheckIntervalDays: checkInterval,
 		MoistureThresholdPct:  moistureThreshold,
 		Ntfy: ntfyPrefsJSON{
-			ServerURL:  prefsOr(ntfyURL, ""),
-			Topic:      prefsOr(ntfyTopic, ""),
-			Enabled:    ntfyEnabled,
-			EventKinds: ntfyKinds,
+			ServerURL:   prefsOr(ntfyURL, ""),
+			Topic:       prefsOr(ntfyTopic, ""),
+			AccessToken: prefsOr(ntfyAccessToken, ""),
+			Enabled:     ntfyEnabled,
+			EventKinds:  ntfyKinds,
 		},
 	})
 }
@@ -183,10 +186,11 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		MiteCheckIntervalDays *int     `json:"miteCheckIntervalDays"`
 		MoistureThresholdPct  *float64 `json:"moistureThresholdPct"`
 		Ntfy                  *struct {
-			ServerURL  *string  `json:"serverUrl"`
-			Topic      *string  `json:"topic"`
-			Enabled    *bool    `json:"enabled"`
-			EventKinds []string `json:"eventKinds"`
+			ServerURL   *string  `json:"serverUrl"`
+			Topic       *string  `json:"topic"`
+			AccessToken *string  `json:"accessToken"`
+			Enabled     *bool    `json:"enabled"`
+			EventKinds  []string `json:"eventKinds"`
 		} `json:"ntfy"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -233,6 +237,7 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 
 	var ntfy ntfyPrefsJSON
 	patchNtfy := req.Ntfy != nil
+	patchNtfyToken := false
 	if patchNtfy {
 		var kinds []string
 		if req.Ntfy.EventKinds != nil {
@@ -243,6 +248,10 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 		if errMsg != "" {
 			writeError(w, http.StatusBadRequest, errMsg)
 			return
+		}
+		if req.Ntfy.AccessToken != nil {
+			patchNtfyToken = true
+			ntfy.AccessToken = strings.TrimSpace(*req.Ntfy.AccessToken)
 		}
 	}
 
@@ -263,14 +272,16 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 			labor_tracking_enabled = COALESCE($12, labor_tracking_enabled),
 			ntfy_server_url = CASE WHEN $13::boolean THEN $14 ELSE ntfy_server_url END,
 			ntfy_topic = CASE WHEN $13::boolean THEN $15 ELSE ntfy_topic END,
-			ntfy_enabled = CASE WHEN $13::boolean THEN $16 ELSE ntfy_enabled END,
-			ntfy_event_kinds = CASE WHEN $13::boolean THEN $17 ELSE ntfy_event_kinds END
+			ntfy_access_token = CASE WHEN $16::boolean THEN $17 ELSE ntfy_access_token END,
+			ntfy_enabled = CASE WHEN $13::boolean THEN $18 ELSE ntfy_enabled END,
+			ntfy_event_kinds = CASE WHEN $13::boolean THEN $19 ELSE ntfy_event_kinds END
 		WHERE id = (SELECT id FROM user_settings LIMIT 1)`,
 		theme, defaultApiaryID, dateFormat, weightUnit,
 		req.MiteThresholdPer100, req.MiteThresholdPerDay, req.MiteCheckIntervalDays,
 		req.MoistureThresholdPct,
 		units, clearTemperature, temperatureUnit, req.LaborTrackingEnabled,
-		patchNtfy, ntfy.ServerURL, ntfy.Topic, ntfy.Enabled, ntfy.EventKinds)
+		patchNtfy, ntfy.ServerURL, ntfy.Topic,
+		patchNtfyToken, nullIfEmpty(ntfy.AccessToken), ntfy.Enabled, ntfy.EventKinds)
 	if err != nil {
 		if inspectionIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "Apiary not found")
@@ -290,10 +301,11 @@ func (s *Server) handleSettingsUpdatePreferences(w http.ResponseWriter, r *http.
 // fail-soft no-op at publish time.
 func (s *Server) handleSettingsUpdateNtfy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ServerURL  string   `json:"serverUrl"`
-		Topic      string   `json:"topic"`
-		Enabled    bool     `json:"enabled"`
-		EventKinds []string `json:"eventKinds"`
+		ServerURL   string   `json:"serverUrl"`
+		Topic       string   `json:"topic"`
+		AccessToken string   `json:"accessToken"`
+		Enabled     bool     `json:"enabled"`
+		EventKinds  []string `json:"eventKinds"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -304,11 +316,14 @@ func (s *Server) handleSettingsUpdateNtfy(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	ntfy.AccessToken = strings.TrimSpace(req.AccessToken)
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE user_settings
-		SET ntfy_server_url = $1, ntfy_topic = $2, ntfy_enabled = $3, ntfy_event_kinds = $4
+		SET ntfy_server_url = $1, ntfy_topic = $2, ntfy_access_token = $3,
+			ntfy_enabled = $4, ntfy_event_kinds = $5
 		WHERE id = (SELECT id FROM user_settings LIMIT 1)`,
-		nullIfEmpty(ntfy.ServerURL), nullIfEmpty(ntfy.Topic), ntfy.Enabled, ntfy.EventKinds)
+		nullIfEmpty(ntfy.ServerURL), nullIfEmpty(ntfy.Topic),
+		nullIfEmpty(ntfy.AccessToken), ntfy.Enabled, ntfy.EventKinds)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Download } from "lucide-react";
+import { Download, Printer } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -48,16 +48,27 @@ export function ComplianceSection() {
         One authenticated export for the inspector or market manager: hive
         list, treatments, lots, sales, and withdrawal windows. Not public.
       </p>
-      <Button
-        type="button"
-        variant="outline"
-        className="justify-self-start"
-        disabled={busy}
-        onClick={() => void download()}
-      >
-        <Download />
-        Download compliance packet
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy}
+          onClick={() => void download()}
+        >
+          <Download />
+          Download JSON
+        </Button>
+        <Button asChild variant="outline">
+          <a
+            href="/api/v1/ops/compliance-packet/print"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Printer />
+            Print / save PDF
+          </a>
+        </Button>
+      </div>
     </div>
   );
 }

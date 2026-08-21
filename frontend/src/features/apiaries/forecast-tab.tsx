@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useUnits } from "@/lib/use-units";
 
 import { FrostPanel } from "./frost-summary";
 import { useApiaryWeather, useBloomPredictions } from "./hooks";
@@ -38,6 +39,7 @@ function shortWeekday(value: string) {
 export function ForecastTab({ apiaryId }: { apiaryId: string }) {
   const weather = useApiaryWeather(apiaryId);
   const bloom = useBloomPredictions(apiaryId);
+  const units = useUnits();
 
   if (weather.isPending || bloom.isPending) {
     return (
@@ -106,16 +108,16 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
                   <div>
                     <Thermometer className="mx-auto size-4 text-muted-foreground" />
                     <p className="mt-1 text-xl font-semibold">
-                      {Math.round(forecast.current.temperature_2m)}°
+                      {units.formatTemperature(forecast.current.temperature_2m)}
                     </p>
                     <p className="text-xs text-muted-foreground">Now</p>
                   </div>
                   <div>
                     <Wind className="mx-auto size-4 text-muted-foreground" />
                     <p className="mt-1 text-xl font-semibold">
-                      {Math.round(forecast.current.wind_speed_10m)}
+                      {units.formatWind(forecast.current.wind_speed_10m)}
                     </p>
-                    <p className="text-xs text-muted-foreground">mph wind</p>
+                    <p className="text-xs text-muted-foreground">Wind</p>
                   </div>
                   <div>
                     <CloudRain className="mx-auto size-4 text-muted-foreground" />
@@ -137,10 +139,14 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
                         <p className="text-xs font-semibold">{shortWeekday(date)}</p>
                         <p className="text-[10px] text-muted-foreground">{shortDate(date)}</p>
                         <p className="mt-2 text-sm font-semibold">
-                          {Math.round(forecast.daily.temperature_2m_max[index])}°
+                          {units.formatTemperature(
+                            forecast.daily.temperature_2m_max[index],
+                          )}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {Math.round(forecast.daily.temperature_2m_min[index])}°
+                          {units.formatTemperature(
+                            forecast.daily.temperature_2m_min[index],
+                          )}
                         </p>
                         <p className="mt-1 text-[10px] text-sky-700 dark:text-sky-300">
                           {Math.round(

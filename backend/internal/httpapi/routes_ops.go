@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"log/slog"
 	"math"
@@ -30,6 +31,7 @@ func (s *Server) mountOps(r chi.Router) {
 
 	admin := r.With(s.requireAdmin)
 	admin.Get("/ops/compliance-packet", s.handleCompliancePacket)
+	admin.Get("/ops/compliance-packet/print", s.handleCompliancePacket)
 	admin.Post("/ops/ntfy/dispatch", s.handleNtfyDispatch)
 	admin.Post("/ops/ntfy/test", s.handleNtfyTest)
 }
@@ -287,14 +289,15 @@ type ntfySettings struct {
 
 func (s *Server) loadNtfySettings(ctx context.Context) (ntfySettings, error) {
 	var (
-		out           ntfySettings
-		server, topic *string
-		kinds         []string
+		out                        ntfySettings
+		server, topic, accessToken *string
+		kinds                      []string
 	)
 	err := s.pool.QueryRow(ctx, `
-		SELECT ntfy_server_url, ntfy_topic, ntfy_enabled, ntfy_event_kinds
+		SELECT ntfy_server_url, ntfy_topic, ntfy_access_token,
+			ntfy_enabled, ntfy_event_kinds
 		FROM user_settings LIMIT 1`).
-		Scan(&server, &topic, &out.enabled, &kinds)
+		Scan(&server, &topic, &accessToken, &out.enabled, &kinds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, nil
 	}
@@ -303,6 +306,7 @@ func (s *Server) loadNtfySettings(ctx context.Context) (ntfySettings, error) {
 	}
 	out.cfg.ServerURL = prefsOr(server, "")
 	out.cfg.Topic = prefsOr(topic, "")
+	out.cfg.AccessToken = prefsOr(accessToken, "")
 	out.kinds = map[string]bool{}
 	if len(kinds) == 0 {
 		if out.enabled {
@@ -659,6 +663,115 @@ type complianceWindow struct {
 	Message        string     `json:"message"`
 }
 
+type compliancePacket struct {
+	ExportedAt        time.Time             `json:"exportedAt"`
+	Hives             []complianceHive      `json:"hives"`
+	Treatments        []complianceTreatment `json:"treatments"`
+	Lots              []complianceLot       `json:"lots"`
+	Sales             []complianceSale      `json:"sales"`
+	WithdrawalWindows []complianceWindow    `json:"withdrawalWindows"`
+}
+
+func complianceDate(value any) string {
+	var date time.Time
+	switch typed := value.(type) {
+	case time.Time:
+		date = typed
+	case *time.Time:
+		if typed == nil {
+			return "—"
+		}
+		date = *typed
+	default:
+		return "—"
+	}
+	if date.IsZero() {
+		return "—"
+	}
+	return date.Format("2006-01-02")
+}
+
+func complianceText(value *string) string {
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return "—"
+	}
+	return *value
+}
+
+func complianceDecimal(value *float64) string {
+	if value == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%.2f", *value)
+}
+
+var compliancePrintTemplate = template.Must(template.New("compliance").Funcs(template.FuncMap{
+	"date":    complianceDate,
+	"text":    complianceText,
+	"decimal": complianceDecimal,
+	"money": func(value money) string {
+		return fmt.Sprintf("$%.2f", value.Dollars())
+	},
+	"yesno": func(value bool) string {
+		if value {
+			return "Yes"
+		}
+		return "No"
+	},
+}).Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beez Trackz compliance packet</title>
+<style>
+  :root { color-scheme: light; font-family: Arial, sans-serif; font-size: 10pt; }
+  body { margin: 0 auto; max-width: 11in; color: #111; }
+  header { border-bottom: 2px solid #111; margin-bottom: 1.2rem; padding-bottom: .7rem; }
+  h1 { font-size: 22pt; margin: 0 0 .2rem; }
+  h2 { break-after: avoid; font-size: 14pt; margin: 1.4rem 0 .4rem; }
+  p { margin: .2rem 0; }
+  table { border-collapse: collapse; font-size: 8pt; width: 100%; }
+  th, td { border: 1px solid #bbb; padding: .25rem .3rem; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  tr { break-inside: avoid; }
+  .muted { color: #555; }
+  .print { margin-bottom: 1rem; }
+  .lines { margin: .2rem 0 0; padding-left: 1rem; }
+  @page { margin: .55in; size: landscape; }
+  @media print { body { max-width: none; } .print { display: none; } }
+</style>
+</head>
+<body>
+<button class="print" onclick="window.print()">Print / save as PDF</button>
+<header><h1>Beez Trackz compliance packet</h1><p class="muted">Exported {{.ExportedAt.UTC.Format "2006-01-02 15:04 MST"}}</p></header>
+
+<h2>Hives ({{len .Hives}})</h2>
+<table><thead><tr><th>Record ID</th><th>Apiary</th><th>Hive</th><th>Status</th><th>Installed</th><th>Deadout</th><th>Archived</th></tr></thead><tbody>
+{{range .Hives}}<tr><td>{{.ID}}</td><td>{{.ApiaryName}}<br><span class="muted">{{.ApiaryID}}</span></td><td>{{.PositionLabel}}</td><td>{{.Status}}</td><td>{{date .InstalledDate}}</td><td>{{date .DeadoutDate}}</td><td>{{yesno .IsArchived}}</td></tr>{{else}}<tr><td colspan="7">No hives</td></tr>{{end}}
+</tbody></table>
+
+<h2>Treatments ({{len .Treatments}})</h2>
+<table><thead><tr><th>Record ID</th><th>Apiary / hive</th><th>Product / method</th><th>Applied</th><th>Removed</th><th>Withdrawal days</th></tr></thead><tbody>
+{{range .Treatments}}<tr><td>{{.ID}}</td><td>{{.ApiaryName}} / {{.HiveName}}<br><span class="muted">{{.HiveID}}</span></td><td>{{.Product}} / {{text .Method}}</td><td>{{date .DateApplied}}</td><td>{{date .DateRemoved}}</td><td>{{.WithdrawalDays}}</td></tr>{{else}}<tr><td colspan="6">No treatments</td></tr>{{end}}
+</tbody></table>
+
+<h2>Harvest lots ({{len .Lots}})</h2>
+<table><thead><tr><th>Record ID</th><th>Lot</th><th>Extraction date</th><th>Weight (canonical lb)</th><th>Variety</th><th>Season</th><th>Moisture %</th><th>Public</th></tr></thead><tbody>
+{{range .Lots}}<tr><td>{{.ID}}</td><td>{{.LotCode}}</td><td>{{date .ExtractionDate}}</td><td>{{printf "%.2f" .HoneyWeightLbs}}</td><td>{{text .HoneyVariety}}</td><td>{{text .Season}}</td><td>{{decimal .MoisturePct}}</td><td>{{yesno .IsPublic}}</td></tr>{{else}}<tr><td colspan="8">No harvest lots</td></tr>{{end}}
+</tbody></table>
+
+<h2>Sales ({{len .Sales}})</h2>
+<table><thead><tr><th>Record ID / date</th><th>Channel / status</th><th>Order / customer / lot</th><th>Lines</th><th>Total</th><th>Paid</th></tr></thead><tbody>
+{{range .Sales}}<tr><td>{{.ID}}<br>{{date .Date}}</td><td>{{.Channel}} / {{.OrderStatus}}</td><td>{{text .OrderNumber}}<br>{{text .Customer}}<br>{{text .LotCode}}</td><td>{{range .Lines}}<div>{{.Quantity}} × {{.Label}} ({{.Kind}}) @ {{money .UnitPrice}}</div>{{else}}—{{end}}</td><td>{{money .TotalAmount}}</td><td>{{money .AmountPaid}}</td></tr>{{else}}<tr><td colspan="6">No sales</td></tr>{{end}}
+</tbody></table>
+
+<h2>Withdrawal windows ({{len .WithdrawalWindows}})</h2>
+<table><thead><tr><th>Hive</th><th>Product</th><th>Applied</th><th>Removed</th><th>Lockout until</th><th>Treatment on</th><th>Locked</th><th>Withdrawal days</th><th>Status</th></tr></thead><tbody>
+{{range .WithdrawalWindows}}<tr><td>{{.ApiaryName}} / {{.HiveName}}<br><span class="muted">{{.HiveID}}</span></td><td>{{.Product}}</td><td>{{date .DateApplied}}</td><td>{{date .DateRemoved}}</td><td>{{date .LockoutUntil}}</td><td>{{yesno .TreatmentOn}}</td><td>{{yesno .Locked}}</td><td>{{.WithdrawalDays}}</td><td>{{.Message}}</td></tr>{{else}}<tr><td colspan="9">No withdrawal windows</td></tr>{{end}}
+</tbody></table>
+</body></html>`))
+
 func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := time.Now().UTC()
@@ -843,14 +956,21 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
+	packet := compliancePacket{
+		ExportedAt: now, Hives: hives, Treatments: treatments, Lots: lots,
+		Sales: sales, WithdrawalWindows: windows,
+	}
+	if strings.HasSuffix(r.URL.Path, "/print") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", "inline")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		if err := compliancePrintTemplate.Execute(w, packet); err != nil {
+			slog.Error("render compliance packet", "err", err)
+		}
+		return
+	}
 	w.Header().Set("Content-Disposition",
 		`attachment; filename="beez-trackz-compliance-`+now.Format("2006-01-02")+`.json"`)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"exportedAt":        now,
-		"hives":             hives,
-		"treatments":        treatments,
-		"lots":              lots,
-		"sales":             sales,
-		"withdrawalWindows": windows,
-	})
+	writeJSON(w, http.StatusOK, packet)
 }

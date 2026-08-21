@@ -66,6 +66,8 @@ var offlineRoutes = offlineRouteManifest{
 		{Prefix: "/api/v1/hives/", ExceptMethods: []string{"DELETE"}},
 		{Prefix: "/api/v1/apiaries/", Methods: []string{"PUT"}},
 		{Prefix: "/api/v1/splits/", Methods: []string{"DELETE"}},
+		{Prefix: "/api/v1/ops/labor/start", Exact: true, Methods: []string{"POST"}},
+		{Prefix: "/api/v1/ops/labor/stop", Exact: true, Methods: []string{"POST"}},
 	},
 	POSTExclusions: []string{
 		"/api/v1/canvas/hives",

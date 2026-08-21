@@ -24,6 +24,7 @@ import {
 const EMPTY_NTFY: NtfySettings = {
   serverUrl: "",
   topic: "",
+  accessToken: "",
   enabled: false,
   eventKinds: [],
 };
@@ -117,6 +118,28 @@ export function NtfySection() {
             onBlur={(event) => save({ ...ntfy, topic: event.target.value })}
           />
         </div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="ntfy-access-token">Access token</Label>
+        <Input
+          id="ntfy-access-token"
+          type="password"
+          autoComplete="off"
+          placeholder="Optional token for protected topics"
+          value={ntfy.accessToken}
+          onChange={(event) =>
+            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              ...data,
+              ntfy: { ...ntfy, accessToken: event.target.value },
+            })
+          }
+          onBlur={(event) =>
+            save({ ...ntfy, accessToken: event.target.value })
+          }
+        />
+        <p className="text-xs text-muted-foreground">
+          Sent only as an Authorization bearer token when publishing.
+        </p>
       </div>
       <label className="flex items-start gap-3 text-sm">
         <input
