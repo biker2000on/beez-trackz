@@ -99,6 +99,8 @@ export interface CatalogProduct {
   isActive: boolean;
   made: number;
   sold: number;
+  /** Net of the adjustment ledger: shrink is negative, found stock positive. */
+  adjusted: number;
   onHand: number;
   inStock: boolean;
   createdAt: string;
@@ -142,6 +144,28 @@ export interface ProductBatch {
   quantityOut: number;
   notes: string | null;
   expenseIds: string[];
+  createdAt: string;
+  voidedAt: string | null;
+  voidReason: string | null;
+  /** Linked product_batch_expenses. */
+  ingredientCost: number;
+  /** Consumed pounds valued at the cost per harvested pound. */
+  honeyCost: number;
+  totalCost: number;
+  costPerUnit: number;
+}
+
+export interface ProductAdjustment {
+  id: string;
+  productId: string;
+  productName: string;
+  date: string;
+  delta: number;
+  reason: string | null;
+  notes: string | null;
+  locationId: string | null;
+  locationName: string | null;
+  settlementId: string | null;
   createdAt: string;
 }
 

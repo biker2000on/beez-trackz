@@ -20,6 +20,7 @@ import type {
   HoneyInventoryRow,
   HoneyOverview,
   HoneySale,
+  ProductAdjustment,
   ProductBatch,
   ProductCatalogResponse,
   PropolisHarvest,
@@ -123,6 +124,13 @@ export function useProductBatches() {
   return useQuery({
     queryKey: ["product-batches"],
     queryFn: () => api.get<ProductBatch[]>("/product-batches"),
+  });
+}
+
+export function useProductAdjustments() {
+  return useQuery({
+    queryKey: ["product-adjustments"],
+    queryFn: () => api.get<ProductAdjustment[]>("/product-adjustments"),
   });
 }
 
@@ -324,6 +332,36 @@ export function useCreateProductBatch() {
     }) => api.post("/product-batches", body),
     successMessage: "Batch recorded",
     invalidate: [["product-batches"], ["products"], ["honey"], ["propolis-harvests"]],
+  });
+}
+
+/**
+ * Undo a batch: the honey it consumed comes back and its output stops
+ * counting. Refused once the output has been sold or consigned.
+ */
+export function useVoidProductBatch() {
+  return useHoneyMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      api.post(`/product-batches/${id}/void`, { reason }),
+    successMessage: "Batch voided",
+    silentError: true,
+    invalidate: [["product-batches"], ["products"], ["honey"], ["propolis-harvests"]],
+  });
+}
+
+/** Record shrink (or found stock) on a catalog SKU. */
+export function useAdjustProduct() {
+  return useHoneyMutation({
+    mutationFn: (body: {
+      productId: string;
+      date: string;
+      delta: number;
+      reason?: string;
+      notes?: string;
+    }) => api.post("/product-adjustments", body),
+    successMessage: "Adjustment recorded",
+    silentError: true,
+    invalidate: [["product-adjustments"], ["products"]],
   });
 }
 

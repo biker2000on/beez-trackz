@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"sort"
@@ -638,7 +641,14 @@ type stockInventoryRow struct {
 	ByLocation map[string]int `json:"byLocation"`
 }
 
-// GET /stock-locations/inventory
+// GET /stock-locations/inventory — every SKU across every location.
+//
+// The away-from-home ledger already answers all of it in ONE pass
+// (stockAwayQuantities returns per-location, per-SKU quantities for every
+// location at once), so this builds the matrix from that plus the two global
+// inventory formulas. It used to call stockLocationShelf once per location,
+// which re-read the whole ledger each time — fine at two locations, quadratic
+// at twenty.
 func (s *Server) stockInventoryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	locations, err := s.stockLoadLocations(ctx,
@@ -647,32 +657,99 @@ func (s *Server) stockInventoryHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	byKey := make(map[string]*stockInventoryRow)
-	order := make([]string, 0)
+	catalog, err := stockLoadSKUs(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	globalJars, err := honeyJarInventoryWithQuerier(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	globalProducts, err := productInventoryQuery(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	away, err := stockAwayQuantities(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	var homeID uuid.UUID
 	for _, location := range locations {
-		shelf, _, err := s.stockLocationShelf(ctx, s.pool, location.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		for _, row := range shelf {
-			key := row.key()
-			entry, ok := byKey[key]
-			if !ok {
-				entry = &stockInventoryRow{
-					JarSizeID: row.JarSizeID, ProductID: row.ProductID, Label: row.Label,
-					Kind: row.Kind, UnitPrice: row.UnitPrice, ByLocation: map[string]int{},
-				}
-				byKey[key] = entry
-				order = append(order, key)
-			}
-			entry.ByLocation[location.ID.String()] += row.OnHand
-			entry.Total += row.OnHand
+		if location.IsHome {
+			homeID = location.ID
 		}
 	}
-	items := make([]stockInventoryRow, 0, len(order))
-	for _, key := range order {
-		items = append(items, *byKey[key])
+
+	// Home is the residual: the global count minus everything standing away.
+	homeJars := make(map[uuid.UUID]int, len(globalJars))
+	for _, row := range globalJars {
+		homeJars[row.JarSizeID] = row.OnHand
+	}
+	homeProducts := make(map[uuid.UUID]int, len(globalProducts))
+	for _, row := range globalProducts {
+		homeProducts[row.ID] = row.OnHand
+	}
+	awayJars := make(map[uuid.UUID]map[string]int)
+	awayProducts := make(map[uuid.UUID]map[string]int)
+	for _, row := range away {
+		if row.Quantity == 0 {
+			continue
+		}
+		if row.JarSizeID != nil {
+			if awayJars[*row.JarSizeID] == nil {
+				awayJars[*row.JarSizeID] = map[string]int{}
+			}
+			awayJars[*row.JarSizeID][row.LocationID.String()] += row.Quantity
+			homeJars[*row.JarSizeID] -= row.Quantity
+		}
+		if row.ProductID != nil {
+			if awayProducts[*row.ProductID] == nil {
+				awayProducts[*row.ProductID] = map[string]int{}
+			}
+			awayProducts[*row.ProductID][row.LocationID.String()] += row.Quantity
+			homeProducts[*row.ProductID] -= row.Quantity
+		}
+	}
+
+	// Catalog order, jars then products — the order stockLocationShelf reports,
+	// so the matrix and a single shelf agree about what comes first.
+	items := make([]stockInventoryRow, 0, len(catalog.JarOrder)+len(catalog.ProductOrder))
+	appendRow := func(row stockInventoryRow, home int, elsewhere map[string]int) {
+		if home != 0 {
+			row.ByLocation[homeID.String()] = home
+			row.Total += home
+		}
+		for locationID, quantity := range elsewhere {
+			if quantity == 0 {
+				continue
+			}
+			row.ByLocation[locationID] += quantity
+			row.Total += quantity
+		}
+		if len(row.ByLocation) == 0 {
+			return
+		}
+		items = append(items, row)
+	}
+	for _, id := range catalog.JarOrder {
+		jarID := id
+		appendRow(stockInventoryRow{
+			JarSizeID: &jarID, Label: catalog.JarLabels[id], Kind: saleKindJar,
+			UnitPrice: catalog.JarPrices[id], ByLocation: map[string]int{},
+		}, homeJars[id], awayJars[id])
+	}
+	for _, id := range catalog.ProductOrder {
+		productID := id
+		price := catalog.ProductPrice[id]
+		appendRow(stockInventoryRow{
+			ProductID: &productID, Label: catalog.ProductNames[id],
+			Kind: catalog.ProductKinds[id], UnitPrice: &price,
+			ByLocation: map[string]int{},
+		}, homeProducts[id], awayProducts[id])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"locations": locations,
@@ -1935,15 +2012,6 @@ func (s *Server) stockApplySettlement(
 			expected := have - line.QuantitySold - line.QuantityReturned
 			difference := expected - *line.CountOnShelf
 			if difference != 0 {
-				if line.ProductID != nil {
-					// Catalog SKUs derive on-hand from batches minus sales, with
-					// no adjustment ledger to absorb a loss. Writing the shop's
-					// half alone would hand the missing unit back to home.
-					return result, stockBadRequest(
-						"%s: catalog products have no adjustment ledger yet, so a "+
-							"count difference cannot be recorded. Return the units "+
-							"instead, or leave countOnShelf unset.", label)
-				}
 				shrinks = append(shrinks, shrinkLine{
 					JarSizeID: line.JarSizeID, ProductID: line.ProductID,
 					Quantity: difference,
@@ -2032,14 +2100,25 @@ func (s *Server) stockApplySettlement(
 			-shrink.Quantity, settlementID, key, reason, actor); err != nil {
 			return result, err
 		}
-		// The global half. Without it the missing jar would come back to home
-		// as the residual and the shrink would cost nothing.
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO honey_movements
-				(date, kind, jar_size_id, quantity, reason, settlement_id)
-			VALUES ($1, 'jar_adjustment', $2, $3, $4, $5)`,
-			reportedAt, shrink.JarSizeID, -shrink.Quantity, reason,
-			settlementID); err != nil {
+		// The global half. Without it the missing unit would come back to home
+		// as the residual and the shrink would cost nothing. Jars write the
+		// honey ledger's jar_adjustment; catalog SKUs write the product
+		// adjustment ledger, which is the same statement in the other table.
+		if shrink.JarSizeID != nil {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO honey_movements
+					(date, kind, jar_size_id, quantity, reason, settlement_id)
+				VALUES ($1, 'jar_adjustment', $2, $3, $4, $5)`,
+				reportedAt, shrink.JarSizeID, -shrink.Quantity, reason,
+				settlementID); err != nil {
+				return result, err
+			}
+			continue
+		}
+		globalKey := fmt.Sprintf("settlement:%s:product-shrink:%d", settlementID, index)
+		if _, err := productInsertAdjustment(ctx, tx, *shrink.ProductID, reportedAt,
+			-shrink.Quantity, &reason, nil, &location.ID, &settlementID, &globalKey,
+			actor); err != nil {
 			return result, err
 		}
 	}
@@ -2151,6 +2230,16 @@ func (s *Server) stockSettlementVoid(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	// The product ledger's half. It carries a soft delete rather than a
+	// negating row, so undoing it is the same idempotent UPDATE: a second void
+	// matches nothing.
+	if _, err := tx.Exec(ctx, `
+		UPDATE product_adjustments
+		SET deleted_at=now(), deleted_by=$2
+		WHERE settlement_id=$1 AND deleted_at IS NULL`, id, actor); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	if saleID != nil {
 		if _, err := tx.Exec(ctx, `
 			UPDATE sales
@@ -2203,242 +2292,59 @@ func stockSettlementMovementIDs(
 }
 
 // --- selling from a location other than home -------------------------------
-
-type stockSaleLineInput struct {
-	JarSizeID *uuid.UUID `json:"jarSizeId"`
-	ProductID *uuid.UUID `json:"productId"`
-	Quantity  int        `json:"quantity"`
-	UnitPrice money      `json:"unitPrice"`
-}
-
-type stockSaleRequest struct {
-	Date           string               `json:"date"`
-	Channel        string               `json:"channel"`
-	PaymentMethod  string               `json:"paymentMethod"`
-	CustomerID     *uuid.UUID           `json:"customerId"`
-	CustomerName   *string              `json:"customerName"`
-	Location       *string              `json:"location"`
-	DiscountAmount money                `json:"discountAmount"`
-	AmountPaid     *money               `json:"amountPaid"`
-	OrderNumber    *string              `json:"orderNumber"`
-	Notes          *string              `json:"notes"`
-	Lines          []stockSaleLineInput `json:"lines"`
-}
-
-// POST /stock-locations/{id}/sales — record a sale that came off THIS
-// location's shelf rather than home's.
 //
-// Market day sells from home through /sales, which validates against home
-// on-hand; this is its counterpart for a second farm stand, or anywhere the
-// money is handed over on the spot. The lines decrement the named location
-// because the sale carries stock_location_id, so home is untouched.
+// There is now ONE way to record a sale: POST /sales, which takes an optional
+// stockLocationId and validates the lines against that location's shelf
+// (omitted or home means home stock). Two endpoints doing the same arithmetic
+// is how the two of them drift apart, so the location-scoped one is retired.
 //
-// A consignment shop that pays as it sells does NOT come through here. Its
-// revenue is recognised by the settlement, which reconciles counts and payment
-// in one action; letting a report also be entered as a plain sale would
-// recognise the same jars twice.
+// POST /stock-locations/{id}/sales survives for one release as a thin delegate
+// that names the location from the URL and hands the request to /sales
+// unchanged. It is marked Deprecated in the response headers; delete it once
+// no client calls it.
+
+// stockSaleDeprecation is the sunset window announced to callers. RFC 8594
+// asks for a date, and one release is what the roadmap promised.
+const stockSaleDeprecationNote = `deprecated: POST /sales accepts stockLocationId; ` +
+	`this route will be removed after the next release`
+
+// POST /stock-locations/{id}/sales
+//
+// Deprecated: use POST /sales with stockLocationId. The body is identical
+// apart from that field, so this rewrites the decoded body to carry the id
+// from the path and re-dispatches. Every rule — the shelf check, the
+// consignment refusal, the line kinds, the money arithmetic — then lives in
+// exactly one handler.
 func (s *Server) stockLocationSaleCreate(w http.ResponseWriter, r *http.Request) {
 	locationID, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var req stockSaleRequest
-	if err := decodeJSON(r, &req); err != nil {
+	// Decoded loosely on purpose: /sales still validates every field with
+	// DisallowUnknownFields, so a typo is refused there rather than twice.
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Date == "" {
-		writeError(w, http.StatusBadRequest, "Date is required")
-		return
+	if body == nil {
+		body = map[string]any{}
 	}
-	date, err := parseDate(req.Date)
+	// The path is the authority. A body naming a different location would make
+	// the URL a lie.
+	body["stockLocationId"] = locationID.String()
+	encoded, err := json.Marshal(body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid date")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if len(req.Lines) == 0 {
-		writeError(w, http.StatusBadRequest, "Add at least one line")
-		return
-	}
-	if req.PaymentMethod == "" {
-		req.PaymentMethod = "cash"
-	}
-	if req.Channel == "" {
-		req.Channel = "direct"
-	}
-	if !honeyPaymentMethods[req.PaymentMethod] || !honeySaleChannels[req.Channel] {
-		writeError(w, http.StatusBadRequest, "invalid channel or payment method")
-		return
-	}
-	if req.DiscountAmount < 0 {
-		writeError(w, http.StatusBadRequest, "discount must not be negative")
-		return
-	}
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Warning", `299 - "`+stockSaleDeprecationNote+`"`)
+	w.Header().Set("Link", `</api/v1/sales>; rel="successor-version"`)
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	locations, err := s.stockLoadLocationsTx(ctx, tx, locationID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if len(locations) == 0 {
-		writeError(w, http.StatusNotFound, "location not found")
-		return
-	}
-	location := locations[0]
-	if location.IsHome {
-		writeError(w, http.StatusBadRequest,
-			"home sells through /sales, which validates against home stock")
-		return
-	}
-	if location.IsConsignment {
-		writeError(w, http.StatusConflict,
-			"this is a consignment location: record their report instead, so the "+
-				"counts and the payment land together")
-		return
-	}
-
-	jarIDs := make([]uuid.UUID, 0, len(req.Lines))
-	productIDs := make([]uuid.UUID, 0, len(req.Lines))
-	for _, line := range req.Lines {
-		if (line.JarSizeID == nil) == (line.ProductID == nil) {
-			writeError(w, http.StatusBadRequest,
-				"each line needs exactly one of jarSizeId or productId")
-			return
-		}
-		if line.Quantity <= 0 || line.UnitPrice <= 0 {
-			writeError(w, http.StatusBadRequest,
-				"quantity and unitPrice must be greater than zero")
-			return
-		}
-		if line.JarSizeID != nil {
-			jarIDs = append(jarIDs, *line.JarSizeID)
-		} else {
-			productIDs = append(productIDs, *line.ProductID)
-		}
-	}
-	if len(jarIDs) > 0 {
-		if _, _, unknown, err := honeyLockJarSizes(ctx, tx, jarIDs); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		} else if unknown {
-			writeError(w, http.StatusBadRequest, "invalid jarSizeId")
-			return
-		}
-	}
-	if len(productIDs) > 0 {
-		unknown, err := stockLockProducts(ctx, tx, productIDs)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if unknown {
-			writeError(w, http.StatusBadRequest, "invalid productId")
-			return
-		}
-	}
-
-	shelf, catalog, err := s.stockLocationShelf(ctx, tx, locationID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	available := make(map[string]int, len(shelf))
-	labels := make(map[string]string, len(shelf))
-	for _, row := range shelf {
-		available[row.key()] = row.OnHand
-		labels[row.key()] = row.Label
-	}
-	needed := make(map[string]int, len(req.Lines))
-	saleLines := make([]saleConsignmentLine, 0, len(req.Lines))
-	subtotal := money(0)
-	for _, line := range req.Lines {
-		key := stockLineKey(stockTransferLine{
-			JarSizeID: line.JarSizeID, ProductID: line.ProductID,
-		})
-		needed[key] += line.Quantity
-		kind := saleKindJar
-		if line.ProductID != nil {
-			kind = catalog.ProductKinds[*line.ProductID]
-		}
-		saleLines = append(saleLines, saleConsignmentLine{
-			JarSizeID: line.JarSizeID, ProductID: line.ProductID, Kind: kind,
-			Quantity: line.Quantity, UnitPrice: line.UnitPrice,
-		})
-		subtotal += line.UnitPrice.mulQuantity(line.Quantity)
-	}
-	keys := make([]string, 0, len(needed))
-	for key := range needed {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if needed[key] > available[key] {
-			label, ok := labels[key]
-			if !ok {
-				label = "units"
-			}
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"Not enough %s at %s: need %d, have %d",
-				label, location.Name, needed[key], available[key]))
-			return
-		}
-	}
-	if req.DiscountAmount > subtotal {
-		writeError(w, http.StatusBadRequest,
-			"discount must be between zero and the subtotal")
-		return
-	}
-	total := subtotal - req.DiscountAmount
-	amountPaid := total
-	if req.AmountPaid != nil {
-		amountPaid = *req.AmountPaid
-	}
-	if amountPaid < 0 || amountPaid > total {
-		writeError(w, http.StatusBadRequest,
-			"amountPaid must be between zero and the total")
-		return
-	}
-
-	saleID := uuid.New()
-	orderNumber, err := saleRecordConsignmentReport(ctx, tx, saleConsignmentInput{
-		SaleID:         saleID,
-		LocationID:     location.ID,
-		LocationName:   location.Name,
-		CustomerID:     req.CustomerID,
-		CustomerName:   inspectionTrimPtr(req.CustomerName),
-		Location:       inspectionTrimPtr(req.Location),
-		Date:           date,
-		Channel:        req.Channel,
-		PaymentMethod:  req.PaymentMethod,
-		TotalAmount:    total,
-		DiscountAmount: req.DiscountAmount,
-		AmountPaid:     amountPaid,
-		OrderNumber:    inspectionTrimPtr(req.OrderNumber),
-		Notes:          inspectionTrimPtr(req.Notes),
-		Lines:          saleLines,
-		Actor:          actorID(r),
-	})
-	if err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"success": true, "id": saleID, "orderNumber": orderNumber,
-		"subtotal": subtotal, "discountAmount": req.DiscountAmount,
-		"totalAmount": total, "amountPaid": amountPaid,
-		"balanceDue": total - amountPaid,
-	})
+	delegated := r.Clone(r.Context())
+	delegated.Body = io.NopCloser(bytes.NewReader(encoded))
+	delegated.ContentLength = int64(len(encoded))
+	s.honeyRecordSale(w, delegated)
 }

@@ -62,6 +62,14 @@ func (s *Server) mountProducts(r chi.Router) {
 
 	admin.Get("/product-batches", s.productBatchList)
 	admin.Post("/product-batches", s.productBatchCreate)
+	// Undo, modelled on POST /bottling-runs/{id}/void: reverses what the batch
+	// consumed rather than deleting the row.
+	admin.Post("/product-batches/{id}/void", s.productBatchVoid)
+
+	admin.Get("/product-adjustments", s.productAdjustmentList)
+	admin.Post("/product-adjustments", s.productAdjustmentCreate)
+	// Soft delete is this ledger's undo; the row and its author survive.
+	admin.Delete("/product-adjustments/{id}", s.productAdjustmentDelete)
 }
 
 type productInventoryRow struct {
@@ -75,21 +83,34 @@ type productInventoryRow struct {
 	IsActive     bool      `json:"isActive"`
 	Made         int       `json:"made"`
 	Sold         int       `json:"sold"`
-	OnHand       int       `json:"onHand"`
-	InStock      bool      `json:"inStock"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	// Adjusted is the net of the product adjustment ledger: shrink is negative,
+	// found stock positive. Reported on its own so a SKU whose count moved
+	// outside a batch or a sale can say why.
+	Adjusted  int       `json:"adjusted"`
+	OnHand    int       `json:"onHand"`
+	InStock   bool      `json:"inStock"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// productInventoryQuery is THE per-SKU on-hand formula:
+//
+//	onHand = made by live batches + adjustments - sold
+//
+// A voided batch produced nothing, so it drops out of "made" the moment it is
+// voided rather than needing a compensating row. Adjustments are the ledger
+// that lets a unit leave the world without a sale — shrink counted at a
+// consignment shop, or a bottle broken at home.
 func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productInventoryRow, error) {
 	rows, err := q.Query(ctx, `
 		SELECT p.id, p.name, p.kind, p.unit, p.default_price_cents, p.size_label, p.net_grams,
 		       p.is_active, p.created_at, p.updated_at,
-		       COALESCE(b.made, 0), COALESCE(s.sold, 0)
+		       COALESCE(b.made, 0), COALESCE(s.sold, 0), COALESCE(a.adjusted, 0)
 		FROM product_catalog p
 		LEFT JOIN (
 			SELECT product_id, SUM(quantity_out) AS made
 			FROM product_batches
+			WHERE voided_at IS NULL
 			GROUP BY product_id
 		) b ON b.product_id = p.id
 		LEFT JOIN (
@@ -99,6 +120,12 @@ func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productI
 			WHERE sale.order_status <> 'cancelled' AND si.product_id IS NOT NULL
 			GROUP BY si.product_id
 		) s ON s.product_id = p.id
+		LEFT JOIN (
+			SELECT product_id, SUM(delta) AS adjusted
+			FROM product_adjustments
+			WHERE deleted_at IS NULL
+			GROUP BY product_id
+		) a ON a.product_id = p.id
 		ORDER BY p.kind, p.name, p.size_label NULLS FIRST`)
 	if err != nil {
 		return nil, err
@@ -109,10 +136,10 @@ func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productI
 		var row productInventoryRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.Kind, &row.Unit, &row.DefaultPrice,
 			&row.SizeLabel, &row.NetGrams, &row.IsActive, &row.CreatedAt, &row.UpdatedAt,
-			&row.Made, &row.Sold); err != nil {
+			&row.Made, &row.Sold, &row.Adjusted); err != nil {
 			return nil, err
 		}
-		row.OnHand = row.Made - row.Sold
+		row.OnHand = row.Made + row.Adjusted - row.Sold
 		row.InStock = row.OnHand > 0
 		out = append(out, row)
 	}
@@ -514,7 +541,7 @@ func propolisOnHandGrams(ctx context.Context, q inspectionQuerier) (float64, err
 			), 0),
 			COALESCE((
 				SELECT SUM(CASE WHEN propolis_unit='ounces' THEN propolis_amount * $1 ELSE propolis_amount END)
-				FROM product_batches WHERE kind='tincture'
+				FROM product_batches WHERE kind='tincture' AND voided_at IS NULL
 			), 0),
 			COALESCE((
 				SELECT SUM(si.quantity * p.net_grams)
@@ -547,7 +574,8 @@ func propolisHarvestRemainingGrams(ctx context.Context, q inspectionQuerier, har
 		SELECT COALESCE(SUM(
 			CASE WHEN propolis_unit='ounces' THEN propolis_amount * $2 ELSE propolis_amount END
 		), 0)
-		FROM product_batches WHERE propolis_harvest_id=$1`, harvestID, gramsPerOunce).
+		FROM product_batches
+		WHERE propolis_harvest_id=$1 AND voided_at IS NULL`, harvestID, gramsPerOunce).
 		Scan(&consumed); err != nil {
 		return 0, err
 	}
@@ -649,7 +677,8 @@ func (s *Server) propolisHarvestDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	var used int
 	if err := s.pool.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM product_batches WHERE propolis_harvest_id=$1`, id).
+		`SELECT COUNT(*) FROM product_batches
+		 WHERE propolis_harvest_id=$1 AND voided_at IS NULL`, id).
 		Scan(&used); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -704,14 +733,53 @@ type productBatchRow struct {
 	Notes             *string     `json:"notes"`
 	ExpenseIDs        []uuid.UUID `json:"expenseIds"`
 	CreatedAt         time.Time   `json:"createdAt"`
+	VoidedAt          *time.Time  `json:"voidedAt"`
+	VoidReason        *string     `json:"voidReason"`
+	// What the batch cost to make. IngredientCost is the linked
+	// product_batch_expenses (the jalapeños for a hot-honey run); HoneyCost is
+	// the consumed pounds valued at the season's cost per harvested pound.
+	// CostPerUnit divides the total by quantity_out.
+	IngredientCost money `json:"ingredientCost"`
+	HoneyCost      money `json:"honeyCost"`
+	TotalCost      money `json:"totalCost"`
+	CostPerUnit    money `json:"costPerUnit"`
+}
+
+// productHoneyCostPerLb values a pound of bulk honey for batch COGS.
+//
+// It is the same ratio /analytics/profitability reports — operating expenses
+// over pounds harvested — minus the expenses already attached to a product
+// batch, because those are that batch's direct ingredient cost and charging
+// them again through the honey rate would double-count them.
+//
+// Zero pounds harvested means zero: an unpriced pound is better than a
+// division by zero pretending to be a cost.
+func productHoneyCostPerLb(ctx context.Context, q inspectionQuerier) (float64, error) {
+	var expenses money
+	var harvested float64
+	if err := q.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT SUM(e.amount_cents) FROM expenses e
+				WHERE e.deleted_at IS NULL
+				  AND NOT EXISTS (SELECT 1 FROM product_batch_expenses pbe
+				                  WHERE pbe.expense_id = e.id)), 0),
+			COALESCE((SELECT SUM(calculated_honey_weight) FROM honey_harvests
+				WHERE deleted_at IS NULL), 0)`).Scan(&expenses, &harvested); err != nil {
+		return 0, err
+	}
+	if harvested <= honeyPoundTolerance {
+		return 0, nil
+	}
+	return expenses.Dollars() / harvested, nil
 }
 
 func (s *Server) productBatchList(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.pool.Query(r.Context(), `
+	ctx := r.Context()
+	rows, err := s.pool.Query(ctx, `
 		SELECT b.id, b.kind, b.product_id, p.name, b.harvest_lot_id, lot.lot_code,
 		       b.started_at, b.finished_at, b.honey_lbs, b.water_liters, b.yeast, b.vessel,
 		       b.propolis_harvest_id, b.propolis_amount, b.propolis_unit,
-		       b.quantity_out, b.notes, b.created_at
+		       b.quantity_out, b.notes, b.created_at, b.voided_at, b.void_reason
 		FROM product_batches b
 		JOIN product_catalog p ON p.id = b.product_id
 		LEFT JOIN harvest_lots lot ON lot.id = b.harvest_lot_id
@@ -730,7 +798,8 @@ func (s *Server) productBatchList(w http.ResponseWriter, r *http.Request) {
 			&row.HarvestLotID, &row.HarvestLotCode, &row.StartedAt, &row.FinishedAt,
 			&row.HoneyLbs, &row.WaterLiters, &row.Yeast, &row.Vessel,
 			&row.PropolisHarvestID, &row.PropolisAmount, &row.PropolisUnit,
-			&row.QuantityOut, &row.Notes, &row.CreatedAt); err != nil {
+			&row.QuantityOut, &row.Notes, &row.CreatedAt,
+			&row.VoidedAt, &row.VoidReason); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -744,22 +813,30 @@ func (s *Server) productBatchList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(ids) > 0 {
-		expRows, err := s.pool.Query(r.Context(), `
-			SELECT batch_id, expense_id FROM product_batch_expenses
-			WHERE batch_id = ANY($1) ORDER BY expense_id`, ids)
+		// One row per (batch, expense) so the ids and the money come off the
+		// same read; expenses are never double-counted because the join table
+		// is keyed on the pair.
+		expRows, err := s.pool.Query(ctx, `
+			SELECT pbe.batch_id, pbe.expense_id,
+			       CASE WHEN e.deleted_at IS NULL THEN e.amount_cents ELSE 0 END
+			FROM product_batch_expenses pbe
+			JOIN expenses e ON e.id = pbe.expense_id
+			WHERE pbe.batch_id = ANY($1) ORDER BY pbe.expense_id`, ids)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
 		for expRows.Next() {
 			var batchID, expenseID uuid.UUID
-			if err := expRows.Scan(&batchID, &expenseID); err != nil {
+			var amount money
+			if err := expRows.Scan(&batchID, &expenseID, &amount); err != nil {
 				expRows.Close()
 				writeError(w, http.StatusInternalServerError, "database error")
 				return
 			}
 			if i, ok := index[batchID]; ok {
 				out[i].ExpenseIDs = append(out[i].ExpenseIDs, expenseID)
+				out[i].IngredientCost += amount
 			}
 		}
 		expErr := expRows.Err()
@@ -769,7 +846,46 @@ func (s *Server) productBatchList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	costPerLb, err := productHoneyCostPerLb(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	for i := range out {
+		productBatchApplyCost(&out[i], costPerLb)
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// productBatchApplyCost fills the derived cost columns. The per-pound rate is
+// a ratio, so it is the only float in the calculation: it is turned into exact
+// cents once, and every sum and division after that is integer arithmetic.
+func productBatchApplyCost(row *productBatchRow, costPerLb float64) {
+	if row.HoneyLbs != nil && *row.HoneyLbs > 0 && costPerLb > 0 {
+		row.HoneyCost = money(dollarsToCents(*row.HoneyLbs * costPerLb))
+	}
+	row.TotalCost = row.IngredientCost + row.HoneyCost
+	if row.QuantityOut > 0 {
+		row.CostPerUnit = productDivideCents(row.TotalCost, row.QuantityOut)
+	}
+}
+
+// productDivideCents splits a cent total across whole units, rounding half
+// away from zero so a $10.00 batch of 3 bottles reports $3.33 rather than a
+// float artifact.
+func productDivideCents(total money, units int) money {
+	if units <= 0 {
+		return 0
+	}
+	negative := total < 0
+	if negative {
+		total = -total
+	}
+	per := (total*2 + money(units)) / money(2*units)
+	if negative {
+		return -per
+	}
+	return per
 }
 
 func (s *Server) productBatchCreate(w http.ResponseWriter, r *http.Request) {
@@ -1012,4 +1128,408 @@ func productValidateExpenses(ctx context.Context, tx inspectionQuerier, ids []uu
 		return errors.New("invalid expenseId")
 	}
 	return nil
+}
+
+// --- adjustments -----------------------------------------------------------
+//
+// A catalog SKU's on-hand used to be batches minus sales and nothing else, so
+// a broken bottle had nowhere to go. This is the jar ledger's jar_adjustment
+// for products: one signed delta per row, soft-deletable, and the global half
+// of shrink counted at a consignment location (the shelf half is the
+// stock_movements adjustment written beside it).
+
+type productAdjustmentRow struct {
+	ID           uuid.UUID  `json:"id"`
+	ProductID    uuid.UUID  `json:"productId"`
+	ProductName  string     `json:"productName"`
+	Date         time.Time  `json:"date"`
+	Delta        int        `json:"delta"`
+	Reason       *string    `json:"reason"`
+	Notes        *string    `json:"notes"`
+	LocationID   *uuid.UUID `json:"locationId"`
+	LocationName *string    `json:"locationName"`
+	SettlementID *uuid.UUID `json:"settlementId"`
+	CreatedAt    time.Time  `json:"createdAt"`
+}
+
+// productInsertAdjustment is the only place a product_adjustments row is
+// written. Replaying a request with the same idempotency key conflicts on the
+// unique index instead of shrinking the stock twice.
+func productInsertAdjustment(
+	ctx context.Context,
+	q inspectionQuerier,
+	productID uuid.UUID,
+	date time.Time,
+	delta int,
+	reason *string,
+	notes *string,
+	locationID *uuid.UUID,
+	settlementID *uuid.UUID,
+	idempotencyKey *string,
+	actor *uuid.UUID,
+) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := q.QueryRow(ctx, `
+		INSERT INTO product_adjustments
+			(product_id, date, delta, reason, notes, location_id, settlement_id,
+			 idempotency_key, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		RETURNING id`,
+		productID, date, delta, reason, notes, locationID, settlementID,
+		idempotencyKey, actor).Scan(&id)
+	if err != nil {
+		if pgErrCode(err) == "23505" {
+			return uuid.Nil, equipFail(http.StatusConflict,
+				"this adjustment was already recorded (idempotency key reused)")
+		}
+		if honeyIsFKViolation(err) {
+			return uuid.Nil, equipBadRequest("invalid product or location")
+		}
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+// GET /product-adjustments
+func (s *Server) productAdjustmentList(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.pool.Query(r.Context(), `
+		SELECT a.id, a.product_id,
+		       COALESCE(NULLIF(CONCAT_WS(' · ', p.name, p.size_label), ''), p.name),
+		       a.date, a.delta, a.reason, a.notes, a.location_id, l.name,
+		       a.settlement_id, a.created_at
+		FROM product_adjustments a
+		JOIN product_catalog p ON p.id = a.product_id
+		LEFT JOIN stock_locations l ON l.id = a.location_id
+		WHERE a.deleted_at IS NULL
+		ORDER BY a.date DESC, a.created_at DESC
+		LIMIT 200`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer rows.Close()
+	out := make([]productAdjustmentRow, 0)
+	for rows.Next() {
+		var row productAdjustmentRow
+		if err := rows.Scan(&row.ID, &row.ProductID, &row.ProductName, &row.Date,
+			&row.Delta, &row.Reason, &row.Notes, &row.LocationID, &row.LocationName,
+			&row.SettlementID, &row.CreatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		out = append(out, row)
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// POST /product-adjustments — "one bottle broke".
+//
+// A negative delta is a withdrawal like any other, so it clears the same
+// availability bar a sale does: the SKU cannot be driven below zero, and the
+// count it is measured against is HOME's, not the global total. Consigned
+// units are still the operator's stock but they sit on someone else's shelf,
+// and shrink discovered there is recorded by the settlement, which writes both
+// halves together.
+func (s *Server) productAdjustmentCreate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ProductID  string     `json:"productId"`
+		Date       string     `json:"date"`
+		Delta      int        `json:"delta"`
+		Reason     *string    `json:"reason"`
+		Notes      *string    `json:"notes"`
+		LocationID *uuid.UUID `json:"locationId"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	productID, err := uuid.Parse(strings.TrimSpace(req.ProductID))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid productId")
+		return
+	}
+	if req.Delta == 0 {
+		writeError(w, http.StatusBadRequest, "delta must not be zero")
+		return
+	}
+	if req.Date == "" {
+		writeError(w, http.StatusBadRequest, "Date is required")
+		return
+	}
+	date, err := parseDate(req.Date)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid date")
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	info, unknown, err := productLockCatalogInfo(ctx, tx, []uuid.UUID{productID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if unknown {
+		writeError(w, http.StatusBadRequest, "invalid productId")
+		return
+	}
+	if req.Delta < 0 {
+		home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if -req.Delta > home {
+			label := info.Labels[productID]
+			if label == "" {
+				label = "product"
+			}
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"Not enough %s at home: need %d, have %d", label, -req.Delta, home))
+			return
+		}
+	}
+	id, err := productInsertAdjustment(ctx, tx, productID, date, req.Delta,
+		honeyTrimPtr(req.Reason), honeyTrimPtr(req.Notes), req.LocationID, nil, nil,
+		actorID(r))
+	if err != nil {
+		equipWriteError(w, err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "id": id})
+}
+
+// DELETE /product-adjustments/{id} — undo a mis-entered adjustment.
+//
+// Soft, and idempotent: a second delete matches no live row and answers 404
+// rather than adjusting anything a second time. A settlement's own adjustments
+// are not undoable here; void the settlement, which unwinds every half it
+// wrote together.
+func (s *Server) productAdjustmentDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var settlementID *uuid.UUID
+	err = s.pool.QueryRow(r.Context(),
+		`SELECT settlement_id FROM product_adjustments
+		 WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&settlementID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "adjustment not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if settlementID != nil {
+		writeError(w, http.StatusConflict,
+			"this adjustment belongs to a settlement; void the settlement instead")
+		return
+	}
+	tag, err := s.pool.Exec(r.Context(), `
+		UPDATE product_adjustments SET deleted_at=now(), deleted_by=$2
+		WHERE id=$1 AND deleted_at IS NULL`, id, actorID(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "adjustment not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": id})
+}
+
+// productHomeOnHand is a SKU's count at home: the global figure minus whatever
+// is standing at another location. It is the number every home-side withdrawal
+// (a market-day sale, shrink, a voided batch) has to clear, for the same
+// reason honeyLockJarSizes reports home rather than the world.
+func productHomeOnHand(
+	ctx context.Context,
+	q inspectionQuerier,
+	productID uuid.UUID,
+	globalOnHand int,
+) (int, error) {
+	away, err := stockAwayProductTotals(ctx, q)
+	if err != nil {
+		return 0, err
+	}
+	return globalOnHand - away[productID], nil
+}
+
+// --- batch void ------------------------------------------------------------
+
+// POST /product-batches/{id}/void — undo a wrong batch.
+//
+// A 40 lb mead batch entered by mistake permanently consumed bulk honey: the
+// batch-linked honey_movement refuses reversal on its own (409), because the
+// batch would survive it and claim output the pounds no longer back. Voiding
+// is the whole-unit operation, exactly like a bottling run's: it reverses
+// every movement the batch wrote, stops the batch counting toward the SKU's
+// on-hand and toward propolis consumed, and marks the row — all in one
+// transaction, so no commit boundary sees the two disagreeing.
+//
+// It is refused with a 409 once the batch's output has left home: those units
+// were sold or consigned, and un-making them would drive the SKU negative.
+func (s *Server) productBatchVoid(w http.ResponseWriter, r *http.Request) {
+	batchID, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Reason *string `json:"reason"`
+	}
+	// A void may legitimately carry no body.
+	_ = decodeJSON(r, &req)
+
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var productID uuid.UUID
+	var quantityOut int
+	var voidedAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT product_id, quantity_out, voided_at
+		FROM product_batches WHERE id=$1 FOR UPDATE`, batchID).
+		Scan(&productID, &quantityOut, &voidedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "batch not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if voidedAt != nil {
+		writeError(w, http.StatusConflict, "this batch is already voided")
+		return
+	}
+
+	// Take the catalog row lock before reading availability, so a concurrent
+	// checkout cannot sell the batch's output between the check and the void.
+	info, unknown, err := productLockCatalogInfo(ctx, tx, []uuid.UUID{productID})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if unknown {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if quantityOut > home {
+		label := info.Labels[productID]
+		if label == "" {
+			label = "this product"
+		}
+		writeError(w, http.StatusConflict, fmt.Sprintf(
+			"%s: %d of the %d units from this batch have already been sold or "+
+				"consigned; cancel those sales or return the stock first",
+			label, quantityOut-home, quantityOut))
+		return
+	}
+
+	// Reverse only the batch's own entries, never a reversal of one, and never
+	// one that somehow already carries a reversal. Propolis needs no reversing
+	// row: consumption is a sum over live batches, so voiding releases it.
+	rows, err := tx.Query(ctx, `
+		SELECT m.id, m.kind, m.amount_lbs, m.reason, m.notes
+		FROM honey_movements m
+		WHERE m.product_batch_id=$1 AND m.reverses_movement_id IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM honey_movements rev WHERE rev.reverses_movement_id = m.id)
+		ORDER BY m.id
+		FOR UPDATE OF m`, batchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	type batchMovement struct {
+		id        uuid.UUID
+		kind      string
+		amountLbs *float64
+		reason    *string
+		notes     *string
+	}
+	movements := make([]batchMovement, 0, 1)
+	for rows.Next() {
+		var m batchMovement
+		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.reason, &m.notes); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		movements = append(movements, m)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	actor := actorID(r)
+	reason := honeyTrimPtr(req.Reason)
+	for _, m := range movements {
+		reversalReason := "void of product batch"
+		if reason != nil {
+			reversalReason = *reason
+		} else if m.reason != nil && *m.reason != "" {
+			reversalReason += " (" + *m.reason + ")"
+		}
+		var negatedLbs *float64
+		if m.amountLbs != nil {
+			v := -*m.amountLbs
+			negatedLbs = &v
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO honey_movements
+				(date, kind, amount_lbs, reason, notes, reverses_movement_id,
+				 product_batch_id, created_by)
+			VALUES (now(), $1, $2, $3, $4, $5, $6, $7)`,
+			m.kind, negatedLbs, reversalReason, m.notes, m.id, batchID, actor); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE product_batches SET voided_at=now(), voided_by=$2, void_reason=$3
+		WHERE id=$1`, batchID, actor, reason); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true, "voided": true, "id": batchID,
+		"reversedMovements": len(movements),
+	})
 }

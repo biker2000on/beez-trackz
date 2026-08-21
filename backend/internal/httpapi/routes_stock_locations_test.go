@@ -610,3 +610,274 @@ func TestDeletingALocationRequiresAnEmptyShelf(t *testing.T) {
 		t.Error("home was deleted")
 	}
 }
+
+// --- catalog products travel too -------------------------------------------
+
+// seedStand creates a plain (non-consignment) location: a second farm stand
+// that rings up its own stock.
+func seedStand(t *testing.T, server *Server, name string) uuid.UUID {
+	t.Helper()
+	response, body := call(t, server.stockLocationCreate, adminRequest(
+		http.MethodPost, "/api/v1/stock-locations", map[string]any{
+			"name": name, "priceBasis": "retail", "settlementCadence": "monthly",
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create location = %d %v", response.Code, body)
+	}
+	id, err := uuid.Parse(body["id"].(string))
+	if err != nil {
+		t.Fatalf("parse location id: %v", err)
+	}
+	return id
+}
+
+func transferProduct(
+	t *testing.T,
+	server *Server,
+	locationID, productID uuid.UUID,
+	quantity int,
+) {
+	t.Helper()
+	response, body := call(t, server.stockTransferCreate, adminRequest(
+		http.MethodPost, "/api/v1/stock-locations/"+locationID.String()+"/transfers",
+		map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"productId": productID.String(), "quantity": quantity},
+			},
+		}, "id", locationID.String()))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("product transfer = %d %v", response.Code, body)
+	}
+}
+
+// productShelfCount reads what one location holds of one catalog SKU.
+func productShelfCount(t *testing.T, server *Server, locationID, productID uuid.UUID) int {
+	t.Helper()
+	shelf, _, err := server.stockLocationShelf(context.Background(), server.pool, locationID)
+	if err != nil {
+		t.Fatalf("shelf: %v", err)
+	}
+	for _, row := range shelf {
+		if row.ProductID != nil && *row.ProductID == productID {
+			return row.OnHand
+		}
+	}
+	return 0
+}
+
+// The gap: shrink counted on a catalog SKU at the shop was refused with a 400
+// because products had no adjustment ledger to absorb the loss.
+func TestSettlementRecordsProductShrink(t *testing.T) {
+	server := honeyTestServer(t)
+	seedHarvest(t, server, 100)
+	productID := seedCatalogProduct(t, server, "Hot honey", 14)
+	seedProductBatch(t, server, productID, 5, 8)
+	shopID := seedShop(t, server, "Bike shop", 30)
+	transferProduct(t, server, shopID, productID, 8)
+
+	// 8 out, 3 sold, 1 handed back: 4 should be left. They count 3.
+	response, body := call(t, server.stockSettlementCreate, adminRequest(
+		http.MethodPost, "/api/v1/stock-locations/"+shopID.String()+"/settlements",
+		map[string]any{
+			"periodStart":   "2026-08-01",
+			"periodEnd":     "2026-08-31",
+			"reportedAt":    "2026-09-02",
+			"paymentMethod": "check",
+			"amountPaid":    0,
+			"lines": []map[string]any{{
+				"productId":        productID.String(),
+				"quantitySold":     3,
+				"quantityReturned": 1,
+				"unitPrice":        14.00,
+				"countOnShelf":     3,
+			}},
+		}, "id", shopID.String()))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("product settlement = %d %v", response.Code, body)
+	}
+	if body["shrinkUnits"] != float64(1) {
+		t.Errorf("shrinkUnits = %v, want 1", body["shrinkUnits"])
+	}
+	// 30% of $14.00 leaves the operator $9.80 a jar, three jars.
+	if body["amountOwed"] != 29.40 {
+		t.Errorf("amountOwed = %v, want 29.40", body["amountOwed"])
+	}
+
+	if got := productShelfCount(t, server, shopID, productID); got != 3 {
+		t.Errorf("shop shelf = %d, want 3", got)
+	}
+	if got := productShelfCount(t, server, homeLocation(t, server), productID); got != 1 {
+		t.Errorf("home shelf = %d, want the one that came back", got)
+	}
+	// The missing unit left the world, so the global count drops. Without the
+	// product ledger's half, home would silently inherit it.
+	if got := productOnHand(t, server, productID); got != 4 {
+		t.Errorf("global on hand = %d, want 4 (8 - 3 sold - 1 shrink)", got)
+	}
+
+	ctx := context.Background()
+	var delta int
+	var reason string
+	var locationID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		SELECT delta, reason, location_id FROM product_adjustments
+		WHERE settlement_id IS NOT NULL AND deleted_at IS NULL`).
+		Scan(&delta, &reason, &locationID); err != nil {
+		t.Fatalf("the shrink wrote no product adjustment: %v", err)
+	}
+	if delta != -1 || locationID != shopID || reason != "shrink at Bike shop" {
+		t.Errorf("adjustment = %d at %v (%q), want -1 at the shop naming it",
+			delta, locationID, reason)
+	}
+
+	// Voiding puts every half back, the product ledger's included.
+	settlementID, err := uuid.Parse(body["id"].(string))
+	if err != nil {
+		t.Fatalf("parse settlement id: %v", err)
+	}
+	voidResponse, voidBody := call(t, server.stockSettlementVoid, adminRequest(
+		http.MethodPost, "/api/v1/consignment-settlements/"+settlementID.String()+"/void",
+		nil, "id", settlementID.String()))
+	if voidResponse.Code != http.StatusOK {
+		t.Fatalf("void = %d %v", voidResponse.Code, voidBody)
+	}
+	if got := productOnHand(t, server, productID); got != 8 {
+		t.Errorf("global on hand after void = %d, want 8", got)
+	}
+	if got := productShelfCount(t, server, shopID, productID); got != 8 {
+		t.Errorf("shop shelf after void = %d, want 8", got)
+	}
+	var live int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM product_adjustments
+		WHERE settlement_id=$1 AND deleted_at IS NULL`, settlementID).Scan(&live); err != nil {
+		t.Fatalf("count adjustments: %v", err)
+	}
+	if live != 0 {
+		t.Errorf("%d settlement adjustments survived the void", live)
+	}
+}
+
+// The inventory matrix is built in one pass now; it must still agree with the
+// per-location shelves it replaced.
+func TestInventoryMatrixMatchesTheShelves(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedHarvest(t, server, 100)
+	jarStock(t, server, jarSizeID, 24)
+	productID := seedCatalogProduct(t, server, "Hot honey", 14)
+	seedProductBatch(t, server, productID, 5, 8)
+	shopID := seedShop(t, server, "Bike shop", 30)
+	transfer(t, server, shopID, jarSizeID, 20)
+	transferProduct(t, server, shopID, productID, 6)
+	homeID := homeLocation(t, server)
+
+	recorder := httptest.NewRecorder()
+	server.stockInventoryHandler(recorder, adminRequest(
+		http.MethodGet, "/api/v1/stock-locations/inventory", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("inventory = %d %s", recorder.Code, recorder.Body.String())
+	}
+	var decoded struct {
+		Locations []stockLocationRow  `json:"locations"`
+		Items     []stockInventoryRow `json:"items"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode inventory: %v", err)
+	}
+	if len(decoded.Items) != 2 {
+		t.Fatalf("inventory listed %d SKUs, want the jar and the product", len(decoded.Items))
+	}
+	// Jars first, then catalog products: the same order one shelf reports.
+	jars, products := decoded.Items[0], decoded.Items[1]
+	if jars.JarSizeID == nil || *jars.JarSizeID != jarSizeID {
+		t.Fatalf("first row is not the jar size: %+v", jars)
+	}
+	if products.ProductID == nil || *products.ProductID != productID {
+		t.Fatalf("second row is not the catalog product: %+v", products)
+	}
+	if jars.Total != 24 || jars.ByLocation[homeID.String()] != 4 ||
+		jars.ByLocation[shopID.String()] != 20 {
+		t.Errorf("jars = %d total, home %d, shop %d; want 24/4/20",
+			jars.Total, jars.ByLocation[homeID.String()], jars.ByLocation[shopID.String()])
+	}
+	if products.Total != 8 || products.ByLocation[homeID.String()] != 2 ||
+		products.ByLocation[shopID.String()] != 6 {
+		t.Errorf("products = %d total, home %d, shop %d; want 8/2/6",
+			products.Total, products.ByLocation[homeID.String()],
+			products.ByLocation[shopID.String()])
+	}
+	// Every number must equal what the per-location shelf says.
+	for _, location := range decoded.Locations {
+		if got := shelfCount(t, server, location.ID, jarSizeID); got != jars.ByLocation[location.ID.String()] {
+			t.Errorf("%s: matrix says %d jars, the shelf says %d",
+				location.Name, jars.ByLocation[location.ID.String()], got)
+		}
+		if got := productShelfCount(t, server, location.ID, productID); got != products.ByLocation[location.ID.String()] {
+			t.Errorf("%s: matrix says %d products, the shelf says %d",
+				location.Name, products.ByLocation[location.ID.String()], got)
+		}
+	}
+}
+
+// The retired endpoint stays for one release as a delegate: same answer, plus
+// the headers that tell a client to move to POST /sales.
+func TestLocationSaleDelegatesToTheGenericEndpoint(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedHarvest(t, server, 100)
+	jarStock(t, server, jarSizeID, 10)
+	standID := seedStand(t, server, "Second stand")
+	transfer(t, server, standID, jarSizeID, 6)
+
+	response, body := call(t, server.stockLocationSaleCreate, adminRequest(
+		http.MethodPost, "/api/v1/stock-locations/"+standID.String()+"/sales",
+		map[string]any{
+			"date":    time.Now().Format("2006-01-02"),
+			"channel": "farm_stand",
+			"lines": []map[string]any{
+				{"jarSizeId": jarSizeID.String(), "quantity": 2, "unitPrice": 12.00},
+			},
+		}, "id", standID.String()))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("delegated sale = %d %v", response.Code, body)
+	}
+	if response.Header().Get("Deprecation") != "true" {
+		t.Error("the delegate did not announce itself as deprecated")
+	}
+	if body["totalAmount"] != 24.00 {
+		t.Errorf("totalAmount = %v, want 24.00", body["totalAmount"])
+	}
+	// The stand's shelf paid for it, not home's.
+	if got := shelfCount(t, server, standID, jarSizeID); got != 4 {
+		t.Errorf("stand shelf = %d, want 4", got)
+	}
+	if got := shelfCount(t, server, homeLocation(t, server), jarSizeID); got != 4 {
+		t.Errorf("home shelf = %d, want the untouched 4", got)
+	}
+	// The sale is scoped to the location named in the path.
+	var locationID uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT stock_location_id FROM sales`).Scan(&locationID); err != nil {
+		t.Fatalf("read sale: %v", err)
+	}
+	if locationID != standID {
+		t.Errorf("sale scoped to %v, want the stand", locationID)
+	}
+
+	// A consignment shop still refuses: its revenue comes from the report.
+	shopID := seedShop(t, server, "Bike shop", 30)
+	transfer(t, server, shopID, jarSizeID, 2)
+	refused, _ := call(t, server.stockLocationSaleCreate, adminRequest(
+		http.MethodPost, "/api/v1/stock-locations/"+shopID.String()+"/sales",
+		map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{
+				{"jarSizeId": jarSizeID.String(), "quantity": 1, "unitPrice": 12.00},
+			},
+		}, "id", shopID.String()))
+	if refused.Code != http.StatusConflict {
+		t.Errorf("consignment sale through the delegate = %d, want 409", refused.Code)
+	}
+}

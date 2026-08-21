@@ -358,10 +358,13 @@ export function useRecordStockSettlement(locationId: string) {
 /**
  * Sell off a location's shelf instead of home's.
  *
- * Home keeps selling through `/sales`; this exists so a second farm stand can
- * ring up its own stock without pretending the jars were at home. Consignment
- * locations refuse it — their revenue is recognised by the report, which takes
- * the counts and the payment together.
+ * There is one sale endpoint: `/sales` takes an optional `stockLocationId` and
+ * validates the lines against that shelf, so a second farm stand rings up its
+ * own stock without pretending the jars were at home. (The old
+ * `/stock-locations/{id}/sales` route still answers as a deprecated delegate;
+ * nothing here calls it.) Consignment locations refuse a plain sale — their
+ * revenue is recognised by the report, which takes the counts and the payment
+ * together.
  */
 export function useStockLocationSale(locationId: string) {
   return useStockMutation(
@@ -380,7 +383,7 @@ export function useStockLocationSale(locationId: string) {
         quantity: number;
         unitPrice: number;
       }[];
-    }) => api.post(`/stock-locations/${locationId}/sales`, body),
+    }) => api.post("/sales", { ...body, stockLocationId: locationId }),
     "Sale recorded",
     { silentError: true },
   );
