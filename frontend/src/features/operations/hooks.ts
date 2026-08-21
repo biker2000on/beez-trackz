@@ -406,3 +406,29 @@ export function useDeleteMiteCount() {
     onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
   });
 }
+
+export interface MiteCountBatchRow {
+  method: MiteMethod;
+  mitesCount: number;
+  sampleSize?: number;
+  daysOnBoard?: number;
+  notes?: string;
+}
+
+/** Replace an inspection's whole mite-count set in one transaction, so a
+ * failed edit can never leave a partial mix of old and new rows. */
+export function useReplaceInspectionMiteCounts() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      inspectionId: string;
+      hiveId?: string;
+      counts: MiteCountBatchRow[];
+    }) =>
+      api.post("/mite-counts/batch", {
+        inspectionId: input.inspectionId,
+        counts: input.counts,
+      }),
+    onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
+  });
+}

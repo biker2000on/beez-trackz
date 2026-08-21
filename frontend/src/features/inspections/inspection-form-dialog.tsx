@@ -42,10 +42,8 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { todayInput, toDateInput } from "@/features/hives/lib";
 import {
-  useCreateMiteCount,
-  useDeleteMiteCount,
   useInspectionMiteCounts,
-  useUpdateMiteCount,
+  useReplaceInspectionMiteCounts,
   type MiteMethod,
 } from "@/features/operations/hooks";
 import {
@@ -251,9 +249,7 @@ export function InspectionFormDialog({
   const isEdit = Boolean(inspection);
   const createInspection = useCreateInspection();
   const updateInspection = useUpdateInspection();
-  const createMiteCount = useCreateMiteCount();
-  const updateMiteCount = useUpdateMiteCount();
-  const deleteMiteCount = useDeleteMiteCount();
+  const replaceMiteCounts = useReplaceInspectionMiteCounts();
   const liveMiteCounts = useInspectionMiteCounts(inspection?.id);
 
   const form = useForm<InspectionValues>({
@@ -417,45 +413,21 @@ export function InspectionFormDialog({
     };
     try {
       if (isEdit && inspection) {
-        // Inspection PUT still rewrites mite_counts when miteCounts is sent.
-        // Edit each row through the dedicated mite-count endpoints instead.
         await updateInspection.mutateAsync({ id: inspection.id, ...payload });
-        const originalIds = new Set(
-          (liveMiteCounts.data ?? inspection.miteCounts ?? []).map(
-            (count) => count.id,
-          ),
-        );
-        const kept = new Set(rows.map((row) => row.id).filter(Boolean));
-        for (const id of originalIds) {
-          if (!kept.has(id)) {
-            await deleteMiteCount.mutateAsync({ id, hiveId });
-          }
-        }
-        for (const row of rows) {
-          if (row.id) {
-            await updateMiteCount.mutateAsync({
-              id: row.id,
-              hiveId,
-              date: values.date,
-              method: row.method,
-              mitesCount: row.mitesCount,
-              sampleSize: row.sampleSize,
-              daysOnBoard: row.daysOnBoard,
-              notes: row.notes,
-            });
-          } else {
-            await createMiteCount.mutateAsync({
-              hiveId,
-              inspectionId: inspection.id,
-              date: values.date,
-              method: row.method,
-              mitesCount: row.mitesCount,
-              sampleSize: row.sampleSize,
-              daysOnBoard: row.daysOnBoard,
-              notes: row.notes,
-            });
-          }
-        }
+        // The whole final mite-count set lands in ONE transactional request —
+        // a per-row sequence could fail halfway (a method swap deterministically
+        // collided with the unique index) and persist a partial edit.
+        await replaceMiteCounts.mutateAsync({
+          inspectionId: inspection.id,
+          hiveId,
+          counts: rows.map((row) => ({
+            method: row.method,
+            mitesCount: row.mitesCount,
+            sampleSize: row.sampleSize,
+            daysOnBoard: row.daysOnBoard,
+            notes: row.notes,
+          })),
+        });
         toast.success("Inspection updated");
       } else {
         await createInspection.mutateAsync({

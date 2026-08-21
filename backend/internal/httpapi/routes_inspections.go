@@ -249,6 +249,7 @@ func replaceInspectionMiteCounts(
 	inspectionID, hiveID uuid.UUID,
 	date time.Time,
 	counts []miteCountPayload,
+	actor *uuid.UUID,
 ) error {
 	// Rows are matched by (inspection_id, method): resubmitted methods are
 	// updated in place by the upsert (which leaves source_media_file_id /
@@ -261,9 +262,9 @@ func replaceInspectionMiteCounts(
 	// Soft delete, matching the standalone endpoint: the audit trail keeps
 	// dropped methods and every aggregate already filters deleted_at IS NULL.
 	if _, err := q.Exec(ctx, `
-		UPDATE mite_counts SET deleted_at = now()
+		UPDATE mite_counts SET deleted_at = now(), deleted_by = $3
 		WHERE inspection_id = $1 AND method <> ALL($2) AND deleted_at IS NULL`,
-		inspectionID, methods); err != nil {
+		inspectionID, methods, actor); err != nil {
 		return err
 	}
 	for _, count := range counts {
@@ -280,26 +281,24 @@ func replaceInspectionMiteCounts(
 }
 
 // syncInspectionTreatmentEvents reconciles the treatment_events rows this
-// inspection owns with the treatments jsonb just submitted. The create path
-// writes one event per treatment; a PATCH that rewrote the jsonb used to leave
-// those events untouched, so a corrected product kept locking the hive on the
-// old withdrawal days and a removed treatment locked it forever.
+// inspection owns with the treatments jsonb just submitted.
 //
 // Rows are matched by product, case-insensitively, the same key
-// resolveWithdrawalDays uses. A resubmitted product keeps its row id and its
-// date_removed, so an in-progress withdrawal window is not reset by an
-// unrelated edit to the same inspection; only products dropped from the array
-// are deleted. withdrawal_days is re-resolved on every pass because the
-// catalog (or the product spelling) may have changed since the event was
-// written.
+// resolveWithdrawalDays uses; matched rows keep their id, date_applied,
+// date_removed, and media lineage, so an in-progress withdrawal window is not
+// reset by an unrelated edit. A single unmatched row facing a single
+// unmatched submission is treated as a RENAME of that row (the typo-fix
+// case), preserving the same columns. Everything else that left the jsonb is
+// soft-deleted with attribution — withdrawal history is regulated data and
+// never hard-deleted. withdrawal_days is re-resolved on every pass.
 func (s *Server) syncInspectionTreatmentEvents(
 	ctx context.Context,
 	q inspectionQuerier,
 	inspectionID, hiveID uuid.UUID,
 	date time.Time,
 	treatments []inspectionTreatment,
+	actor *uuid.UUID,
 ) error {
-	keys := make([]string, 0, len(treatments))
 	seen := make(map[string]bool, len(treatments))
 	kept := make([]inspectionTreatment, 0, len(treatments))
 	for _, treatment := range treatments {
@@ -314,16 +313,16 @@ func (s *Server) syncInspectionTreatmentEvents(
 			continue
 		}
 		seen[key] = true
-		keys = append(keys, key)
 		treatment.Product = product
 		kept = append(kept, treatment)
 	}
-	if _, err := q.Exec(ctx, `
-		DELETE FROM treatment_events
-		WHERE inspection_id = $1 AND lower(btrim(product)) <> ALL($2)`,
-		inspectionID, keys); err != nil {
-		return err
-	}
+
+	// Update pass first: matched rows are never deleted, so their
+	// date_removed and source_media lineage survive. date_applied is NOT
+	// reset here — a direct treatment-event date correction must survive an
+	// unrelated jsonb edit; date moves ride the inspection-date path.
+	unmatched := make([]inspectionTreatment, 0)
+	matchedKeys := make([]string, 0, len(kept))
 	for _, treatment := range kept {
 		days, err := s.resolveWithdrawalDays(ctx, treatment.Product)
 		if err != nil {
@@ -331,15 +330,76 @@ func (s *Server) syncInspectionTreatmentEvents(
 		}
 		tag, err := q.Exec(ctx, `
 			UPDATE treatment_events
-			SET product = $3, method = $4, date_applied = $5, withdrawal_days = $6
-			WHERE inspection_id = $1 AND lower(btrim(product)) = $2`,
+			SET product = $3, method = $4, withdrawal_days = $5
+			WHERE inspection_id = $1
+			  AND lower(btrim(product, E' \t\n\r')) = $2
+			  AND deleted_at IS NULL`,
 			inspectionID, strings.ToLower(treatment.Product), treatment.Product,
-			inspectionTrimPtr(treatment.Method), date, days)
+			inspectionTrimPtr(treatment.Method), days)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() > 0 {
+			matchedKeys = append(matchedKeys, strings.ToLower(treatment.Product))
 			continue
+		}
+		unmatched = append(unmatched, treatment)
+	}
+
+	// Rows the submission no longer names.
+	leftRows, err := q.Query(ctx, `
+		SELECT id FROM treatment_events
+		WHERE inspection_id = $1 AND deleted_at IS NULL
+		  AND lower(btrim(product, E' \t\n\r')) <> ALL($2)`,
+		inspectionID, matchedKeys)
+	if err != nil {
+		return err
+	}
+	leftover := make([]uuid.UUID, 0)
+	for leftRows.Next() {
+		var id uuid.UUID
+		if err := leftRows.Scan(&id); err != nil {
+			leftRows.Close()
+			return err
+		}
+		leftover = append(leftover, id)
+	}
+	leftRows.Close()
+	if err := leftRows.Err(); err != nil {
+		return err
+	}
+
+	// One row out, one product in: a rename. Keep the row.
+	if len(leftover) == 1 && len(unmatched) == 1 {
+		treatment := unmatched[0]
+		days, err := s.resolveWithdrawalDays(ctx, treatment.Product)
+		if err != nil {
+			return err
+		}
+		if _, err := q.Exec(ctx, `
+			UPDATE treatment_events
+			SET product = $2, method = $3, withdrawal_days = $4
+			WHERE id = $1`,
+			leftover[0], treatment.Product,
+			inspectionTrimPtr(treatment.Method), days); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if len(leftover) > 0 {
+		if _, err := q.Exec(ctx, `
+			UPDATE treatment_events
+			SET deleted_at = now(), deleted_by = $2
+			WHERE id = ANY($1) AND deleted_at IS NULL`,
+			leftover, actor); err != nil {
+			return err
+		}
+	}
+	for _, treatment := range unmatched {
+		days, err := s.resolveWithdrawalDays(ctx, treatment.Product)
+		if err != nil {
+			return err
 		}
 		if _, err := q.Exec(ctx, `
 			INSERT INTO treatment_events
@@ -494,11 +554,11 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 	// Same reconcile the PATCH path runs; on a brand-new inspection it is
 	// pure inserts, so create and update can never drift apart.
 	if err := s.syncInspectionTreatmentEvents(
-		r.Context(), tx, id, hiveID, date, req.Treatments); err != nil {
+		r.Context(), tx, id, hiveID, date, req.Treatments, actorID(r)); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid treatment")
 		return
 	}
-	if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, req.MiteCounts); err != nil {
+	if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, req.MiteCounts, actorID(r)); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid mite count")
 		return
 	}
@@ -710,15 +770,22 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 	if updatedDate != nil {
 		date = *updatedDate
 		if _, err := tx.Exec(r.Context(),
-			`UPDATE mite_counts SET date = $2 WHERE inspection_id = $1`,
+			`UPDATE mite_counts SET date = $2
+			 WHERE inspection_id = $1 AND deleted_at IS NULL`,
 			id, date); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
 		// A treatment's lockout is anchored to date_applied, so moving the
-		// inspection has to move its events with it.
-		if _, err := tx.Exec(r.Context(),
-			`UPDATE treatment_events SET date_applied = $2 WHERE inspection_id = $1`,
+		// inspection has to move its events with it. A recorded removal can
+		// never precede the application, so clamp it forward.
+		if _, err := tx.Exec(r.Context(), `
+			UPDATE treatment_events
+			SET date_applied = $2,
+			    date_removed = CASE
+					WHEN date_removed IS NOT NULL AND date_removed < $2 THEN $2
+					ELSE date_removed END
+			WHERE inspection_id = $1 AND deleted_at IS NULL`,
 			id, date); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -726,13 +793,13 @@ func (s *Server) handleInspectionUpdate(w http.ResponseWriter, r *http.Request) 
 	}
 	if treatmentsSet {
 		if err := s.syncInspectionTreatmentEvents(
-			r.Context(), tx, id, hiveID, date, treatments); err != nil {
+			r.Context(), tx, id, hiveID, date, treatments, actorID(r)); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid treatment")
 			return
 		}
 	}
 	if miteCountsSet {
-		if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, miteCounts); err != nil {
+		if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, miteCounts, actorID(r)); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid mite count")
 			return
 		}

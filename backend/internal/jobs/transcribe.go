@@ -153,9 +153,13 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 		defer cancel()
 		if hadComplete {
 			// Re-transcribe failed: restore complete and keep the old text.
+			// Clear the operator's intent flag too — leaving it set makes the
+			// retranscribe endpoint answer 409 for the rest of the 15-minute
+			// window even though nothing is running any more.
 			if _, uerr := conn.Exec(writeCtx, `
 				UPDATE media_files
-				SET transcription_status = 'complete', transcription_error = $2
+				SET transcription_status = 'complete', transcription_error = $2,
+				    retranscription_requested_at = NULL
 				WHERE id = $1 AND COALESCE(transcription_text, '') <> ''`,
 				p.RecordingID, cause.Error()); uerr != nil {
 				slog.Error("transcribe: failed to record error", "recordingId", p.RecordingID, "err", uerr)
@@ -164,7 +168,8 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 		}
 		if _, uerr := conn.Exec(writeCtx, `
 			UPDATE media_files
-			SET transcription_status = 'failed', transcription_error = $2
+			SET transcription_status = 'failed', transcription_error = $2,
+			    retranscription_requested_at = NULL
 			WHERE id = $1 AND `+transcribeIncompleteSQL,
 			p.RecordingID, cause.Error()); uerr != nil {
 			slog.Error("transcribe: failed to record error", "recordingId", p.RecordingID, "err", uerr)

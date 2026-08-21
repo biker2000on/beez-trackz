@@ -9,8 +9,9 @@ ALTER TABLE harvest_lots
   ADD COLUMN moisture_override_reason text,
   ADD COLUMN moisture_override_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
   ADD COLUMN moisture_override_at timestamptz,
-  -- The three move together: an override is never anonymous or undated, and a
-  -- cleared override leaves nothing behind.
+  -- Reason and timestamp move together; a cleared override leaves nothing
+  -- behind. moisture_override_by is deliberately outside the CHECK — the FK
+  -- nulls it when the user is deleted, so attribution is best-effort.
   ADD CONSTRAINT harvest_lots_moisture_override_complete CHECK (
     (moisture_override_reason IS NULL AND moisture_override_at IS NULL)
     OR (moisture_override_reason IS NOT NULL
@@ -122,6 +123,10 @@ CREATE INDEX IF NOT EXISTS treatment_events_inspection_id_idx
   ON treatment_events (inspection_id) WHERE inspection_id IS NOT NULL;
 
 -- +goose Down
+-- Asymmetries, both deliberate: the notes annotation from section 2 is not
+-- reverted (the updated_at trigger already fired, so a later re-run of Up
+-- will skip those rows — behaviourally harmless), and the seed delete below
+-- keeps operator-edited rows, matching "operator edits win" in the Up.
 DROP INDEX IF EXISTS treatment_events_inspection_id_idx;
 DELETE FROM treatment_products WHERE name_key IN (
   'terramycin', 'tylan', 'lincomix', 'fumagilin-b', 'thymovar',

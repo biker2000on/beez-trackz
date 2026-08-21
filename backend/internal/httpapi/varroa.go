@@ -48,6 +48,7 @@ WITH treatments AS (
 		) AS next_applied
 	FROM treatment_events t
 	WHERE ($1::uuid IS NULL OR t.hive_id = $1)
+		AND t.deleted_at IS NULL
 )
 SELECT t.id, t.hive_id, t.date_applied, t.product, t.method, t.date_removed,
 	before_count.rate, after_count.rate,
@@ -499,6 +500,54 @@ func (s *Server) miteCountCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, miteCountResponse(id, per100, perDay))
+}
+
+// POST /mite-counts/batch {inspectionId, counts} — replace an inspection's
+// whole mite-count set in ONE transaction. The form's per-row PATCH/POST/
+// DELETE sequence could fail halfway (a method swap deterministically
+// collided with the unique index) and leave a partial edit persisted;
+// submitting the final set atomically cannot.
+func (s *Server) miteCountBatchReplace(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		InspectionID uuid.UUID          `json:"inspectionId"`
+		Counts       []miteCountPayload `json:"counts"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.InspectionID == uuid.Nil {
+		writeError(w, http.StatusBadRequest, "inspectionId and counts are required")
+		return
+	}
+	var hiveID uuid.UUID
+	var date time.Time
+	err := s.pool.QueryRow(r.Context(), `
+		SELECT hive_id, date FROM inspections WHERE id = $1`, req.InspectionID).
+		Scan(&hiveID, &date)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "inspection not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if !s.requireHiveRole(w, r, hiveID, true) {
+		return
+	}
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err := replaceInspectionMiteCounts(
+		r.Context(), tx, req.InspectionID, hiveID, date, req.Counts, actorID(r)); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid mite count")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 func (s *Server) miteCountUpdate(w http.ResponseWriter, r *http.Request) {

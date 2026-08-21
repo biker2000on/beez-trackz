@@ -380,7 +380,8 @@ func (s *Server) transcriptionReparseDiff(ctx context.Context, mediaID uuid.UUID
 
 	treatRows, err := s.pool.Query(ctx, `
 		SELECT id, hive_id, product, method FROM treatment_events
-		WHERE source_media_file_id = $1 ORDER BY date_applied`, mediaID)
+		WHERE deleted_at IS NULL AND source_media_file_id = $1
+		ORDER BY date_applied`, mediaID)
 	if err != nil {
 		return diff, err
 	}
@@ -799,18 +800,45 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 				return
 			}
 			if item.ExistingID != nil {
-				tag, err := tx.Exec(ctx, `
-					UPDATE treatment_events SET product = $2, method = $3, withdrawal_days = $4,
-						source_transcript_version_id = $5
-					WHERE id = $1 AND source_media_file_id = $6`,
-					*item.ExistingID, fields.Product, fields.Method, days, versionID, row.ID)
+				// Capture the old spelling first: the owning inspection's
+				// treatments jsonb keys the reconcile in routes_inspections.go,
+				// and leaving the old product there would make the next
+				// inspection PATCH delete this row and revert the reparse.
+				var oldProduct string
+				var inspectionID *uuid.UUID
+				err := tx.QueryRow(ctx, `
+					SELECT product, inspection_id FROM treatment_events
+					WHERE id = $1 AND source_media_file_id = $2 FOR UPDATE`,
+					*item.ExistingID, row.ID).Scan(&oldProduct, &inspectionID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeError(w, http.StatusConflict, "treatment is not from this recording")
+					return
+				}
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "database error")
 					return
 				}
-				if tag.RowsAffected() == 0 {
-					writeError(w, http.StatusConflict, "treatment is not from this recording")
+				if _, err := tx.Exec(ctx, `
+					UPDATE treatment_events SET product = $2, method = $3, withdrawal_days = $4,
+						source_transcript_version_id = $5
+					WHERE id = $1`,
+					*item.ExistingID, fields.Product, fields.Method, days, versionID); err != nil {
+					writeError(w, http.StatusInternalServerError, "database error")
 					return
+				}
+				if inspectionID != nil && !strings.EqualFold(strings.TrimSpace(oldProduct), strings.TrimSpace(fields.Product)) {
+					if _, err := tx.Exec(ctx, `
+						UPDATE inspections SET treatments = (
+							SELECT jsonb_agg(
+								CASE WHEN lower(btrim(elem->>'product', E' \t\n\r')) = lower(btrim($2, E' \t\n\r'))
+								     THEN jsonb_set(elem, '{product}', to_jsonb($3::text))
+								     ELSE elem END)
+							FROM jsonb_array_elements(treatments) elem)
+						WHERE id = $1 AND jsonb_typeof(treatments) = 'array'`,
+						*inspectionID, oldProduct, fields.Product); err != nil {
+						writeError(w, http.StatusInternalServerError, "database error")
+						return
+					}
 				}
 				updated++
 				continue

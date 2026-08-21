@@ -453,7 +453,7 @@ func (s *Server) collectNtfyCandidates(ctx context.Context, now time.Time) ([]nt
 		FROM treatment_events t
 		JOIN hives h ON h.id = t.hive_id
 		JOIN apiaries a ON a.id = h.apiary_id
-		WHERE t.date_removed IS NOT NULL`)
+		WHERE t.date_removed IS NOT NULL AND t.deleted_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -872,6 +872,7 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 		FROM treatment_events t
 		JOIN hives h ON h.id = t.hive_id
 		JOIN apiaries a ON a.id = h.apiary_id
+		WHERE t.deleted_at IS NULL
 		ORDER BY t.date_applied DESC, h.position_label`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")

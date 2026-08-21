@@ -25,6 +25,10 @@ CREATE INDEX mite_counts_live_idx
 CREATE INDEX mite_counts_created_by_idx ON mite_counts (created_by);
 
 -- +goose Down
+-- Purge tombstones first: once a count has been soft-deleted and replaced,
+-- recreating the unfiltered unique indexes over ALL rows would abort on the
+-- duplicate key. The live replacement is the row worth keeping.
+DELETE FROM mite_counts WHERE deleted_at IS NOT NULL;
 DROP INDEX IF EXISTS mite_counts_created_by_idx;
 DROP INDEX IF EXISTS mite_counts_live_idx;
 DROP INDEX IF EXISTS mite_counts_standalone_uidx;

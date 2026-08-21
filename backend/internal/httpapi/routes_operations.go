@@ -18,6 +18,7 @@ import (
 func (s *Server) mountOperations(r chi.Router) {
 	r.Get("/mite-counts", s.miteCountList)
 	r.Post("/mite-counts", s.miteCountCreate)
+	r.Post("/mite-counts/batch", s.miteCountBatchReplace)
 	r.With(s.requireEntityParamRole("mite", true)).
 		Patch("/mite-counts/{id}", s.miteCountUpdate)
 	r.With(s.requireEntityParamRole("mite", true)).
@@ -155,7 +156,7 @@ func (s *Server) treatmentEventUpdate(w http.ResponseWriter, r *http.Request) {
 	)
 	err = s.pool.QueryRow(r.Context(), `
 		SELECT hive_id, date_applied, date_removed, product, method, notes, withdrawal_days
-		FROM treatment_events WHERE id = $1`, id).Scan(
+		FROM treatment_events WHERE id = $1 AND deleted_at IS NULL`, id).Scan(
 		&hiveID, &applied, &removed, &product, &method, &notes, &withdrawalDays)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "treatment event not found")
@@ -338,7 +339,7 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 					'lockoutUntil', CASE WHEN t.date_removed IS NULL THEN NULL
 						ELSE (t.date_removed::date + t.withdrawal_days)::date END
 				)
-			FROM treatment_events t WHERE t.hive_id = $1
+			FROM treatment_events t WHERE t.hive_id = $1 AND t.deleted_at IS NULL
 			UNION ALL
 			SELECT m.id, 'mite_count', m.date, 'Varroa count',
 				m.mites_count::text || ' mites via ' || replace(m.method, '_', ' '),

@@ -426,7 +426,8 @@ func checkTreatNow(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]Re
 		  AND m.date >= $1::timestamptz - make_interval(days => $2)
 		  AND m.date > COALESCE((
 			SELECT max(GREATEST(t.date_applied, COALESCE(t.date_removed, t.date_applied)))
-			FROM treatment_events t WHERE t.hive_id = m.hive_id
+			FROM treatment_events t
+			WHERE t.hive_id = m.hive_id AND t.deleted_at IS NULL
 		  ), '-infinity'::timestamptz)
 		ORDER BY m.hive_id, m.date DESC`, now, treatNowMaxCountAgeDays)
 	if err != nil {

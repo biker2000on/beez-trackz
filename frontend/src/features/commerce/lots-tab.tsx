@@ -231,9 +231,15 @@ function LotFormDialog({
     () => (lot?.bottlingMoisturePct != null ? String(lot.bottlingMoisturePct) : ""),
   );
   // Revealed only after the server rejects an over-threshold reading, so the
-  // default path stays a hard reject.
-  const [overrideOffered, setOverrideOffered] = React.useState(false);
-  const [overrideAccepted, setOverrideAccepted] = React.useState(false);
+  // default path stays a hard reject. A lot that already carries an override
+  // starts accepted, so an unrelated edit re-submits (and preserves) it
+  // instead of tripping the reject again.
+  const [overrideOffered, setOverrideOffered] = React.useState(
+    () => lot?.moistureOverrideReason != null,
+  );
+  const [overrideAccepted, setOverrideAccepted] = React.useState(
+    () => lot?.moistureOverrideReason != null,
+  );
   const [overrideReason, setOverrideReason] = React.useState(
     () => lot?.moistureOverrideReason ?? "",
   );
@@ -302,9 +308,14 @@ function LotFormDialog({
     setMoistureError(null);
     const onError = (cause: unknown) => {
       const message = cause instanceof Error ? cause.message : "";
-      if (/moisture/i.test(message)) {
+      // Only the over-threshold rejection is overridable; range and
+      // reason-length errors would fail the resubmit identically.
+      if (/is over the .* harvest threshold/i.test(message) ||
+          /Set moistureOverrideReason/i.test(message)) {
         setMoistureError(message);
         setOverrideOffered(true);
+      } else if (/moisture/i.test(message)) {
+        setMoistureError(message);
       }
     };
     if (lot) {

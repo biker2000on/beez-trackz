@@ -180,6 +180,7 @@ func loadTreatmentsAsOf(ctx context.Context, q queryRower, hiveIDs []uuid.UUID, 
 		SELECT id, hive_id, product, date_applied, date_removed, withdrawal_days
 		FROM treatment_events
 		WHERE hive_id = ANY($1) AND date_applied::date <= $2::date
+		  AND deleted_at IS NULL
 		ORDER BY date_applied DESC`, hiveIDs, calendarDate(asOf))
 	if err != nil {
 		return nil, err
@@ -573,11 +574,18 @@ func stampMoistureOverride(ctx context.Context, q inspectionQuerier, lotID uuid.
 			WHERE id = $1`, lotID)
 		return err
 	}
+	// Re-stamp who/when only when the justification actually changed; an
+	// unrelated edit that re-submits the same reason must not replace the
+	// original attribution the audit tier exists to keep.
 	_, err := q.Exec(ctx, `
 		UPDATE harvest_lots
-		SET moisture_override_reason = $2,
-		    moisture_override_by = $3,
-		    moisture_override_at = now()
+		SET moisture_override_by = CASE
+				WHEN moisture_override_reason IS DISTINCT FROM $2 THEN $3
+				ELSE moisture_override_by END,
+		    moisture_override_at = CASE
+				WHEN moisture_override_reason IS DISTINCT FROM $2 THEN now()
+				ELSE moisture_override_at END,
+		    moisture_override_reason = $2
 		WHERE id = $1`, lotID, *reason, actor)
 	return err
 }

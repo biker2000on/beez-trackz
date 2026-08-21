@@ -87,16 +87,33 @@ export function ReparseDiffPanel({
   const actionable = diff.proposals.filter(
     (proposal) => proposal.action === "update" || proposal.action === "create",
   );
-  const [selected, setSelected] = React.useState<Set<number>>(
-    () => new Set(actionable.map((_, index) => index)),
+  // Selection is keyed by stable proposal identity, not array index: a
+  // re-parse can reorder or replace proposals while the panel stays mounted,
+  // and a stale index would silently apply the wrong subset.
+  const identityOf = React.useCallback(
+    (proposal: (typeof actionable)[number], index: number) =>
+      `${proposal.kind}:${proposal.existingId ?? `new-${proposal.hiveId ?? ""}-${index}`}`,
+    [],
   );
+  const identityKey = actionable.map(identityOf).join("|");
+  const [selected, setSelected] = React.useState<Set<string>>(
+    () => new Set(actionable.map(identityOf)),
+  );
+  const lastIdentityKey = React.useRef(identityKey);
+  React.useEffect(() => {
+    if (lastIdentityKey.current !== identityKey) {
+      lastIdentityKey.current = identityKey;
+      setSelected(new Set(actionable.map(identityOf)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identityKey]);
 
   const apply = useMutation({
     mutationFn: () =>
       applyReparse(
         mediaFileId,
         actionable
-          .filter((_, index) => selected.has(index))
+          .filter((proposal, index) => selected.has(identityOf(proposal, index)))
           .map((proposal) => ({
             kind: proposal.kind,
             existingId: proposal.existingId,
@@ -129,21 +146,22 @@ export function ReparseDiffPanel({
       ) : (
         actionable.map((proposal, index) => {
           const changes = proposalChanges(proposal);
+          const identity = identityOf(proposal, index);
           return (
             <div
-              key={`${proposal.kind}-${index}`}
+              key={identity}
               className="grid gap-2 rounded-md border bg-muted/20 p-3"
             >
               <div className="flex items-start gap-2">
                 <Checkbox
                   id={`reparse-${index}`}
-                  checked={selected.has(index)}
+                  checked={selected.has(identity)}
                   disabled={disabled || apply.isPending}
                   onCheckedChange={(checked) => {
                     setSelected((prev) => {
                       const next = new Set(prev);
-                      if (checked === true) next.add(index);
-                      else next.delete(index);
+                      if (checked === true) next.add(identity);
+                      else next.delete(identity);
                       return next;
                     });
                   }}
