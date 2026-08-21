@@ -55,7 +55,6 @@ type Config struct {
 const defaultTrustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 func Load() (*Config, error) {
-	loadDotEnv()
 	cfg := &Config{
 		ListenAddr:          getenv("LISTEN_ADDR", ":8080"),
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
@@ -207,10 +206,12 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-// loadDotEnv fills unset process env from nearby .env files so `go run ./cmd/...`
-// works from backend/ or the repo root without a manual export. Existing
-// environment variables always win, including empty values set by tests.
-func loadDotEnv() {
+// LoadDotEnv fills unset process env from nearby .env files so local CLI
+// tools can run from backend/ or the repo root without a manual export.
+// Existing environment variables always win, including empty values set by
+// tests. The production server and worker do not call this — they take env
+// from the process (compose / systemd), never a cwd .env.
+func LoadDotEnv() {
 	for _, path := range []string{
 		filepath.Join("..", ".env"),
 		filepath.Join("..", ".env.local"),

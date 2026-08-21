@@ -21,6 +21,7 @@ func (s *Server) mountHives(r chi.Router) {
 	r.Patch("/hives/bulk", s.handleHiveBulkUpdate)
 	r.With(s.requireHiveParamRole(false)).Get("/hives/{id}", s.handleHiveGet)
 	r.With(s.requireHiveParamRole(true)).Put("/hives/{id}", s.handleHiveUpdate)
+	r.With(s.requireHiveParamRole(true)).Patch("/hives/{id}/gps", s.handleHiveGps)
 	r.With(s.requireHiveParamRole(true)).Delete("/hives/{id}", s.handleHiveDelete)
 	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/move", s.handleHiveMove)
 	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/archive", s.handleHiveArchive)
@@ -524,6 +525,50 @@ func (s *Server) handleHiveUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	hive, err := s.hiveFetch(r.Context(), id)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, hive)
+}
+
+// PATCH /hives/{id}/gps {latitude, longitude} — both present or both null.
+// A yard-map save still refreshes GPS from the stand slot when the hive is
+// placed; this is for unplaced hives and an explicit recapture/clear.
+func (s *Server) handleHiveGps(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Latitude  *float64 `json:"latitude"`
+		Longitude *float64 `json:"longitude"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !canvasValidLatLng(req.Latitude, req.Longitude) {
+		writeError(w, http.StatusBadRequest, "latitude/longitude out of range")
+		return
+	}
+	tag, err := s.pool.Exec(r.Context(),
+		`UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`,
+		apiaryRoundCoord(req.Latitude), apiaryRoundCoord(req.Longitude), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "hive not found")
+		return
+	}
+	hive, err := s.hiveFetch(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if err := s.fillHiveLockout(r.Context(), hive); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}

@@ -20,6 +20,7 @@ import (
 )
 
 func main() {
+	config.LoadDotEnv()
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config:", err)

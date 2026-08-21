@@ -50,18 +50,6 @@ type canvasNorthArrow struct {
 	Rotation float64 `json:"rotation"`
 }
 
-// canvasRegistration is the stand-layer transform relative to the apiary pin.
-// Occupied slots derive lat/lng from this plus stand geometry — never a
-// second stored layout.
-type canvasRegistration struct {
-	OriginX  float64 `json:"originX"`
-	OriginY  float64 `json:"originY"`
-	OffsetX  float64 `json:"offsetX"`
-	OffsetY  float64 `json:"offsetY"`
-	Rotation float64 `json:"rotation"`
-	Scale    float64 `json:"scale"`
-}
-
 // canvasMapView is the last Leaflet center/zoom (Leaflet owns pan/zoom).
 type canvasMapView struct {
 	CenterLat float64 `json:"centerLat"`
@@ -71,15 +59,15 @@ type canvasMapView struct {
 
 // canvasLayoutJSON is the geometry-only blob persisted to
 // apiaries.canvas_layout. Hive slot occupancy lives in relational hive
-// columns and is never written here.
+// columns and is never written here. Offset/rotation/scale registration is
+// gone: once a stand has GPS the overlay is identity around the pin.
 type canvasLayoutJSON struct {
-	Stands       []canvasStand       `json:"stands"`
-	NorthArrow   *canvasNorthArrow   `json:"northArrow,omitempty"`
-	Zoom         *float64            `json:"zoom,omitempty"`
-	OffsetX      *float64            `json:"offsetX,omitempty"`
-	OffsetY      *float64            `json:"offsetY,omitempty"`
-	Registration *canvasRegistration `json:"registration,omitempty"`
-	MapView      *canvasMapView      `json:"mapView,omitempty"`
+	Stands     []canvasStand     `json:"stands"`
+	NorthArrow *canvasNorthArrow `json:"northArrow,omitempty"`
+	Zoom       *float64          `json:"zoom,omitempty"`
+	OffsetX    *float64          `json:"offsetX,omitempty"`
+	OffsetY    *float64          `json:"offsetY,omitempty"`
+	MapView    *canvasMapView    `json:"mapView,omitempty"`
 }
 
 // canvasSlotLabel mirrors getSlotLabel: "{standLabel}{row*cols+col+1}".

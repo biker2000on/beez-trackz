@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/ai"
 	"github.com/biker2000on/beez-trackz/backend/internal/jobs"
@@ -27,9 +28,17 @@ func (c transcriptionSourceCounts) total() int {
 	return c.Inspections + c.Feedings + c.Treatments + c.MiteCounts
 }
 
+type transcriptionQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func (s *Server) transcriptionSourceCounts(ctx context.Context, mediaID uuid.UUID) (transcriptionSourceCounts, error) {
+	return transcriptionSourceCountsOn(ctx, s.pool, mediaID)
+}
+
+func transcriptionSourceCountsOn(ctx context.Context, q transcriptionQuerier, mediaID uuid.UUID) (transcriptionSourceCounts, error) {
 	var c transcriptionSourceCounts
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT
 			(SELECT count(*) FROM inspections
 			  WHERE source_media_file_id = $1
@@ -168,6 +177,8 @@ func (s *Server) handleTranscriptionSelectVersion(w http.ResponseWriter, r *http
 }
 
 // DELETE /transcriptions/{id} — refuses while domain rows still point at it.
+// Check-and-delete run in one transaction so a concurrent confirm cannot
+// turn a race into a 500 FK error.
 func (s *Server) handleTranscriptionDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -175,7 +186,16 @@ func (s *Server) handleTranscriptionDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ctx := r.Context()
-	row, err := s.transcriptionLoad(ctx, id)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var audioKey string
+	err = tx.QueryRow(ctx, `
+		SELECT audio_key FROM media_files WHERE id = $1 FOR UPDATE`, id).Scan(&audioKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "Media file not found")
 		return
@@ -184,7 +204,7 @@ func (s *Server) handleTranscriptionDelete(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	counts, err := s.transcriptionSourceCounts(ctx, id)
+	counts, err := transcriptionSourceCountsOn(ctx, tx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -194,17 +214,27 @@ func (s *Server) handleTranscriptionDelete(w http.ResponseWriter, r *http.Reques
 			"recording still has confirmed inspections, feedings, treatments, or mite counts")
 		return
 	}
-	if _, err := s.pool.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE media_files SET current_transcript_version_id = NULL WHERE id = $1`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM media_files WHERE id = $1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM media_files WHERE id = $1`, id); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			writeError(w, http.StatusConflict,
+				"recording still has confirmed inspections, feedings, treatments, or mite counts")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if s.store != nil && row.AudioKey != "" {
-		_ = s.store.Delete(ctx, row.AudioKey)
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if s.store != nil && audioKey != "" {
+		_ = s.store.Delete(ctx, audioKey)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }

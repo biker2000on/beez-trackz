@@ -43,8 +43,8 @@ type copySpec struct {
 
 var specs = []copySpec{
 	{table: "apiaries",
-		cols:       []string{"id", "name", "latitude", "longitude", "notes", "canvas_layout", "satellite_image_key", "created_at", "updated_at"},
-		selectCols: []string{"id", "name", "latitude", "longitude", "notes", "canvas_layout", "satellite_image_url", "created_at", "updated_at"}},
+		cols:       []string{"id", "name", "latitude", "longitude", "notes", "canvas_layout", "created_at", "updated_at"},
+		selectCols: []string{"id", "name", "latitude", "longitude", "notes", "canvas_layout", "created_at", "updated_at"}},
 	{table: "hives",
 		cols: []string{"id", "apiary_id", "position_label", "stand_id", "slot_row", "slot_col", "placement", "facing_degrees", "status", "installed_date", "is_archived", "deadout_date", "notes", "created_at", "updated_at"}},
 	{table: "hive_location_history",

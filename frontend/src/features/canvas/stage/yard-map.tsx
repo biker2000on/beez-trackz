@@ -14,14 +14,14 @@ import {
 import {
   overlayTransform,
   type CanvasMapView,
-  type CanvasRegistration,
+  type CanvasOrigin,
   type GeoOverlayTransform,
 } from "../lib/geo";
 
 interface YardMapProps {
   latitude: number;
   longitude: number;
-  registration: CanvasRegistration;
+  origin: CanvasOrigin;
   layerId: TileLayerId;
   imageryOpacity: number;
   locked: boolean;
@@ -38,7 +38,7 @@ interface YardMapProps {
 export function YardMap({
   latitude,
   longitude,
-  registration,
+  origin,
   layerId,
   imageryOpacity,
   locked,
@@ -51,15 +51,15 @@ export function YardMap({
   const tileRef = useRef<import("leaflet").TileLayer | null>(null);
   const onViewChangeRef = useRef(onViewChange);
   const onTransformRef = useRef(onTransform);
-  const registrationRef = useRef(registration);
+  const originRef = useRef(origin);
   const pinRef = useRef({ lat: latitude, lng: longitude });
 
   useEffect(() => {
     onViewChangeRef.current = onViewChange;
     onTransformRef.current = onTransform;
-    registrationRef.current = registration;
+    originRef.current = origin;
     pinRef.current = { lat: latitude, lng: longitude };
-  }, [onViewChange, onTransform, registration, latitude, longitude]);
+  }, [onViewChange, onTransform, origin, latitude, longitude]);
 
   useEffect(() => {
     const el = elRef.current;
@@ -101,7 +101,7 @@ export function YardMap({
       const publishTransform = () => {
         if (!map) return;
         onTransformRef.current(
-          overlayTransform(map, pinRef.current, registrationRef.current),
+          overlayTransform(map, pinRef.current, originRef.current),
           map,
         );
       };
@@ -179,10 +179,10 @@ export function YardMap({
     const map = mapRef.current;
     if (!map) return;
     onTransform(
-      overlayTransform(map, { lat: latitude, lng: longitude }, registration),
+      overlayTransform(map, { lat: latitude, lng: longitude }, origin),
       map,
     );
-  }, [registration, latitude, longitude, onTransform]);
+  }, [origin, latitude, longitude, onTransform]);
 
   return (
     <div

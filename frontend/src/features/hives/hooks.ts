@@ -251,6 +251,17 @@ export function useUpdateHive(id: string) {
   });
 }
 
+export function useUpdateHiveGps(id: string) {
+  const invalidate = useInvalidateHives();
+  return useMutation({
+    mutationFn: (payload: {
+      latitude: number | null;
+      longitude: number | null;
+    }) => api.patch<Hive>(`/hives/${id}/gps`, payload),
+    onSuccess: invalidate,
+  });
+}
+
 export function useBulkCreateHives() {
   const invalidate = useInvalidateHives();
   return useMutation({

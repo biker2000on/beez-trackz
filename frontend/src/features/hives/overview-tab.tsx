@@ -8,12 +8,15 @@ import {
   Crown,
   Droplets,
   HeartPulse,
+  LocateFixed,
+  MapPin,
   Package,
   type LucideIcon,
 } from "lucide-react";
 
 import { toast } from "sonner";
 
+import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,7 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useHiveFeedings } from "@/features/feedings/hooks";
 import { useHiveInspections } from "@/features/inspections/hooks";
 import { usePhotos } from "@/features/photos/hooks";
-import { useHive, useHiveDeployments, useHiveQueens } from "./hooks";
+import { useHive, useHiveDeployments, useHiveQueens, useUpdateHiveGps } from "./hooks";
 import {
   miteDisplay,
   useEndTreatment,
@@ -266,6 +269,115 @@ export function HiveOverviewTab({
           href={`/hives/${hiveId}?tab=timeline`}
         />
       </div>
+      <HiveGpsCard hive={hive.data} canEdit={canEdit} />
     </div>
+  );
+}
+
+function formatCoord(n: number): string {
+  return n.toFixed(6);
+}
+
+function HiveGpsCard({
+  hive,
+  canEdit,
+}: {
+  hive: ReturnType<typeof useHive>["data"];
+  canEdit: boolean;
+}) {
+  const updateGps = useUpdateHiveGps(hive?.id ?? "");
+  const [locating, setLocating] = React.useState(false);
+  if (!hive) return null;
+
+  const hasGps =
+    hive.latitude != null &&
+    hive.longitude != null &&
+    Number.isFinite(hive.latitude) &&
+    Number.isFinite(hive.longitude);
+
+  async function save(latitude: number | null, longitude: number | null) {
+    try {
+      await updateGps.mutateAsync({ latitude, longitude });
+      toast.success(
+        latitude == null ? "Hive GPS cleared" : "Hive GPS saved",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof ApiError ? error.message : "Could not update hive GPS",
+      );
+    }
+  }
+
+  function recapture() {
+    if (!("geolocation" in navigator)) {
+      toast.error("Geolocation is not supported by this browser.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocating(false);
+        const lat =
+          Math.round(position.coords.latitude * 1e8) / 1e8;
+        const lng =
+          Math.round(position.coords.longitude * 1e8) / 1e8;
+        void save(lat, lng);
+      },
+      (error) => {
+        setLocating(false);
+        toast.error(error.message || "Could not read this device's location");
+      },
+      { enableHighAccuracy: true, timeout: 15_000 },
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <MapPin className="size-3.5" />
+            GPS
+          </p>
+          {hasGps ? (
+            <p className="mt-1 font-mono text-sm tabular-nums">
+              {formatCoord(hive.latitude!)}, {formatCoord(hive.longitude!)}
+            </p>
+          ) : (
+            <p className="mt-1 text-sm text-muted-foreground">
+              No coordinates stored. Recapture from this device, or place the
+              hive on a mapped stand.
+            </p>
+          )}
+          <p className="mt-1 text-xs text-muted-foreground">
+            A yard-map save refreshes GPS from the stand slot when the hive is
+            placed.
+          </p>
+        </div>
+        {canEdit ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={recapture}
+              disabled={updateGps.isPending || locating}
+            >
+              <LocateFixed className="size-4" />
+              {locating ? "Locating…" : hasGps ? "Recapture" : "Capture"}
+            </Button>
+            {hasGps && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void save(null, null)}
+                disabled={updateGps.isPending}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

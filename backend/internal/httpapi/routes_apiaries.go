@@ -56,18 +56,17 @@ func apiaryValidateForageRadius(v *int) (*int, error) {
 
 // apiaryJSON is the detail response shape for a single apiary.
 type apiaryJSON struct {
-	ID                string          `json:"id"`
-	Name              string          `json:"name"`
-	Latitude          *float64        `json:"latitude"`
-	Longitude         *float64        `json:"longitude"`
-	ElevationM        *float64        `json:"elevationM"`
-	ElevationSource   *string         `json:"elevationSource"`
-	ForageRadiusM     int             `json:"forageRadiusM"`
-	Notes             *string         `json:"notes"`
-	CanvasLayout      json.RawMessage `json:"canvasLayout"`
-	SatelliteImageKey *string         `json:"satelliteImageKey"`
-	CreatedAt         time.Time       `json:"createdAt"`
-	UpdatedAt         time.Time       `json:"updatedAt"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Latitude        *float64        `json:"latitude"`
+	Longitude       *float64        `json:"longitude"`
+	ElevationM      *float64        `json:"elevationM"`
+	ElevationSource *string         `json:"elevationSource"`
+	ForageRadiusM   int             `json:"forageRadiusM"`
+	Notes           *string         `json:"notes"`
+	CanvasLayout    json.RawMessage `json:"canvasLayout"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
 }
 
 // apiaryListJSON is the list response shape (legacy getApiaries fields).
@@ -134,12 +133,10 @@ func (s *Server) apiaryFetch(ctx context.Context, id any) (*apiaryJSON, error) {
 	var layout []byte
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, name, latitude, longitude, elevation_m, elevation_source,
-		       forage_radius_m, notes, canvas_layout, satellite_image_key,
-		       created_at, updated_at
+		       forage_radius_m, notes, canvas_layout, created_at, updated_at
 		FROM apiaries WHERE id = $1`, id).
 		Scan(&a.ID, &a.Name, &a.Latitude, &a.Longitude, &a.ElevationM, &a.ElevationSource,
-			&a.ForageRadiusM, &a.Notes, &layout, &a.SatelliteImageKey,
-			&a.CreatedAt, &a.UpdatedAt)
+			&a.ForageRadiusM, &a.Notes, &layout, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

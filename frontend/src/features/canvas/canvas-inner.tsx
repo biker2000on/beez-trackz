@@ -27,12 +27,13 @@ import {
   standsBoundingBox,
   ZOOM_STEP,
 } from "./lib/geometry";
+import { useApiaryWeather } from "@/features/apiaries/hooks";
 import {
   alignStandToPin,
   bakeStandsToGps,
+  canvasOrigin,
   canvasToLatLng,
-  IDENTITY_REGISTRATION,
-  resolveRegistration,
+  PIN_ORIGIN,
   slotLatLng,
   slotWorldCenter,
   standHasGps,
@@ -145,11 +146,46 @@ function todayInput(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function dateFromScrubber(day: string, minutes: number): Date {
+function dateFromScrubber(
+  day: string,
+  minutes: number,
+  timeZone?: string,
+): Date {
   const [y, m, d] = day.split("-").map(Number);
-  const date = new Date(y, (m ?? 1) - 1, d ?? 1, 0, 0, 0, 0);
-  date.setMinutes(minutes);
-  return date;
+  const year = y || 1970;
+  const month = m ?? 1;
+  const date = d ?? 1;
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  if (!timeZone) {
+    return new Date(year, month - 1, date, hour, minute, 0, 0);
+  }
+  let utc = Date.UTC(year, month - 1, date, hour, minute, 0);
+  for (let i = 0; i < 3; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(utc));
+    const num = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((part) => part.type === type)?.value);
+    const asUTC = Date.UTC(
+      num("year"),
+      num("month") - 1,
+      num("day"),
+      num("hour"),
+      num("minute"),
+      num("second"),
+    );
+    const tzHours = (asUTC - utc) / 3_600_000;
+    utc = Date.UTC(year, month - 1, date, hour, minute, 0) - tzHours * 3_600_000;
+  }
+  return new Date(utc);
 }
 
 interface CanvasInnerProps {
@@ -196,18 +232,16 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     return { lat: apiary.latitude, lng: apiary.longitude };
   }, [apiary.latitude, apiary.longitude]);
 
-  const { stands, northArrow, registration, mapView, dirty, generation, dispatch, markSaved } =
+  const { stands, northArrow, mapView, dirty, generation, dispatch, markSaved } =
     useLayoutState({
       stands: initialLayout.stands ?? [],
       northArrow: initialLayout.northArrow,
-      registration: initialLayout.registration,
       mapView: initialLayout.mapView,
     });
 
-  const resolvedReg = useMemo(() => {
-    if (hasLocation && stands.some(standHasGps)) return IDENTITY_REGISTRATION;
-    return resolveRegistration(registration, stands);
-  }, [hasLocation, registration, stands]);
+  const origin = useMemo(() => canvasOrigin(stands), [stands]);
+  const weather = useApiaryWeather(apiary.id);
+  const sunTimeZone = weather.data?.forecast.timezone;
 
   const bakedForPin = useRef<string | null>(null);
   useEffect(() => {
@@ -218,7 +252,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     const key = `${pin.lat},${pin.lng}`;
     const missingGps = stands.some((stand) => !standHasGps(stand));
     if (missingGps) {
-      const baked = bakeStandsToGps(stands, pin, resolveRegistration(registration, stands));
+      const baked = bakeStandsToGps(stands, pin, canvasOrigin(stands));
       dispatch({
         type: "hydrateStands",
         stands: baked.map((stand) => alignStandToPin(stand, pin)),
@@ -234,7 +268,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     if (moved) {
       dispatch({ type: "hydrateStands", stands: aligned, dirty: false });
     }
-  }, [pin, stands, registration, dispatch]);
+  }, [pin, stands, dispatch]);
 
   const markViewportDirty = useCallback(
     () => dispatch({ type: "markViewportDirty" }),
@@ -338,7 +372,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
         zoom: viewport.zoom,
         offsetX: viewport.offset.x,
         offsetY: viewport.offset.y,
-        registration: resolvedReg,
         mapView,
       });
       markSaved(savedGeneration);
@@ -354,7 +387,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     northArrow,
     viewport.zoom,
     viewport.offset,
-    resolvedReg,
     mapView,
     markSaved,
   ]);
@@ -680,7 +712,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       if (pin && stand) {
         const cx = x + (stand.cols * CELL_SIZE) / 2;
         const cy = y + (stand.rows * CELL_SIZE) / 2;
-        const ll = canvasToLatLng(cx, cy, pin, IDENTITY_REGISTRATION);
+        const ll = canvasToLatLng(cx, cy, pin, PIN_ORIGIN);
         dispatch({
           type: "moveStand",
           standId,
@@ -711,24 +743,24 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       const corners = stands.flatMap((stand) => {
         if (standHasGps(stand)) {
           return [
-            slotLatLng(stand, 0, 0, pin, resolvedReg),
-            slotLatLng(stand, 0, stand.cols - 1, pin, resolvedReg),
-            slotLatLng(stand, stand.rows - 1, 0, pin, resolvedReg),
-            slotLatLng(stand, stand.rows - 1, stand.cols - 1, pin, resolvedReg),
+            slotLatLng(stand, 0, 0, pin, origin),
+            slotLatLng(stand, 0, stand.cols - 1, pin, origin),
+            slotLatLng(stand, stand.rows - 1, 0, pin, origin),
+            slotLatLng(stand, stand.rows - 1, stand.cols - 1, pin, origin),
           ];
         }
         const box = standsBoundingBox([stand]);
         if (!box) return [];
         return [
-          canvasToLatLng(box.minX, box.minY, pin, resolvedReg),
-          canvasToLatLng(box.maxX, box.maxY, pin, resolvedReg),
+          canvasToLatLng(box.minX, box.minY, pin, origin),
+          canvasToLatLng(box.maxX, box.maxY, pin, origin),
         ];
       });
       fitMapToStands(mapRef.current, corners.length > 0 ? corners : [pin]);
       return;
     }
     viewport.fitToContent(stands);
-  }, [hasLocation, pin, stands, resolvedReg, viewport]);
+  }, [hasLocation, pin, stands, origin, viewport]);
 
   /** Screen position of a focused item, for anchoring the actions menu. */
   const itemScreenPosition = useCallback(
@@ -809,13 +841,13 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   });
 
   const sunWhen = useMemo(
-    () => dateFromScrubber(sunDay, sunMinutes),
-    [sunDay, sunMinutes],
+    () => dateFromScrubber(sunDay, sunMinutes, sunTimeZone),
+    [sunDay, sunMinutes, sunTimeZone],
   );
   const solar = useMemo(() => {
     if (!pin || !sunEnabled) return null;
-    return solarPosition(pin.lat, pin.lng, sunWhen);
-  }, [pin, sunEnabled, sunWhen]);
+    return solarPosition(pin.lat, pin.lng, sunWhen, sunTimeZone);
+  }, [pin, sunEnabled, sunWhen, sunTimeZone]);
 
   const sunHives = useMemo((): { marks: SunHiveMark[]; usingPin: boolean } => {
     if (!pin) return { marks: [], usingPin: true };
@@ -846,7 +878,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     }
     const stand = stands.find((s) => s.id === hive.standId);
     if (!stand) return null;
-    return slotLatLng(stand, hive.slotRow, hive.slotCol, pin, resolvedReg);
+    return slotLatLng(stand, hive.slotRow, hive.slotCol, pin, origin);
   }
 
   function renderStandMenuItems(stand: StandGeometry) {
@@ -1022,7 +1054,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
       const slotLabel = getSlotLabel(stand.label, row, col, stand.cols);
       const occupants = slot?.hives ?? [];
       const derived =
-        pin != null ? slotLatLng(stand, row, col, pin, resolvedReg) : null;
+        pin != null ? slotLatLng(stand, row, col, pin, origin) : null;
 
       return (
         <MenuSurface
@@ -1119,7 +1151,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
             const dest = { lat: next.latitude, lng: next.longitude };
             let nextStands = stands;
             if (pin && nextStands.some((stand) => !standHasGps(stand))) {
-              nextStands = bakeStandsToGps(nextStands, pin, resolveRegistration(registration, nextStands));
+              nextStands = bakeStandsToGps(nextStands, pin, canvasOrigin(nextStands));
             }
             const center = yardCentroid(nextStands);
             if (center) {
@@ -1136,7 +1168,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
               zoom: viewport.zoom,
               offsetX: viewport.offset.x,
               offsetY: viewport.offset.y,
-              registration: IDENTITY_REGISTRATION,
               mapView,
             });
           }}
@@ -1367,7 +1398,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           <YardMap
             latitude={pin.lat}
             longitude={pin.lng}
-            registration={resolvedReg}
+            origin={origin}
             layerId={tileLayer}
             imageryOpacity={imageryOpacity}
             locked={false}
@@ -1502,7 +1533,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
             {sunEnabled && solar && (
               <SunLayer
-                origin={{ x: resolvedReg.originX, y: resolvedReg.originY }}
+                origin={origin}
                 solar={solar}
                 hives={sunHives.marks}
                 usingPin={sunHives.usingPin}
@@ -1513,12 +1544,12 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
               <KonvaText
                 x={
                   hasLocation
-                    ? resolvedReg.originX - 200
+                    ? origin.x - 200
                     : (0 - viewport.offset.x) / viewport.zoom
                 }
                 y={
                   hasLocation
-                    ? resolvedReg.originY
+                    ? origin.y
                     : (dimensions.height / 2 - viewport.offset.y) / viewport.zoom
                 }
                 width={hasLocation ? 400 : dimensions.width / viewport.zoom}
@@ -1528,7 +1559,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
                       ? "Use “Add Stand” to lay out your first hive stand — Set location to put the yard on a map"
                       : "No stands yet — switch to Edit mode, or Set location for the map"
                     : editMode
-                      ? "Use “Add Stand” then Register to slide the layout onto the ground"
+                      ? "Use “Add Stand” to drop a stand at the map center"
                       : "No stands yet — switch to Edit mode to lay out the yard"
                 }
                 fontSize={14}

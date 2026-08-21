@@ -1,27 +1,18 @@
 import type { Map as LeafletMap } from "leaflet";
 
 import { CELL_SIZE, PX_PER_METER, standCenter, standSize } from "./geometry";
-import type {
-  CanvasMapView,
-  CanvasRegistration,
-  StandGeometry,
-} from "./types";
+import type { CanvasMapView, StandGeometry } from "./types";
 
-export type { CanvasMapView, CanvasRegistration };
+export type { CanvasMapView };
 
-export const DEFAULT_REGISTRATION: Omit<
-  CanvasRegistration,
-  "originX" | "originY"
-> = {
-  offsetX: 0,
-  offsetY: 0,
-  rotation: 0,
-  scale: 1,
-};
+/** Canvas world point that sits on the apiary pin. GPS-aligned yards use 0,0. */
+export type CanvasOrigin = { x: number; y: number };
+
+export const PIN_ORIGIN: CanvasOrigin = { x: 0, y: 0 };
 
 const METERS_PER_DEG_LAT = 111_320;
 
-export function defaultOrigin(stands: StandGeometry[]): { x: number; y: number } {
+export function defaultOrigin(stands: StandGeometry[]): CanvasOrigin {
   if (stands.length === 0) return { x: 300, y: 200 };
   let minX = Infinity;
   let minY = Infinity;
@@ -34,23 +25,6 @@ export function defaultOrigin(stands: StandGeometry[]): { x: number; y: number }
     maxY = Math.max(maxY, stand.y + stand.rows * CELL_SIZE);
   }
   return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-}
-
-export function resolveRegistration(
-  raw: CanvasRegistration | undefined,
-  stands: StandGeometry[],
-): CanvasRegistration {
-  const origin = defaultOrigin(stands);
-  const scale =
-    raw && Number.isFinite(raw.scale) && raw.scale > 0 ? raw.scale : 1;
-  return {
-    originX: raw && Number.isFinite(raw.originX) ? raw.originX : origin.x,
-    originY: raw && Number.isFinite(raw.originY) ? raw.originY : origin.y,
-    offsetX: raw && Number.isFinite(raw.offsetX) ? raw.offsetX : 0,
-    offsetY: raw && Number.isFinite(raw.offsetY) ? raw.offsetY : 0,
-    rotation: raw && Number.isFinite(raw.rotation) ? raw.rotation : 0,
-    scale,
-  };
 }
 
 export function metersPerDegLng(lat: number): number {
@@ -71,23 +45,22 @@ export function offsetLatLng(
 }
 
 /**
- * Apply registration to a canvas world point, then project onto the pin.
- * Canvas +x is east, +y is south (screen convention, matches Web Mercator).
+ * Project a canvas world point onto the pin. Canvas +x is east, +y is south
+ * (screen convention, matches Web Mercator). No offset/rotation/scale —
+ * GPS-aligned stands already sit in pin-relative world coords.
  */
 export function canvasToLatLng(
   worldX: number,
   worldY: number,
   pin: { lat: number; lng: number },
-  reg: CanvasRegistration,
+  origin: CanvasOrigin = PIN_ORIGIN,
 ): { lat: number; lng: number } {
-  const dx = worldX - reg.originX;
-  const dy = worldY - reg.originY;
-  const rad = (reg.rotation * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const rx = (dx * cos - dy * sin) * reg.scale + reg.offsetX;
-  const ry = (dx * sin + dy * cos) * reg.scale + reg.offsetY;
-  return offsetLatLng(pin.lat, pin.lng, rx / PX_PER_METER, ry / PX_PER_METER);
+  return offsetLatLng(
+    pin.lat,
+    pin.lng,
+    (worldX - origin.x) / PX_PER_METER,
+    (worldY - origin.y) / PX_PER_METER,
+  );
 }
 
 /** Center of a slot in canvas world coordinates (rotation-aware). */
@@ -107,15 +80,6 @@ export function slotWorldCenter(
   };
 }
 
-export const IDENTITY_REGISTRATION: CanvasRegistration = {
-  originX: 0,
-  originY: 0,
-  offsetX: 0,
-  offsetY: 0,
-  rotation: 0,
-  scale: 1,
-};
-
 export function standHasGps(stand: StandGeometry): boolean {
   return (
     typeof stand.latitude === "number" &&
@@ -125,15 +89,21 @@ export function standHasGps(stand: StandGeometry): boolean {
   );
 }
 
+/** Pin origin: identity once any stand has GPS (stands are aligned to the pin). */
+export function canvasOrigin(stands: StandGeometry[]): CanvasOrigin {
+  if (stands.some(standHasGps)) return PIN_ORIGIN;
+  return defaultOrigin(stands);
+}
+
 export function bakeStandsToGps(
   stands: StandGeometry[],
   pin: { lat: number; lng: number },
-  reg: CanvasRegistration,
+  origin: CanvasOrigin = PIN_ORIGIN,
 ): StandGeometry[] {
   return stands.map((stand) => {
     if (standHasGps(stand)) return stand;
     const center = standCenter(stand);
-    const ll = canvasToLatLng(center.x, center.y, pin, reg);
+    const ll = canvasToLatLng(center.x, center.y, pin, origin);
     return { ...stand, latitude: ll.lat, longitude: ll.lng };
   });
 }
@@ -186,7 +156,7 @@ export function slotLatLng(
   row: number,
   col: number,
   pin: { lat: number; lng: number },
-  reg: CanvasRegistration,
+  origin: CanvasOrigin = PIN_ORIGIN,
 ): { lat: number; lng: number } {
   if (standHasGps(stand)) {
     const { w, h } = standSize(stand);
@@ -201,7 +171,7 @@ export function slotLatLng(
     );
   }
   const world = slotWorldCenter(stand, row, col);
-  return canvasToLatLng(world.x, world.y, pin, reg);
+  return canvasToLatLng(world.x, world.y, pin, origin);
 }
 
 export interface GeoOverlayTransform {
@@ -259,42 +229,19 @@ export function pixelsPerMeter(
 export function overlayTransform(
   map: LeafletMap,
   pin: { lat: number; lng: number },
-  reg: CanvasRegistration,
+  origin: CanvasOrigin = PIN_ORIGIN,
   view?: CanvasMapView,
 ): GeoOverlayTransform {
   const zoom = view?.zoom ?? map.getZoom();
-  const originGeo = offsetLatLng(
-    pin.lat,
-    pin.lng,
-    reg.offsetX / PX_PER_METER,
-    reg.offsetY / PX_PER_METER,
-  );
-  const originPt = containerPointPrecise(map, originGeo.lat, originGeo.lng, view);
-  const canvasToScreen = (pixelsPerMeter(map, pin, zoom) / PX_PER_METER) * reg.scale;
+  const originPt = containerPointPrecise(map, pin.lat, pin.lng, view);
+  const canvasToScreen = pixelsPerMeter(map, pin, zoom) / PX_PER_METER;
   return {
     x: originPt.x,
     y: originPt.y,
     scaleX: canvasToScreen,
     scaleY: canvasToScreen,
-    rotation: reg.rotation,
-    offsetX: reg.originX,
-    offsetY: reg.originY,
-  };
-}
-
-/** Convert a screen-pixel drag on the locked map into a registration nudge. */
-export function screenDeltaToRegistrationOffset(
-  map: LeafletMap,
-  pin: { lat: number; lng: number },
-  reg: CanvasRegistration,
-  dxScreen: number,
-  dyScreen: number,
-): { offsetX: number; offsetY: number } {
-  const ppm = pixelsPerMeter(map, pin);
-  if (ppm < 1e-9) return { offsetX: reg.offsetX, offsetY: reg.offsetY };
-  const pxPerCanvas = ppm / PX_PER_METER;
-  return {
-    offsetX: reg.offsetX + dxScreen / pxPerCanvas,
-    offsetY: reg.offsetY + dyScreen / pxPerCanvas,
+    rotation: 0,
+    offsetX: origin.x,
+    offsetY: origin.y,
   };
 }

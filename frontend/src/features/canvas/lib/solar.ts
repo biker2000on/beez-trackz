@@ -21,19 +21,72 @@ export interface SolarPosition {
 const rad = (d: number) => (d * Math.PI) / 180;
 const deg = (r: number) => (r * 180) / Math.PI;
 
-function julianDay(date: Date): number {
-  const y = date.getFullYear();
-  const m = date.getMonth() + 1;
-  const d =
-    date.getDate() +
-    (date.getHours() +
-      (date.getMinutes() + date.getSeconds() / 60) / 60) /
-      24;
-  const tzHours = -date.getTimezoneOffset() / 60;
-  if (m <= 2) {
-    return julianDayFromParts(y - 1, m + 12, d, tzHours);
+interface WallClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  tzHours: number;
+}
+
+function wallClock(date: Date, timeZone?: string): WallClock {
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(date);
+      const num = (type: Intl.DateTimeFormatPartTypes) =>
+        Number(parts.find((part) => part.type === type)?.value);
+      const year = num("year");
+      const month = num("month");
+      const day = num("day");
+      const hour = num("hour");
+      const minute = num("minute");
+      const second = num("second");
+      const asUTC = Date.UTC(year, month - 1, day, hour, minute, second);
+      return {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        tzHours: (asUTC - date.getTime()) / 3_600_000,
+      };
+    } catch {
+      // Invalid IANA zone — fall through to the device timezone.
+    }
   }
-  return julianDayFromParts(y, m, d, tzHours);
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+    day: date.getDate(),
+    hour: date.getHours(),
+    minute: date.getMinutes(),
+    second: date.getSeconds(),
+    tzHours: -date.getTimezoneOffset() / 60,
+  };
+}
+
+function julianDay(clock: WallClock): number {
+  const y = clock.year;
+  const m = clock.month;
+  const d =
+    clock.day +
+    (clock.hour + (clock.minute + clock.second / 60) / 60) / 24;
+  if (m <= 2) {
+    return julianDayFromParts(y - 1, m + 12, d, clock.tzHours);
+  }
+  return julianDayFromParts(y, m, d, clock.tzHours);
 }
 
 function julianDayFromParts(
@@ -63,6 +116,7 @@ function solarAt(
   lat: number,
   lng: number,
   date: Date,
+  timeZone?: string,
 ): {
   azimuth: number;
   altitude: number;
@@ -70,8 +124,10 @@ function solarAt(
   declination: number;
   eqTime: number;
   haSunrise: number | null;
+  tzHours: number;
 } {
-  const jd = julianDay(date);
+  const clock = wallClock(date, timeZone);
+  const jd = julianDay(clock);
   const jc = (jd - 2451545) / 36525;
   const geomMeanLong = wrap360(
     280.46646 + jc * (36000.76983 + jc * 0.0003032),
@@ -112,9 +168,9 @@ function solarAt(
         1.25 * eccent * eccent * Math.sin(2 * rad(geomMeanAnom)),
     );
 
-  const tzHours = -date.getTimezoneOffset() / 60;
+  const tzHours = clock.tzHours;
   const minutesPastMidnight =
-    date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+    clock.hour * 60 + clock.minute + clock.second / 60;
   const trueSolarTime =
     (((minutesPastMidnight + eqTime + 4 * lng - 60 * tzHours) % 1440) +
       1440) %
@@ -173,7 +229,29 @@ function solarAt(
     Math.tan(rad(lat)) * Math.tan(rad(declination));
   const haSunrise = Math.abs(cosHa) <= 1 ? deg(Math.acos(cosHa)) : null;
 
-  return { azimuth, altitude, zenith, declination, eqTime, haSunrise };
+  return { azimuth, altitude, zenith, declination, eqTime, haSunrise, tzHours };
+}
+
+/** Instant for a wall-clock time-of-day on `day`'s calendar date. */
+function instantAtMinutes(
+  day: Date,
+  minutes: number,
+  timeZone?: string,
+): Date {
+  const clock = wallClock(day, timeZone);
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  if (!timeZone) {
+    return new Date(clock.year, clock.month - 1, clock.day, hour, minute, 0, 0);
+  }
+  let utc = Date.UTC(clock.year, clock.month - 1, clock.day, hour, minute, 0);
+  for (let i = 0; i < 3; i++) {
+    const tzHours = wallClock(new Date(utc), timeZone).tzHours;
+    utc =
+      Date.UTC(clock.year, clock.month - 1, clock.day, hour, minute, 0) -
+      tzHours * 3_600_000;
+  }
+  return new Date(utc);
 }
 
 /** Azimuth at a given local time-of-day (minutes from midnight) on this date. */
@@ -182,20 +260,20 @@ function azimuthAtMinutes(
   lng: number,
   day: Date,
   minutes: number,
+  timeZone?: string,
 ): number {
-  const d = new Date(day);
-  d.setHours(0, 0, 0, 0);
-  d.setMinutes(minutes);
-  return solarAt(lat, lng, d).azimuth;
+  return solarAt(lat, lng, instantAtMinutes(day, minutes, timeZone), timeZone)
+    .azimuth;
 }
 
 export function solarPosition(
   lat: number,
   lng: number,
   date: Date,
+  timeZone?: string,
 ): SolarPosition {
-  const pos = solarAt(lat, lng, date);
-  const tzHours = -date.getTimezoneOffset() / 60;
+  const pos = solarAt(lat, lng, date, timeZone);
+  const tzHours = pos.tzHours;
   let sunriseMinutes: number | null = null;
   let sunsetMinutes: number | null = null;
   let sunriseAzimuth: number | null = null;
@@ -204,8 +282,8 @@ export function solarPosition(
     const solarNoon = (720 - 4 * lng - pos.eqTime + tzHours * 60 + 1440) % 1440;
     sunriseMinutes = (solarNoon - (pos.haSunrise * 4) + 1440) % 1440;
     sunsetMinutes = (solarNoon + pos.haSunrise * 4) % 1440;
-    sunriseAzimuth = azimuthAtMinutes(lat, lng, date, sunriseMinutes);
-    sunsetAzimuth = azimuthAtMinutes(lat, lng, date, sunsetMinutes);
+    sunriseAzimuth = azimuthAtMinutes(lat, lng, date, sunriseMinutes, timeZone);
+    sunsetAzimuth = azimuthAtMinutes(lat, lng, date, sunsetMinutes, timeZone);
   }
   return {
     azimuth: pos.azimuth,

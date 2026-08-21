@@ -34,7 +34,6 @@ export interface Apiary {
   forageRadiusM: number;
   notes: string | null;
   canvasLayout: unknown;
-  satelliteImageKey: string | null;
   createdAt: string;
   updatedAt: string;
 }

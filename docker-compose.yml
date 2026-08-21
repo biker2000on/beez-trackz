@@ -1,5 +1,12 @@
 # Dev infrastructure for the Go rewrite. The API (backend/) and web app
 # (frontend/) run locally; this provides Postgres, Redis, and MinIO.
+#
+# Optional Immich photo originals — set these in the local shell / .env used
+# by `go run ./cmd/server` (this compose file has no API service). Empty
+# defaults match production compose: MinIO unless both URL and key are set.
+#   PHOTO_STORAGE_BACKEND=
+#   IMMICH_BASE_URL=
+#   IMMICH_API_KEY=
 services:
   db:
     image: postgres:16-alpine
