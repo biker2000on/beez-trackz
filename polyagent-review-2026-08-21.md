@@ -1,4 +1,7 @@
-# Polyagent cross-model review — 2026-08-21
+# Polyagent cross-model reviews — 2026-08-21
+
+Two review runs this day: the gap-closure wave (below) and the wave-2 run
+(`20260821-w2-review-e8a4`, second section).
 
 Run `20260821-gaps-review-c7d2`, pinned to `f618759` (the four gap-closure
 commits `26acc00..f618759`). Reviewers: Claude Opus (ledger/idempotency),
@@ -81,3 +84,81 @@ exact; goose annotations and numbering for 00030–00033 are correct and apply
 cleanly in sequence from 00029; `CanvasRegistration`/`satelliteImageKey`
 removal is complete with no dangling reference; hive-GPS route auth matches
 its siblings; transcription delete/confirm lock ordering cannot deadlock.
+
+---
+
+# Wave-2 review — run `20260821-w2-review-e8a4`
+
+Pinned to `0420354` (commits `73f47d2..0420354`: lockout/moisture, media UI
++ transcribe race guard, varroa CRUD, lead glue). Reviewers: Claude Opus
+(domain invariants) and Codex gpt-5.6-sol (concurrency/contract/frontend);
+the Grok CLI was excluded after failing twice as a reviewer earlier in the
+day. **All confirmed findings fixed in `99067d2`.**
+
+## Fixed
+
+- **HIGH (claude F1/F2)** — the inspection treatment reconcile deleted a
+  renamed product's event before updating (losing `date_removed`, media
+  lineage, and the row id — a typo fix re-locked honey indefinitely), and
+  the reparse-apply reconciler keyed the same rows differently, so each
+  silently reverted the other. Now: update-first matching, a single-rename
+  heuristic that keeps the row, and reparse product changes write back the
+  inspection jsonb.
+- **MED (claude F3)** — dropped treatment events were hard-deleted:
+  regulated withdrawal history erasable without a trace, and a one-request
+  path from "honey blocked" to "honey sellable". Migration 00037 adds
+  soft delete with attribution; every reader (lockout, recs, timeline,
+  ntfy, compliance, efficacy, reparse) filters live rows.
+- **MED (claude F4)** — every edit of an over-threshold lot re-stamped the
+  override's who/when; now re-stamped only when the reason changes, and the
+  form starts accepted for a lot already carrying an override.
+- **MED (codex)** — inspection mite-count edits were N sequential requests
+  that could fail halfway (a method swap deterministically collided with the
+  unique index); now one transactional `POST /mite-counts/batch`.
+- **MED (codex)** — reparse checkbox selection was keyed by array index and
+  survived a re-parse that reordered proposals; now keyed by stable proposal
+  identity and reset when proposals change.
+- **MED (codex)** — a terminally failed forced re-transcription left the
+  claim set (409 for the rest of the window); the failure path now clears it.
+- **MED (codex)** — 00036's down migration could abort on tombstone
+  duplicates; both 00036 and 00037 downs now purge tombstones first, and
+  00030's voided-batch guard precedent is documented in 00034's down.
+- **LOW** — `deleted_by` on inspection-driven mite soft-deletes; the
+  moisture override UI only reveals itself for the genuinely overridable
+  threshold rejection; date moves clamp `date_removed >= date_applied` and
+  no longer reset `date_applied` on unrelated edits; `btrim` matches Go's
+  whitespace trimming; no-op override stamp on create removed via CASE
+  semantics; 00034 comments corrected (best-effort attribution, down
+  asymmetries).
+
+## Accepted / deferred
+
+- **Harvest sessions still hard-reject over-threshold moisture** (claude
+  F5): the lot is the enforcement point for now; extending the override
+  tier to sessions needs its own column set and is an explicit product
+  decision.
+- **Lot composition is not re-checked after bottling** (claude F6): a
+  tainted harvest can be attached to an already-bottled lot; shared
+  check-then-act exposure with the sale path under READ COMMITTED. Worth
+  its own roadmap bullet.
+- **The recorded moisture override has no downstream effect** (claude F14):
+  it is a record, not a permission — deliberate, revisit with labels.
+- **Stale-`processing` transcription rows** rely on asynq redelivery
+  (codex): no heartbeat-based reclaim yet.
+- Rename preservation uses a single-unmatched heuristic; a multi-product
+  rename in one edit still falls back to soft-delete + insert (needs stable
+  ids in the jsonb to do better).
+
+## Verified clean (do not re-litigate)
+
+Bottling gate placement (inside the FOR UPDATE tx, before any write) and
+bottling/sale decision parity; override cannot stamp without the threshold
+exceeded; `moistureOverrideReq` embedding has no JSON collision; 00034's
+alias guard covers all four directions and its seeds are genuinely
+insert-only with no collisions; the 00034 partial index serves its queries;
+duplicate/blank jsonb products handled; clear-to-empty works; advisory-lock
+scope is single-connection with no lock cycle against delete/confirm;
+mite-count auth parity and the 409's role boundary; ON CONFLICT predicates
+match 00036's partial indexes; the deliberately unfiltered media source
+count (the FK still blocks deletion); offline inspection create unchanged;
+reparse camelCase contract has no legacy consumer.
