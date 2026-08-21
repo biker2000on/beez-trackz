@@ -311,6 +311,7 @@ export interface MiteCountInput {
   sampleSize?: number;
   daysOnBoard?: number;
   notes?: string;
+  overwrite?: boolean;
 }
 
 /** `hiveId` only targets cache invalidation; the backend rejects unknown
@@ -328,9 +329,21 @@ function invalidateMiteQueries(
   void client.invalidateQueries({ queryKey: ["analytics", "varroa"] });
   void client.invalidateQueries({ queryKey: ["hives"] });
   void client.invalidateQueries({ queryKey: ["inspections"] });
+  void client.invalidateQueries({ queryKey: ["mite-counts"] });
   if (hiveId) {
     void client.invalidateQueries({ queryKey: ["hives", "detail", hiveId] });
   }
+}
+
+export function useInspectionMiteCounts(inspectionId?: string) {
+  return useQuery({
+    queryKey: ["mite-counts", "inspection", inspectionId],
+    queryFn: () =>
+      api.get<MiteCount[]>("/mite-counts", {
+        params: { inspectionId },
+      }),
+    enabled: Boolean(inspectionId),
+  });
 }
 
 export function useCreateMiteCount() {

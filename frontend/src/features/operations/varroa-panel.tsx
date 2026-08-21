@@ -71,6 +71,7 @@ export function VarroaPanel({
   const [open, setOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<MiteCount | null>(null);
   const [deleting, setDeleting] = React.useState<MiteCount | null>(null);
+  const [conflict, setConflict] = React.useState<MiteCount | null>(null);
   // Touch has no hover: tapping a bar selects it and its actions appear in a
   // full-size row under the chart instead of the hover-only icons per bar.
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -101,7 +102,7 @@ export function VarroaPanel({
     setOpen(true);
   }
 
-  async function save(resetAfter = false) {
+  async function save(resetAfter = false, overwrite = false) {
     const mitesCount = Number(count);
     const sampleSize = sample.trim() === "" ? undefined : Number(sample);
     const days = daysOnBoard.trim() === "" ? undefined : Number(daysOnBoard);
@@ -137,12 +138,28 @@ export function VarroaPanel({
         await update.mutateAsync({ id: editing.id, ...payload });
         toast.success("Varroa count updated");
       } else {
-        await create.mutateAsync(payload);
-        toast.success("Varroa count recorded");
+        await create.mutateAsync({
+          ...payload,
+          overwrite: overwrite || undefined,
+        });
+        toast.success(overwrite ? "Varroa count overwritten" : "Varroa count recorded");
       }
+      setConflict(null);
       resetDraft(null);
       if (!resetAfter) setOpen(false);
     } catch (error) {
+      if (
+        !editing &&
+        !overwrite &&
+        error instanceof ApiError &&
+        error.status === 409
+      ) {
+        const existing = (error.body as { existing?: MiteCount } | null)?.existing;
+        if (existing) {
+          setConflict(existing);
+          return;
+        }
+      }
       toast.error(error instanceof Error ? error.message : "Could not save count");
     }
   }
@@ -180,19 +197,8 @@ export function VarroaPanel({
       : report.data.thresholdPer100
     : report.data.thresholdPer100;
   const over = report.data.overThreshold;
-  const rateCounts = counts.filter(
-    (row) => isWashMethod(row.method) && row.mitesPer100 != null,
-  );
-  const boardRates = counts.filter(
-    (row) => isBoardMethod(row.method) && row.mitesPerDay != null,
-  );
   const rawBoards = counts.filter(
     (row) => isBoardMethod(row.method) && row.mitesPerDay == null,
-  );
-  const chartMax = Math.max(
-    1,
-    report.data.thresholdPer100,
-    ...rateCounts.map((row) => row.mitesPer100 ?? 0),
   );
   const pending = create.isPending || update.isPending;
 
@@ -241,75 +247,27 @@ export function VarroaPanel({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Activity className="size-4" /> Mites per 100 bees
+            <Activity className="size-4" /> Mite load over time
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {rateCounts.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {counts.length === 0
-                ? "No structured mite counts yet."
-                : "No alcohol wash or sugar roll counts yet. Board and visual counts are listed separately — they are not a rate per 100 bees."}
-            </p>
-          ) : (
-            <div className="relative flex h-44 items-end gap-2 border-b border-l p-3">
-              <div
-                aria-hidden
-                className="pointer-events-none absolute left-3 right-3 border-t border-dashed border-destructive/70"
-                style={{
-                  bottom: `${12 + (report.data.thresholdPer100 / chartMax) * 112}px`,
-                }}
-              />
-              <span
-                className="pointer-events-none absolute right-3 text-[10px] text-destructive"
-                style={{
-                  bottom: `${16 + (report.data.thresholdPer100 / chartMax) * 112}px`,
-                }}
-              >
-                {report.data.thresholdPer100.toFixed(1)}
-              </span>
-              {rateCounts.map((row) => {
-                const value = row.mitesPer100 ?? 0;
-                return (
-                  <div key={row.id} className="group flex min-w-0 flex-1 flex-col items-center justify-end gap-1">
-                    <span className="text-[10px] font-medium tabular-nums">{value.toFixed(1)}</span>
-                    <button
-                      type="button"
-                      aria-pressed={selectedId === row.id}
-                      aria-label={`${formatDate(row.date)} · ${METHOD_LABELS[row.method] ?? row.method}: ${value.toFixed(1)} per 100 bees`}
-                      onClick={() => setSelectedId((current) => (current === row.id ? null : row.id))}
-                      className={cn(
-                        "w-full max-w-12 rounded-t bg-primary/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        selectedId === row.id && "bg-primary ring-2 ring-ring ring-offset-2 ring-offset-background",
-                      )}
-                      style={{ height: `${Math.max(4, (value / chartMax) * 112)}px` }}
-                    />
-                    <span className="truncate text-[9px] text-muted-foreground">
-                      {new Date(row.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                    </span>
-                    {canEdit ? (
-                      <span className="flex gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 touch:hidden">
-                        <Button type="button" variant="ghost" size="icon-sm" aria-label="Edit count" onClick={() => openEdit(row)}>
-                          <Pencil className="size-3" />
-                        </Button>
-                        <Button type="button" variant="ghost" size="icon-sm" aria-label="Delete count" onClick={() => setDeleting(row)}>
-                          <Trash2 className="size-3" />
-                        </Button>
-                      </span>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <CardContent className="grid gap-3">
+          <VarroaTrendChart
+            counts={counts}
+            thresholdPer100={report.data.thresholdPer100}
+            thresholdPerDay={report.data.thresholdPerDay}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
           {(() => {
-            const selected = rateCounts.find((row) => row.id === selectedId);
+            const selected = counts.find((row) => row.id === selectedId);
             if (!selected) return null;
-            const value = selected.mitesPer100 ?? 0;
+            const display = miteDisplay(selected);
             return (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm">
                 <span className="min-w-0">
-                  <span className="font-medium tabular-nums">{value.toFixed(1)} per 100</span>
+                  <span className="font-medium tabular-nums">
+                    {display?.label ?? `${selected.mitesCount} mites`}
+                  </span>
                   <span className="text-muted-foreground">
                     {" · "}
                     {formatDate(selected.date)} · {METHOD_LABELS[selected.method] ?? selected.method}
@@ -333,50 +291,6 @@ export function VarroaPanel({
           })()}
         </CardContent>
       </Card>
-
-      {boardRates.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Mites per day (board / visual)</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <ul className="grid gap-2">
-              {boardRates.map((row) => {
-                const display = miteDisplay(row);
-                return (
-                  <li key={row.id} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium tabular-nums">
-                        {display?.label ?? `${row.mitesCount} mites`}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {formatDate(row.date)}
-                        {row.daysOnBoard != null ? ` · ${row.daysOnBoard}d on board` : ""}
-                        {row.notes ? ` · ${row.notes}` : ""}
-                      </span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      <span className="text-xs text-muted-foreground">
-                        {METHOD_LABELS[row.method] ?? row.method}
-                      </span>
-                      {canEdit ? (
-                        <>
-                          <Button type="button" variant="ghost" size="icon-sm" aria-label="Edit count" onClick={() => openEdit(row)}>
-                            <Pencil className="size-3.5" />
-                          </Button>
-                          <Button type="button" variant="ghost" size="icon-sm" aria-label="Delete count" onClick={() => setDeleting(row)}>
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </>
-                      ) : null}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </CardContent>
-        </Card>
-      ) : null}
 
       {rawBoards.length > 0 ? (
         <Card>
@@ -448,7 +362,11 @@ export function VarroaPanel({
                 </div>
                 <div className="text-right">
                   {treatment.efficacyPercent == null ? (
-                    <span className="text-xs text-muted-foreground">Needs before/after counts</span>
+                    <span className="text-xs text-muted-foreground">
+                      {treatment.beforeRate != null && treatment.afterRate == null
+                        ? "No matching after count"
+                        : "Needs before/after counts"}
+                    </span>
                   ) : (
                     <>
                       <p className="font-semibold tabular-nums">{treatment.efficacyPercent.toFixed(0)}% reduction</p>
@@ -523,6 +441,33 @@ export function VarroaPanel({
       </Dialog> : null}
 
       {canEdit ? (
+        <AlertDialog open={conflict != null} onOpenChange={(next) => !next && setConflict(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Overwrite this mite count?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {conflict
+                  ? `A ${METHOD_LABELS[conflict.method] ?? conflict.method} already exists for this hive on ${formatDate(conflict.date)} (${miteDisplay(conflict)?.label ?? `${conflict.mitesCount} mites`}). Saving replaces that count.`
+                  : ""}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep the existing count</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault();
+                  void save(false, true);
+                }}
+                disabled={create.isPending}
+              >
+                {create.isPending ? "Overwriting…" : "Overwrite"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
+
+      {canEdit ? (
         <AlertDialog open={deleting != null} onOpenChange={(next) => !next && setDeleting(null)}>
           <AlertDialogContent>
             <AlertDialogHeader>
@@ -549,6 +494,271 @@ export function VarroaPanel({
           </AlertDialogContent>
         </AlertDialog>
       ) : null}
+    </div>
+  );
+}
+
+type TrendSeries = "wash" | "board" | "visual";
+
+const SERIES_META: Record<
+  TrendSeries,
+  { label: string; className: string; unit: string }
+> = {
+  wash: { label: "Wash / roll", className: "fill-primary stroke-primary", unit: "/ 100" },
+  board: { label: "Sticky board", className: "fill-amber-700 stroke-amber-700 dark:fill-amber-400 dark:stroke-amber-400", unit: "/ day" },
+  visual: { label: "Visual", className: "fill-sky-700 stroke-sky-700 dark:fill-sky-400 dark:stroke-sky-400", unit: "/ day" },
+};
+
+function trendSeries(row: MiteCount): TrendSeries | null {
+  if (isWashMethod(row.method) && row.mitesPer100 != null) return "wash";
+  if (row.method === "sticky_board" && row.mitesPerDay != null) return "board";
+  if (row.method === "visual" && row.mitesPerDay != null) return "visual";
+  return null;
+}
+
+function trendValue(row: MiteCount): number | null {
+  const series = trendSeries(row);
+  if (series === "wash") return row.mitesPer100;
+  if (series === "board" || series === "visual") return row.mitesPerDay;
+  return null;
+}
+
+function VarroaTrendChart({
+  counts,
+  thresholdPer100,
+  thresholdPerDay,
+  selectedId,
+  onSelect,
+}: {
+  counts: MiteCount[];
+  thresholdPer100: number;
+  thresholdPerDay: number;
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const points = counts
+    .map((row) => {
+      const series = trendSeries(row);
+      const value = trendValue(row);
+      if (series == null || value == null) return null;
+      return { row, series, value, time: new Date(row.date).getTime() };
+    })
+    .filter((point): point is NonNullable<typeof point> => point != null)
+    .sort((a, b) => a.time - b.time);
+
+  if (points.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {counts.length === 0
+          ? "No structured mite counts yet."
+          : "No comparable rates yet. Add a sample size for washes or days on board for sticky boards and visual counts."}
+      </p>
+    );
+  }
+
+  const times = points.map((point) => point.time);
+  const minT = Math.min(...times);
+  const maxT = Math.max(...times);
+  const span = Math.max(maxT - minT, 1);
+  const washMax = Math.max(
+    1,
+    thresholdPer100,
+    ...points.filter((p) => p.series === "wash").map((p) => p.value),
+  );
+  const dayMax = Math.max(
+    1,
+    thresholdPerDay,
+    ...points.filter((p) => p.series !== "wash").map((p) => p.value),
+  );
+  const hasWash = points.some((p) => p.series === "wash");
+  const hasDay = points.some((p) => p.series !== "wash");
+  const width = 400;
+  const height = 168;
+  const pad = { left: 28, right: 28, top: 14, bottom: 28 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  function xOf(time: number): number {
+    if (minT === maxT) return pad.left + plotW / 2;
+    return pad.left + ((time - minT) / span) * plotW;
+  }
+  function yOf(value: number, series: TrendSeries): number {
+    const max = series === "wash" ? washMax : dayMax;
+    return pad.top + plotH - (value / max) * plotH;
+  }
+
+  const present = (["wash", "board", "visual"] as const).filter((series) =>
+    points.some((p) => p.series === series),
+  );
+
+  return (
+    <div className="grid gap-2">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="h-44 w-full overflow-visible"
+        role="img"
+        aria-label="Mite counts on a time axis"
+      >
+        <line
+          x1={pad.left}
+          y1={pad.top + plotH}
+          x2={pad.left + plotW}
+          y2={pad.top + plotH}
+          className="stroke-border"
+          strokeWidth="1"
+        />
+        <line
+          x1={pad.left}
+          y1={pad.top}
+          x2={pad.left}
+          y2={pad.top + plotH}
+          className="stroke-border"
+          strokeWidth="1"
+        />
+        {hasWash ? (
+          <>
+            <line
+              x1={pad.left}
+              x2={pad.left + plotW}
+              y1={yOf(thresholdPer100, "wash")}
+              y2={yOf(thresholdPer100, "wash")}
+              className="stroke-destructive/70"
+              strokeDasharray="4 3"
+              strokeWidth="1"
+            />
+            <text
+              x={pad.left + plotW}
+              y={yOf(thresholdPer100, "wash") - 4}
+              textAnchor="end"
+              className="fill-destructive text-[9px]"
+            >
+              {thresholdPer100.toFixed(1)} / 100
+            </text>
+          </>
+        ) : null}
+        {hasDay ? (
+          <>
+            <line
+              x1={pad.left}
+              x2={pad.left + plotW}
+              y1={yOf(thresholdPerDay, "board")}
+              y2={yOf(thresholdPerDay, "board")}
+              className="stroke-amber-700/70 dark:stroke-amber-400/70"
+              strokeDasharray="2 3"
+              strokeWidth="1"
+            />
+            <text
+              x={pad.left}
+              y={yOf(thresholdPerDay, "board") - 4}
+              className="fill-amber-700 text-[9px] dark:fill-amber-400"
+            >
+              {thresholdPerDay.toFixed(1)} / day
+            </text>
+          </>
+        ) : null}
+        {present.map((series) => {
+          const seriesPoints = points.filter((p) => p.series === series);
+          if (seriesPoints.length < 2) return null;
+          const d = seriesPoints
+            .map((p, i) => `${i === 0 ? "M" : "L"} ${xOf(p.time)} ${yOf(p.value, series)}`)
+            .join(" ");
+          return (
+            <path
+              key={series}
+              d={d}
+              fill="none"
+              className={SERIES_META[series].className}
+              strokeWidth="1.5"
+              opacity={0.55}
+            />
+          );
+        })}
+        {points.map((point) => {
+          const x = xOf(point.time);
+          const y = yOf(point.value, point.series);
+          const selected = selectedId === point.row.id;
+          const label = `${formatDate(point.row.date)} · ${METHOD_LABELS[point.row.method] ?? point.row.method}: ${point.value.toFixed(1)} ${SERIES_META[point.series].unit}`;
+          return (
+            <g key={point.row.id}>
+              <title>{label}</title>
+              {point.series === "board" ? (
+                <rect
+                  x={x - (selected ? 5 : 3.5)}
+                  y={y - (selected ? 5 : 3.5)}
+                  width={selected ? 10 : 7}
+                  height={selected ? 10 : 7}
+                  className={cn(SERIES_META.board.className, selected && "stroke-ring")}
+                  strokeWidth={selected ? 2 : 1}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected}
+                  aria-label={label}
+                  onClick={() => onSelect(selected ? null : point.row.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect(selected ? null : point.row.id);
+                    }
+                  }}
+                />
+              ) : (
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={selected ? 6 : point.series === "visual" ? 4.5 : 4}
+                  className={cn(
+                    SERIES_META[point.series].className,
+                    selected && "stroke-ring",
+                    point.series === "visual" && "fill-none",
+                  )}
+                  strokeWidth={selected ? 2 : point.series === "visual" ? 2 : 1}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selected}
+                  aria-label={label}
+                  onClick={() => onSelect(selected ? null : point.row.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect(selected ? null : point.row.id);
+                    }
+                  }}
+                />
+              )}
+            </g>
+          );
+        })}
+        <text
+          x={pad.left}
+          y={height - 8}
+          className="fill-muted-foreground text-[9px]"
+        >
+          {formatDate(new Date(minT).toISOString())}
+        </text>
+        <text
+          x={pad.left + plotW}
+          y={height - 8}
+          textAnchor="end"
+          className="fill-muted-foreground text-[9px]"
+        >
+          {formatDate(new Date(maxT).toISOString())}
+        </text>
+      </svg>
+      <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+        {present.map((series) => (
+          <span key={series} className="inline-flex items-center gap-1.5">
+            <span
+              className={cn(
+                "size-2 rounded-full",
+                series === "wash" && "bg-primary",
+                series === "board" && "rounded-sm bg-amber-700 dark:bg-amber-400",
+                series === "visual" && "border-2 border-sky-700 bg-transparent dark:border-sky-400",
+              )}
+            />
+            {SERIES_META[series].label} ({SERIES_META[series].unit})
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

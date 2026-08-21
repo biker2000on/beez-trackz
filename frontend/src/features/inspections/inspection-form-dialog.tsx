@@ -42,6 +42,13 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { todayInput, toDateInput } from "@/features/hives/lib";
 import {
+  useCreateMiteCount,
+  useDeleteMiteCount,
+  useInspectionMiteCounts,
+  useUpdateMiteCount,
+  type MiteMethod,
+} from "@/features/operations/hooks";
+import {
   useCreateInspection,
   useUpdateInspection,
   type Inspection,
@@ -88,17 +95,73 @@ const inspectionSchema = z.object({
       method: z.string(),
     }),
   ),
-  miteMethod: z.string(),
-  miteCount: z.string(),
-  miteSampleSize: z.string(),
-  miteDaysOnBoard: z.string(),
-  miteNotes: z.string(),
+  miteCounts: z.array(
+    z.object({
+      id: z.string().optional(),
+      method: z.enum(["alcohol_wash", "sugar_roll", "sticky_board", "visual"]),
+      mitesCount: z.string(),
+      sampleSize: z.string(),
+      daysOnBoard: z.string(),
+      notes: z.string(),
+    }),
+  ),
   notes: z.string(),
 });
 
 type InspectionValues = z.infer<typeof inspectionSchema>;
 
-function toValues(inspection?: Inspection | null): InspectionValues {
+const MITE_METHODS: { value: MiteMethod; label: string }[] = [
+  { value: "alcohol_wash", label: "Alcohol wash" },
+  { value: "sugar_roll", label: "Sugar roll" },
+  { value: "sticky_board", label: "Sticky board" },
+  { value: "visual", label: "Visual count" },
+];
+
+function isBoardMiteMethod(method: string): boolean {
+  return method === "sticky_board" || method === "visual";
+}
+
+function emptyMiteRow(): InspectionValues["miteCounts"][number] {
+  return {
+    method: "alcohol_wash",
+    mitesCount: "",
+    sampleSize: "300",
+    daysOnBoard: "1",
+    notes: "",
+  };
+}
+
+function miteRowsFrom(
+  counts?: {
+    id: string;
+    method: string;
+    mitesCount: number;
+    sampleSize: number | null;
+    daysOnBoard: number | null;
+    notes: string | null;
+  }[],
+): InspectionValues["miteCounts"] {
+  return (counts ?? []).map((count) => ({
+    id: count.id,
+    method: count.method as MiteMethod,
+    mitesCount: String(count.mitesCount),
+    sampleSize: count.sampleSize != null ? String(count.sampleSize) : "300",
+    daysOnBoard: count.daysOnBoard != null ? String(count.daysOnBoard) : "1",
+    notes: count.notes ?? "",
+  }));
+}
+
+function toValues(
+  inspection?: Inspection | null,
+  miteCounts?: {
+    id: string;
+    method: string;
+    mitesCount: number;
+    sampleSize: number | null;
+    daysOnBoard: number | null;
+    notes: string | null;
+  }[],
+): InspectionValues {
   return {
     date: inspection ? toDateInput(inspection.date) : todayInput(),
     inspectorName: inspection?.inspectorName ?? "",
@@ -131,20 +194,7 @@ function toValues(inspection?: Inspection | null): InspectionValues {
       product: treatment.product,
       method: treatment.method ?? "",
     })),
-    miteMethod: inspection?.miteCounts?.[0]?.method ?? "none",
-    miteCount:
-      inspection?.miteCounts?.[0] != null
-        ? String(inspection.miteCounts[0].mitesCount)
-        : "",
-    miteSampleSize:
-      inspection?.miteCounts?.[0]?.sampleSize != null
-        ? String(inspection.miteCounts[0].sampleSize)
-        : "300",
-    miteDaysOnBoard:
-      inspection?.miteCounts?.[0]?.daysOnBoard != null
-        ? String(inspection.miteCounts[0].daysOnBoard)
-        : "1",
-    miteNotes: inspection?.miteCounts?.[0]?.notes ?? "",
+    miteCounts: miteRowsFrom(miteCounts ?? inspection?.miteCounts),
     notes: inspection?.notes ?? "",
   };
 }
@@ -201,6 +251,10 @@ export function InspectionFormDialog({
   const isEdit = Boolean(inspection);
   const createInspection = useCreateInspection();
   const updateInspection = useUpdateInspection();
+  const createMiteCount = useCreateMiteCount();
+  const updateMiteCount = useUpdateMiteCount();
+  const deleteMiteCount = useDeleteMiteCount();
+  const liveMiteCounts = useInspectionMiteCounts(inspection?.id);
 
   const form = useForm<InspectionValues>({
     resolver: zodResolver(inspectionSchema),
@@ -211,14 +265,18 @@ export function InspectionFormDialog({
     control: form.control,
     name: "treatments",
   });
+  const miteCounts = useFieldArray({
+    control: form.control,
+    name: "miteCounts",
+  });
   const [discardOpen, setDiscardOpen] = React.useState(false);
 
   React.useEffect(() => {
     if (open) {
-      form.reset(toValues(inspection));
+      form.reset(toValues(inspection, liveMiteCounts.data));
       setDiscardOpen(false);
     }
-  }, [open, inspection, form]);
+  }, [open, inspection, liveMiteCounts.data, form]);
 
   const watched = form.watch();
   const isDirty = form.formState.isDirty;
@@ -260,42 +318,76 @@ export function InspectionFormDialog({
     return value.trim() === "" ? null : Number(value);
   }
 
-  async function onSubmit(values: InspectionValues, resetAfter = false) {
-    const miteCount = values.miteCount.trim() === "" ? null : Number(values.miteCount);
-    const miteSample = values.miteSampleSize.trim() === "" ? undefined : Number(values.miteSampleSize);
-    const miteDays = values.miteDaysOnBoard.trim() === "" ? undefined : Number(values.miteDaysOnBoard);
-    if (values.miteMethod !== "none") {
-      let miteInvalid = false;
-      if (miteCount == null || !Number.isInteger(miteCount) || miteCount < 0) {
-        form.setError("miteCount", {
+  function parsedMiteCounts(values: InspectionValues) {
+    const seen = new Set<string>();
+    let miteInvalid = false;
+    const rows: {
+      id?: string;
+      method: MiteMethod;
+      mitesCount: number;
+      sampleSize?: number;
+      daysOnBoard?: number;
+      notes?: string;
+    }[] = [];
+    values.miteCounts.forEach((row, index) => {
+      if (seen.has(row.method)) {
+        form.setError(`miteCounts.${index}.method`, {
+          message: "Each method can only be recorded once",
+        });
+        miteInvalid = true;
+      }
+      seen.add(row.method);
+      const mitesCount =
+        row.mitesCount.trim() === "" ? null : Number(row.mitesCount);
+      const sampleSize =
+        row.sampleSize.trim() === "" ? undefined : Number(row.sampleSize);
+      const daysOnBoard =
+        row.daysOnBoard.trim() === "" ? undefined : Number(row.daysOnBoard);
+      if (mitesCount == null || !Number.isInteger(mitesCount) || mitesCount < 0) {
+        form.setError(`miteCounts.${index}.mitesCount`, {
           message: "Enter a non-negative mite count",
         });
         miteInvalid = true;
       }
-      const needsSample =
-        values.miteMethod !== "sticky_board" && values.miteMethod !== "visual";
-      if (
-        needsSample &&
-        (miteSample == null || !Number.isInteger(miteSample) || miteSample <= 0)
+      if (isBoardMiteMethod(row.method)) {
+        if (
+          daysOnBoard == null ||
+          !Number.isInteger(daysOnBoard) ||
+          daysOnBoard <= 0
+        ) {
+          form.setError(`miteCounts.${index}.daysOnBoard`, {
+            message: "Enter days the board was on the hive",
+          });
+          miteInvalid = true;
+        }
+      } else if (
+        sampleSize == null ||
+        !Number.isInteger(sampleSize) ||
+        sampleSize <= 0
       ) {
-        form.setError("miteSampleSize", {
+        form.setError(`miteCounts.${index}.sampleSize`, {
           message: "Enter a positive sample size",
         });
         miteInvalid = true;
       }
-      if (
-        !needsSample &&
-        (miteDays == null || !Number.isInteger(miteDays) || miteDays <= 0)
-      ) {
-        form.setError("miteDaysOnBoard", {
-          message: "Enter days the board was on the hive",
-        });
-        miteInvalid = true;
-      }
-      if (miteInvalid) {
-        scrollFirstError();
-        return;
-      }
+      if (miteInvalid || mitesCount == null) return;
+      rows.push({
+        id: row.id,
+        method: row.method,
+        mitesCount,
+        sampleSize: isBoardMiteMethod(row.method) ? undefined : sampleSize,
+        daysOnBoard: isBoardMiteMethod(row.method) ? daysOnBoard : undefined,
+        notes: row.notes.trim() || undefined,
+      });
+    });
+    return { miteInvalid, rows };
+  }
+
+  async function onSubmit(values: InspectionValues, resetAfter = false) {
+    const { miteInvalid, rows } = parsedMiteCounts(values);
+    if (miteInvalid) {
+      scrollFirstError();
+      return;
     }
     const payload = {
       date: values.date,
@@ -321,30 +413,62 @@ export function InspectionFormDialog({
         product: treatment.product,
         method: treatment.method.trim() === "" ? null : treatment.method,
       })),
-      miteCounts:
-        values.miteMethod !== "none" && miteCount != null
-          ? [{
-              method: values.miteMethod as "alcohol_wash" | "sugar_roll" | "sticky_board" | "visual",
-              mitesCount: miteCount,
-              sampleSize:
-                values.miteMethod === "sticky_board" || values.miteMethod === "visual"
-                  ? undefined
-                  : miteSample,
-              daysOnBoard:
-                values.miteMethod === "sticky_board" || values.miteMethod === "visual"
-                  ? miteDays
-                  : undefined,
-              notes: values.miteNotes.trim() || undefined,
-            }]
-          : [],
       notes: values.notes.trim() === "" ? null : values.notes,
     };
     try {
       if (isEdit && inspection) {
+        // Inspection PUT still rewrites mite_counts when miteCounts is sent.
+        // Edit each row through the dedicated mite-count endpoints instead.
         await updateInspection.mutateAsync({ id: inspection.id, ...payload });
+        const originalIds = new Set(
+          (liveMiteCounts.data ?? inspection.miteCounts ?? []).map(
+            (count) => count.id,
+          ),
+        );
+        const kept = new Set(rows.map((row) => row.id).filter(Boolean));
+        for (const id of originalIds) {
+          if (!kept.has(id)) {
+            await deleteMiteCount.mutateAsync({ id, hiveId });
+          }
+        }
+        for (const row of rows) {
+          if (row.id) {
+            await updateMiteCount.mutateAsync({
+              id: row.id,
+              hiveId,
+              date: values.date,
+              method: row.method,
+              mitesCount: row.mitesCount,
+              sampleSize: row.sampleSize,
+              daysOnBoard: row.daysOnBoard,
+              notes: row.notes,
+            });
+          } else {
+            await createMiteCount.mutateAsync({
+              hiveId,
+              inspectionId: inspection.id,
+              date: values.date,
+              method: row.method,
+              mitesCount: row.mitesCount,
+              sampleSize: row.sampleSize,
+              daysOnBoard: row.daysOnBoard,
+              notes: row.notes,
+            });
+          }
+        }
         toast.success("Inspection updated");
       } else {
-        await createInspection.mutateAsync({ hiveId, ...payload });
+        await createInspection.mutateAsync({
+          hiveId,
+          ...payload,
+          miteCounts: rows.map((row) => ({
+            method: row.method,
+            mitesCount: row.mitesCount,
+            sampleSize: row.sampleSize,
+            daysOnBoard: row.daysOnBoard,
+            notes: row.notes,
+          })),
+        });
         toast.success("Inspection recorded");
       }
       if (resetAfter && !isEdit) {
@@ -420,91 +544,168 @@ export function InspectionFormDialog({
           <Separator />
 
           <section className="grid gap-3">
-            <SectionHeading>Varroa count</SectionHeading>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="grid gap-2">
-                <Label>Method</Label>
-                <Select
-                  value={watched.miteMethod}
-                  onValueChange={(value) =>
-                    form.setValue("miteMethod", value, { shouldDirty: true })
-                  }
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Not counted</SelectItem>
-                    <SelectItem value="alcohol_wash">Alcohol wash</SelectItem>
-                    <SelectItem value="sugar_roll">Sugar roll</SelectItem>
-                    <SelectItem value="sticky_board">Sticky board</SelectItem>
-                    <SelectItem value="visual">Visual count</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="inspection-mite-count">Mites</Label>
-                <Input
-                  id="inspection-mite-count"
-                  type="number"
-                  min="0"
-                  step="1"
-                  disabled={watched.miteMethod === "none"}
-                  aria-invalid={
-                    form.formState.errors.miteCount ? true : undefined
-                  }
-                  {...form.register("miteCount")}
-                />
-                {form.formState.errors.miteCount && (
-                  <p className="text-sm text-destructive" role="alert">
-                    {form.formState.errors.miteCount.message}
-                  </p>
-                )}
-              </div>
-              {watched.miteMethod === "sticky_board" || watched.miteMethod === "visual" ? (
-                <div className="grid gap-2">
-                  <Label htmlFor="inspection-mite-days">Days on board</Label>
-                  <Input
-                    id="inspection-mite-days"
-                    type="number"
-                    min="1"
-                    step="1"
-                    aria-invalid={
-                      form.formState.errors.miteDaysOnBoard ? true : undefined
-                    }
-                    {...form.register("miteDaysOnBoard")}
-                  />
-                  {form.formState.errors.miteDaysOnBoard && (
-                    <p className="text-sm text-destructive" role="alert">
-                      {form.formState.errors.miteDaysOnBoard.message}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <div className="grid gap-2">
-                  <Label htmlFor="inspection-mite-sample">Bees sampled</Label>
-                  <Input
-                    id="inspection-mite-sample"
-                    type="number"
-                    min="1"
-                    step="1"
-                    disabled={watched.miteMethod === "none"}
-                    aria-invalid={
-                      form.formState.errors.miteSampleSize ? true : undefined
-                    }
-                    {...form.register("miteSampleSize")}
-                  />
-                  {form.formState.errors.miteSampleSize && (
-                    <p className="text-sm text-destructive" role="alert">
-                      {form.formState.errors.miteSampleSize.message}
-                    </p>
-                  )}
-                </div>
-              )}
+            <div className="flex items-center justify-between">
+              <SectionHeading>Varroa counts</SectionHeading>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const used = new Set(
+                    (form.getValues("miteCounts") ?? []).map((row) => row.method),
+                  );
+                  const next =
+                    MITE_METHODS.find((item) => !used.has(item.value)) ??
+                    MITE_METHODS[0];
+                  miteCounts.append({ ...emptyMiteRow(), method: next.value });
+                }}
+              >
+                <Plus className="size-4" />
+                Add count
+              </Button>
             </div>
-            <Input
-              placeholder="Optional mite-count notes"
-              disabled={watched.miteMethod === "none"}
-              {...form.register("miteNotes")}
-            />
+            {miteCounts.fields.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No structured mite counts.
+              </p>
+            )}
+            {miteCounts.fields.map((field, index) => {
+              const method = watched.miteCounts?.[index]?.method ?? field.method;
+              const board = isBoardMiteMethod(method);
+              return (
+                <div key={field.id} className="grid gap-2 rounded-md border p-3">
+                  <div className="grid gap-3 sm:grid-cols-[1.4fr_0.8fr_0.9fr_auto]">
+                    <div className="grid gap-1">
+                      <Label className="sr-only">Method</Label>
+                      <Select
+                        value={method}
+                        onValueChange={(value) =>
+                          form.setValue(
+                            `miteCounts.${index}.method`,
+                            value as MiteMethod,
+                            { shouldDirty: true },
+                          )
+                        }
+                      >
+                        <SelectTrigger aria-label={`Mite count ${index + 1} method`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {MITE_METHODS.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {form.formState.errors.miteCounts?.[index]?.method && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {form.formState.errors.miteCounts[index]?.method?.message}
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="sr-only" htmlFor={`inspection-mite-count-${index}`}>
+                        Mites
+                      </Label>
+                      <Input
+                        id={`inspection-mite-count-${index}`}
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="Mites"
+                        aria-label={`Mite count ${index + 1} mites`}
+                        aria-invalid={
+                          form.formState.errors.miteCounts?.[index]?.mitesCount
+                            ? true
+                            : undefined
+                        }
+                        {...form.register(`miteCounts.${index}.mitesCount`)}
+                      />
+                      {form.formState.errors.miteCounts?.[index]?.mitesCount && (
+                        <p className="text-sm text-destructive" role="alert">
+                          {
+                            form.formState.errors.miteCounts[index]?.mitesCount
+                              ?.message
+                          }
+                        </p>
+                      )}
+                    </div>
+                    {board ? (
+                      <div className="grid gap-1">
+                        <Label className="sr-only" htmlFor={`inspection-mite-days-${index}`}>
+                          Days on board
+                        </Label>
+                        <Input
+                          id={`inspection-mite-days-${index}`}
+                          type="number"
+                          min="1"
+                          step="1"
+                          placeholder="Days on board"
+                          aria-label={`Mite count ${index + 1} days on board`}
+                          aria-invalid={
+                            form.formState.errors.miteCounts?.[index]?.daysOnBoard
+                              ? true
+                              : undefined
+                          }
+                          {...form.register(`miteCounts.${index}.daysOnBoard`)}
+                        />
+                        {form.formState.errors.miteCounts?.[index]?.daysOnBoard && (
+                          <p className="text-sm text-destructive" role="alert">
+                            {
+                              form.formState.errors.miteCounts[index]?.daysOnBoard
+                                ?.message
+                            }
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid gap-1">
+                        <Label className="sr-only" htmlFor={`inspection-mite-sample-${index}`}>
+                          Bees sampled
+                        </Label>
+                        <Input
+                          id={`inspection-mite-sample-${index}`}
+                          type="number"
+                          min="1"
+                          step="1"
+                          placeholder="Bees sampled"
+                          aria-label={`Mite count ${index + 1} bees sampled`}
+                          aria-invalid={
+                            form.formState.errors.miteCounts?.[index]?.sampleSize
+                              ? true
+                              : undefined
+                          }
+                          {...form.register(`miteCounts.${index}.sampleSize`)}
+                        />
+                        {form.formState.errors.miteCounts?.[index]?.sampleSize && (
+                          <p className="text-sm text-destructive" role="alert">
+                            {
+                              form.formState.errors.miteCounts[index]?.sampleSize
+                                ?.message
+                            }
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove mite count ${index + 1}`}
+                      onClick={() => miteCounts.remove(index)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                  <Input
+                    placeholder="Optional mite-count notes"
+                    aria-label={`Mite count ${index + 1} notes`}
+                    {...form.register(`miteCounts.${index}.notes`)}
+                  />
+                </div>
+              );
+            })}
           </section>
           <Separator />
 

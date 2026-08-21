@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestMiteCountBoardRateAndStandaloneUpsert(t *testing.T) {
+func TestMiteCountBoardRateAndStandaloneConflict(t *testing.T) {
 	fixture := newHiveScopeFixture(t)
 	hive := fixture.hiveA.String()
 
@@ -33,34 +33,55 @@ func TestMiteCountBoardRateAndStandaloneUpsert(t *testing.T) {
 		t.Fatalf("mitesPerDay = %v, want 6", first["mitesPerDay"])
 	}
 
-	// Same hive/date/method standalone upserts instead of inserting a second row.
 	again := fixture.call(t, fixture.server.miteCountCreate,
 		http.MethodPost, "/mite-counts",
 		map[string]any{
 			"hiveId": hive, "date": "2026-08-01", "method": "sticky_board",
 			"mitesCount": 24, "daysOnBoard": 3,
 		}, nil)
-	if again.Code != http.StatusCreated {
-		t.Fatalf("upsert: status %d: %s", again.Code, again.Body.String())
+	if again.Code != http.StatusConflict {
+		t.Fatalf("duplicate: status %d: %s", again.Code, again.Body.String())
+	}
+	var conflict map[string]any
+	if err := json.Unmarshal(again.Body.Bytes(), &conflict); err != nil {
+		t.Fatalf("decode conflict: %v", err)
+	}
+	existing, _ := conflict["existing"].(map[string]any)
+	if existing == nil || existing["id"] != first["id"] {
+		t.Fatalf("409 should return the existing row, got %#v", conflict)
+	}
+	if got, _ := existing["mitesPerDay"].(float64); math.Abs(got-6) > 0.0001 {
+		t.Fatalf("existing mitesPerDay = %v, want 6 (not overwritten)", existing["mitesPerDay"])
+	}
+
+	overwritten := fixture.call(t, fixture.server.miteCountCreate,
+		http.MethodPost, "/mite-counts",
+		map[string]any{
+			"hiveId": hive, "date": "2026-08-01", "method": "sticky_board",
+			"mitesCount": 24, "daysOnBoard": 3, "overwrite": true,
+		}, nil)
+	if overwritten.Code != http.StatusOK {
+		t.Fatalf("overwrite: status %d: %s", overwritten.Code, overwritten.Body.String())
 	}
 	var second map[string]any
-	if err := json.Unmarshal(again.Body.Bytes(), &second); err != nil {
-		t.Fatalf("decode upsert: %v", err)
+	if err := json.Unmarshal(overwritten.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode overwrite: %v", err)
 	}
 	if first["id"] != second["id"] {
-		t.Fatalf("standalone upsert changed id: %v → %v", first["id"], second["id"])
+		t.Fatalf("overwrite changed id: %v → %v", first["id"], second["id"])
 	}
 	if got, _ := second["mitesPerDay"].(float64); math.Abs(got-8) > 0.0001 {
-		t.Fatalf("upserted mitesPerDay = %v, want 8", second["mitesPerDay"])
+		t.Fatalf("overwritten mitesPerDay = %v, want 8", second["mitesPerDay"])
 	}
 
 	var n int
 	if err := fixture.server.pool.QueryRow(fixture.ctx, `
-		SELECT count(*) FROM mite_counts WHERE hive_id=$1`, fixture.hiveA).Scan(&n); err != nil {
+		SELECT count(*) FROM mite_counts WHERE hive_id=$1 AND deleted_at IS NULL`,
+		fixture.hiveA).Scan(&n); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("standalone upsert left %d rows, want 1", n)
+		t.Fatalf("overwrite left %d live rows, want 1", n)
 	}
 }
 
@@ -100,10 +121,24 @@ func TestMiteCountPatchAndDelete(t *testing.T) {
 	if deleted.Code != http.StatusOK {
 		t.Fatalf("delete: status %d: %s", deleted.Code, deleted.Body.String())
 	}
+	var deletedAt *string
+	if err := fixture.server.pool.QueryRow(fixture.ctx, `
+		SELECT deleted_at::text FROM mite_counts WHERE id=$1`, id).Scan(&deletedAt); err != nil {
+		t.Fatalf("load deleted row: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("delete should set deleted_at, not remove the row")
+	}
 	missing := fixture.call(t, fixture.server.miteCountDelete,
 		http.MethodDelete, "/mite-counts/"+id, nil, map[string]string{"id": id})
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("second delete = %d, want 404", missing.Code)
+	}
+	patchedGone := fixture.call(t, fixture.server.miteCountUpdate,
+		http.MethodPatch, "/mite-counts/"+id,
+		map[string]any{"mitesCount": 1}, map[string]string{"id": id})
+	if patchedGone.Code != http.StatusNotFound {
+		t.Fatalf("patch of deleted = %d, want 404", patchedGone.Code)
 	}
 }
 
@@ -160,6 +195,97 @@ func TestInspectionGetAndUpdateMiteCounts(t *testing.T) {
 	if inspection.MiteCounts[0].MitesPer100 == nil ||
 		math.Abs(*inspection.MiteCounts[0].MitesPer100-4) > 0.0001 {
 		t.Fatalf("updated rate = %#v, want 4", inspection.MiteCounts[0].MitesPer100)
+	}
+}
+
+func TestInspectionMiteCountsPatchedIndividually(t *testing.T) {
+	fixture := newHiveScopeFixture(t)
+	created := fixture.call(t, fixture.server.handleInspectionCreate,
+		http.MethodPost, "/inspections",
+		map[string]any{
+			"hiveId": fixture.hiveA.String(), "date": "2026-08-05",
+			"miteCounts": []map[string]any{
+				{"method": "alcohol_wash", "mitesCount": 6, "sampleSize": 300},
+				{"method": "sticky_board", "mitesCount": 12, "daysOnBoard": 2},
+			},
+		}, nil)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: status %d: %s", created.Code, created.Body.String())
+	}
+	var inspection inspectionJSON
+	if err := json.Unmarshal(created.Body.Bytes(), &inspection); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if len(inspection.MiteCounts) != 2 {
+		t.Fatalf("create mite counts = %d, want 2", len(inspection.MiteCounts))
+	}
+
+	listed := fixture.call(t, fixture.server.miteCountList,
+		http.MethodGet, "/mite-counts?inspectionId="+inspection.ID.String(), nil, nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", listed.Code, listed.Body.String())
+	}
+	var rows []miteCountJSON
+	if err := json.Unmarshal(listed.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("list = %d, want 2", len(rows))
+	}
+
+	byMethod := map[string]miteCountJSON{}
+	for _, row := range rows {
+		byMethod[row.Method] = row
+	}
+	wash := byMethod["alcohol_wash"]
+	board := byMethod["sticky_board"]
+	if wash.ID == uuid.Nil || board.ID == uuid.Nil {
+		t.Fatalf("missing method rows: %#v", byMethod)
+	}
+
+	patched := fixture.call(t, fixture.server.miteCountUpdate,
+		http.MethodPatch, "/mite-counts/"+board.ID.String(),
+		map[string]any{"mitesCount": 4, "daysOnBoard": 2},
+		map[string]string{"id": board.ID.String()})
+	if patched.Code != http.StatusOK {
+		t.Fatalf("patch board: %d %s", patched.Code, patched.Body.String())
+	}
+	var after map[string]any
+	if err := json.Unmarshal(patched.Body.Bytes(), &after); err != nil {
+		t.Fatalf("decode patch: %v", err)
+	}
+	if got, _ := after["mitesPerDay"].(float64); math.Abs(got-2) > 0.0001 {
+		t.Fatalf("patched board mitesPerDay = %v, want 2", after["mitesPerDay"])
+	}
+
+	listed = fixture.call(t, fixture.server.miteCountList,
+		http.MethodGet, "/mite-counts?inspectionId="+inspection.ID.String(), nil, nil)
+	if err := json.Unmarshal(listed.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode list after patch: %v", err)
+	}
+	for _, row := range rows {
+		byMethod[row.Method] = row
+	}
+	if byMethod["alcohol_wash"].MitesCount != 6 {
+		t.Fatalf("wash was rewritten: %#v", byMethod["alcohol_wash"])
+	}
+	if byMethod["sticky_board"].MitesCount != 4 {
+		t.Fatalf("board was not patched: %#v", byMethod["sticky_board"])
+	}
+
+	deleted := fixture.call(t, fixture.server.miteCountDelete,
+		http.MethodDelete, "/mite-counts/"+wash.ID.String(),
+		nil, map[string]string{"id": wash.ID.String()})
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete wash: %d %s", deleted.Code, deleted.Body.String())
+	}
+	listed = fixture.call(t, fixture.server.miteCountList,
+		http.MethodGet, "/mite-counts?inspectionId="+inspection.ID.String(), nil, nil)
+	if err := json.Unmarshal(listed.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode list after delete: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Method != "sticky_board" {
+		t.Fatalf("after delete list = %#v, want only sticky_board", rows)
 	}
 }
 
@@ -351,10 +477,11 @@ func TestVarroaEfficacyIgnoresAfterAfterNextTreatmentAndMismatchedUnits(t *testi
 	insertTreatment(t, fixture, hive, "2026-05-12", "OA", nil)
 	// This after-count is after the next treatment, so Formic must stay unpaired.
 	insertMite(t, fixture, hive, "2026-05-20", "alcohol_wash", 1, &sample, nil)
-	// Board after a wash before: rates exist but kinds differ → no efficacy %.
+	// Same-kind, different-method after-count must not pair.
 	insertMite(t, fixture, hive, "2026-06-01", "alcohol_wash", 6, &sample, nil)
 	insertTreatment(t, fixture, hive, "2026-06-05", "Mixed", nil)
-	insertMite(t, fixture, hive, "2026-06-15", "sticky_board", 2, nil, &days)
+	insertMite(t, fixture, hive, "2026-06-15", "sugar_roll", 2, &sample, nil)
+	insertMite(t, fixture, hive, "2026-06-16", "sticky_board", 2, nil, &days)
 
 	rows, err := queryVarroaEfficacy(fixture.ctx, fixture.server.pool, &hive)
 	if err != nil {
@@ -374,10 +501,79 @@ func TestVarroaEfficacyIgnoresAfterAfterNextTreatmentAndMismatchedUnits(t *testi
 	}
 
 	mixed := byProduct["Mixed"]
-	if mixed.Before == nil || mixed.After == nil {
-		t.Fatalf("Mixed should still surface both rates: before=%v after=%v", mixed.Before, mixed.After)
+	if mixed.Before == nil {
+		t.Fatal("Mixed should keep the wash before-count")
+	}
+	if mixed.After != nil {
+		t.Fatalf("Mixed after should be nil without a same-method count, got %#v", mixed.After)
 	}
 	if mixed.efficacyPercent() != nil {
-		t.Fatal("wash-then-board pairing must not invent a percent reduction")
+		t.Fatal("mismatched-method pairing must not invent a percent reduction")
+	}
+}
+
+func TestVarroaAnalyticsOmitsDeletedCounts(t *testing.T) {
+	fixture := newHiveScopeFixture(t)
+	created := fixture.call(t, fixture.server.miteCountCreate,
+		http.MethodPost, "/mite-counts",
+		map[string]any{
+			"hiveId": fixture.hiveA.String(), "date": "2026-08-04",
+			"method": "alcohol_wash", "mitesCount": 12, "sampleSize": 300,
+		}, nil)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	id := body["id"].(string)
+
+	listed := fixture.call(t, fixture.server.miteCountList,
+		http.MethodGet, "/mite-counts?hiveId="+fixture.hiveA.String(), nil, nil)
+	if listed.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", listed.Code, listed.Body.String())
+	}
+	var live []map[string]any
+	if err := json.Unmarshal(listed.Body.Bytes(), &live); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(live) != 1 {
+		t.Fatalf("list before delete = %d, want 1", len(live))
+	}
+
+	deleted := fixture.call(t, fixture.server.miteCountDelete,
+		http.MethodDelete, "/mite-counts/"+id, nil, map[string]string{"id": id})
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", deleted.Code, deleted.Body.String())
+	}
+
+	after := fixture.call(t, fixture.server.varroaAnalytics,
+		http.MethodGet, "/analytics/varroa?hiveId="+fixture.hiveA.String(), nil, nil)
+	if after.Code != http.StatusOK {
+		t.Fatalf("analytics: %d %s", after.Code, after.Body.String())
+	}
+	var report struct {
+		Counts []map[string]any `json:"counts"`
+		Latest any              `json:"latest"`
+	}
+	if err := json.Unmarshal(after.Body.Bytes(), &report); err != nil {
+		t.Fatalf("decode analytics: %v", err)
+	}
+	if len(report.Counts) != 0 || report.Latest != nil {
+		t.Fatalf("deleted count still in analytics: %#v", report)
+	}
+
+	empty := fixture.call(t, fixture.server.miteCountList,
+		http.MethodGet, "/mite-counts?hiveId="+fixture.hiveA.String(), nil, nil)
+	if empty.Code != http.StatusOK {
+		t.Fatalf("list after delete: %d %s", empty.Code, empty.Body.String())
+	}
+	live = nil
+	if err := json.Unmarshal(empty.Body.Bytes(), &live); err != nil {
+		t.Fatalf("decode empty list: %v", err)
+	}
+	if len(live) != 0 {
+		t.Fatalf("list after delete = %d, want 0", len(live))
 	}
 }

@@ -16,6 +16,7 @@ import (
 )
 
 func (s *Server) mountOperations(r chi.Router) {
+	r.Get("/mite-counts", s.miteCountList)
 	r.Post("/mite-counts", s.miteCountCreate)
 	r.With(s.requireEntityParamRole("mite", true)).
 		Patch("/mite-counts/{id}", s.miteCountUpdate)
@@ -55,140 +56,7 @@ type miteCountPayload struct {
 	SampleSize   *int       `json:"sampleSize"`
 	DaysOnBoard  *int       `json:"daysOnBoard"`
 	Notes        *string    `json:"notes"`
-}
-
-func (s *Server) miteCountCreate(w http.ResponseWriter, r *http.Request) {
-	var req miteCountPayload
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	date, err := parseDate(req.Date)
-	if err != nil || req.HiveID == uuid.Nil {
-		writeError(w, http.StatusBadRequest, "hiveId, date, method, and a non-negative mite count are required")
-		return
-	}
-	if err := normalizeMiteCount(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "hiveId, date, method, and a non-negative mite count are required")
-		return
-	}
-	if !s.requireHiveRole(w, r, req.HiveID, true) {
-		return
-	}
-	if req.InspectionID != nil {
-		var ok bool
-		if err := s.pool.QueryRow(r.Context(), `
-			SELECT EXISTS (SELECT 1 FROM inspections WHERE id = $1 AND hive_id = $2)`,
-			*req.InspectionID, req.HiveID).Scan(&ok); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if !ok {
-			writeError(w, http.StatusBadRequest, "inspectionId does not belong to hiveId")
-			return
-		}
-	}
-	id, per100, perDay, err := upsertMiteCount(r.Context(), s.pool, req, date)
-	if err != nil {
-		if honeyIsFKViolation(err) {
-			writeError(w, http.StatusBadRequest, "invalid hiveId or inspectionId")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	writeJSON(w, http.StatusCreated, miteCountResponse(id, per100, perDay))
-}
-
-func (s *Server) miteCountUpdate(w http.ResponseWriter, r *http.Request) {
-	id, err := uuidParam(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	var body struct {
-		// The UI echoes hiveId back; it is validated against the row, never changed.
-		HiveID      *uuid.UUID `json:"hiveId"`
-		Date        *string    `json:"date"`
-		Method      *string    `json:"method"`
-		MitesCount  *int       `json:"mitesCount"`
-		SampleSize  *int       `json:"sampleSize"`
-		DaysOnBoard *int       `json:"daysOnBoard"`
-		Notes       *string    `json:"notes"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	var current miteCountPayload
-	var currentDate time.Time
-	err = s.pool.QueryRow(r.Context(), `
-		SELECT hive_id, inspection_id, date, method, mites_count, sample_size, days_on_board, notes
-		FROM mite_counts WHERE id = $1`, id).Scan(
-		&current.HiveID, &current.InspectionID, &currentDate, &current.Method,
-		&current.MitesCount, &current.SampleSize, &current.DaysOnBoard, &current.Notes)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "mite count not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if body.HiveID != nil && *body.HiveID != current.HiveID {
-		writeError(w, http.StatusBadRequest, "hiveId cannot be changed")
-		return
-	}
-	date := currentDate
-	if body.Date != nil {
-		parsed, err := parseDate(*body.Date)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid date")
-			return
-		}
-		date = parsed
-	}
-	if body.Method != nil {
-		current.Method = *body.Method
-	}
-	if body.MitesCount != nil {
-		current.MitesCount = *body.MitesCount
-	}
-	if body.SampleSize != nil {
-		current.SampleSize = body.SampleSize
-	}
-	if body.DaysOnBoard != nil {
-		current.DaysOnBoard = body.DaysOnBoard
-	}
-	if body.Notes != nil {
-		current.Notes = body.Notes
-	}
-	if err := normalizeMiteCount(&current); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid mite count")
-		return
-	}
-
-	var per100, perDay *float64
-	err = s.pool.QueryRow(r.Context(), `
-		UPDATE mite_counts
-		SET date = $2, method = $3, mites_count = $4, sample_size = $5,
-			days_on_board = $6, notes = $7
-		WHERE id = $1
-		RETURNING mites_per_100, mites_per_day`,
-		id, date, current.Method, current.MitesCount, current.SampleSize,
-		current.DaysOnBoard, honeyTrimPtr(current.Notes)).Scan(&per100, &perDay)
-	if err != nil {
-		writeDBError(w, err,
-			"a mite count already exists for this hive, date, and method",
-			"invalid mite count")
-		return
-	}
-	writeJSON(w, http.StatusOK, miteCountResponse(id, per100, perDay))
-}
-
-func (s *Server) miteCountDelete(w http.ResponseWriter, r *http.Request) {
-	deleteSimpleRecord(s, w, r, "mite_counts", "mite count")
+	Overwrite    bool       `json:"overwrite"`
 }
 
 var queenEventTypes = map[string]bool{
@@ -478,7 +346,7 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 				jsonb_build_object('method', m.method, 'mitesCount', m.mites_count,
 					'sampleSize', m.sample_size, 'daysOnBoard', m.days_on_board,
 					'mitesPer100', m.mites_per_100, 'mitesPerDay', m.mites_per_day)
-			FROM mite_counts m WHERE m.hive_id = $1
+			FROM mite_counts m WHERE m.hive_id = $1 AND m.deleted_at IS NULL
 			UNION ALL
 			SELECT q.id, 'queen_event', q.event_date,
 				'Queen ' || replace(q.event_type, '_', ' '), q.notes,
@@ -550,7 +418,7 @@ func (s *Server) varroaAnalytics(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
 		SELECT id, hive_id, date, method, mites_count, sample_size, days_on_board,
 			mites_per_100, mites_per_day, notes
-		FROM mite_counts WHERE hive_id = $1 ORDER BY date`, hiveID)
+		FROM mite_counts WHERE hive_id = $1 AND deleted_at IS NULL ORDER BY date`, hiveID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -613,7 +481,7 @@ func (s *Server) varroaFleetAnalytics(w http.ResponseWriter, r *http.Request) {
 			SELECT id, date, method, mites_count, sample_size, days_on_board,
 				mites_per_100, mites_per_day, notes
 			FROM mite_counts
-			WHERE hive_id = h.id
+			WHERE hive_id = h.id AND deleted_at IS NULL
 			ORDER BY date DESC
 			LIMIT 1
 		) m ON true
