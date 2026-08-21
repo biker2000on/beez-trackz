@@ -556,9 +556,13 @@ func TestRefuseLotBottlingMatchesSaleLockout(t *testing.T) {
 
 func inspectionTreatmentEvents(t *testing.T, server *Server, inspectionID uuid.UUID) []treatmentLockoutRow {
 	t.Helper()
+	// Live rows only: dropping a treatment soft-deletes its event (00037),
+	// and every production reader filters the same way.
 	rows, err := server.pool.Query(context.Background(), `
 		SELECT id, hive_id, product, date_applied, date_removed, withdrawal_days
-		FROM treatment_events WHERE inspection_id = $1 ORDER BY product`, inspectionID)
+		FROM treatment_events
+		WHERE inspection_id = $1 AND deleted_at IS NULL
+		ORDER BY product`, inspectionID)
 	if err != nil {
 		t.Fatalf("load treatment events: %v", err)
 	}
@@ -621,9 +625,10 @@ func TestInspectionPatchSyncsTreatmentEvents(t *testing.T) {
 		t.Fatalf("create wrote %#v, want one Apivar event", events)
 	}
 	apivarDays := events[0].WithdrawalDays
+	apivarRowID := events[0].ID
 
-	// Corrected product: the old event must stop locking the hive, and the new
-	// one must carry the new product days from the catalog.
+	// Corrected product: a single rename keeps the SAME row (id, and with it
+	// date_removed and media lineage) while re-resolving withdrawal days.
 	patchLockoutInspection(t, server, id, map[string]any{
 		"treatments": []map[string]any{{"product": "ApiLife Var", "method": "wafer"}},
 	})
@@ -633,6 +638,10 @@ func TestInspectionPatchSyncsTreatmentEvents(t *testing.T) {
 	}
 	if events[0].Product != "ApiLife Var" {
 		t.Fatalf("product = %q, want ApiLife Var", events[0].Product)
+	}
+	if events[0].ID != apivarRowID {
+		t.Fatalf("rename replaced the row (%s -> %s); a typo fix must keep the event",
+			apivarRowID, events[0].ID)
 	}
 	if events[0].WithdrawalDays == apivarDays && apivarDays != 0 {
 		t.Fatalf("withdrawal days stayed at %d: the catalog was not re-resolved",
