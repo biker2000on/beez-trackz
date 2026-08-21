@@ -11,6 +11,7 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
+	"github.com/biker2000on/beez-trackz/backend/internal/httpapi"
 	"github.com/biker2000on/beez-trackz/backend/internal/jobs"
 	"github.com/biker2000on/beez-trackz/backend/internal/storage"
 )
@@ -43,7 +44,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv, mux, err := jobs.NewWorker(cfg, pool, store)
+	dispatcher := httpapi.NewBackgroundDispatcher(cfg, pool)
+	srv, mux, err := jobs.NewWorker(cfg, pool, store, dispatcher.DispatchNtfy)
 	if err != nil {
 		slog.Error("worker", "err", err)
 		os.Exit(1)

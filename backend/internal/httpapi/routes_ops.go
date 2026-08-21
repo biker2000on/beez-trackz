@@ -15,7 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/notify"
 )
 
@@ -504,32 +506,34 @@ func (s *Server) collectNtfyCandidates(ctx context.Context, now time.Time) ([]nt
 	return out, nil
 }
 
-func (s *Server) handleNtfyDispatch(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+type ntfyDispatchResult struct {
+	Published int      `json:"published"`
+	Skipped   int      `json:"skipped"`
+	Errors    []string `json:"errors"`
+	Reason    string   `json:"reason,omitempty"`
+}
+
+// runNtfyDispatch is the shared core behind POST /ops/ntfy/dispatch and the
+// worker's post-recommendation hook. Deduplication is the ntfy_dispatches
+// receipt insert; a failed publish drops its receipt so a later run retries.
+func (s *Server) runNtfyDispatch(ctx context.Context, now time.Time) (ntfyDispatchResult, error) {
+	result := ntfyDispatchResult{Errors: []string{}}
 	settings, err := s.loadNtfySettings(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+		return result, err
 	}
 	if !settings.enabled || !settings.cfg.Configured() {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"published": 0, "skipped": 0, "errors": []string{},
-			"reason": "ntfy is not configured",
-		})
-		return
+		result.Reason = "ntfy is not configured"
+		return result, nil
 	}
-	candidates, err := s.collectNtfyCandidates(ctx, time.Now())
+	candidates, err := s.collectNtfyCandidates(ctx, now)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+		return result, err
 	}
 	client := s.ntfyClient()
-	published := 0
-	skipped := 0
-	errs := make([]string, 0)
 	for _, item := range candidates {
 		if !settings.kinds[item.Kind] {
-			skipped++
+			result.Skipped++
 			continue
 		}
 		var dispatchID uuid.UUID
@@ -540,11 +544,11 @@ func (s *Server) handleNtfyDispatch(w http.ResponseWriter, r *http.Request) {
 			RETURNING id`,
 			item.Kind, item.Key, item.Title, item.Body).Scan(&dispatchID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			skipped++
+			result.Skipped++
 			continue
 		}
 		if err != nil {
-			errs = append(errs, err.Error())
+			result.Errors = append(result.Errors, err.Error())
 			continue
 		}
 		if pubErr := client.Publish(ctx, settings.cfg, notify.Message{
@@ -554,16 +558,45 @@ func (s *Server) handleNtfyDispatch(w http.ResponseWriter, r *http.Request) {
 			// Drop the receipt so a later dispatch retries; fail-soft here.
 			_, _ = s.pool.Exec(ctx, `DELETE FROM ntfy_dispatches WHERE id = $1`, dispatchID)
 			slog.Warn("ntfy publish failed", "kind", item.Kind, "err", pubErr)
-			errs = append(errs, item.Kind+": "+pubErr.Error())
+			result.Errors = append(result.Errors, item.Kind+": "+pubErr.Error())
 			continue
 		}
-		published++
+		result.Published++
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"published": published,
-		"skipped":   skipped,
-		"errors":    errs,
-	})
+	return result, nil
+}
+
+func (s *Server) handleNtfyDispatch(w http.ResponseWriter, r *http.Request) {
+	result, err := s.runNtfyDispatch(r.Context(), time.Now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// NewBackgroundDispatcher returns a Server wired only for background ntfy
+// dispatch — no routes are mounted. The worker binary hangs it after the
+// recommendation run so pushes are hands-free.
+func NewBackgroundDispatcher(cfg *config.Config, pool *pgxpool.Pool) *Server {
+	return &Server{cfg: cfg, pool: pool}
+}
+
+// DispatchNtfy publishes due notifications, deduplicated by the receipt
+// table, and is safe to run repeatedly. Fail-soft: a push failure is logged,
+// never returned, so it cannot fail the job that triggered it.
+func (s *Server) DispatchNtfy(ctx context.Context) {
+	result, err := s.runNtfyDispatch(ctx, time.Now())
+	if err != nil {
+		slog.Warn("ntfy dispatch", "err", err)
+		return
+	}
+	if result.Published > 0 || len(result.Errors) > 0 {
+		slog.Info("ntfy dispatch",
+			"published", result.Published,
+			"skipped", result.Skipped,
+			"errors", len(result.Errors))
+	}
 }
 
 func (s *Server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {

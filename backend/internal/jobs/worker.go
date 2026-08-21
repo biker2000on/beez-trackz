@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/hibiken/asynq"
@@ -13,14 +14,18 @@ import (
 
 // Handlers holds worker-side dependencies.
 type Handlers struct {
-	cfg    *config.Config
-	pool   *pgxpool.Pool
-	store  *storage.Store
-	photos *photostore.Resolver
+	cfg      *config.Config
+	pool     *pgxpool.Pool
+	store    *storage.Store
+	photos   *photostore.Resolver
+	postRecs func(context.Context)
 }
 
 // NewWorker builds the asynq server and task mux for the worker binary.
-func NewWorker(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*asynq.Server, *asynq.ServeMux, error) {
+// postRecs, when non-nil, runs after each successful recommendation pass —
+// the ntfy dispatch hook lives there so pushes are hands-free. It must be
+// fail-soft; its errors cannot fail the task.
+func NewWorker(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, postRecs func(context.Context)) (*asynq.Server, *asynq.ServeMux, error) {
 	opt, err := redisOpt(cfg.RedisURL)
 	if err != nil {
 		return nil, nil, err
@@ -30,7 +35,7 @@ func NewWorker(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*a
 		Logger:      asynqLogger{},
 	})
 
-	h := &Handlers{cfg: cfg, pool: pool, store: store, photos: photostore.New(cfg, store)}
+	h := &Handlers{cfg: cfg, pool: pool, store: store, photos: photostore.New(cfg, store), postRecs: postRecs}
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TypeProcessImage, h.handleProcessImage)
 	mux.HandleFunc(TypeImmichYardScan, h.handleImmichYardScan)

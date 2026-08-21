@@ -157,26 +157,21 @@ Items 6 and most of item 8 shipped 2026-08-20 via a three-worker
 Polyagent run (consignment / field+health / units+ops; migrations
 00024–00026). What the worker reports left open:
 
-- **Consignment.** Shrink on `product_catalog` SKUs is refused at
-  settlement (400) because products have no adjustment ledger — jars are
-  complete; a product adjustment table belongs to the other-hive-products
-  work. The generic `POST /sales` endpoint cannot name a stock location
-  (safe failure: consignment channel validates against home); converging
-  it with `/stock-locations/{id}/sales` retires the latter. `GET /sales`
-  does not return `stock_location_id` yet. `GET /stock-locations/inventory`
-  is O(locations) round trips — fine at 2–3 locations.
-  Transfers/settlements are online-only by design.
-- **Units.** Display sweep shipped in wave 2 (honey, feedings, propolis,
-  inspection weather, hive feeding lists, lot form with typed suffixes,
-  Honey Story on the operator preference, `honey_weight_entered`
-  persisted). Still open: the raw °F/mph tiles inside the forecast tab's
-  current-conditions strip, and weather stays °F/mph canonical until the
-  Open-Meteo request switches to Celsius in a coordinated change.
-- **Ops.** ntfy has no access token column (reserved topics fail-soft);
-  dispatch is on-demand (`POST /ops/ntfy/dispatch`) — wire it into
-  `jobs/schedule.go` or after `recs.Run` for hands-free pushes.
-  Compliance packet is JSON, not a printable PDF. Labor start/stop is
-  not in the offline mutation manifest.
+- **Consignment.** Closed 2026-08-21 (migration 00030): product
+  adjustment ledger (settlement shrink on catalog SKUs now writes both
+  halves), `POST /sales` takes `stockLocationId` with
+  `/stock-locations/{id}/sales` retired to a deprecated delegate (delete
+  after one release), inventory matrix is a fixed number of queries.
+  Transfers/settlements stay online-only by design.
+- **Units.** Display sweep complete 2026-08-21 (forecast
+  current-conditions strip converts through the preference). Weather
+  stays °F/mph canonical until the Open-Meteo request switches to
+  Celsius in a coordinated change.
+- **Ops.** Closed 2026-08-21: ntfy access token (migration 00031,
+  bearer auth for reserved topics), dispatch runs hands-free after each
+  recommendation pass (receipt-deduplicated), compliance packet has an
+  authenticated print view (browser print-to-PDF), labor start/stop in
+  the offline mutation manifest.
 - **Field/health.** None blocking; voice parser now extracts
   frames-of-bees/brood/stores (`extract-v2`).
 
@@ -186,13 +181,14 @@ Reviewed 2026-08-19 (six independent read-only reviewers over
 52ac317..28046bf, then fixes landed the same day — see history). What
 the review left open, by feature:
 
-- **Sales / products.** No undo/cancel for a product batch (a wrong
-  40 lb mead batch permanently consumes bulk honey). Colony revenue is not paired against `bees_queens`; equipment lines
-  have no cost basis / COGS. `external_sync` entity types and per-kind
-  account mappings for colony/equipment/product lines were not
-  designed (do with GnuCash). Hot-honey batch expenses are stored but
-  not reported. (Propolis `net_grams` and deferred physical effects for
-  draft/pending sales landed 2026-08-19, migration 00022.)
+- **Sales / products.** Product batches void 2026-08-21 (reverses the
+  honey/propolis consumption; refused once output is drawn down), and
+  batch expenses now report cost-per-unit on the products page. Still
+  open: colony revenue is not paired against `bees_queens`; equipment
+  lines have no cost basis / COGS; `external_sync` entity types and
+  per-kind account mappings for colony/equipment/product lines were not
+  designed (do with GnuCash). (Propolis `net_grams` and deferred physical
+  effects for draft/pending sales landed 2026-08-19, migration 00022.)
 - **Lockout / moisture / yard queue.** Migration 00022 seeds Apivar 14,
   CheckMite+ 14, ApiLife Var 30 days; verify the rest against labels in
   Settings > Treatment withdrawals. Sale lockout only bites when the sale names a lot; jar lines are not
@@ -200,7 +196,8 @@ the review left open, by feature:
   Moisture is a hard reject above threshold with no override tier.
   Transcript re-parse can change a treatment's product without
   re-resolving withdrawal days. Inspection PATCH of `treatments` jsonb
-  does not touch `treatment_events`. Yard queue has no endpoint test.
+  does not touch `treatment_events`. (Yard-queue endpoint test added
+  2026-08-21.)
 - **Varroa.** Inspection form edits only the first mite count; a
   multi-method inspection cannot be fully edited. Trend chart still
   evenly spaced; board/visual not charted. No soft delete/audit on
@@ -211,17 +208,20 @@ the review left open, by feature:
   checkboxes, not current vs proposed values. No photo reprocess UI;
   no UI to pick which transcript version to parse. Worker Force
   re-transcribe can race a retry of the original task (two versions).
-  Transcription delete is check-then-delete outside a tx (FK makes it
-  a 500, not data loss). Dev `docker-compose.yml` lacks the Immich vars.
-- **Yard map / sun.** `CanvasRegistration` offset/rotation/scale is
-  vestigial (identity once any stand has GPS) — remove it and the
-  `satelliteImageKey` column. No UI surfaces hive lat/lng. Sun uses
-  the device timezone, not the apiary's. Tiles are cross-origin so the
-  map is blank offline, and the stand layer is hidden until geo loads.
-  Browser `coords.altitude` is ellipsoidal, stored as if MSL. Esri
-  legacy tile endpoint ToS is grey.
-- **Auth.** `loadDotEnv` runs in the production server (harmless with
-  cwd `/`, but scope it to `cmd/set-password`).
+  (Transcription delete made transactional and dev compose gained the
+  Immich vars 2026-08-21.)
+- **Yard map / sun.** Closed 2026-08-21: `CanvasRegistration` and
+  `satelliteImageKey` dropped (migration 00032), hive lat/lng surfaced
+  on the hive overview (capture/clear via `PATCH /hives/{id}/gps`), sun
+  times formatted in the apiary timezone from the weather snapshot.
+  Still open: tiles are cross-origin so the map is blank offline, and
+  the stand layer is hidden until geo loads. Browser `coords.altitude`
+  is ellipsoidal, stored as if MSL. Esri legacy tile endpoint ToS is
+  grey. A yard-map save still refreshes placed-hive GPS from stand
+  slots, so a recapture on a placed hive is overwritten on the next
+  layout save (the UI says so).
+- **Auth.** Closed 2026-08-21: `.env` loading is scoped to
+  `cmd/set-password`; the production server no longer reads one.
 
 ## P1 — Live GnuCash sync and reconciliation
 

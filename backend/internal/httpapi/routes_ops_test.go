@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,7 @@ func TestOpsRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodPost, "/api/v1/ops/labor/start"},
 		{http.MethodPost, "/api/v1/ops/labor/stop"},
 		{http.MethodGet, "/api/v1/ops/compliance-packet"},
+		{http.MethodGet, "/api/v1/ops/compliance-packet/print"},
 		{http.MethodPost, "/api/v1/ops/ntfy/dispatch"},
 		{http.MethodPost, "/api/v1/ops/ntfy/test"},
 		{http.MethodPut, "/api/v1/settings/ntfy"},
@@ -129,6 +131,19 @@ func TestOpsRoutesRequireAuthentication(t *testing.T) {
 		if response.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s status = %d, want 401", path.method, path.path, response.Code)
 		}
+	}
+}
+
+func TestCompliancePrintTemplateRenders(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	packet := compliancePacket{ExportedAt: time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC)}
+	if err := compliancePrintTemplate.Execute(&out, packet); err != nil {
+		t.Fatalf("render empty packet: %v", err)
+	}
+	html := out.String()
+	if !strings.Contains(html, "<title>Beez Trackz compliance packet</title>") {
+		t.Fatal("print view missing title")
 	}
 }
 

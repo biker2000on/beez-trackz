@@ -32,5 +32,8 @@ func (h *Handlers) handleGenerateRecs(ctx context.Context, _ *asynq.Task) error 
 	if len(errs) > 0 && ruleFailures == recs.RuleCount() {
 		return errs[0]
 	}
+	if h.postRecs != nil {
+		h.postRecs(ctx)
+	}
 	return nil
 }
