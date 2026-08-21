@@ -224,7 +224,7 @@ func loadMiteCountsByInspection(
 		SELECT id, inspection_id, method, mites_count, sample_size, days_on_board,
 			mites_per_100, mites_per_day, notes
 		FROM mite_counts
-		WHERE inspection_id = ANY($1)
+		WHERE inspection_id = ANY($1) AND deleted_at IS NULL
 		ORDER BY method`, ids)
 	if err != nil {
 		return nil, err
@@ -258,8 +258,11 @@ func replaceInspectionMiteCounts(
 	for _, count := range counts {
 		methods = append(methods, count.Method)
 	}
-	if _, err := q.Exec(ctx,
-		`DELETE FROM mite_counts WHERE inspection_id = $1 AND method <> ALL($2)`,
+	// Soft delete, matching the standalone endpoint: the audit trail keeps
+	// dropped methods and every aggregate already filters deleted_at IS NULL.
+	if _, err := q.Exec(ctx, `
+		UPDATE mite_counts SET deleted_at = now()
+		WHERE inspection_id = $1 AND method <> ALL($2) AND deleted_at IS NULL`,
 		inspectionID, methods); err != nil {
 		return err
 	}

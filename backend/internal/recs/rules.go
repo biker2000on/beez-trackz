@@ -422,6 +422,7 @@ func checkTreatNow(ctx context.Context, pool *pgxpool.Pool, now time.Time) ([]Re
 		FROM mite_counts m
 		JOIN hives h ON h.id = m.hive_id
 		WHERE h.status = 'active' AND h.is_archived = false
+		  AND m.deleted_at IS NULL
 		  AND m.date >= $1::timestamptz - make_interval(days => $2)
 		  AND m.date > COALESCE((
 			SELECT max(GREATEST(t.date_applied, COALESCE(t.date_removed, t.date_applied)))
@@ -484,7 +485,8 @@ func checkMiteCheckDue(ctx context.Context, pool *pgxpool.Pool, now time.Time) (
 
 	rows, err := pool.Query(ctx, `
 		SELECT h.id, h.position_label,
-		       (SELECT max(m.date) FROM mite_counts m WHERE m.hive_id = h.id)
+		       (SELECT max(m.date) FROM mite_counts m
+	        WHERE m.hive_id = h.id AND m.deleted_at IS NULL)
 		FROM hives h
 		WHERE h.status = 'active' AND h.is_archived = false`)
 	if err != nil {

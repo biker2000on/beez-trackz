@@ -397,7 +397,8 @@ func (s *Server) transcriptionReparseDiff(ctx context.Context, mediaID uuid.UUID
 
 	miteRows, err := s.pool.Query(ctx, `
 		SELECT id, hive_id, method, mites_count, sample_size, notes
-		FROM mite_counts WHERE source_media_file_id = $1 ORDER BY date`, mediaID)
+		FROM mite_counts
+		WHERE source_media_file_id = $1 AND deleted_at IS NULL ORDER BY date`, mediaID)
 	if err != nil {
 		return diff, err
 	}

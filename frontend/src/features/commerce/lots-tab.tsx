@@ -114,6 +114,7 @@ export function LotsTab() {
                       <p className="text-xs text-muted-foreground">
                         {lot.moisturePct != null ? `Extracted ${lot.moisturePct}%` : "Extraction moisture not recorded"}
                         {lot.bottlingMoisturePct != null ? ` · Bottled ${lot.bottlingMoisturePct}%` : ""}
+                        {lot.moistureOverrideReason ? ` · Override: ${lot.moistureOverrideReason}` : ""}
                       </p>
                     )}
                     {lot.lockout?.locked && (
@@ -229,6 +230,14 @@ function LotFormDialog({
   const [bottlingMoisture, setBottlingMoisture] = React.useState(
     () => (lot?.bottlingMoisturePct != null ? String(lot.bottlingMoisturePct) : ""),
   );
+  // Revealed only after the server rejects an over-threshold reading, so the
+  // default path stays a hard reject.
+  const [overrideOffered, setOverrideOffered] = React.useState(false);
+  const [overrideAccepted, setOverrideAccepted] = React.useState(false);
+  const [overrideReason, setOverrideReason] = React.useState(
+    () => lot?.moistureOverrideReason ?? "",
+  );
+  const [moistureError, setMoistureError] = React.useState<string | null>(null);
 
   function resetDraft() {
     setLotCode("");
@@ -248,6 +257,10 @@ function LotFormDialog({
     setPhotoIds("");
     setMoisture("");
     setBottlingMoisture("");
+    setOverrideOffered(false);
+    setOverrideAccepted(false);
+    setOverrideReason("");
+    setMoistureError(null);
   }
 
   function submit(resetAfter = false) {
@@ -282,12 +295,23 @@ function LotFormDialog({
       photoIds: photoIds.split(",").map((id) => id.trim()).filter(Boolean),
       moisturePct: moisture.trim() ? Number(moisture) : null,
       bottlingMoisturePct: bottlingMoisture.trim() ? Number(bottlingMoisture) : null,
+      moistureOverride: overrideAccepted || undefined,
+      moistureOverrideReason:
+        overrideAccepted && overrideReason.trim() ? overrideReason.trim() : undefined,
+    };
+    setMoistureError(null);
+    const onError = (cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : "";
+      if (/moisture/i.test(message)) {
+        setMoistureError(message);
+        setOverrideOffered(true);
+      }
     };
     if (lot) {
       // Keep the published slug stable so printed QR labels keep resolving.
       update.mutate(
         { id: lot.id, publicSlug: lot.publicSlug, ...payload },
-        { onSuccess: () => onOpenChange(false) },
+        { onSuccess: () => onOpenChange(false), onError },
       );
     } else {
       create.mutate(payload, {
@@ -295,6 +319,7 @@ function LotFormDialog({
           if (resetAfter) resetDraft();
           else onOpenChange(false);
         },
+        onError,
       });
     }
   }
@@ -327,6 +352,40 @@ function LotFormDialog({
               <Input id="lot-bottle-moisture" type="number" min="0" max="100" step="0.1" value={bottlingMoisture} onChange={(e) => setBottlingMoisture(e.target.value)} />
             </div>
           </div>
+          {moistureError ? (
+            <p className="text-sm text-destructive">{moistureError}</p>
+          ) : null}
+          {overrideOffered ? (
+            <div className="grid gap-2 rounded-md border p-3">
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1 size-4 accent-primary"
+                  checked={overrideAccepted}
+                  onChange={(e) => setOverrideAccepted(e.target.checked)}
+                />
+                <span>Accept this reading anyway (recorded on the lot)</span>
+              </label>
+              {overrideAccepted ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="lot-moisture-override-reason">Reason</Label>
+                  <Input
+                    id="lot-moisture-override-reason"
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                    placeholder="Going to mead; fermentation is the point"
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : lot?.moistureOverrideReason ? (
+            <p className="text-xs text-muted-foreground">
+              Moisture override on record: {lot.moistureOverrideReason}
+              {lot.moistureOverrideAt
+                ? ` (${formatDate(lot.moistureOverrideAt)})`
+                : ""}
+            </p>
+          ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} placeholder="Wildflower" /></div>
             <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>

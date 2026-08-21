@@ -28,6 +28,9 @@ export interface HarvestLot {
   isPublic: boolean;
   moisturePct: number | null;
   bottlingMoisturePct: number | null;
+  /** Read-only record of an accepted over-threshold moisture reading. */
+  moistureOverrideReason: string | null;
+  moistureOverrideAt: string | null;
   lockout?: {
     locked: boolean;
     treatmentOn: boolean;
@@ -77,6 +80,9 @@ export interface HarvestLotInput {
   photoIds: string[];
   moisturePct?: number | null;
   bottlingMoisturePct?: number | null;
+  /** Accept an over-threshold extraction reading; requires a reason. */
+  moistureOverride?: boolean;
+  moistureOverrideReason?: string;
 }
 
 export interface Expense {

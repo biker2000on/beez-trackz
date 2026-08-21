@@ -106,6 +106,7 @@ type harvestLotPayload struct {
 	ClaimYear           *int           `json:"claimYear"`
 	ClaimApiaryID       *uuid.UUID     `json:"claimApiaryId"`
 	ClaimElevationM     *float64       `json:"claimElevationM"`
+	moistureOverrideReq
 }
 
 type harvestLotRow struct {
@@ -125,6 +126,9 @@ type harvestLotRow struct {
 	IsPublic            bool             `json:"isPublic"`
 	MoisturePct         *float64         `json:"moisturePct"`
 	BottlingMoisturePct *float64         `json:"bottlingMoisturePct"`
+	// Read-only record of an accepted over-threshold reading.
+	MoistureOverrideReason *string    `json:"moistureOverrideReason"`
+	MoistureOverrideAt     *time.Time `json:"moistureOverrideAt"`
 	ClaimSpecies        *string          `json:"claimSpecies"`
 	ClaimYear           *int             `json:"claimYear"`
 	ClaimApiaryID       *uuid.UUID       `json:"claimApiaryId"`
@@ -145,6 +149,7 @@ const harvestLotSelect = `
 		lot.honey_weight_entered, lot.honey_variety, lot.season, lot.apiary_region, lot.bloom_notes,
 		lot.beekeeper_story, COALESCE(lot.testing_data, '{}'::jsonb), lot.reorder_url, lot.is_public,
 		lot.moisture_pct, lot.bottling_moisture_pct,
+		lot.moisture_override_reason, lot.moisture_override_at,
 		lot.claim_species, lot.claim_year, lot.claim_apiary_id, claim_apiary.name, lot.claim_elevation_m,
 		lot.created_at, lot.updated_at
 	FROM harvest_lots lot
@@ -257,6 +262,7 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyVariety, &item.Season,
 			&item.ApiaryRegion, &item.BloomNotes, &item.BeekeeperStory, &item.TestingData,
 			&item.ReorderURL, &item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
+			&item.MoistureOverrideReason, &item.MoistureOverrideAt,
 			&item.ClaimSpecies, &item.ClaimYear, &item.ClaimApiaryID, &item.ClaimApiaryName,
 			&item.ClaimElevationM, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
@@ -424,11 +430,14 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
 		return
 	}
-	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
+	moistureMsg, overrideReason, err := s.refuseLotMoisture(
+		r.Context(), req.MoisturePct, req.moistureOverrideReq)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
-	} else if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+	}
+	if moistureMsg != "" {
+		writeError(w, http.StatusBadRequest, moistureMsg)
 		return
 	}
 	if msg := validateMoisturePct(req.BottlingMoisturePct); msg != "" {
@@ -488,6 +497,10 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 			"invalid reference")
 		return
 	}
+	if err := stampMoistureOverride(r.Context(), tx, id, overrideReason, actorID(r)); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	for _, harvestID := range req.HarvestIDs {
 		if _, err := tx.Exec(r.Context(), `
 			INSERT INTO harvest_lot_harvests (lot_id, harvest_id) VALUES ($1, $2)`,
@@ -530,11 +543,14 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
 		return
 	}
-	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
+	moistureMsg, overrideReason, err := s.refuseLotMoisture(
+		r.Context(), req.MoisturePct, req.moistureOverrideReq)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
-	} else if msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+	}
+	if moistureMsg != "" {
+		writeError(w, http.StatusBadRequest, moistureMsg)
 		return
 	}
 	if msg := validateMoisturePct(req.BottlingMoisturePct); msg != "" {
@@ -610,6 +626,12 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "harvest lot not found")
+		return
+	}
+	// nil reason (reading within threshold) clears any previous override, so a
+	// corrected reading does not leave a stale justification behind.
+	if err := stampMoistureOverride(r.Context(), tx, id, overrideReason, actorID(r)); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `DELETE FROM harvest_lot_harvests WHERE lot_id=$1`, id); err != nil {
@@ -701,6 +723,17 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	// Jar lines are not traced back to a lot, so the bottling run is the last
+	// point where a withdrawal window can still be enforced. Same rule
+	// refuseLotSale applies to sales.
+	if msg, err := refuseLotBottling(ctx, tx, lotID, lotCode, date); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusConflict, msg)
 		return
 	}
 

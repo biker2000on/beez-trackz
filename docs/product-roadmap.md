@@ -193,23 +193,29 @@ the review left open, by feature:
   CheckMite+ 14, ApiLife Var 30 days; verify the rest against labels in
   Settings > Treatment withdrawals. Sale lockout only bites when the sale names a lot; jar lines are not
   traced to lots and bottling from a locked lot is not refused.
-  Moisture is a hard reject above threshold with no override tier.
-  Transcript re-parse can change a treatment's product without
-  re-resolving withdrawal days. Inspection PATCH of `treatments` jsonb
-  does not touch `treatment_events`. (Yard-queue endpoint test added
-  2026-08-21.)
-- **Varroa.** Inspection form edits only the first mite count; a
-  multi-method inspection cannot be fully edited. Trend chart still
-  evenly spaced; board/visual not charted. No soft delete/audit on
-  `mite_counts`. Efficacy "after" count does not match method.
-  Standalone same-day counts now upsert (unique index) — a second
-  sticky board on the same day silently overwrites the first.
-- **Media / Immich.** The re-parse "diff" UI shows only accept
-  checkboxes, not current vs proposed values. No photo reprocess UI;
-  no UI to pick which transcript version to parse. Worker Force
-  re-transcribe can race a retry of the original task (two versions).
-  (Transcription delete made transactional and dev compose gained the
-  Immich vars 2026-08-21.)
+  Closed 2026-08-21 (migration 00034): bottling from a locked lot is
+  refused with the same rule as sales; moisture has an explicit override
+  tier (flag + recorded reason, hard reject unchanged without it);
+  inspection PATCH of `treatments` jsonb reconciles `treatment_events`
+  with re-resolved withdrawal days; withdrawal seeds audited against
+  labels with missing products added insert-only. (The re-parse
+  re-resolve sentence was stale — fixed earlier in `5e7a706`. Yard-queue
+  endpoint test added the same day.) Still open: jar lines are not
+  traced to lots, so a jar sale is only caught at bottling time; a
+  bottling run back-dated to after the window escapes the check (same
+  hole the sale path has).
+- **Varroa.** Closed 2026-08-21 (migration 00036): every mite count on
+  an inspection is editable via dedicated `/mite-counts` endpoints;
+  soft delete + audit on `mite_counts` (all aggregates filter deleted
+  rows); a same-day duplicate returns 409 with the existing row and
+  requires an explicit overwrite; trend chart is on a real time axis
+  with wash/board/visual series; efficacy pairs same-method only.
+- **Media / Immich.** Closed 2026-08-21 (migration 00035): re-parse
+  acceptance shows current → proposed per field; transcript versions
+  are listed with a Select action; photo detail has a Reprocess action;
+  forced re-transcribe records intent and serializes deliveries so it
+  cannot race an original-task retry. (Transcription delete made
+  transactional and dev compose gained the Immich vars the same day.)
 - **Yard map / sun.** Closed 2026-08-21: `CanvasRegistration` and
   `satelliteImageKey` dropped (migration 00032), hive lat/lng surfaced
   on the hive overview (capture/clear via `PATCH /hives/{id}/gps`), sun
