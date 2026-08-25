@@ -72,6 +72,41 @@ func calendarDate(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
+// --- future-dating guard -------------------------------------------------
+//
+// Every lockout rule is evaluated at a client-supplied date: refuseHiveHarvest
+// takes the harvest date, refuseLotBottling the bottled date. A date past the
+// end of the withdrawal window therefore reports "clear" no matter what is
+// actually on the hive today, which turns the whole lockout into an opt-out —
+// type next month's date and the tainted honey is extracted, bottled, and
+// jarred with no refusal anywhere.
+//
+// Backdating stays legal: an operator writing up yesterday's extraction is the
+// normal case, and a backdated record can only ever be *more* locked. Only
+// forward-dating is refused.
+
+// dateIsFuture reports whether a supplied date's calendar day is later than
+// the server's today. Today is projected into the supplied date's own location
+// before the comparison, so an operator east or west of UTC is not judged
+// against a midnight in someone else's zone.
+func dateIsFuture(date, now time.Time) bool {
+	day := calendarDate(date)
+	y, m, d := now.Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, day.Location())
+	return day.After(today)
+}
+
+// refuseFutureDate returns a user-facing refusal for a forward-dated record,
+// or "" when the date is today or earlier. field names the request field so
+// the operator knows which box to fix.
+func refuseFutureDate(date time.Time, field string) string {
+	if !dateIsFuture(date, time.Now()) {
+		return ""
+	}
+	return field + " cannot be in the future: dating a record past a treatment " +
+		"withdrawal window would clear a lockout that has not actually ended"
+}
+
 func lockoutEndDate(removed time.Time, days int) time.Time {
 	return calendarDate(removed).AddDate(0, 0, days)
 }

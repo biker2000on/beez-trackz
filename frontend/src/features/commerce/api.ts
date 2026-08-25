@@ -12,6 +12,15 @@ export interface HarvestLot {
   extractionDate: string;
   honeyWeightLbs: number;
   honeyWeightEntered: string | null;
+  /**
+   * Where honeyWeightLbs came from. 'derived' means it is the sum of the
+   * linked harvests and is recomputed whenever that set changes; 'manual'
+   * means the operator typed it and it is left alone.
+   */
+  honeyWeightSource: "manual" | "derived";
+  /** What the linked harvests sum to, reported on manual lots too. */
+  derivedWeightLbs: number;
+  linkedHarvestCount: number;
   honeyVariety: string | null;
   claimSpecies: string | null;
   claimYear: number | null;
@@ -62,7 +71,9 @@ export interface HarvestLotInput {
   lotCode: string;
   publicSlug?: string;
   extractionDate: string;
-  honeyWeightLbs: number;
+  /** Omitted when the weight is derived from the linked harvests. */
+  honeyWeightLbs?: number;
+  honeyWeightSource?: "manual" | "derived";
   honeyWeightEntered?: string;
   honeyVariety?: string;
   claimSpecies?: string;

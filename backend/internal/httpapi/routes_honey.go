@@ -184,6 +184,10 @@ func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
+	if msg := refuseFutureDate(date, "date"); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
 	before, after, honeyWeight, direct, msg := hsEntryWeights(req.hsEntryReq)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
@@ -744,6 +748,11 @@ type honeySaleItemRow struct {
 	Quantity         int        `json:"quantity"`
 	UnitPrice        money      `json:"unitPrice"`
 	Label            string     `json:"label"`
+	// Provenance of a jar line: the run that filled it and the lot that run
+	// drew from. Both nil on non-jar lines and on sales recorded before 00038.
+	BottlingRunID *uuid.UUID `json:"bottlingRunId"`
+	LotID         *uuid.UUID `json:"lotId"`
+	LotCode       *string    `json:"lotCode"`
 }
 
 type honeySaleRow struct {
@@ -817,14 +826,17 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 		         CASE WHEN si.kind='colony' THEN h.position_label || ' · ' || a.name END,
 		         et.name,
 		         NULLIF(CONCAT_WS(' · ', pc.name, pc.size_label), ''),
-		         si.kind)
+		         si.kind),
+		       si.bottling_run_id, run.lot_id, runlot.lot_code
 		FROM sale_items si
 		LEFT JOIN jar_sizes js ON js.id = si.jar_size_id
 		LEFT JOIN hives h ON h.id = si.hive_id
 		LEFT JOIN apiaries a ON a.id = h.apiary_id
 		LEFT JOIN equipment_stock es ON es.id = si.equipment_stock_id
 		LEFT JOIN equipment_types et ON et.id = es.type_id
-		LEFT JOIN product_catalog pc ON pc.id = si.product_id`)
+		LEFT JOIN product_catalog pc ON pc.id = si.product_id
+		LEFT JOIN bottling_runs run ON run.id = si.bottling_run_id
+		LEFT JOIN harvest_lots runlot ON runlot.id = run.lot_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -833,7 +845,8 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 	for itemRows.Next() {
 		var item honeySaleItemRow
 		if err := itemRows.Scan(&item.SaleID, &item.Kind, &item.JarSizeID, &item.HiveID,
-			&item.EquipmentStockID, &item.ProductID, &item.Quantity, &item.UnitPrice, &item.Label); err != nil {
+			&item.EquipmentStockID, &item.ProductID, &item.Quantity, &item.UnitPrice, &item.Label,
+			&item.BottlingRunID, &item.LotID, &item.LotCode); err != nil {
 			return nil, err
 		}
 		itemsBySale[item.SaleID] = append(itemsBySale[item.SaleID], item)
@@ -890,6 +903,10 @@ type honeySaleLineInput struct {
 	ProductID        string `json:"productId"`
 	Quantity         int    `json:"quantity"`
 	UnitPrice        money  `json:"unitPrice"`
+	// BottlingRunID traces a jar line back to the run that filled it, and
+	// through the run to a harvest lot. Optional: pre-00038 sales and clients
+	// that do not track provenance keep working.
+	BottlingRunID string `json:"bottlingRunId"`
 }
 
 type honeySaleLine struct {
@@ -900,6 +917,8 @@ type honeySaleLine struct {
 	ProductID        uuid.UUID
 	Quantity         int
 	UnitPrice        money
+	// BottlingRunID is uuid.Nil when the jar line names no run.
+	BottlingRunID uuid.UUID
 }
 
 // honeySalePriceRequired rejects a $0 paid sale. Gift is the only channel
@@ -919,7 +938,11 @@ func honeySalePriceRequired(channel string, lines []honeySaleLine) error {
 
 func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, error) {
 	lines := make([]honeySaleLine, 0, len(inputs))
-	byJarSize := make(map[uuid.UUID]int, len(inputs))
+	// Jar lines merge per (size, bottling run): two lines of the same size off
+	// two different runs are two different lots and must stay separate rows,
+	// but a client that repeats the same size and run still collapses.
+	type jarKey struct{ size, run uuid.UUID }
+	byJarSize := make(map[jarKey]int, len(inputs))
 	byHive := make(map[uuid.UUID]int, len(inputs))
 	byStock := make(map[uuid.UUID]int, len(inputs))
 	byProduct := make(map[uuid.UUID]int, len(inputs))
@@ -950,6 +973,9 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 		if input.UnitPrice < 0 {
 			return nil, errors.New("unitPrice must be non-negative")
 		}
+		if kind != saleKindJar && strings.TrimSpace(input.BottlingRunID) != "" {
+			return nil, errors.New("bottlingRunId is only valid on jar lines")
+		}
 		switch kind {
 		case saleKindJar:
 			if input.JarSizeID == "" {
@@ -959,16 +985,25 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 			if err != nil {
 				return nil, errors.New("invalid jarSizeId")
 			}
-			if index, ok := byJarSize[id]; ok {
+			var runID uuid.UUID
+			if trimmed := strings.TrimSpace(input.BottlingRunID); trimmed != "" {
+				runID, err = uuid.Parse(trimmed)
+				if err != nil {
+					return nil, errors.New("invalid bottlingRunId")
+				}
+			}
+			key := jarKey{size: id, run: runID}
+			if index, ok := byJarSize[key]; ok {
 				if lines[index].UnitPrice != input.UnitPrice {
 					return nil, errors.New("duplicate jarSizeId entries must use the same unitPrice")
 				}
 				lines[index].Quantity += input.Quantity
 				continue
 			}
-			byJarSize[id] = len(lines)
+			byJarSize[key] = len(lines)
 			lines = append(lines, honeySaleLine{
-				Kind: saleKindJar, JarSizeID: id, Quantity: input.Quantity, UnitPrice: input.UnitPrice,
+				Kind: saleKindJar, JarSizeID: id, Quantity: input.Quantity,
+				UnitPrice: input.UnitPrice, BottlingRunID: runID,
 			})
 		case saleKindColony:
 			id, err := uuid.Parse(input.HiveID)
@@ -1115,6 +1150,101 @@ func (s *Server) honeyCheckLocationShelf(
 	return nil
 }
 
+// saleBottlingRunLot is the resolved provenance of one jar line's bottling run.
+type saleBottlingRunLot struct {
+	LotID   uuid.UUID
+	LotCode string
+	JarSize *uuid.UUID
+	Voided  bool
+}
+
+// saleResolveBottlingRuns validates every bottlingRunId named by the jar lines
+// and returns the lot each one belongs to. A refusal is returned as an
+// equipFail so the caller can hand it straight to equipWriteError.
+//
+// This is what makes a jar sale lot-traced: with the run resolved to a lot,
+// refuseLotSale applies to a plain jar sale that names no harvestLotId at all,
+// which is the case the withdrawal lockout could never reach before.
+func saleResolveBottlingRuns(
+	ctx context.Context,
+	tx pgx.Tx,
+	lines []honeySaleLine,
+	date time.Time,
+) (map[uuid.UUID]saleBottlingRunLot, error) {
+	runIDs := make([]uuid.UUID, 0, len(lines))
+	seen := make(map[uuid.UUID]bool, len(lines))
+	for _, line := range lines {
+		if line.BottlingRunID == uuid.Nil || seen[line.BottlingRunID] {
+			continue
+		}
+		seen[line.BottlingRunID] = true
+		runIDs = append(runIDs, line.BottlingRunID)
+	}
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT br.id, br.lot_id, lot.lot_code, br.jar_size_id, br.voided_at IS NOT NULL
+		FROM bottling_runs br
+		JOIN harvest_lots lot ON lot.id = br.lot_id
+		WHERE br.id = ANY($1)`, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	byRun := make(map[uuid.UUID]saleBottlingRunLot, len(runIDs))
+	for rows.Next() {
+		var id uuid.UUID
+		var run saleBottlingRunLot
+		if err := rows.Scan(&id, &run.LotID, &run.LotCode, &run.JarSize, &run.Voided); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		byRun[id] = run
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for _, line := range lines {
+		if line.BottlingRunID == uuid.Nil {
+			continue
+		}
+		run, ok := byRun[line.BottlingRunID]
+		if !ok {
+			return nil, saleBadRequest("invalid bottlingRunId")
+		}
+		if run.Voided {
+			return nil, equipFail(http.StatusConflict,
+				"bottling run for lot %s is voided; its jars no longer exist", run.LotCode)
+		}
+		// The run pins the size it filled. Selling a 12 oz line "from" a
+		// 1 lb run would attribute pounds to the wrong lot.
+		if run.JarSize == nil || *run.JarSize != line.JarSizeID {
+			return nil, saleBadRequest(
+				"bottlingRunId does not match the jar size on its line")
+		}
+	}
+
+	// One refusal per lot, evaluated at the sale date like every other
+	// lockout check.
+	checked := make(map[uuid.UUID]bool, len(byRun))
+	for _, run := range byRun {
+		if checked[run.LotID] {
+			continue
+		}
+		checked[run.LotID] = true
+		msg, err := refuseLotSale(ctx, tx, run.LotID, date)
+		if err != nil {
+			return nil, err
+		}
+		if msg != "" {
+			return nil, equipFail(http.StatusConflict, "Lot %s: %s", run.LotCode, msg)
+		}
+	}
+	return byRun, nil
+}
+
 // POST /honey/sales creates either an immediate sale or an order/invoice.
 func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -1212,6 +1342,16 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// Per-line provenance first: each jar line's bottling run resolves to a
+	// lot, and that lot is held to the same withdrawal window the sale-level
+	// lot is. Ahead of the availability check on purpose — a voided or
+	// mismatched run is a bad reference, and reporting it as "not enough
+	// jars" would send the operator to the wrong screen.
+	if _, err := saleResolveBottlingRuns(ctx, tx, lines, date); err != nil {
+		equipWriteError(w, err)
+		return
 	}
 
 	// Serialize sales that touch the same jar sizes, then validate availability
@@ -1437,11 +1577,15 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, line := range lines {
-		var jarSizeID, hiveID, stockID, productID *uuid.UUID
+		var jarSizeID, hiveID, stockID, productID, bottlingRunID *uuid.UUID
 		switch {
 		case line.Kind == saleKindJar:
 			id := line.JarSizeID
 			jarSizeID = &id
+			if line.BottlingRunID != uuid.Nil {
+				runID := line.BottlingRunID
+				bottlingRunID = &runID
+			}
 		case line.Kind == saleKindColony:
 			id := line.HiveID
 			hiveID = &id
@@ -1455,10 +1599,10 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO sale_items
 				(sale_id, kind, jar_size_id, hive_id, equipment_stock_id, product_id,
-				 quantity, unit_price_cents, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				 quantity, unit_price_cents, bottling_run_id, created_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			saleID, line.Kind, jarSizeID, hiveID, stockID, productID,
-			line.Quantity, line.UnitPrice, actor); err != nil {
+			line.Quantity, line.UnitPrice, bottlingRunID, actor); err != nil {
 			if honeyIsFKViolation(err) {
 				writeError(w, http.StatusBadRequest, "invalid jar, hive, equipment, or product target")
 				return

@@ -93,6 +93,16 @@ export function LotsTab() {
                   <CardTitle className="text-base">{lot.lotCode}</CardTitle>
                   <p className="text-xs text-muted-foreground">
                     {formatDate(lot.extractionDate)} · {formatLbs(lot.honeyWeightLbs)}
+                    {lot.honeyWeightSource === "derived"
+                      ? ` · derived from ${lot.linkedHarvestCount} ${
+                          lot.linkedHarvestCount === 1 ? "harvest" : "harvests"
+                        }`
+                      : lot.linkedHarvestCount > 0 &&
+                          lot.derivedWeightLbs !== lot.honeyWeightLbs
+                        ? ` · typed; ${lot.linkedHarvestCount} ${
+                            lot.linkedHarvestCount === 1 ? "harvest sums" : "harvests sum"
+                          } to ${formatLbs(lot.derivedWeightLbs)}`
+                        : ""}
                   </p>
                 </div>
                 <div className="flex flex-wrap justify-end gap-1">
@@ -198,6 +208,12 @@ function LotFormDialog({
     if (entered && parseMass(entered, "pounds")?.suffix) return entered;
     return `${lot.honeyWeightLbs} lb`;
   });
+  // A derived lot takes its weight from the harvests below and recomputes
+  // whenever that set changes. A new lot starts derived so the default is the
+  // number the scale actually produced; typing a weight is the override.
+  const [weightSource, setWeightSource] = React.useState<"manual" | "derived">(
+    () => lot?.honeyWeightSource ?? "derived",
+  );
   const [variety, setVariety] = React.useState(lot?.honeyVariety ?? "");
   const [claimSpecies, setClaimSpecies] = React.useState(
     lot?.claimSpecies ?? "",
@@ -245,10 +261,24 @@ function LotFormDialog({
   );
   const [moistureError, setMoistureError] = React.useState<string | null>(null);
 
+  // Previewed client-side from the ticked harvests so the number moves with
+  // the checkboxes; the server recomputes the same SUM on save.
+  const selectedHarvests = (harvests ?? []).filter((harvest) =>
+    harvestIds.includes(harvest.id),
+  );
+  const derivedLbs = selectedHarvests.reduce(
+    (total, harvest) => total + harvest.calculatedHoneyWeight,
+    0,
+  );
+  // Nothing to derive from yet, so the field has to stay typed.
+  const derivable = selectedHarvests.length > 0;
+  const useDerived = weightSource === "derived" && derivable;
+
   function resetDraft() {
     setLotCode("");
     setDate(todayISO());
     setWeight("");
+    setWeightSource("derived");
     setVariety("");
     setClaimSpecies("");
     setClaimYear("");
@@ -271,21 +301,26 @@ function LotFormDialog({
 
   function submit(resetAfter = false) {
     const pounds = parseHoneyMassInput(weight, units.units);
-    if (!lotCode.trim() || !date || pounds == null || pounds < 0) return;
+    if (!lotCode.trim() || !date) return;
+    if (!useDerived && (pounds == null || pounds < 0)) return;
     const claimYearNumber = claimYear.trim() ? Number(claimYear) : undefined;
     if (claimYearNumber !== undefined && !Number.isInteger(claimYearNumber)) return;
     const elevation = parseElevation(claimElevation, units.units);
     const payload = {
       lotCode: lotCode.trim(),
       extractionDate: date,
-      honeyWeightLbs: pounds,
+      // A derived lot sends no weight at all: the server owns the number, and
+      // shipping a stale client-side sum would defeat the point.
+      honeyWeightSource: useDerived ? ("derived" as const) : ("manual" as const),
+      honeyWeightLbs: useDerived ? undefined : (pounds ?? 0),
       // Persist the typed text with an explicit unit so a later edit under a
       // different preference cannot re-interpret it.
-      honeyWeightEntered: weight.trim()
-        ? parseMass(weight, "pounds")?.suffix
-          ? weight.trim()
-          : `${weight.trim()} ${units.units === "metric" ? "kg" : "lb"}`
-        : undefined,
+      honeyWeightEntered:
+        !useDerived && weight.trim()
+          ? parseMass(weight, "pounds")?.suffix
+            ? weight.trim()
+            : `${weight.trim()} ${units.units === "metric" ? "kg" : "lb"}`
+          : undefined,
       claimSpecies: claimSpecies.trim() || undefined,
       claimYear: claimYearNumber,
       claimApiaryId: claimApiaryId || undefined,
@@ -351,7 +386,50 @@ function LotFormDialog({
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label htmlFor="lot-code">Lot code</Label><Input id="lot-code" value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></div>
             <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-            <div className="grid gap-1.5"><Label htmlFor="lot-weight">Extracted weight</Label><Input id="lot-weight" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder={units.units === "metric" ? "9 kg or 20 lb" : "20 lb or 9 kg"} /></div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-weight">Extracted weight</Label>
+              {useDerived ? (
+                <div className="flex h-9 items-center justify-between gap-2 rounded-md border border-dashed px-3">
+                  <span className="truncate text-sm">
+                    {formatLbs(derivedLbs)}
+                    <span className="text-muted-foreground">
+                      {" "}· derived from {selectedHarvests.length}{" "}
+                      {selectedHarvests.length === 1 ? "harvest" : "harvests"}
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto shrink-0 p-0 text-xs"
+                    onClick={() => {
+                      // Seed the box with what it is overriding, so the
+                      // override is an edit rather than a blank retype.
+                      if (!weight.trim()) setWeight(`${derivedLbs} lb`);
+                      setWeightSource("manual");
+                    }}
+                  >
+                    Type a weight
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <Input id="lot-weight" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder={units.units === "metric" ? "9 kg or 20 lb" : "20 lb or 9 kg"} />
+                  {derivable && (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="h-auto justify-start p-0 text-xs"
+                      onClick={() => setWeightSource("derived")}
+                    >
+                      Use {formatLbs(derivedLbs)} derived from {selectedHarvests.length}{" "}
+                      {selectedHarvests.length === 1 ? "harvest" : "harvests"}
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">

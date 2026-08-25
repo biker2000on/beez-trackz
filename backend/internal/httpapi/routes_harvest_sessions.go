@@ -129,6 +129,13 @@ func (s *Server) hsCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
+	// The session date becomes every entry's harvest date, and that is the
+	// date refuseHiveHarvest is evaluated at. Forward-dating a session would
+	// clear the withdrawal window for every hive walked that day.
+	if msg := refuseFutureDate(date, "date"); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
 	if msg, err := s.refuseHarvestMoisture(r.Context(), req.MoisturePct); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -412,6 +419,13 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	// A session created before the future-date guard existed can still be
+	// dated forward; its entries inherit that date, so refuse here too rather
+	// than trust the session row.
+	if msg := refuseFutureDate(sessionDate, "session date"); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 	// A trued-up session is finalized: its extracted weight is authoritative,

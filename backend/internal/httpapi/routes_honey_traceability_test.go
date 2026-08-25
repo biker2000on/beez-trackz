@@ -1,0 +1,622 @@
+package httpapi
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// --- A2: forward-dating a record must not clear a withdrawal window --------
+
+func TestDateIsFuture(t *testing.T) {
+	now := time.Date(2026, 8, 25, 15, 4, 5, 0, time.UTC)
+	day := func(y int, m time.Month, d int, loc *time.Location) time.Time {
+		return time.Date(y, m, d, 0, 0, 0, 0, loc)
+	}
+	east := time.FixedZone("UTC+10", 10*3600)
+	west := time.FixedZone("UTC-08", -8*3600)
+
+	cases := []struct {
+		name string
+		date time.Time
+		want bool
+	}{
+		{"today is allowed", day(2026, 8, 25, time.UTC), false},
+		{"yesterday is allowed", day(2026, 8, 24, time.UTC), false},
+		{"a backdated season is allowed", day(2025, 6, 1, time.UTC), false},
+		{"tomorrow is refused", day(2026, 8, 26, time.UTC), true},
+		{"next month is refused", day(2026, 9, 25, time.UTC), true},
+		// The comparison projects today into the supplied date's own zone, so
+		// an operator ten hours ahead of UTC is not told their today is the
+		// future, and one eight hours behind is not handed an extra day.
+		{"today east of UTC is allowed", day(2026, 8, 25, east), false},
+		{"tomorrow east of UTC is refused", day(2026, 8, 26, east), true},
+		{"today west of UTC is allowed", day(2026, 8, 25, west), false},
+		{"tomorrow west of UTC is refused", day(2026, 8, 26, west), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dateIsFuture(tc.date, now); got != tc.want {
+				t.Fatalf("dateIsFuture(%s) = %v, want %v",
+					tc.date.Format(time.RFC3339), got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRefuseFutureDateNamesTheField(t *testing.T) {
+	msg := refuseFutureDate(time.Now().AddDate(0, 0, 1), "bottledDate")
+	if !strings.Contains(msg, "bottledDate") {
+		t.Fatalf("refusal %q does not name the field", msg)
+	}
+	if refuseFutureDate(time.Now().AddDate(0, 0, -1), "bottledDate") != "" {
+		t.Fatal("a backdated record was refused; backdating stays legal")
+	}
+}
+
+// harvestDay renders a calendar date offset from today, so these tests do not
+// go stale the way a hard-coded 2026 date would.
+func harvestDay(offsetDays int) string {
+	return time.Now().AddDate(0, 0, offsetDays).Format("2006-01-02")
+}
+
+func TestFutureDatingIsRefusedAtEveryHoneyEntryPoint(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	ctx := context.Background()
+
+	var apiaryID uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`SELECT apiary_id FROM hives WHERE id=$1`, hiveID).Scan(&apiaryID); err != nil {
+		t.Fatalf("read apiary: %v", err)
+	}
+
+	// A lot with a bottling-ready weight and enough bulk honey behind it, so
+	// the only thing that can refuse the run is its date.
+	seedHarvest(t, server, 60)
+	jarSizeID := seedJarSize(t, server, "1 lb", 16, 1200)
+	created, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/harvest-lots", map[string]any{
+			"lotCode":        "FUTURE-DATE",
+			"extractionDate": harvestDay(-5),
+			"honeyWeightLbs": 40,
+		}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", created.Code, body)
+	}
+	lotID := body["id"].(string)
+
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+		request func(date string) *http.Request
+	}{
+		{
+			name:    "bottling run",
+			handler: server.bottlingRunCreate,
+			request: func(date string) *http.Request {
+				return adminRequest(http.MethodPost, "/harvest-lots/x/bottling-runs",
+					map[string]any{
+						"bottledDate": date, "jarSizeId": jarSizeID.String(), "quantity": 2,
+					}, "id", lotID)
+			},
+		},
+		{
+			name:    "standalone harvest",
+			handler: server.honeyCreateHarvest,
+			request: func(date string) *http.Request {
+				return adminRequest(http.MethodPost, "/harvests", map[string]any{
+					"hiveId": hiveID.String(), "date": date, "harvestedWeight": 5,
+				})
+			},
+		},
+		{
+			name:    "harvest session",
+			handler: server.hsCreate,
+			request: func(date string) *http.Request {
+				return adminRequest(http.MethodPost, "/harvest-sessions", map[string]any{
+					"apiaryId": apiaryID.String(), "date": date,
+				})
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+" refuses tomorrow", func(t *testing.T) {
+			response, decoded := call(t, tc.handler, tc.request(harvestDay(1)))
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("future-dated %s = %d %v, want 422", tc.name, response.Code, decoded)
+			}
+			if message, _ := decoded["error"].(string); !strings.Contains(message, "future") {
+				t.Fatalf("refusal %q does not explain the future-dating rule", message)
+			}
+		})
+		t.Run(tc.name+" accepts today", func(t *testing.T) {
+			response, decoded := call(t, tc.handler, tc.request(harvestDay(0)))
+			if response.Code >= 400 {
+				t.Fatalf("today's %s = %d %v, want success", tc.name, response.Code, decoded)
+			}
+		})
+	}
+}
+
+// TestFutureBottlingCannotStepPastAWithdrawalWindow is the hole itself: the
+// lockout is evaluated at the client's date, so before the guard a run dated
+// past the window bottled tainted honey with no refusal anywhere.
+func TestFutureBottlingCannotStepPastAWithdrawalWindow(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	ctx := context.Background()
+
+	applied, removed := harvestDay(-20), harvestDay(-15)
+	insertLockoutTreatment(t, server, hiveID, &applied, &removed, 90)
+
+	var harvestID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO honey_harvests
+			(hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight)
+		VALUES ($1,$2,60,0,60) RETURNING id`, hiveID, harvestDay(-10)).Scan(&harvestID); err != nil {
+		t.Fatalf("seed tainted harvest: %v", err)
+	}
+	jarSizeID := seedJarSize(t, server, "1 lb", 16, 1200)
+	created, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/harvest-lots", map[string]any{
+			"lotCode":        "LOCK-FUTURE",
+			"extractionDate": harvestDay(-10),
+			"honeyWeightLbs": 40,
+			"harvestIds":     []string{harvestID.String()},
+		}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", created.Code, body)
+	}
+	lotID := body["id"].(string)
+
+	bottleOn := func(date string) (*httptest.ResponseRecorder, map[string]any) {
+		return call(t, server.bottlingRunCreate, adminRequest(
+			http.MethodPost, "/harvest-lots/x/bottling-runs", map[string]any{
+				"bottledDate": date, "jarSizeId": jarSizeID.String(), "quantity": 2,
+			}, "id", lotID))
+	}
+
+	response, decoded := bottleOn(harvestDay(0))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("bottling inside the window = %d %v, want 409", response.Code, decoded)
+	}
+
+	// The escape: 120 days out is past the 90-day window, so the lockout
+	// evaluates clear. It must now be refused on the date instead.
+	response, decoded = bottleOn(harvestDay(120))
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("future-dated bottling = %d %v, want 422", response.Code, decoded)
+	}
+}
+
+// --- A1: jar sale lines trace back to a lot -------------------------------
+
+// seedTracedRun builds a lot whose honey came from hiveID and bottles jars
+// from it, returning the lot id, the run id, and the jar size.
+func seedTracedRun(
+	t *testing.T,
+	server *Server,
+	hiveID uuid.UUID,
+	lotCode string,
+) (lotID, runID, jarSizeID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	var harvestID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO honey_harvests
+			(hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight)
+		VALUES ($1,$2,60,0,60) RETURNING id`, hiveID, harvestDay(-10)).Scan(&harvestID); err != nil {
+		t.Fatalf("seed harvest: %v", err)
+	}
+	jarSizeID = seedJarSize(t, server, lotCode+" 1 lb", 16, 1200)
+	created, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/harvest-lots", map[string]any{
+			"lotCode":        lotCode,
+			"extractionDate": harvestDay(-10),
+			"honeyWeightLbs": 40,
+			"harvestIds":     []string{harvestID.String()},
+		}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create lot %s = %d %v", lotCode, created.Code, body)
+	}
+	lotID = uuid.MustParse(body["id"].(string))
+
+	created, body = call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/harvest-lots/x/bottling-runs", map[string]any{
+			"bottledDate": harvestDay(-1), "jarSizeId": jarSizeID.String(), "quantity": 10,
+		}, "id", lotID.String()))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("bottle lot %s = %d %v", lotCode, created.Code, body)
+	}
+	runID = uuid.MustParse(body["id"].(string))
+	return lotID, runID, jarSizeID
+}
+
+func TestJarSaleLineCarriesItsBottlingRunAndLot(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	lotID, runID, jarSizeID := seedTracedRun(t, server, hiveID, "TRACE-A")
+
+	response, decoded := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/sales", map[string]any{
+			"date":    harvestDay(0),
+			"channel": "direct",
+			"lines": []map[string]any{{
+				"kind": "jar", "jarSizeId": jarSizeID.String(),
+				"quantity": 3, "unitPrice": 12, "bottlingRunId": runID.String(),
+			}},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("traced sale = %d %v", response.Code, decoded)
+	}
+	saleID := uuid.MustParse(decoded["id"].(string))
+
+	var storedRun *uuid.UUID
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT bottling_run_id FROM sale_items WHERE sale_id=$1`, saleID).
+		Scan(&storedRun); err != nil {
+		t.Fatalf("read sale item: %v", err)
+	}
+	if storedRun == nil || *storedRun != runID {
+		t.Fatalf("stored bottling_run_id = %v, want %s", storedRun, runID)
+	}
+
+	sales, err := server.honeyListSales(context.Background())
+	if err != nil {
+		t.Fatalf("list sales: %v", err)
+	}
+	var seen bool
+	for _, sale := range sales {
+		if sale.ID != saleID {
+			continue
+		}
+		seen = true
+		item := sale.LineItems[0]
+		if item.BottlingRunID == nil || *item.BottlingRunID != runID {
+			t.Fatalf("line bottlingRunId = %v, want %s", item.BottlingRunID, runID)
+		}
+		if item.LotID == nil || *item.LotID != lotID {
+			t.Fatalf("line lotId = %v, want %s", item.LotID, lotID)
+		}
+		if item.LotCode == nil || *item.LotCode != "TRACE-A" {
+			t.Fatalf("line lotCode = %v, want TRACE-A", item.LotCode)
+		}
+	}
+	if !seen {
+		t.Fatal("the traced sale is missing from the sale listing")
+	}
+}
+
+// TestJarSaleFromLockedLotIsRefusedWithoutASaleLevelLot is the gap A1 closes:
+// the sale names no harvestLotId, so before the run reference there was
+// nothing for refuseLotSale to check.
+func TestJarSaleFromLockedLotIsRefusedWithoutASaleLevelLot(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	_, runID, jarSizeID := seedTracedRun(t, server, hiveID, "TRACE-LOCK")
+
+	// The treatment lands after the jars are bottled — a mite treatment
+	// recorded late, which is exactly when the honey is already in jars.
+	applied, removed := harvestDay(-20), harvestDay(-15)
+	insertLockoutTreatment(t, server, hiveID, &applied, &removed, 90)
+
+	sale := func(line map[string]any) (*httptest.ResponseRecorder, map[string]any) {
+		return call(t, server.honeyRecordSale, adminRequest(
+			http.MethodPost, "/sales", map[string]any{
+				"date": harvestDay(0), "channel": "direct",
+				"lines": []map[string]any{line},
+			}))
+	}
+
+	// Untraced, the sale still goes through: nothing links it to a lot. That
+	// is the residual hole the run reference is opt-in against.
+	response, decoded := sale(map[string]any{
+		"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1, "unitPrice": 12,
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("untraced sale = %d %v", response.Code, decoded)
+	}
+
+	response, decoded = sale(map[string]any{
+		"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1, "unitPrice": 12,
+		"bottlingRunId": runID.String(),
+	})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("traced sale from a locked lot = %d %v, want 409", response.Code, decoded)
+	}
+	if message, _ := decoded["error"].(string); !strings.Contains(message, "TRACE-LOCK") {
+		t.Fatalf("refusal %q does not name the lot", message)
+	}
+}
+
+func TestJarSaleBottlingRunValidation(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	_, runID, jarSizeID := seedTracedRun(t, server, hiveID, "TRACE-B")
+	otherSizeID := seedJarSize(t, server, "12 oz", 12, 900)
+
+	cases := []struct {
+		name string
+		line map[string]any
+		want int
+	}{
+		{
+			name: "unknown run",
+			line: map[string]any{
+				"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1,
+				"unitPrice": 12, "bottlingRunId": uuid.NewString(),
+			},
+			want: http.StatusBadRequest,
+		},
+		{
+			name: "malformed run id",
+			line: map[string]any{
+				"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1,
+				"unitPrice": 12, "bottlingRunId": "not-a-uuid",
+			},
+			want: http.StatusBadRequest,
+		},
+		{
+			name: "run filled a different jar size",
+			line: map[string]any{
+				"kind": "jar", "jarSizeId": otherSizeID.String(), "quantity": 1,
+				"unitPrice": 12, "bottlingRunId": runID.String(),
+			},
+			want: http.StatusBadRequest,
+		},
+		{
+			name: "a colony line cannot carry a run",
+			line: map[string]any{
+				"kind": "colony", "hiveId": hiveID.String(), "quantity": 1,
+				"unitPrice": 200, "bottlingRunId": runID.String(),
+			},
+			want: http.StatusBadRequest,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response, decoded := call(t, server.honeyRecordSale, adminRequest(
+				http.MethodPost, "/sales", map[string]any{
+					"date": harvestDay(0), "channel": "direct",
+					"lines": []map[string]any{tc.line},
+				}))
+			if response.Code != tc.want {
+				t.Fatalf("%s = %d %v, want %d", tc.name, response.Code, decoded, tc.want)
+			}
+		})
+	}
+}
+
+func TestVoidedBottlingRunCannotBeSold(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	_, runID, jarSizeID := seedTracedRun(t, server, hiveID, "TRACE-VOID")
+
+	response, decoded := call(t, server.bottlingRunVoid, adminRequest(
+		http.MethodPost, "/bottling-runs/x/void", map[string]any{"reason": "spoiled"},
+		"id", runID.String()))
+	if response.Code >= 400 {
+		t.Fatalf("void run = %d %v", response.Code, decoded)
+	}
+
+	response, decoded = call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/sales", map[string]any{
+			"date": harvestDay(0), "channel": "direct",
+			"lines": []map[string]any{{
+				"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1,
+				"unitPrice": 12, "bottlingRunId": runID.String(),
+			}},
+		}))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("sale off a voided run = %d %v, want 409", response.Code, decoded)
+	}
+}
+
+func TestJarLinesMergeOnlyWithinTheSameRun(t *testing.T) {
+	const size = "11111111-1111-1111-1111-111111111111"
+	const runA = "22222222-2222-2222-2222-222222222222"
+	const runB = "33333333-3333-3333-3333-333333333333"
+	lines, err := normalizeHoneySaleLines([]honeySaleLineInput{
+		{Kind: "jar", JarSizeID: size, Quantity: 2, UnitPrice: 1200, BottlingRunID: runA},
+		{Kind: "jar", JarSizeID: size, Quantity: 3, UnitPrice: 1200, BottlingRunID: runA},
+		{Kind: "jar", JarSizeID: size, Quantity: 4, UnitPrice: 1200, BottlingRunID: runB},
+		{Kind: "jar", JarSizeID: size, Quantity: 5, UnitPrice: 1200},
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3 (two runs plus the untraced remainder)", len(lines))
+	}
+	if lines[0].Quantity != 5 {
+		t.Fatalf("same-run lines did not merge: quantity %d, want 5", lines[0].Quantity)
+	}
+	if lines[1].Quantity != 4 || lines[2].Quantity != 5 {
+		t.Fatalf("lines merged across runs: %+v", lines)
+	}
+	if lines[2].BottlingRunID != uuid.Nil {
+		t.Fatalf("untraced line picked up a run: %v", lines[2].BottlingRunID)
+	}
+}
+
+// --- A3: lot weight derived from its harvests ------------------------------
+
+func TestResolveLotWeight(t *testing.T) {
+	weight := func(v float64) *float64 { return &v }
+	text := func(v string) *string { return &v }
+
+	cases := []struct {
+		name        string
+		requested   *float64
+		source      *string
+		entered     *string
+		derived     float64
+		linked      int
+		wantWeight  float64
+		wantSource  string
+		wantEntered *string
+		wantErr     string
+	}{
+		{
+			// Pre-00039 behaviour: an unset weight stored 0 and stayed typed.
+			name:       "no weight and no harvests keeps the old empty lot",
+			wantSource: lotWeightSourceManual,
+		},
+		{
+			name: "no weight with harvests derives", derived: 41.5, linked: 3,
+			wantWeight: 41.5, wantSource: lotWeightSourceDerived,
+		},
+		{
+			name:      "a typed weight stays manual and keeps its sidecar",
+			requested: weight(40), entered: text("40 lb"), derived: 41.5, linked: 3,
+			wantWeight: 40, wantSource: lotWeightSourceManual, wantEntered: text("40 lb"),
+		},
+		{
+			name:      "an explicit zero is a typed weight, not a missing one",
+			requested: weight(0), derived: 41.5, linked: 3,
+			wantWeight: 0, wantSource: lotWeightSourceManual,
+		},
+		{
+			name:      "asking for derived overrides a typed weight",
+			requested: weight(40), source: text(lotWeightSourceDerived),
+			entered: text("40 lb"), derived: 41.5, linked: 3,
+			wantWeight: 41.5, wantSource: lotWeightSourceDerived,
+		},
+		{
+			// Deriving from zero harvests is a silent zero-pound lot, which
+			// would then refuse every bottling run against it.
+			name:    "derived with nothing to sum is refused",
+			source:  text(lotWeightSourceDerived),
+			wantErr: "at least one linked harvest",
+		},
+		{
+			name:   "manual without a weight is refused",
+			source: text(lotWeightSourceManual), derived: 41.5, linked: 3,
+			wantErr: "requires honeyWeightLbs",
+		},
+		{
+			name:      "a negative typed weight is refused",
+			requested: weight(-1), wantErr: "non-negative",
+		},
+		{
+			name:   "an unknown source is refused",
+			source: text("guessed"), wantErr: "'manual' or 'derived'",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotWeight, gotSource, gotEntered, errMsg := resolveLotWeight(
+				tc.requested, tc.source, tc.entered, tc.derived, tc.linked)
+			if tc.wantErr != "" {
+				if !strings.Contains(errMsg, tc.wantErr) {
+					t.Fatalf("error = %q, want it to mention %q", errMsg, tc.wantErr)
+				}
+				return
+			}
+			if errMsg != "" {
+				t.Fatalf("unexpected refusal %q", errMsg)
+			}
+			if gotWeight != tc.wantWeight || gotSource != tc.wantSource {
+				t.Fatalf("got (%v, %s), want (%v, %s)",
+					gotWeight, gotSource, tc.wantWeight, tc.wantSource)
+			}
+			switch {
+			case tc.wantEntered == nil && gotEntered != nil:
+				t.Fatalf("entered = %q, want nil", *gotEntered)
+			case tc.wantEntered != nil && (gotEntered == nil || *gotEntered != *tc.wantEntered):
+				t.Fatalf("entered = %v, want %q", gotEntered, *tc.wantEntered)
+			}
+		})
+	}
+}
+
+func TestHarvestLotWeightDerivesAndRecomputes(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	ctx := context.Background()
+
+	seedOne := func(pounds float64) uuid.UUID {
+		var id uuid.UUID
+		if err := server.pool.QueryRow(ctx, `
+			INSERT INTO honey_harvests
+				(hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight)
+			VALUES ($1,$2,$3,0,$3) RETURNING id`, hiveID, harvestDay(-10), pounds).
+			Scan(&id); err != nil {
+			t.Fatalf("seed harvest: %v", err)
+		}
+		return id
+	}
+	first, second := seedOne(12), seedOne(8)
+
+	created, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/harvest-lots", map[string]any{
+			"lotCode":        "DERIVE-1",
+			"extractionDate": harvestDay(-10),
+			"harvestIds":     []string{first.String(), second.String()},
+		}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create lot = %d %v", created.Code, body)
+	}
+	lotID := body["id"].(string)
+
+	get := func() map[string]any {
+		response, decoded := call(t, server.harvestLotGet, adminRequest(
+			http.MethodGet, "/harvest-lots/x", nil, "id", lotID))
+		if response.Code != http.StatusOK {
+			t.Fatalf("get lot = %d %v", response.Code, decoded)
+		}
+		return decoded
+	}
+	lot := get()
+	if lot["honeyWeightSource"] != lotWeightSourceDerived {
+		t.Fatalf("source = %v, want derived", lot["honeyWeightSource"])
+	}
+	if lot["honeyWeightLbs"] != 20.0 || lot["derivedWeightLbs"] != 20.0 {
+		t.Fatalf("weight = %v / derived %v, want 20",
+			lot["honeyWeightLbs"], lot["derivedWeightLbs"])
+	}
+	if lot["linkedHarvestCount"] != 2.0 {
+		t.Fatalf("linkedHarvestCount = %v, want 2", lot["linkedHarvestCount"])
+	}
+
+	// Dropping a harvest recomputes: a derived weight can never drift from
+	// the harvests it claims to summarise.
+	update := func(payload map[string]any) (*httptest.ResponseRecorder, map[string]any) {
+		payload["lotCode"] = "DERIVE-1"
+		payload["extractionDate"] = harvestDay(-10)
+		return call(t, server.harvestLotUpdate, adminRequest(
+			http.MethodPut, "/harvest-lots/x", payload, "id", lotID))
+	}
+	response, decoded := update(map[string]any{"harvestIds": []string{first.String()}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("update lot = %d %v", response.Code, decoded)
+	}
+	lot = get()
+	if lot["honeyWeightLbs"] != 12.0 || lot["honeyWeightSource"] != lotWeightSourceDerived {
+		t.Fatalf("after dropping a harvest: %v lbs, source %v; want 12 derived",
+			lot["honeyWeightLbs"], lot["honeyWeightSource"])
+	}
+
+	// An explicit override takes the lot back to manual and stops tracking.
+	response, decoded = update(map[string]any{
+		"harvestIds": []string{first.String()}, "honeyWeightLbs": 25,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("manual override = %d %v", response.Code, decoded)
+	}
+	lot = get()
+	if lot["honeyWeightLbs"] != 25.0 || lot["honeyWeightSource"] != lotWeightSourceManual {
+		t.Fatalf("after override: %v lbs, source %v; want 25 manual",
+			lot["honeyWeightLbs"], lot["honeyWeightSource"])
+	}
+	if lot["derivedWeightLbs"] != 12.0 {
+		t.Fatalf("derivedWeightLbs = %v, want the 12 the harvests still say",
+			lot["derivedWeightLbs"])
+	}
+}

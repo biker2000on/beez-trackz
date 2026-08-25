@@ -85,11 +85,16 @@ func commerceOptionalHTTPURL(value *string) (*string, error) {
 }
 
 type harvestLotPayload struct {
-	LotCode             string         `json:"lotCode"`
-	PublicSlug          string         `json:"publicSlug"`
-	ExtractionDate      string         `json:"extractionDate"`
-	HoneyWeightLbs      float64        `json:"honeyWeightLbs"`
-	HoneyWeightEntered  *string        `json:"honeyWeightEntered"`
+	LotCode        string `json:"lotCode"`
+	PublicSlug     string `json:"publicSlug"`
+	ExtractionDate string `json:"extractionDate"`
+	// Pointer so "no weight supplied" is distinguishable from an explicit 0:
+	// with linked harvests, omitting it means "derive it".
+	HoneyWeightLbs     *float64 `json:"honeyWeightLbs"`
+	HoneyWeightEntered *string  `json:"honeyWeightEntered"`
+	// HoneyWeightSource lets the client ask for a derivation explicitly
+	// ("derived") or pin the typed number ("manual"). Omitted = infer.
+	HoneyWeightSource   *string        `json:"honeyWeightSource"`
 	HoneyVariety        *string        `json:"honeyVariety"`
 	Season              *string        `json:"season"`
 	ApiaryRegion        *string        `json:"apiaryRegion"`
@@ -110,43 +115,49 @@ type harvestLotPayload struct {
 }
 
 type harvestLotRow struct {
-	ID                  uuid.UUID        `json:"id"`
-	LotCode             string           `json:"lotCode"`
-	PublicSlug          string           `json:"publicSlug"`
-	ExtractionDate      time.Time        `json:"extractionDate"`
-	HoneyWeightLbs      float64          `json:"honeyWeightLbs"`
-	HoneyWeightEntered  *string          `json:"honeyWeightEntered"`
-	HoneyVariety        *string          `json:"honeyVariety"`
-	Season              *string          `json:"season"`
-	ApiaryRegion        *string          `json:"apiaryRegion"`
-	BloomNotes          *string          `json:"bloomNotes"`
-	BeekeeperStory      *string          `json:"beekeeperStory"`
-	TestingData         map[string]any   `json:"testingData"`
-	ReorderURL          *string          `json:"reorderUrl"`
-	IsPublic            bool             `json:"isPublic"`
-	MoisturePct         *float64         `json:"moisturePct"`
-	BottlingMoisturePct *float64         `json:"bottlingMoisturePct"`
+	ID                 uuid.UUID `json:"id"`
+	LotCode            string    `json:"lotCode"`
+	PublicSlug         string    `json:"publicSlug"`
+	ExtractionDate     time.Time `json:"extractionDate"`
+	HoneyWeightLbs     float64   `json:"honeyWeightLbs"`
+	HoneyWeightEntered *string   `json:"honeyWeightEntered"`
+	// HoneyWeightSource is 'manual' (operator typed it) or 'derived' (summed
+	// from the linked harvests). DerivedWeightLbs and LinkedHarvestCount are
+	// reported either way so the UI can show what the derivation would be.
+	HoneyWeightSource   string         `json:"honeyWeightSource"`
+	DerivedWeightLbs    float64        `json:"derivedWeightLbs"`
+	LinkedHarvestCount  int            `json:"linkedHarvestCount"`
+	HoneyVariety        *string        `json:"honeyVariety"`
+	Season              *string        `json:"season"`
+	ApiaryRegion        *string        `json:"apiaryRegion"`
+	BloomNotes          *string        `json:"bloomNotes"`
+	BeekeeperStory      *string        `json:"beekeeperStory"`
+	TestingData         map[string]any `json:"testingData"`
+	ReorderURL          *string        `json:"reorderUrl"`
+	IsPublic            bool           `json:"isPublic"`
+	MoisturePct         *float64       `json:"moisturePct"`
+	BottlingMoisturePct *float64       `json:"bottlingMoisturePct"`
 	// Read-only record of an accepted over-threshold reading.
-	MoistureOverrideReason *string    `json:"moistureOverrideReason"`
-	MoistureOverrideAt     *time.Time `json:"moistureOverrideAt"`
-	ClaimSpecies        *string          `json:"claimSpecies"`
-	ClaimYear           *int             `json:"claimYear"`
-	ClaimApiaryID       *uuid.UUID       `json:"claimApiaryId"`
-	ClaimApiaryName     *string          `json:"claimApiaryName"`
-	ClaimElevationM     *float64         `json:"claimElevationM"`
-	FloralClaim         string           `json:"floralClaim"`
-	Lockout             *hiveLockoutJSON `json:"lockout,omitempty"`
-	SourceHarvestIDs    []uuid.UUID      `json:"sourceHarvestIds"`
-	SourceApiaries      []string         `json:"sourceApiaries"`
-	Photos              []map[string]any `json:"photos"`
-	BottlingRuns        []map[string]any `json:"bottlingRuns"`
-	CreatedAt           time.Time        `json:"createdAt"`
-	UpdatedAt           time.Time        `json:"updatedAt"`
+	MoistureOverrideReason *string          `json:"moistureOverrideReason"`
+	MoistureOverrideAt     *time.Time       `json:"moistureOverrideAt"`
+	ClaimSpecies           *string          `json:"claimSpecies"`
+	ClaimYear              *int             `json:"claimYear"`
+	ClaimApiaryID          *uuid.UUID       `json:"claimApiaryId"`
+	ClaimApiaryName        *string          `json:"claimApiaryName"`
+	ClaimElevationM        *float64         `json:"claimElevationM"`
+	FloralClaim            string           `json:"floralClaim"`
+	Lockout                *hiveLockoutJSON `json:"lockout,omitempty"`
+	SourceHarvestIDs       []uuid.UUID      `json:"sourceHarvestIds"`
+	SourceApiaries         []string         `json:"sourceApiaries"`
+	Photos                 []map[string]any `json:"photos"`
+	BottlingRuns           []map[string]any `json:"bottlingRuns"`
+	CreatedAt              time.Time        `json:"createdAt"`
+	UpdatedAt              time.Time        `json:"updatedAt"`
 }
 
 const harvestLotSelect = `
 	SELECT lot.id, lot.lot_code, lot.public_slug, lot.extraction_date, lot.honey_weight_lbs,
-		lot.honey_weight_entered, lot.honey_variety, lot.season, lot.apiary_region, lot.bloom_notes,
+		lot.honey_weight_entered, lot.honey_weight_source, lot.honey_variety, lot.season, lot.apiary_region, lot.bloom_notes,
 		lot.beekeeper_story, COALESCE(lot.testing_data, '{}'::jsonb), lot.reorder_url, lot.is_public,
 		lot.moisture_pct, lot.bottling_moisture_pct,
 		lot.moisture_override_reason, lot.moisture_override_at,
@@ -198,6 +209,80 @@ func formatFloralClaim(species *string, year *int, apiaryName *string, elevation
 		parts = append(parts, formatClaimElevation(*elevationM, units))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// lotWeightSourceManual / lotWeightSourceDerived are the two values of
+// harvest_lots.honey_weight_source (00039).
+const (
+	lotWeightSourceManual  = "manual"
+	lotWeightSourceDerived = "derived"
+)
+
+// harvestLotDerivedWeight sums the live harvests a lot is about to be linked
+// to. Create and update both replace the link set wholesale, so the requested
+// ids — not the rows currently in harvest_lot_harvests — are the input: that
+// is what makes a derived lot recompute the moment its harvests change.
+func harvestLotDerivedWeight(
+	ctx context.Context,
+	q inspectionQuerier,
+	harvestIDs []uuid.UUID,
+) (float64, int, error) {
+	if len(harvestIDs) == 0 {
+		return 0, 0, nil
+	}
+	var total float64
+	var count int
+	err := q.QueryRow(ctx, `
+		SELECT COALESCE(SUM(calculated_honey_weight), 0), COUNT(*)
+		FROM honey_harvests WHERE id = ANY($1) AND deleted_at IS NULL`,
+		harvestIDs).Scan(&total, &count)
+	return total, count, err
+}
+
+// resolveLotWeight decides the stored weight and its source.
+//
+//   - honeyWeightSource:"derived" — always the SUM; refused with no harvests
+//     to sum, because an empty derivation is a silent zero-pound lot.
+//   - a typed honeyWeightLbs — manual, and honey_weight_entered keeps
+//     recording the raw string the operator typed (00026).
+//   - neither — derived when the lot has linked harvests, otherwise the old
+//     behaviour of an unset weight (0, manual).
+//
+// entered is returned nil for a derived lot: nothing was typed, so keeping a
+// stale sidecar string would misreport how the number was arrived at.
+func resolveLotWeight(
+	requested *float64,
+	source *string,
+	entered *string,
+	derived float64,
+	linked int,
+) (weight float64, resolvedSource string, resolvedEntered *string, errMsg string) {
+	want := ""
+	if source != nil {
+		want = strings.TrimSpace(*source)
+	}
+	if want != "" && want != lotWeightSourceManual && want != lotWeightSourceDerived {
+		return 0, "", nil, "honeyWeightSource must be 'manual' or 'derived'"
+	}
+	if want == lotWeightSourceDerived {
+		if linked == 0 {
+			return 0, "", nil, "honeyWeightSource 'derived' needs at least one linked harvest"
+		}
+		return derived, lotWeightSourceDerived, nil, ""
+	}
+	if want == lotWeightSourceManual || requested != nil {
+		if requested == nil {
+			return 0, "", nil, "honeyWeightSource 'manual' requires honeyWeightLbs"
+		}
+		if *requested < 0 {
+			return 0, "", nil, "honeyWeightLbs must be non-negative"
+		}
+		return *requested, lotWeightSourceManual, entered, ""
+	}
+	if linked > 0 {
+		return derived, lotWeightSourceDerived, nil, ""
+	}
+	return 0, lotWeightSourceManual, entered, ""
 }
 
 func ptrString(v *string) string {
@@ -259,7 +344,8 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 	for rows.Next() {
 		var item harvestLotRow
 		if err := rows.Scan(&item.ID, &item.LotCode, &item.PublicSlug, &item.ExtractionDate,
-			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyVariety, &item.Season,
+			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyWeightSource,
+			&item.HoneyVariety, &item.Season,
 			&item.ApiaryRegion, &item.BloomNotes, &item.BeekeeperStory, &item.TestingData,
 			&item.ReorderURL, &item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
 			&item.MoistureOverrideReason, &item.MoistureOverrideAt,
@@ -287,6 +373,19 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 }
 
 func (s *Server) populateHarvestLot(r *http.Request, item *harvestLotRow) error {
+	// The derivation is reported on every lot, not just derived ones, so the
+	// UI can offer "derived from N harvests" as a switch on a manual lot and
+	// show the two numbers side by side when they disagree. Same SUM the
+	// product and business-report readers use, soft-deleted harvests excluded.
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT COALESCE(SUM(hh.calculated_honey_weight), 0), COUNT(*)
+		FROM harvest_lot_harvests lhh
+		JOIN honey_harvests hh ON hh.id = lhh.harvest_id
+		WHERE lhh.lot_id = $1 AND hh.deleted_at IS NULL`, item.ID).
+		Scan(&item.DerivedWeightLbs, &item.LinkedHarvestCount); err != nil {
+		return err
+	}
+
 	sourceRows, err := s.pool.Query(r.Context(), `
 		SELECT hh.id, a.name
 		FROM harvest_lot_harvests lhh
@@ -426,7 +525,8 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	date, err := parseDate(req.ExtractionDate)
-	if err != nil || strings.TrimSpace(req.LotCode) == "" || req.HoneyWeightLbs < 0 {
+	if err != nil || strings.TrimSpace(req.LotCode) == "" ||
+		(req.HoneyWeightLbs != nil && *req.HoneyWeightLbs < 0) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
 		return
 	}
@@ -477,16 +577,29 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(r.Context(), tx, req.HarvestIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
+		req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
+		derivedLbs, linkedHarvests)
+	if weightMsg != "" {
+		writeError(w, http.StatusBadRequest, weightMsg)
+		return
+	}
 	var id uuid.UUID
 	err = tx.QueryRow(r.Context(), `
 		INSERT INTO harvest_lots
 			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_weight_entered,
+			 honey_weight_source,
 			 honey_variety, season, apiary_region, bloom_notes, beekeeper_story, testing_data,
 			 reorder_url, is_public, moisture_pct, bottling_moisture_pct,
 			 claim_species, claim_year, claim_apiary_id, claim_elevation_m, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
-		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
-		honeyTrimPtr(req.HoneyWeightEntered),
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+		strings.TrimSpace(req.LotCode), slug, date, weightLbs,
+		weightEntered, weightSource,
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
@@ -539,7 +652,8 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	date, err := parseDate(req.ExtractionDate)
-	if err != nil || strings.TrimSpace(req.LotCode) == "" || req.HoneyWeightLbs < 0 {
+	if err != nil || strings.TrimSpace(req.LotCode) == "" ||
+		(req.HoneyWeightLbs != nil && *req.HoneyWeightLbs < 0) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
 		return
 	}
@@ -587,6 +701,21 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(r.Context(), tx, req.HarvestIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	// req.HarvestIDs replaces the link set wholesale below, so a derived lot
+	// whose harvests were added, dropped, or soft-deleted picks up the new sum
+	// on this same update — the weight can never drift from its sources.
+	weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
+		req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
+		derivedLbs, linkedHarvests)
+	if weightMsg != "" {
+		writeError(w, http.StatusBadRequest, weightMsg)
+		return
+	}
 	// The lot's weight cannot drop below what its runs already bottled —
 	// existing runs would exceed capacity and every future run would 400.
 	var alreadyBottledLbs float64
@@ -599,7 +728,14 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if req.HoneyWeightLbs < alreadyBottledLbs-honeyPoundTolerance {
+	if weightLbs < alreadyBottledLbs-honeyPoundTolerance {
+		if weightSource == lotWeightSourceDerived {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"The linked harvests total %.2f lbs but this lot's bottling runs already used %.2f lbs; "+
+					"fix the harvests or type a manual weight",
+				weightLbs, alreadyBottledLbs))
+			return
+		}
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
 			"Lot weight cannot be below the %.2f lbs its bottling runs already used",
 			alreadyBottledLbs))
@@ -610,15 +746,16 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 			honey_weight_lbs=$4, honey_weight_entered=$5, honey_variety=$6, season=$7,
 			apiary_region=$8, bloom_notes=$9, beekeeper_story=$10, testing_data=$11,
 			reorder_url=$12, is_public=$13, moisture_pct=$14, bottling_moisture_pct=$15,
-			claim_species=$16, claim_year=$17, claim_apiary_id=$18, claim_elevation_m=$19
+			claim_species=$16, claim_year=$17, claim_apiary_id=$18, claim_elevation_m=$19,
+			honey_weight_source=$21
 		WHERE id=$20`,
-		strings.TrimSpace(req.LotCode), slug, date, req.HoneyWeightLbs,
-		honeyTrimPtr(req.HoneyWeightEntered),
+		strings.TrimSpace(req.LotCode), slug, date, weightLbs,
+		weightEntered,
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
 		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-		claimSpecies, claimYear, claimApiaryID, claimElevation, id)
+		claimSpecies, claimYear, claimApiaryID, claimElevation, id, weightSource)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -683,6 +820,12 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	date, err := parseDate(req.BottledDate)
 	if err != nil || req.Quantity <= 0 || (req.HoneyLbs != nil && *req.HoneyLbs < 0) {
 		writeError(w, http.StatusBadRequest, "bottledDate and a positive quantity are required")
+		return
+	}
+	// refuseLotBottling below is evaluated at this date; a forward-dated run
+	// would step past the withdrawal window and bottle tainted honey.
+	if msg := refuseFutureDate(date, "bottledDate"); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 	// Serialized runs insert one jar_serials row per unit and accumulate every
