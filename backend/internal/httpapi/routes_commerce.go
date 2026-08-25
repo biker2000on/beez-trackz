@@ -218,6 +218,90 @@ const (
 	lotWeightSourceDerived = "derived"
 )
 
+// --- honey write lock order -------------------------------------------------
+//
+// honeyLockOrder is THE global acquisition order for every honey write path
+// that takes more than one lock. Three resource classes are involved, and
+// every handler takes the ones it needs in this order and no other:
+//
+//  1. honey_harvests rows (and the harvest_sessions row that owns them) —
+//     SELECT ... FOR UPDATE, ORDER BY id when there is more than one.
+//  2. harvest_lots rows — SELECT ... FOR UPDATE, ORDER BY id.
+//  3. the bulk-honey advisory lock — honeyLockBulk.
+//
+// A handler may start anywhere in the list and skip classes; it may never go
+// backwards. That is what makes the paths deadlock-free as a set:
+//
+//   - hsDeleteEntry: harvest row, then the lot rows reconcileLotsForHarvestDelete
+//     locks, then the bulk lock. The bulk check runs LAST for this reason.
+//   - harvestLotCreate / harvestLotUpdate: the requested harvest rows
+//     (lockRequestedHarvests) before the lot row. Inserting into
+//     harvest_lot_harvests takes an FK key-share lock on the harvest, so a
+//     handler that only locked the lot would be reaching backwards into class
+//     1 while holding class 2.
+//   - bottlingRunCreate: the lot row, then the bulk lock — a suffix.
+//   - hsTrueUp: the session row, then the bulk lock — a suffix.
+//
+// Cite this block, do not restate it, at each locking site.
+const honeyLockOrder = "harvest rows, then lot rows, then the bulk advisory lock"
+
+// lockRequestedHarvests takes the class-1 locks a lot write needs before it
+// touches any lot row (see honeyLockOrder), and re-validates under those locks
+// that none of the requested harvests has been soft-deleted.
+//
+// Both jobs need the same lock. Without it, harvestLotCreate reads live
+// harvest weights and inserts its links while a concurrent hsDeleteEntry —
+// which saw no committed link, so reconciliation found nothing — commits a
+// soft-delete: the lot lands holding the pre-delete weight, linked only to a
+// harvest that no longer exists. Holding the harvest row FOR UPDATE makes the
+// two serialise, and whichever handler arrives second sees the other's work:
+// the delete either blocks and then refuses (a linked lot with runs), or the
+// create blocks and then reports the harvest as deleted.
+//
+// Returns a user-facing 422 message ("" when the write may proceed). Ids that
+// do not exist at all are left to the link insert's foreign key.
+func lockRequestedHarvests(
+	ctx context.Context,
+	tx pgx.Tx,
+	harvestIDs []uuid.UUID,
+) (string, error) {
+	if len(harvestIDs) == 0 {
+		return "", nil
+	}
+	// One statement, so every requested row — deleted or not — is locked, and
+	// ORDER BY id fixes the order two concurrent lot writes acquire them in.
+	rows, err := tx.Query(ctx, `
+		SELECT id, deleted_at IS NOT NULL FROM honey_harvests
+		WHERE id = ANY($1)
+		ORDER BY id
+		FOR UPDATE`, harvestIDs)
+	if err != nil {
+		return "", err
+	}
+	deleted := make([]string, 0)
+	for rows.Next() {
+		var id uuid.UUID
+		var isDeleted bool
+		if err := rows.Scan(&id, &isDeleted); err != nil {
+			rows.Close()
+			return "", err
+		}
+		if isDeleted {
+			deleted = append(deleted, id.String())
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(deleted) > 0 {
+		return fmt.Sprintf(
+			"harvest %s has been deleted and cannot be linked to a lot",
+			strings.Join(deleted, ", ")), nil
+	}
+	return "", nil
+}
+
 // harvestLotDerivedWeight sums the live harvests a lot is about to be linked
 // to. Create and update both replace the link set wholesale, so the requested
 // ids — not the rows currently in harvest_lot_harvests — are the input: that
@@ -239,69 +323,74 @@ func harvestLotDerivedWeight(
 	return total, count, err
 }
 
-// reconcileDerivedLotsForHarvest keeps derived lots honest when one of the
-// harvests behind them is soft-deleted. Called inside the deleting
-// transaction, AFTER the harvest row has been marked deleted, so the
-// recomputed sum already excludes it.
+// reconcileLotsForHarvestDelete decides whether a harvest may leave the lots
+// it is linked to, and keeps derived lots honest when it may. Called inside
+// the deleting transaction, AFTER the harvest row has been marked deleted, so
+// the recomputed sums already exclude it.
 //
-// A derived lot claims to be the sum of its live harvests. Letting a harvest
-// vanish without touching the lot leaves that claim false, and if the new sum
-// falls under what the lot's runs have already bottled the lot is claiming
-// fewer pounds than it demonstrably produced. The delete is refused in that
-// case: the operator has to type a manual weight on the lot or void the runs
-// first, which is the deliberate act that belongs in the audit trail.
+// Lock order: this is class 2 (see honeyLockOrder). The caller is already
+// holding the class-1 harvest row and has not yet taken the bulk lock.
 //
-// Refusing also preserves treatment-lockout provenance. refuseLotBottling
-// walks a lot's linked harvests back to their hives to find the treatment
-// covering them; a harvest that disappeared from under an already-bottled lot
-// takes its hive — and therefore the withdrawal window that justified or
-// blocked those runs — out of that walk, leaving bottled jars whose lockout
-// history can no longer be reconstructed. While the lot's runs stand, the
-// harvest behind them cannot silently leave.
+// Two rules, in this order:
 //
-// Manual-weight lots are untouched: their weight was typed, not derived, so a
-// harvest leaving the link set changes nothing they assert.
+//  1. A harvest that stands behind BOTTLED jars cannot leave. Refuse (409) if
+//     any linked lot — manual or derived — still has a non-voided bottling
+//     run. refuseLotBottling and lotLockoutAsOf walk a lot's linked harvests
+//     back to their hives to find the treatment covering them, and both skip
+//     soft-deleted harvests: a harvest that vanished from under a bottled lot
+//     takes its hive, and therefore the withdrawal window that justified or
+//     blocked those runs, out of that walk. The jars on the shelf would keep
+//     a provenance nobody can reconstruct. Voiding the runs first is the
+//     deliberate act that belongs in the audit trail — and once they are
+//     voided the harvest leaves freely.
+//
+//  2. Otherwise a derived lot is recomputed to the sum of its remaining live
+//     harvests. The bottled ceiling is re-checked as a belt-and-braces guard
+//     on that recompute; with rule 1 enforced there is nothing left to bottle
+//     against, so it should never fire.
+//
+// Manual-weight lots are never recomputed: their weight was typed, not
+// derived, so a harvest leaving the link set changes nothing they assert.
+// They are still covered by rule 1, because the provenance walk does not care
+// how the lot's pounds were arrived at.
 //
 // Returns a user-facing refusal ("" when the delete may proceed).
-func reconcileDerivedLotsForHarvest(
+func reconcileLotsForHarvestDelete(
 	ctx context.Context,
 	tx pgx.Tx,
 	harvestID uuid.UUID,
 ) (string, error) {
 	type lotRecompute struct {
-		id      uuid.UUID
-		code    string
-		derived float64
-		bottled float64
+		id       uuid.UUID
+		code     string
+		source   string
+		derived  float64
+		bottled  float64
+		runCount int
 	}
-	// FOR UPDATE OF l takes the same harvest_lots row lock bottlingRunCreate
-	// and harvestLotUpdate take, so a run cannot commit between this read and
-	// the UPDATE below. ORDER BY l.id keeps multi-lot deletes in a stable lock
-	// order.
+	// Two statements, and they have to stay two. FOR UPDATE OF l takes the
+	// same harvest_lots row lock bottlingRunCreate and harvestLotUpdate take,
+	// so no run can commit against these lots from here on; ORDER BY l.id
+	// keeps multi-lot deletes in a stable lock order. But a locking SELECT in
+	// READ COMMITTED only re-checks the LOCKED row against the newer version —
+	// scalar subqueries in its target list keep the statement snapshot, which
+	// was taken before the lock was granted and therefore before the run that
+	// was in flight committed. Counting the runs in a second statement, once
+	// the locks are held, is what makes this guard see them.
 	rows, err := tx.Query(ctx, `
-		SELECT l.id, l.lot_code,
-			COALESCE((SELECT SUM(hh.calculated_honey_weight)
-				FROM harvest_lot_harvests link
-				JOIN honey_harvests hh
-					ON hh.id = link.harvest_id AND hh.deleted_at IS NULL
-				WHERE link.lot_id = l.id), 0) AS derived_lbs,
-			COALESCE((SELECT SUM(COALESCE(run.honey_lbs,
-					run.quantity * COALESCE(size.honey_oz, 0) / 16.0))
-				FROM bottling_runs run
-				LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-				WHERE run.lot_id = l.id AND run.voided_at IS NULL), 0) AS bottled_lbs
+		SELECT l.id, l.lot_code, l.honey_weight_source
 		FROM harvest_lots l
 		JOIN harvest_lot_harvests hl ON hl.lot_id = l.id
-		WHERE hl.harvest_id = $1 AND l.honey_weight_source = $2
+		WHERE hl.harvest_id = $1
 		ORDER BY l.id
-		FOR UPDATE OF l`, harvestID, lotWeightSourceDerived)
+		FOR UPDATE OF l`, harvestID)
 	if err != nil {
 		return "", err
 	}
 	var lots []lotRecompute
 	for rows.Next() {
 		var lot lotRecompute
-		if err := rows.Scan(&lot.id, &lot.code, &lot.derived, &lot.bottled); err != nil {
+		if err := rows.Scan(&lot.id, &lot.code, &lot.source); err != nil {
 			rows.Close()
 			return "", err
 		}
@@ -311,7 +400,42 @@ func reconcileDerivedLotsForHarvest(
 	if err := rows.Err(); err != nil {
 		return "", err
 	}
+	for i := range lots {
+		if err := tx.QueryRow(ctx, `
+			SELECT
+				COALESCE((SELECT SUM(hh.calculated_honey_weight)
+					FROM harvest_lot_harvests link
+					JOIN honey_harvests hh
+						ON hh.id = link.harvest_id AND hh.deleted_at IS NULL
+					WHERE link.lot_id = $1), 0),
+				COALESCE((SELECT SUM(COALESCE(run.honey_lbs,
+						run.quantity * COALESCE(size.honey_oz, 0) / 16.0))
+					FROM bottling_runs run
+					LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
+					WHERE run.lot_id = $1 AND run.voided_at IS NULL), 0),
+				(SELECT COUNT(*) FROM bottling_runs run
+					WHERE run.lot_id = $1 AND run.voided_at IS NULL)`, lots[i].id).
+			Scan(&lots[i].derived, &lots[i].bottled, &lots[i].runCount); err != nil {
+			return "", err
+		}
+	}
 	for _, lot := range lots {
+		if lot.runCount > 0 {
+			runs := "bottling run"
+			if lot.runCount > 1 {
+				runs = "bottling runs"
+			}
+			return fmt.Sprintf(
+				"Lot %s was bottled from this harvest: %d %s still stand on it, "+
+					"and the jars keep the harvest's treatment history behind them. "+
+					"Void those runs first, then delete the harvest.",
+				lot.code, lot.runCount, runs), nil
+		}
+	}
+	for _, lot := range lots {
+		if lot.source != lotWeightSourceDerived {
+			continue
+		}
 		if lot.derived < lot.bottled-honeyPoundTolerance {
 			return fmt.Sprintf(
 				"Lot %s derives its weight from this harvest: without it the lot "+
@@ -321,6 +445,9 @@ func reconcileDerivedLotsForHarvest(
 		}
 	}
 	for _, lot := range lots {
+		if lot.source != lotWeightSourceDerived {
+			continue
+		}
 		if _, err := tx.Exec(ctx,
 			`UPDATE harvest_lots SET honey_weight_lbs=$2 WHERE id=$1`,
 			lot.id, lot.derived); err != nil {
@@ -659,6 +786,17 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	// Lock the requested harvests FIRST — class 1 of honeyLockOrder — before
+	// their weights are read and before any lot row is touched. This is what
+	// stops a concurrent hsDeleteEntry from soft-deleting a harvest between
+	// the weight read below and the link inserts at the end of this handler.
+	if msg, err := lockRequestedHarvests(r.Context(), tx, req.HarvestIDs); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
 	claimElevation, err = fillClaimElevation(r.Context(), tx, claimApiaryID, claimElevation)
 	if err != nil {
 		if err.Error() == "invalid claimApiaryId" {
@@ -783,13 +921,26 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	// Lock the lot row FIRST, before anything is read off it. The bottled
-	// total below and the UPDATE that acts on it have to be one atomic step:
+	// Lock the requested harvests first — class 1 of honeyLockOrder. The link
+	// inserts at the bottom of this handler take an FK key-share lock on each
+	// of these rows, so taking them here, before the lot row, is what keeps
+	// this path from reaching backwards into class 1 while holding class 2
+	// and deadlocking against hsDeleteEntry. It also re-validates under the
+	// lock that none of them has been deleted.
+	if msg, err := lockRequestedHarvests(r.Context(), tx, req.HarvestIDs); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
+	// Then the lot row, before anything is read off it. The bottled total
+	// below and the UPDATE that acts on it have to be one atomic step:
 	// without this, a bottling run committing between the two stores a derived
 	// weight lower than the pounds live runs have already taken out of the lot,
 	// and every later run 400s on a ceiling that was never really there.
-	// bottlingRunCreate takes the same lock on the same row first, so both
-	// paths order their locks identically and neither can deadlock the other.
+	// bottlingRunCreate takes the same lock on the same row, so both paths
+	// order their locks identically and neither can deadlock the other.
 	var lockedLotCode string
 	if err := tx.QueryRow(r.Context(),
 		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, id).
@@ -963,6 +1114,9 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
+	// The lot row (class 2 of honeyLockOrder), then the bulk advisory lock
+	// (class 3) further down. This path takes no harvest row locks, so it is a
+	// suffix of the global order and cannot deadlock against the paths that do.
 	var lotCode string
 	var lotWeightLbs float64
 	if err := tx.QueryRow(ctx,

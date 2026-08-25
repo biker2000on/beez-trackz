@@ -671,9 +671,13 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Deleting an entry shrinks TotalHarvestedLbs unless the session has an
-	// authoritative trued-up weight, so it is a bulk withdrawal too: hold the
-	// bulk advisory lock and refuse to remove pounds that were already jarred.
+	// This handler takes all three of honeyLockOrder's classes (declared in
+	// routes_commerce.go), in that order: the harvest row here, the lot rows
+	// inside reconcileLotsForHarvestDelete, and the bulk advisory lock last.
+	// The bulk check reads as though it belongs up here with the row it is
+	// about, but hoisting it would take class 3 before class 2 and deadlock
+	// against bottlingRunCreate, which holds a lot row while it waits for the
+	// bulk lock.
 	var weight float64
 	var countsTowardBulk bool
 	err = tx.QueryRow(ctx, `
@@ -691,19 +695,6 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if countsTowardBulk && weight > 0 {
-		bulk, err := honeyLockBulk(ctx, tx)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if bulk.BulkOnHandLbs-weight < -honeyPoundTolerance {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"Deleting this entry would remove %.2f lbs from bulk honey but only %.2f lbs remain unjarred",
-				weight, bulk.BulkOnHandLbs))
-			return
-		}
-	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE honey_harvests
@@ -713,18 +704,38 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	// A derived harvest lot is the sum of its live harvests, so this delete
-	// changes lot weights too. Recompute them here, in the same transaction —
-	// or refuse the delete outright when a lot would end up claiming fewer
-	// pounds than its bottling runs already took. See
-	// reconcileDerivedLotsForHarvest for why refusal is what preserves the
-	// treatment-lockout provenance of the jars already on the shelf.
-	if msg, err := reconcileDerivedLotsForHarvest(ctx, tx, id); err != nil {
+	// The harvest stands behind whatever lots link to it: refuse the delete
+	// when bottled jars still depend on it, and recompute the derived lots
+	// that may let it go. Same transaction, so the lots never disagree with
+	// their harvests at a commit boundary. See reconcileLotsForHarvestDelete
+	// for why refusal is what preserves the treatment-lockout provenance of
+	// the jars already on the shelf.
+	if msg, err := reconcileLotsForHarvestDelete(ctx, tx, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	} else if msg != "" {
 		writeError(w, http.StatusConflict, msg)
 		return
+	}
+
+	// Deleting an entry shrinks TotalHarvestedLbs unless the session has an
+	// authoritative trued-up weight, so it is a bulk withdrawal too: hold the
+	// bulk advisory lock and refuse to remove pounds that were already jarred.
+	// The soft-delete above is already applied in this transaction, so the
+	// totals read here are the POST-delete ones — the pre-delete figure the
+	// operator is told about is this plus the entry's own weight.
+	if countsTowardBulk && weight > 0 {
+		bulk, err := honeyLockBulk(ctx, tx)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if bulk.BulkOnHandLbs < -honeyPoundTolerance {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf(
+				"Deleting this entry would remove %.2f lbs from bulk honey but only %.2f lbs remain unjarred",
+				weight, bulk.BulkOnHandLbs+weight))
+			return
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")

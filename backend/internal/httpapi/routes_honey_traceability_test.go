@@ -831,7 +831,12 @@ func TestSoftDeletingAHarvestRecomputesItsDerivedLot(t *testing.T) {
 	}
 }
 
-func TestSoftDeleteRefusedWhenADerivedLotWouldFallBelowWhatItBottled(t *testing.T) {
+// A harvest that stands behind bottled jars cannot leave, whatever the lot's
+// weight would recompute to. lotLockoutAsOf and refuseLotBottling walk a lot's
+// live harvests back to their hives for the treatment covering them, so a
+// harvest that vanished from under a bottled lot takes the withdrawal window
+// that justified those jars out of the record with it.
+func TestSoftDeleteRefusedWhileBottlingRunsStandOnTheLot(t *testing.T) {
 	server := honeyTestServer(t)
 	_, hiveID := seedLockoutHive(t, server)
 	ctx := context.Background()
@@ -841,9 +846,9 @@ func TestSoftDeleteRefusedWhenADerivedLotWouldFallBelowWhatItBottled(t *testing.
 	// Unlinked bulk honey, so the delete is not stopped by the bulk-ledger
 	// guard before it ever reaches the lot check.
 	seedDerivedLotHarvest(t, server, hiveID, 100)
-	lotID := seedDerivedLot(t, server, "DELETE-CEILING", []uuid.UUID{first, second}, nil)
+	lotID := seedDerivedLot(t, server, "DELETE-BOTTLED", []uuid.UUID{first, second}, nil)
 
-	jarSizeID := seedJarSize(t, server, "DELETE-CEILING 1 lb", 16, 1200)
+	jarSizeID := seedJarSize(t, server, "DELETE-BOTTLED 1 lb", 16, 1200)
 	created, body := call(t, server.bottlingRunCreate, adminRequest(
 		http.MethodPost, "/harvest-lots/x/bottling-runs", map[string]any{
 			"bottledDate": harvestDay(-1), "jarSizeId": jarSizeID.String(), "quantity": 12,
@@ -851,34 +856,95 @@ func TestSoftDeleteRefusedWhenADerivedLotWouldFallBelowWhatItBottled(t *testing.
 	if created.Code != http.StatusCreated {
 		t.Fatalf("bottle lot = %d %v", created.Code, body)
 	}
+	runID := body["id"].(string)
 
-	response, decoded := call(t, server.hsDeleteEntry, adminRequest(
-		http.MethodDelete, "/harvest-entries/x",
-		map[string]any{"reason": "mis-keyed"}, "id", first.String()))
-	if response.Code != http.StatusConflict {
-		t.Fatalf("delete entry = %d %v, want 409: the lot would derive 10 lbs "+
-			"after the delete but has already bottled 12", response.Code, decoded)
-	}
-	message, _ := decoded["error"].(string)
-	for _, want := range []string{"DELETE-CEILING", "10.00", "12.00"} {
-		if !strings.Contains(message, want) {
-			t.Errorf("refusal %q does not name %q", message, want)
+	// Not just the harvest whose pounds the runs needed: ANY harvest behind a
+	// bottled lot is part of the jars' provenance. `second` is only 10 of the
+	// lot's 40 lbs and the runs used 12, so the weight ceiling alone would let
+	// it go.
+	for _, harvest := range []uuid.UUID{first, second} {
+		response, decoded := call(t, server.hsDeleteEntry, adminRequest(
+			http.MethodDelete, "/harvest-entries/x",
+			map[string]any{"reason": "mis-keyed"}, "id", harvest.String()))
+		if response.Code != http.StatusConflict {
+			t.Fatalf("delete entry = %d %v, want 409: a non-voided bottling run "+
+				"still stands on the lot", response.Code, decoded)
+		}
+		message, _ := decoded["error"].(string)
+		for _, want := range []string{"DELETE-BOTTLED", "Void"} {
+			if !strings.Contains(message, want) {
+				t.Errorf("refusal %q does not mention %q", message, want)
+			}
 		}
 	}
 
-	// Refused means refused: the harvest is still live and the lot untouched,
-	// so the bottled jars keep the harvest — and its hive's treatment history —
-	// behind them.
-	var deletedAt *time.Time
-	if err := server.pool.QueryRow(ctx,
-		`SELECT deleted_at FROM honey_harvests WHERE id=$1`, first).Scan(&deletedAt); err != nil {
-		t.Fatalf("read harvest: %v", err)
-	}
-	if deletedAt != nil {
-		t.Error("the harvest was soft-deleted despite the refusal")
+	// Refused means refused: the harvests are still live and the lot untouched,
+	// so the bottled jars keep the harvests — and their hive's treatment
+	// history — behind them.
+	for _, harvest := range []uuid.UUID{first, second} {
+		var deletedAt *time.Time
+		if err := server.pool.QueryRow(ctx,
+			`SELECT deleted_at FROM honey_harvests WHERE id=$1`, harvest).
+			Scan(&deletedAt); err != nil {
+			t.Fatalf("read harvest: %v", err)
+		}
+		if deletedAt != nil {
+			t.Error("the harvest was soft-deleted despite the refusal")
+		}
 	}
 	if got := lotStoredWeight(t, server, lotID); got != 40 {
 		t.Errorf("lot weight = %v, want the original 40 lbs", got)
+	}
+
+	// Voiding the run is the deliberate act the refusal asks for. Once the
+	// jars are gone the harvest leaves freely and the lot recomputes.
+	voided, decoded := call(t, server.bottlingRunVoid, adminRequest(
+		http.MethodPost, "/bottling-runs/x/void", map[string]any{"reason": "recalled"},
+		"id", runID))
+	if voided.Code >= 400 {
+		t.Fatalf("void run = %d %v", voided.Code, decoded)
+	}
+	response, decoded := call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/harvest-entries/x",
+		map[string]any{"reason": "mis-keyed"}, "id", first.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete after voiding = %d %v, want 200", response.Code, decoded)
+	}
+	if got := lotStoredWeight(t, server, lotID); got != 10 {
+		t.Errorf("lot weight = %v, want 10 after the 30 lb harvest left", got)
+	}
+}
+
+// A manual weight is no exemption. The old rule skipped manual lots because
+// nothing about their number changes when a harvest leaves — but the jars'
+// treatment provenance is not their number.
+func TestSoftDeleteRefusedWhileRunsStandOnAManualLot(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+
+	first := seedDerivedLotHarvest(t, server, hiveID, 30)
+	seedDerivedLotHarvest(t, server, hiveID, 100)
+	lotID := seedDerivedLot(t, server, "DELETE-MANUAL-BOTTLED", []uuid.UUID{first},
+		map[string]any{"honeyWeightLbs": 30})
+
+	jarSizeID := seedJarSize(t, server, "DELETE-MANUAL-BOTTLED 1 lb", 16, 1200)
+	created, body := call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/harvest-lots/x/bottling-runs", map[string]any{
+			"bottledDate": harvestDay(-1), "jarSizeId": jarSizeID.String(), "quantity": 4,
+		}, "id", lotID.String()))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("bottle lot = %d %v", created.Code, body)
+	}
+
+	response, decoded := call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/harvest-entries/x", nil, "id", first.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete entry = %d %v, want 409: the manual lot's jars still "+
+			"trace their treatment history through this harvest",
+			response.Code, decoded)
+	}
+	if got := lotStoredWeight(t, server, lotID); got != 30 {
+		t.Errorf("lot weight = %v, want the typed 30 lbs", got)
 	}
 }
 
