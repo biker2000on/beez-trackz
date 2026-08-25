@@ -21,25 +21,27 @@ import (
 // --- shared request plumbing ---
 
 type equipQuantityRequest struct {
-	Quantity      int     `json:"quantity"`
-	Reason        string  `json:"reason"`
-	Notes         *string `json:"notes"`
-	Date          *string `json:"date"`
-	UnitCostCents *int    `json:"unitCostCents"`
+	Quantity       int     `json:"quantity"`
+	Reason         string  `json:"reason"`
+	Notes          *string `json:"notes"`
+	Date           *string `json:"date"`
+	UnitCostCents  *int    `json:"unitCostCents"`
+	IdempotencyKey *string `json:"idempotencyKey"`
 	// From selects the pool a state change or removal draws from
 	// ('serviceable' by default, or 'damaged' / 'retired').
 	From *string `json:"from"`
 }
 
 type equipParsedRequest struct {
-	StockID   uuid.UUID
-	Quantity  int
-	Reason    string
-	Notes     *string
-	Date      time.Time
-	Cost      *int
-	From      string
-	CreatedBy *uuid.UUID
+	StockID        uuid.UUID
+	Quantity       int
+	Reason         string
+	Notes          *string
+	Date           time.Time
+	Cost           *int
+	From           string
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
 }
 
 // equipParseQuantityRequest handles the parts every ledger action shares.
@@ -89,14 +91,15 @@ func equipParseQuantityRequest(
 	}
 
 	parsed = equipParsedRequest{
-		StockID:   stockID,
-		Quantity:  req.Quantity,
-		Reason:    req.Reason,
-		Notes:     equipTrimPtr(req.Notes),
-		Date:      date,
-		Cost:      req.UnitCostCents,
-		From:      from,
-		CreatedBy: equipActor(r),
+		StockID:        stockID,
+		Quantity:       req.Quantity,
+		Reason:         req.Reason,
+		Notes:          equipTrimPtr(req.Notes),
+		Date:           date,
+		Cost:           req.UnitCostCents,
+		From:           from,
+		CreatedBy:      equipActor(r),
+		IdempotencyKey: equipTrimPtr(req.IdempotencyKey),
 	}
 	return parsed, nil
 }
@@ -156,16 +159,21 @@ func (s *Server) equipReceiveStock(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
-		if err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-			StockID:       state.ID,
-			Quantity:      parsed.Quantity,
-			Reason:        parsed.Reason,
-			Notes:         parsed.Notes,
-			UnitCostCents: parsed.Cost,
-			Date:          parsed.Date,
-			CreatedBy:     parsed.CreatedBy,
-		}); err != nil {
+		replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+			StockID:        state.ID,
+			Quantity:       parsed.Quantity,
+			Reason:         parsed.Reason,
+			Notes:          parsed.Notes,
+			UnitCostCents:  parsed.Cost,
+			Date:           parsed.Date,
+			CreatedBy:      parsed.CreatedBy,
+			IdempotencyKey: parsed.IdempotencyKey,
+		})
+		if err != nil {
 			return nil, err
+		}
+		if replayed {
+			return equipStateSnapshot(state), nil
 		}
 		// The most recent purchase price becomes the type's unit cost, which is
 		// what the loss report values future losses at.
@@ -198,6 +206,11 @@ func equipAdjustTx(
 	if err != nil {
 		return nil, err
 	}
+	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_stock_adjustments", parsed.IdempotencyKey); err != nil {
+		return nil, err
+	} else if found {
+		return equipStateSnapshot(state), nil
+	}
 	removed := -parsed.Quantity
 	switch {
 	case parsed.Quantity > 0:
@@ -220,29 +233,35 @@ func equipAdjustTx(
 		}
 	}
 
-	if err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-		StockID:       state.ID,
-		Quantity:      parsed.Quantity,
-		Reason:        parsed.Reason,
-		Notes:         parsed.Notes,
-		UnitCostCents: parsed.Cost,
-		Date:          parsed.Date,
-		CreatedBy:     parsed.CreatedBy,
-	}); err != nil {
+	replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+		StockID:        state.ID,
+		Quantity:       parsed.Quantity,
+		Reason:         parsed.Reason,
+		Notes:          parsed.Notes,
+		UnitCostCents:  parsed.Cost,
+		Date:           parsed.Date,
+		CreatedBy:      parsed.CreatedBy,
+		IdempotencyKey: parsed.IdempotencyKey,
+	})
+	if err != nil {
 		return nil, err
+	}
+	if replayed {
+		return equipStateSnapshot(state), nil
 	}
 	// Disposing of damaged or retired units also empties that pool, so the
 	// states keep partitioning what is owned.
 	if parsed.Quantity < 0 && parsed.From != "serviceable" {
-		if err := equipInsertStateChange(ctx, tx, equipStateEntry{
-			StockID:   state.ID,
-			From:      parsed.From,
-			To:        "serviceable",
-			Quantity:  removed,
-			Reason:    "disposed",
-			Notes:     parsed.Notes,
-			Date:      parsed.Date,
-			CreatedBy: parsed.CreatedBy,
+		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
+			StockID:        state.ID,
+			From:           parsed.From,
+			To:             "serviceable",
+			Quantity:       removed,
+			Reason:         "disposed",
+			Notes:          parsed.Notes,
+			Date:           parsed.Date,
+			CreatedBy:      parsed.CreatedBy,
+			IdempotencyKey: parsed.IdempotencyKey,
 		}); err != nil {
 			return nil, err
 		}
@@ -284,6 +303,11 @@ func equipMoveState(
 	if err != nil {
 		return nil, err
 	}
+	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_state_changes", parsed.IdempotencyKey); err != nil {
+		return nil, err
+	} else if found {
+		return equipStateSnapshot(state), nil
+	}
 	if parsed.From == to {
 		return nil, equipBadRequest("Equipment is already %s", to)
 	}
@@ -310,18 +334,23 @@ func equipMoveState(
 	if cost == nil {
 		cost = state.UnitCostCents
 	}
-	if err := equipInsertStateChange(ctx, tx, equipStateEntry{
-		StockID:       state.ID,
-		From:          parsed.From,
-		To:            to,
-		Quantity:      parsed.Quantity,
-		Reason:        parsed.Reason,
-		Notes:         parsed.Notes,
-		UnitCostCents: cost,
-		Date:          parsed.Date,
-		CreatedBy:     parsed.CreatedBy,
-	}); err != nil {
+	replayed, err := equipInsertStateChange(ctx, tx, equipStateEntry{
+		StockID:        state.ID,
+		From:           parsed.From,
+		To:             to,
+		Quantity:       parsed.Quantity,
+		Reason:         parsed.Reason,
+		Notes:          parsed.Notes,
+		UnitCostCents:  cost,
+		Date:           parsed.Date,
+		CreatedBy:      parsed.CreatedBy,
+		IdempotencyKey: parsed.IdempotencyKey,
+	})
+	if err != nil {
 		return nil, err
+	}
+	if replayed {
+		return equipStateSnapshot(state), nil
 	}
 
 	switch parsed.From {
@@ -422,10 +451,11 @@ type equipCountRequestLine struct {
 }
 
 type equipCountInput struct {
-	Lines     []equipCountRequestLine
-	Date      time.Time
-	Notes     *string
-	CreatedBy *uuid.UUID
+	Lines          []equipCountRequestLine
+	Date           time.Time
+	Notes          *string
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
 }
 
 // equipPhysicalCountTx applies a physical count. It returns per-line results,
@@ -522,15 +552,25 @@ func equipPhysicalCountTx(
 		}
 		delta := line.CountedQuantity - state.Available()
 		if delta != 0 {
-			if err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-				StockID:   state.ID,
-				Quantity:  delta,
-				Reason:    "physical_count",
-				Notes:     in.Notes,
-				Date:      in.Date,
-				CreatedBy: in.CreatedBy,
-			}); err != nil {
+			var lineKey *string
+			if in.IdempotencyKey != nil {
+				key := *in.IdempotencyKey + ":" + line.StockID.String()
+				lineKey = &key
+			}
+			replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+				StockID:        state.ID,
+				Quantity:       delta,
+				Reason:         "physical_count",
+				Notes:          in.Notes,
+				Date:           in.Date,
+				CreatedBy:      in.CreatedBy,
+				IdempotencyKey: lineKey,
+			})
+			if err != nil {
 				return nil, nil, err
+			}
+			if replayed {
+				delta = 0
 			}
 		}
 		results = append(results, equipCountLineResult{
@@ -555,9 +595,10 @@ func equipPhysicalCountTx(
 // Nothing is applied unless every line resolves.
 func (s *Server) equipPhysicalCount(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date  *string                 `json:"date"`
-		Notes *string                 `json:"notes"`
-		Lines []equipCountRequestLine `json:"lines"`
+		Date           *string                 `json:"date"`
+		Notes          *string                 `json:"notes"`
+		IdempotencyKey *string                 `json:"idempotencyKey"`
+		Lines          []equipCountRequestLine `json:"lines"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -584,10 +625,11 @@ func (s *Server) equipPhysicalCount(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	results, lineErrors, err := equipPhysicalCountTx(ctx, tx, equipCountInput{
-		Lines:     req.Lines,
-		Date:      date,
-		Notes:     equipTrimPtr(req.Notes),
-		CreatedBy: equipActor(r),
+		Lines:          req.Lines,
+		Date:           date,
+		Notes:          equipTrimPtr(req.Notes),
+		CreatedBy:      equipActor(r),
+		IdempotencyKey: equipTrimPtr(req.IdempotencyKey),
 	})
 	if err != nil {
 		equipWriteError(w, err)

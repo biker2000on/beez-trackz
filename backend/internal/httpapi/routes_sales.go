@@ -173,7 +173,32 @@ func saleSellHive(
 	if tag.RowsAffected() == 0 {
 		return saleBadRequest("cannot sell a hive that is already sold, dead, or combined")
 	}
-	return nil
+	return saleSnapshotColonyCost(ctx, tx, saleID, hiveID)
+}
+
+// saleSnapshotColonyCost freezes the hive's recorded acquisition cost onto
+// the colony line. SUM of zero matching expenses is NULL (no recorded
+// basis), which is distinct from a basis of zero.
+func saleSnapshotColonyCost(
+	ctx context.Context,
+	tx pgx.Tx,
+	saleID, hiveID uuid.UUID,
+) error {
+	var basis *int64
+	if err := tx.QueryRow(ctx, `
+		SELECT SUM(amount_cents)::bigint
+		FROM expenses
+		WHERE hive_id = $1
+		  AND category = 'bees_queens'
+		  AND deleted_at IS NULL`, hiveID).Scan(&basis); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE sale_items
+		SET cost_basis_cents = $3
+		WHERE sale_id = $1 AND kind = 'colony' AND hive_id = $2`,
+		saleID, hiveID, basis)
+	return err
 }
 
 func saleCloseDeployment(
@@ -227,11 +252,27 @@ func saleInsertSoldAdjustment(
 	actor *uuid.UUID,
 	notes string,
 ) error {
-	_, err := tx.Exec(ctx, `
+	// equipment_types has no unit_cost_cents (00006 put cost on stock and
+	// on the adjustment itself). Snapshot the stock's current unit cost.
+	var snapshot *int
+	if err := tx.QueryRow(ctx, `
+		SELECT unit_cost_cents FROM equipment_stock WHERE id = $1`,
+		stockID).Scan(&snapshot); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO equipment_stock_adjustments
-			(stock_id, quantity, reason, notes, date, created_by, sale_id)
-		VALUES ($1, $2, 'sold', $3, $4, $5, $6)`,
-		stockID, -qty, notes, date, actor, saleID)
+			(stock_id, quantity, reason, notes, date, created_by, sale_id,
+			 unit_cost_cents_snapshot)
+		VALUES ($1, $2, 'sold', $3, $4, $5, $6, $7)`,
+		stockID, -qty, notes, date, actor, saleID, snapshot); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE sale_items
+		SET cost_basis_cents = quantity::bigint * $3::bigint
+		WHERE sale_id = $1 AND kind = 'equipment' AND equipment_stock_id = $2`,
+		saleID, stockID, snapshot)
 	return err
 }
 
@@ -440,6 +481,14 @@ func saleRevertPhysical(
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE hives SET status='active', sale_id=NULL WHERE sale_id=$1`,
+		saleID); err != nil {
+		return err
+	}
+
+	// Clear frozen COGS so a later apply resnapshots from live stock
+	// prices and bees_queens expenses rather than keeping a stale basis.
+	if _, err := tx.Exec(ctx, `
+		UPDATE sale_items SET cost_basis_cents = NULL WHERE sale_id = $1`,
 		saleID); err != nil {
 		return err
 	}

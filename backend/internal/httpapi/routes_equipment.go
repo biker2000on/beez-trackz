@@ -215,45 +215,100 @@ func equipLockStock(ctx context.Context, tx pgx.Tx, stockID uuid.UUID) (equipSto
 // --- ledger writes ---
 
 type equipAdjustmentEntry struct {
-	StockID       uuid.UUID
-	Quantity      int
-	Reason        string
-	Notes         *string
-	UnitCostCents *int
-	Date          time.Time
-	CreatedBy     *uuid.UUID
+	StockID        uuid.UUID
+	Quantity       int
+	Reason         string
+	Notes          *string
+	UnitCostCents  *int
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
 }
 
-func equipInsertAdjustment(ctx context.Context, q inspectionQuerier, e equipAdjustmentEntry) error {
+// equipInsertAdjustment appends an ownership-ledger row. A duplicate
+// idempotency key returns (true, nil) so the caller can surface the
+// previously-created row instead of applying the quantity twice.
+func equipInsertAdjustment(ctx context.Context, q inspectionQuerier, e equipAdjustmentEntry) (bool, error) {
+	if id, found, err := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey); err != nil {
+		return false, err
+	} else if found {
+		_ = id
+		return true, nil
+	}
 	_, err := q.Exec(ctx, `
 		INSERT INTO equipment_stock_adjustments
-			(stock_id, quantity, reason, notes, unit_cost_cents, date, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		e.StockID, e.Quantity, e.Reason, e.Notes, e.UnitCostCents, e.Date, e.CreatedBy)
-	return err
+			(stock_id, quantity, reason, notes, unit_cost_cents, date, created_by,
+			 idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		e.StockID, e.Quantity, e.Reason, e.Notes, e.UnitCostCents, e.Date, e.CreatedBy,
+		e.IdempotencyKey)
+	if err != nil && e.IdempotencyKey != nil && pgErrCode(err) == "23505" {
+		if _, found, lookupErr := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey); lookupErr != nil {
+			return false, lookupErr
+		} else if found {
+			return true, nil
+		}
+	}
+	return false, err
 }
 
 type equipStateEntry struct {
-	StockID       uuid.UUID
-	From          string
-	To            string
-	Quantity      int
-	Reason        string
-	Notes         *string
-	UnitCostCents *int
-	Date          time.Time
-	CreatedBy     *uuid.UUID
+	StockID        uuid.UUID
+	From           string
+	To             string
+	Quantity       int
+	Reason         string
+	Notes          *string
+	UnitCostCents  *int
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
 }
 
-func equipInsertStateChange(ctx context.Context, q inspectionQuerier, e equipStateEntry) error {
+func equipInsertStateChange(ctx context.Context, q inspectionQuerier, e equipStateEntry) (bool, error) {
+	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey); err != nil {
+		return false, err
+	} else if found {
+		return true, nil
+	}
 	_, err := q.Exec(ctx, `
 		INSERT INTO equipment_state_changes
 			(stock_id, from_state, to_state, quantity, reason, notes,
-			 unit_cost_cents, date, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			 unit_cost_cents, date, created_by, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		e.StockID, e.From, e.To, e.Quantity, e.Reason, e.Notes,
-		e.UnitCostCents, e.Date, e.CreatedBy)
-	return err
+		e.UnitCostCents, e.Date, e.CreatedBy, e.IdempotencyKey)
+	if err != nil && e.IdempotencyKey != nil && pgErrCode(err) == "23505" {
+		if _, found, lookupErr := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey); lookupErr != nil {
+			return false, lookupErr
+		} else if found {
+			return true, nil
+		}
+	}
+	return false, err
+}
+
+// equipLookupIdempotent finds a previously-written ledger row by key.
+// table is a compile-time identifier, never request input.
+func equipLookupIdempotent(
+	ctx context.Context,
+	q inspectionQuerier,
+	table string,
+	key *string,
+) (uuid.UUID, bool, error) {
+	if key == nil {
+		return uuid.Nil, false, nil
+	}
+	var id uuid.UUID
+	err := q.QueryRow(ctx,
+		`SELECT id FROM `+table+` WHERE idempotency_key = $1`, *key).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	return id, true, nil
 }
 
 // --- types ---
@@ -504,7 +559,7 @@ func (s *Server) equipCreateStock(w http.ResponseWriter, r *http.Request) {
 	}
 	if initial > 0 {
 		notes := "Opening count"
-		if err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+		if _, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
 			StockID:       stockID,
 			Quantity:      initial,
 			Reason:        "purchased",
@@ -722,50 +777,67 @@ func (s *Server) equipListStateChanges(w http.ResponseWriter, r *http.Request) {
 
 // equipDeployInput is the validated form of a deploy request.
 type equipDeployInput struct {
-	StockID   uuid.UUID
-	HiveID    uuid.UUID
-	Quantity  int
-	Notes     *string
-	Date      time.Time
-	CreatedBy *uuid.UUID
+	StockID        uuid.UUID
+	HiveID         uuid.UUID
+	Quantity       int
+	Notes          *string
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
 }
 
 // equipDeployTx locks the stock row, refuses to deploy more than is available,
-// and records the deployment.
-func equipDeployTx(ctx context.Context, tx pgx.Tx, in equipDeployInput) (uuid.UUID, error) {
+// and records the deployment. replayed is true when idempotencyKey matched an
+// existing row, in which case nothing is applied again.
+func equipDeployTx(ctx context.Context, tx pgx.Tx, in equipDeployInput) (uuid.UUID, bool, error) {
 	state, err := equipLockStock(ctx, tx, in.StockID)
 	if err != nil {
-		return uuid.Nil, err
+		return uuid.Nil, false, err
+	}
+	if id, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey); err != nil {
+		return uuid.Nil, false, err
+	} else if found {
+		return id, true, nil
 	}
 	if available := state.Available(); in.Quantity > available {
-		return uuid.Nil, equipBadRequest(
+		return uuid.Nil, false, equipBadRequest(
 			"Not enough %s available: need %d, have %d",
 			state.TypeName, in.Quantity, available)
 	}
 	var id uuid.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO equipment_deployments
-			(stock_id, hive_id, quantity, date_deployed, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(stock_id, hive_id, quantity, date_deployed, notes, created_by,
+			 idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id`,
-		in.StockID, in.HiveID, in.Quantity, in.Date, in.Notes, in.CreatedBy).Scan(&id)
+		in.StockID, in.HiveID, in.Quantity, in.Date, in.Notes, in.CreatedBy,
+		in.IdempotencyKey).Scan(&id)
 	if err != nil {
-		if equipPgErrCode(err, "23503") {
-			return uuid.Nil, equipBadRequest("invalid stockId or hiveId")
+		if in.IdempotencyKey != nil && pgErrCode(err) == "23505" {
+			if existing, found, lookupErr := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey); lookupErr != nil {
+				return uuid.Nil, false, lookupErr
+			} else if found {
+				return existing, true, nil
+			}
 		}
-		return uuid.Nil, err
+		if equipPgErrCode(err, "23503") {
+			return uuid.Nil, false, equipBadRequest("invalid stockId or hiveId")
+		}
+		return uuid.Nil, false, err
 	}
-	return id, nil
+	return id, false, nil
 }
 
 // POST /equipment/deployments {stockId, hiveId, quantity?, notes?, date?}
 func (s *Server) equipDeploy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		StockID  string  `json:"stockId"`
-		HiveID   string  `json:"hiveId"`
-		Quantity *int    `json:"quantity"`
-		Notes    *string `json:"notes"`
-		Date     *string `json:"date"`
+		StockID        string  `json:"stockId"`
+		HiveID         string  `json:"hiveId"`
+		Quantity       *int    `json:"quantity"`
+		Notes          *string `json:"notes"`
+		Date           *string `json:"date"`
+		IdempotencyKey *string `json:"idempotencyKey"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -813,13 +885,14 @@ func (s *Server) equipDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	id, err := equipDeployTx(ctx, tx, equipDeployInput{
-		StockID:   stockID,
-		HiveID:    hiveID,
-		Quantity:  quantity,
-		Notes:     equipTrimPtr(req.Notes),
-		Date:      date,
-		CreatedBy: equipActor(r),
+	id, replayed, err := equipDeployTx(ctx, tx, equipDeployInput{
+		StockID:        stockID,
+		HiveID:         hiveID,
+		Quantity:       quantity,
+		Notes:          equipTrimPtr(req.Notes),
+		Date:           date,
+		CreatedBy:      equipActor(r),
+		IdempotencyKey: equipTrimPtr(req.IdempotencyKey),
 	})
 	if err != nil {
 		equipWriteError(w, err)
@@ -829,29 +902,36 @@ func (s *Server) equipDeploy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "id": id})
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{"success": true, "id": id})
 }
 
 // equipReturnInput is the validated form of a (possibly partial) return.
 type equipReturnInput struct {
 	DeploymentID uuid.UUID
 	// Quantity nil means "everything still out".
-	Quantity  *int
-	Reason    string
-	Condition string
-	Notes     *string
-	Date      time.Time
-	CreatedBy *uuid.UUID
-	SaleID    *uuid.UUID
+	Quantity       *int
+	Reason         string
+	Condition      string
+	Notes          *string
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	SaleID         *uuid.UUID
+	IdempotencyKey *string
 }
 
 type equipReturnResult struct {
+	ID            uuid.UUID
 	Quantity      int
 	TotalReturned int
 	Outstanding   int
 	FullyReturned bool
 	StockID       uuid.UUID
 	DeployedTotal int
+	Replayed      bool
 }
 
 // equipReturnTx returns equipment from a hive. The `date_removed IS NULL`
@@ -874,6 +954,11 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 	}
 	if _, err := equipLockStock(ctx, tx, stockID); err != nil {
 		return result, err
+	}
+	if existingID, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey); err != nil {
+		return result, err
+	} else if found {
+		return equipLoadReturnResult(ctx, tx, existingID, true)
 	}
 
 	var deployed, returned int
@@ -903,12 +988,23 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 			"Only %d still deployed: cannot return %d", outstanding, quantity)
 	}
 
-	if _, err := tx.Exec(ctx, `
+	var returnID uuid.UUID
+	err = tx.QueryRow(ctx, `
 		INSERT INTO equipment_deployment_returns
-			(deployment_id, quantity, reason, condition, notes, date, created_by, sale_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			(deployment_id, quantity, reason, condition, notes, date, created_by,
+			 sale_id, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id`,
 		in.DeploymentID, quantity, in.Reason, in.Condition, in.Notes,
-		in.Date, in.CreatedBy, in.SaleID); err != nil {
+		in.Date, in.CreatedBy, in.SaleID, in.IdempotencyKey).Scan(&returnID)
+	if err != nil {
+		if in.IdempotencyKey != nil && pgErrCode(err) == "23505" {
+			if existingID, found, lookupErr := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey); lookupErr != nil {
+				return result, lookupErr
+			} else if found {
+				return equipLoadReturnResult(ctx, tx, existingID, true)
+			}
+		}
 		return result, err
 	}
 
@@ -932,21 +1028,23 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 	// Equipment that came back broken or worn out does not silently rejoin the
 	// serviceable pool: it lands in a real state with a quantity.
 	if in.Condition == "damaged" || in.Condition == "retired" {
-		if err := equipInsertStateChange(ctx, tx, equipStateEntry{
-			StockID:   stockID,
-			From:      "serviceable",
-			To:        in.Condition,
-			Quantity:  quantity,
-			Reason:    "returned_damaged",
-			Notes:     in.Notes,
-			Date:      in.Date,
-			CreatedBy: in.CreatedBy,
+		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
+			StockID:        stockID,
+			From:           "serviceable",
+			To:             in.Condition,
+			Quantity:       quantity,
+			Reason:         "returned_damaged",
+			Notes:          in.Notes,
+			Date:           in.Date,
+			CreatedBy:      in.CreatedBy,
+			IdempotencyKey: in.IdempotencyKey,
 		}); err != nil {
 			return result, err
 		}
 	}
 
 	result = equipReturnResult{
+		ID:            returnID,
 		Quantity:      quantity,
 		TotalReturned: total,
 		Outstanding:   deployed - total,
@@ -954,6 +1052,29 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 		StockID:       stockID,
 		DeployedTotal: deployed,
 	}
+	return result, nil
+}
+
+func equipLoadReturnResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	returnID uuid.UUID,
+	replayed bool,
+) (equipReturnResult, error) {
+	var result equipReturnResult
+	err := tx.QueryRow(ctx, `
+		SELECT r.id, r.quantity, d.quantity, d.quantity_returned,
+		       d.stock_id, d.date_removed IS NOT NULL
+		FROM equipment_deployment_returns r
+		JOIN equipment_deployments d ON d.id = r.deployment_id
+		WHERE r.id = $1`, returnID).
+		Scan(&result.ID, &result.Quantity, &result.DeployedTotal,
+			&result.TotalReturned, &result.StockID, &result.FullyReturned)
+	if err != nil {
+		return result, err
+	}
+	result.Outstanding = result.DeployedTotal - result.TotalReturned
+	result.Replayed = replayed
 	return result, nil
 }
 
@@ -968,11 +1089,12 @@ func (s *Server) equipReturnDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Quantity  *int    `json:"quantity"`
-		Reason    *string `json:"reason"`
-		Condition *string `json:"condition"`
-		Notes     *string `json:"notes"`
-		Date      *string `json:"date"`
+		Quantity       *int    `json:"quantity"`
+		Reason         *string `json:"reason"`
+		Condition      *string `json:"condition"`
+		Notes          *string `json:"notes"`
+		Date           *string `json:"date"`
+		IdempotencyKey *string `json:"idempotencyKey"`
 	}
 	if err := decodeOptionalJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1011,13 +1133,14 @@ func (s *Server) equipReturnDeployment(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 
 	result, err := equipReturnTx(ctx, tx, equipReturnInput{
-		DeploymentID: id,
-		Quantity:     req.Quantity,
-		Reason:       reason,
-		Condition:    condition,
-		Notes:        equipTrimPtr(req.Notes),
-		Date:         date,
-		CreatedBy:    equipActor(r),
+		DeploymentID:   id,
+		Quantity:       req.Quantity,
+		Reason:         reason,
+		Condition:      condition,
+		Notes:          equipTrimPtr(req.Notes),
+		Date:           date,
+		CreatedBy:      equipActor(r),
+		IdempotencyKey: equipTrimPtr(req.IdempotencyKey),
 	})
 	if err != nil {
 		equipWriteError(w, err)
@@ -1029,6 +1152,7 @@ func (s *Server) equipReturnDeployment(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":          true,
+		"id":               result.ID,
 		"quantityReturned": result.Quantity,
 		"totalReturned":    result.TotalReturned,
 		"outstanding":      result.Outstanding,

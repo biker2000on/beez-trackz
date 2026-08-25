@@ -91,7 +91,7 @@ func equipFixtureStock(
 		t.Fatalf("insert equipment stock: %v", err)
 	}
 	if opening != 0 {
-		if err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+		if _, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
 			StockID: id, Quantity: opening, Reason: "purchased", Date: time.Now(),
 		}); err != nil {
 			t.Fatalf("book opening count: %v", err)
@@ -171,7 +171,7 @@ func TestEquipmentMergeDuplicateStockRows(t *testing.T) {
 	}
 
 	hiveID := equipFixtureHive(t, ctx, tx)
-	if _, err := equipDeployTx(ctx, tx, equipDeployInput{
+	if _, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: dup, HiveID: hiveID, Quantity: 3, Date: time.Now(),
 	}); err != nil {
 		t.Fatalf("deploy from duplicate row: %v", err)
@@ -292,7 +292,7 @@ func TestEquipmentDeployRejectsNegativeStock(t *testing.T) {
 	stockID := equipFixtureStock(t, ctx, tx, typeID, 2)
 	hiveID := equipFixtureHive(t, ctx, tx)
 
-	_, err := equipDeployTx(ctx, tx, equipDeployInput{
+	_, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 3, Date: time.Now(),
 	})
 	if err == nil {
@@ -303,7 +303,7 @@ func TestEquipmentDeployRejectsNegativeStock(t *testing.T) {
 	}
 
 	// Deploying exactly what is available is still allowed, and consumes it.
-	if _, err := equipDeployTx(ctx, tx, equipDeployInput{
+	if _, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 2, Date: time.Now(),
 	}); err != nil {
 		t.Fatalf("deploying the full available quantity failed: %v", err)
@@ -311,7 +311,7 @@ func TestEquipmentDeployRejectsNegativeStock(t *testing.T) {
 	if _, available := equipStatusFor(t, ctx, tx, stockID); available != 0 {
 		t.Fatalf("available = %d, want 0", available)
 	}
-	if _, err := equipDeployTx(ctx, tx, equipDeployInput{
+	if _, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 1, Date: time.Now(),
 	}); err == nil {
 		t.Fatal("deploying with nothing available succeeded")
@@ -323,7 +323,7 @@ func TestEquipmentAdjustRejectsNegativeStock(t *testing.T) {
 	typeID := equipFixtureType(t, ctx, tx, "frame")
 	stockID := equipFixtureStock(t, ctx, tx, typeID, 4)
 	hiveID := equipFixtureHive(t, ctx, tx)
-	if _, err := equipDeployTx(ctx, tx, equipDeployInput{
+	if _, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 3, Date: time.Now(),
 	}); err != nil {
 		t.Fatalf("deploy: %v", err)
@@ -385,7 +385,7 @@ func TestEquipmentDoubleReturnIsRejected(t *testing.T) {
 	stockID := equipFixtureStock(t, ctx, tx, typeID, 5)
 	hiveID := equipFixtureHive(t, ctx, tx)
 
-	deploymentID, err := equipDeployTx(ctx, tx, equipDeployInput{
+	deploymentID, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 3, Date: time.Now(),
 	})
 	if err != nil {
@@ -442,7 +442,7 @@ func TestEquipmentPartialReturnCapturesReasonAndCondition(t *testing.T) {
 	stockID := equipFixtureStock(t, ctx, tx, typeID, 10)
 	hiveID := equipFixtureHive(t, ctx, tx)
 
-	deploymentID, err := equipDeployTx(ctx, tx, equipDeployInput{
+	deploymentID, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 5, Date: time.Now(),
 	})
 	if err != nil {
@@ -523,7 +523,7 @@ func TestEquipmentPhysicalCountRecordsSignedAdjustments(t *testing.T) {
 	typeID := equipFixtureType(t, ctx, tx, "box")
 	stockID := equipFixtureStock(t, ctx, tx, typeID, 10)
 	hiveID := equipFixtureHive(t, ctx, tx)
-	if _, err := equipDeployTx(ctx, tx, equipDeployInput{
+	if _, _, err := equipDeployTx(ctx, tx, equipDeployInput{
 		StockID: stockID, HiveID: hiveID, Quantity: 4, Date: time.Now(),
 	}); err != nil {
 		t.Fatalf("deploy: %v", err)
@@ -682,5 +682,191 @@ func TestEquipmentDamageRetireAndLossReport(t *testing.T) {
 	}
 	if valueCents != 5*2500 {
 		t.Fatalf("loss value = %d cents, want %d", valueCents, 5*2500)
+	}
+}
+
+func TestEquipmentReceiveIdempotencyKeyDoesNotDoubleApply(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeID := equipFixtureType(t, ctx, tx, "box")
+	stockID := equipFixtureStock(t, ctx, tx, typeID, 4)
+	key := "recv-" + uuid.NewString()
+
+	entry := equipAdjustmentEntry{
+		StockID: stockID, Quantity: 3, Reason: "purchased", Date: time.Now(),
+		IdempotencyKey: &key,
+	}
+	replayed, err := equipInsertAdjustment(ctx, tx, entry)
+	if err != nil || replayed {
+		t.Fatalf("first receive: replayed=%v err=%v", replayed, err)
+	}
+	replayed, err = equipInsertAdjustment(ctx, tx, entry)
+	if err != nil {
+		t.Fatalf("second receive: %v", err)
+	}
+	if !replayed {
+		t.Fatal("second receive with the same key was treated as a new write")
+	}
+
+	state := equipReadState(t, ctx, tx, stockID)
+	if state.TotalOwned != 7 {
+		t.Fatalf("totalOwned = %d, want 7 (4 opening + 3 once)", state.TotalOwned)
+	}
+	var rows int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM equipment_stock_adjustments
+		WHERE stock_id = $1 AND idempotency_key = $2`, stockID, key).Scan(&rows); err != nil {
+		t.Fatalf("count keyed adjustments: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("keyed adjustments = %d, want 1", rows)
+	}
+}
+
+func TestEquipmentDeployIdempotencyKeyReturnsExisting(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeID := equipFixtureType(t, ctx, tx, "box")
+	stockID := equipFixtureStock(t, ctx, tx, typeID, 5)
+	hiveID := equipFixtureHive(t, ctx, tx)
+	key := "deploy-" + uuid.NewString()
+
+	first, replayed, err := equipDeployTx(ctx, tx, equipDeployInput{
+		StockID: stockID, HiveID: hiveID, Quantity: 2, Date: time.Now(),
+		IdempotencyKey: &key,
+	})
+	if err != nil || replayed {
+		t.Fatalf("first deploy: id=%s replayed=%v err=%v", first, replayed, err)
+	}
+
+	second, replayed, err := equipDeployTx(ctx, tx, equipDeployInput{
+		StockID: stockID, HiveID: hiveID, Quantity: 2, Date: time.Now(),
+		IdempotencyKey: &key,
+	})
+	if err != nil {
+		t.Fatalf("second deploy: %v", err)
+	}
+	if !replayed {
+		t.Fatal("second deploy with the same key was not marked replayed")
+	}
+	if second != first {
+		t.Fatalf("replay id = %s, want existing %s", second, first)
+	}
+
+	deployed, available := equipStatusFor(t, ctx, tx, stockID)
+	if deployed != 2 || available != 3 {
+		t.Fatalf("deployed/available = %d/%d, want 2/3", deployed, available)
+	}
+}
+
+func TestEquipmentAdjustIdempotencyKeyDoesNotDoubleApply(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeID := equipFixtureType(t, ctx, tx, "frame")
+	stockID := equipFixtureStock(t, ctx, tx, typeID, 8)
+	key := "adj-" + uuid.NewString()
+	parsed := equipParsedRequest{
+		StockID: stockID, Quantity: -3, Reason: "discarded",
+		Date: time.Now(), From: "serviceable", IdempotencyKey: &key,
+	}
+	if _, err := equipAdjustTx(ctx, tx, parsed); err != nil {
+		t.Fatalf("first adjust: %v", err)
+	}
+	if _, err := equipAdjustTx(ctx, tx, parsed); err != nil {
+		t.Fatalf("second adjust: %v", err)
+	}
+	state := equipReadState(t, ctx, tx, stockID)
+	if state.TotalOwned != 5 {
+		t.Fatalf("totalOwned = %d, want 5", state.TotalOwned)
+	}
+}
+
+func TestEquipmentStateChangeIdempotencyKeyDoesNotDoubleApply(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeID := equipFixtureType(t, ctx, tx, "box")
+	stockID := equipFixtureStock(t, ctx, tx, typeID, 6)
+	key := "dmg-" + uuid.NewString()
+	parsed := equipParsedRequest{
+		StockID: stockID, Quantity: 2, Reason: "broken",
+		Date: time.Now(), From: "serviceable", IdempotencyKey: &key,
+	}
+	if _, err := equipMoveState(ctx, tx, parsed, "damaged"); err != nil {
+		t.Fatalf("first damage: %v", err)
+	}
+	if _, err := equipMoveState(ctx, tx, parsed, "damaged"); err != nil {
+		t.Fatalf("second damage: %v", err)
+	}
+	state := equipReadState(t, ctx, tx, stockID)
+	if state.Damaged != 2 {
+		t.Fatalf("damaged = %d, want 2", state.Damaged)
+	}
+}
+
+func TestEquipmentReturnIdempotencyKeyDoesNotDoubleApply(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeID := equipFixtureType(t, ctx, tx, "box")
+	stockID := equipFixtureStock(t, ctx, tx, typeID, 8)
+	hiveID := equipFixtureHive(t, ctx, tx)
+	deploymentID, _, err := equipDeployTx(ctx, tx, equipDeployInput{
+		StockID: stockID, HiveID: hiveID, Quantity: 4, Date: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	key := "ret-" + uuid.NewString()
+	qty := 2
+	first, err := equipReturnTx(ctx, tx, equipReturnInput{
+		DeploymentID: deploymentID, Quantity: &qty, Reason: "season_end",
+		Condition: "good", Date: time.Now(), IdempotencyKey: &key,
+	})
+	if err != nil {
+		t.Fatalf("first return: %v", err)
+	}
+	second, err := equipReturnTx(ctx, tx, equipReturnInput{
+		DeploymentID: deploymentID, Quantity: &qty, Reason: "season_end",
+		Condition: "good", Date: time.Now(), IdempotencyKey: &key,
+	})
+	if err != nil {
+		t.Fatalf("second return: %v", err)
+	}
+	if !second.Replayed {
+		t.Fatal("second return with the same key was not marked replayed")
+	}
+	if second.ID != first.ID {
+		t.Fatalf("replay id = %s, want existing %s", second.ID, first.ID)
+	}
+	if second.TotalReturned != 2 || second.Outstanding != 2 {
+		t.Fatalf("replay total/outstanding = %d/%d, want 2/2",
+			second.TotalReturned, second.Outstanding)
+	}
+}
+
+func TestEquipmentPhysicalCountIdempotencyKeyDoesNotDoubleApply(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeID := equipFixtureType(t, ctx, tx, "box")
+	stockID := equipFixtureStock(t, ctx, tx, typeID, 10)
+	counted := 7
+	id := stockID.String()
+	key := "count-" + uuid.NewString()
+	in := equipCountInput{
+		Lines:          []equipCountRequestLine{{StockID: &id, CountedQuantity: &counted}},
+		Date:           time.Now(),
+		IdempotencyKey: &key,
+	}
+	if _, lineErrors, err := equipPhysicalCountTx(ctx, tx, in); err != nil || len(lineErrors) > 0 {
+		t.Fatalf("first count: err=%v errors=%v", err, lineErrors)
+	}
+	if _, lineErrors, err := equipPhysicalCountTx(ctx, tx, in); err != nil || len(lineErrors) > 0 {
+		t.Fatalf("second count: err=%v errors=%v", err, lineErrors)
+	}
+	state := equipReadState(t, ctx, tx, stockID)
+	if state.TotalOwned != 7 {
+		t.Fatalf("totalOwned = %d, want 7 (count applied once)", state.TotalOwned)
+	}
+	var rows int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM equipment_stock_adjustments
+		WHERE stock_id = $1 AND reason = 'physical_count'`, stockID).Scan(&rows); err != nil {
+		t.Fatalf("count physical_count rows: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("physical_count adjustments = %d, want 1", rows)
 	}
 }
