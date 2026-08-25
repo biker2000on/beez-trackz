@@ -2,6 +2,7 @@
 
 import {
   Bell,
+  BookOpenCheck,
   Bot,
   ClipboardList,
   Images,
@@ -17,6 +18,7 @@ import { AccessSection } from "@/features/access/access-section";
 import { useAccessProfile } from "@/features/access/api";
 import { AISection } from "./ai-section";
 import { ComplianceSection } from "./compliance-section";
+import { GnuCashSection } from "./gnucash-section";
 import { InstallSection } from "./install-section";
 import { JarSizesSection } from "./jar-sizes-section";
 import { LaborControl } from "./labor-control";
@@ -102,6 +104,14 @@ export function SettingsView() {
             defaultOpen={false}
           >
             <LaborControl />
+          </SettingsSection>
+          <SettingsSection
+            title="GnuCash sync"
+            description="Push sales and expenses to a GnuCash book, and reconcile edits made there."
+            icon={BookOpenCheck}
+            defaultOpen={false}
+          >
+            <GnuCashSection />
           </SettingsSection>
           <SettingsSection
             title="Compliance packet"

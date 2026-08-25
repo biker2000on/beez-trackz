@@ -371,3 +371,177 @@ export function useUpdateJarSize() {
     },
   });
 }
+
+// --- GnuCash (folio) sync --------------------------------------------------
+//
+// Beez pushes sales and expenses into a GnuCash book and pulls back only
+// enough to notice that someone edited them there. The browser never talks to
+// folio: the base URL and token live server-side, and every call below goes
+// through the beez API.
+
+export interface GnuCashAccount {
+  guid: string;
+  name: string;
+  fullName: string;
+  type: string;
+  commodityMnemonic: string;
+  placeholder: boolean;
+  hidden: boolean;
+}
+
+/** Folio account GUIDs keyed by what they fund. */
+export interface GnuCashAccountMapping {
+  /** One revenue account per sale-line kind. */
+  revenue?: Record<string, string>;
+  /** One expense account per expenses.category. */
+  expenses?: Record<string, string>;
+  cash?: string;
+  accountsReceivable?: string;
+  salesTax?: string;
+  discount?: string;
+  /** COGS and inventory are an optional pair — map both or neither. */
+  cogs?: string;
+  inventory?: string;
+}
+
+export interface GnuCashSettings {
+  baseUrl: string;
+  /** The stored token is never returned, only whether one exists. */
+  hasToken: boolean;
+  bookGuid: string;
+  bookName: string;
+  rootCurrency: string;
+  syncEnabled: boolean;
+  accountMapping: GnuCashAccountMapping;
+  lastSyncedAt: string | null;
+  hasCursor: boolean;
+  /** Kinds and categories come from the server so the editor cannot drift
+   * from the database CHECK lists. */
+  saleLineKinds: string[];
+  expenseCategories: string[];
+}
+
+/** PUT /settings/gnucash: omit apiToken to keep the stored one, "" to clear. */
+export interface GnuCashSettingsPayload {
+  baseUrl?: string;
+  apiToken?: string;
+  syncEnabled?: boolean;
+  accountMapping?: GnuCashAccountMapping;
+}
+
+export interface GnuCashTestResult {
+  success?: boolean;
+  bookGuid?: string;
+  bookName?: string;
+  rootCurrency?: string;
+  error?: string;
+}
+
+export interface GnuCashRow {
+  id: string;
+  entityType: string;
+  entityId: string;
+  externalId: string;
+  syncState: string;
+  conflictState: string;
+  lastError: string;
+  lastSyncedAt: string | null;
+  remoteEnterDate: string | null;
+  summary: string;
+}
+
+export interface GnuCashRows {
+  counts: Record<string, number>;
+  conflicts: GnuCashRow[];
+  failures: GnuCashRow[];
+}
+
+export interface GnuCashSyncReport {
+  scanned: number;
+  created: number;
+  updated: number;
+  retired: number;
+  failed: number;
+  skipped: number;
+  pulledItems: number;
+  conflicts: number;
+  errors: string[];
+}
+
+export function useGnuCashSettings() {
+  return useQuery({
+    queryKey: ["settings", "gnucash"],
+    queryFn: () => api.get<GnuCashSettings>("/settings/gnucash"),
+  });
+}
+
+export function useUpdateGnuCashSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: GnuCashSettingsPayload) =>
+      api.put<{ success: boolean }>("/settings/gnucash", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+export function useTestGnuCashConnection() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<GnuCashTestResult>("/settings/gnucash/test"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+/** The account list is fetched from folio on demand, not on every render. */
+export function useGnuCashAccounts(enabled: boolean) {
+  return useQuery({
+    queryKey: ["settings", "gnucash", "accounts"],
+    queryFn: () =>
+      api.get<{ accounts: GnuCashAccount[] }>("/settings/gnucash/accounts"),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+export function useGnuCashRows() {
+  return useQuery({
+    queryKey: ["settings", "gnucash", "rows"],
+    queryFn: () => api.get<GnuCashRows>("/settings/gnucash/rows"),
+  });
+}
+
+export function useRunGnuCashSync() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<GnuCashSyncReport>("/settings/gnucash/sync"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+export function usePushGnuCashRow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<GnuCashSyncReport>(`/settings/gnucash/rows/${id}/push`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+export function useIgnoreGnuCashRow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ success: boolean }>(`/settings/gnucash/rows/${id}/ignore`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}

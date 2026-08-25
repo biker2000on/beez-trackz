@@ -24,6 +24,9 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountRecommendations(r)
 	s.mountSettings(r)
 	s.mountAISettings(r)
+	// Live GnuCash (folio) sync: connection settings, account mapping,
+	// "sync now", and the reconciliation queue.
+	s.mountGnuCashSync(r)
 	s.mountHoney(r)
 	s.mountHarvestSessions(r)
 	s.mountJarSizes(r)
