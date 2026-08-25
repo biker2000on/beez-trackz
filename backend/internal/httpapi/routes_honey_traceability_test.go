@@ -315,6 +315,10 @@ func TestJarSaleLineCarriesItsBottlingRunAndLot(t *testing.T) {
 	if storedRun == nil || *storedRun != runID {
 		t.Fatalf("stored bottling_run_id = %v, want %s", storedRun, runID)
 	}
+	if _, err := server.pool.Exec(context.Background(), `
+		UPDATE sale_items SET cost_basis_cents=3456 WHERE sale_id=$1`, saleID); err != nil {
+		t.Fatalf("seed cost basis: %v", err)
+	}
 
 	sales, err := server.honeyListSales(context.Background())
 	if err != nil {
@@ -336,10 +340,38 @@ func TestJarSaleLineCarriesItsBottlingRunAndLot(t *testing.T) {
 		if item.LotCode == nil || *item.LotCode != "TRACE-A" {
 			t.Fatalf("line lotCode = %v, want TRACE-A", item.LotCode)
 		}
+		if item.CostBasisCents == nil || *item.CostBasisCents != 3456 {
+			t.Fatalf("line costBasisCents = %v, want 3456", item.CostBasisCents)
+		}
 	}
 	if !seen {
 		t.Fatal("the traced sale is missing from the sale listing")
 	}
+
+	listResponse := httptest.NewRecorder()
+	server.honeyListSalesHandler(listResponse,
+		adminRequest(http.MethodGet, "/honey/sales", nil))
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list sales HTTP = %d: %s", listResponse.Code, listResponse.Body.String())
+	}
+	var payload []struct {
+		ID        uuid.UUID `json:"id"`
+		LineItems []struct {
+			CostBasisCents *int64 `json:"costBasisCents"`
+		} `json:"lineItems"`
+	}
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode sales JSON: %v", err)
+	}
+	for _, sale := range payload {
+		if sale.ID == saleID && len(sale.LineItems) == 1 {
+			if got := sale.LineItems[0].CostBasisCents; got == nil || *got != 3456 {
+				t.Fatalf("JSON costBasisCents = %v, want 3456", got)
+			}
+			return
+		}
+	}
+	t.Fatal("the traced sale is missing from the sales JSON")
 }
 
 // TestJarSaleFromLockedLotIsRefusedWithoutASaleLevelLot is the gap A1 closes:

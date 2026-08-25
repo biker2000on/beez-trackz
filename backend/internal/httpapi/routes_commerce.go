@@ -2179,7 +2179,8 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	seasonRows.Close()
 
 	kindRows, err := s.pool.Query(r.Context(), `
-		SELECT si.kind, COALESCE(SUM(si.quantity * si.unit_price_cents),0)
+		SELECT si.kind, COALESCE(SUM(si.quantity * si.unit_price_cents),0),
+			SUM(si.cost_basis_cents) FILTER (WHERE s.physical_applied_at IS NOT NULL)
 		FROM sale_items si
 		JOIN sales s ON s.id=si.sale_id
 		WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
@@ -2192,12 +2193,21 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	for kindRows.Next() {
 		var kind string
 		var kindRevenue money
-		if err := kindRows.Scan(&kind, &kindRevenue); err != nil {
+		var kindCost *money
+		if err := kindRows.Scan(&kind, &kindRevenue, &kindCost); err != nil {
 			kindRows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
-		byKind = append(byKind, map[string]any{"kind": kind, "revenue": kindRevenue})
+		var kindMargin *money
+		if kindCost != nil {
+			margin := kindRevenue - *kindCost
+			kindMargin = &margin
+		}
+		byKind = append(byKind, map[string]any{
+			"kind": kind, "revenue": kindRevenue,
+			"cost": kindCost, "margin": kindMargin,
+		})
 	}
 	kindRows.Close()
 	if kindRows.Err() != nil {

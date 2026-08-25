@@ -7,6 +7,7 @@
  */
 
 import { Input } from "@/components/ui/input";
+import { BottlingRunPicker } from "@/features/commerce/bottling-run-picker";
 import { cn } from "@/lib/utils";
 
 import { parseNum } from "./format";
@@ -16,6 +17,7 @@ export interface JarLineValue {
   jarSizeId: string;
   quantity: string;
   unitPrice?: string;
+  bottlingRunId?: string;
 }
 
 /** Build the initial (empty) lines for a set of inventory rows. */
@@ -130,6 +132,18 @@ export function JarLinesEditor({
                   aria-label={`${row.label} unit price`}
                   value={line.unitPrice ?? ""}
                   onChange={(e) => update(index, { unitPrice: e.target.value })}
+                  disabled={disabled}
+                />
+              </div>
+            )}
+            {showPrice && (
+              <div className="col-span-full">
+                <BottlingRunPicker
+                  jarSizeId={line.jarSizeId}
+                  value={line.bottlingRunId}
+                  onChange={(bottlingRunId) =>
+                    update(index, { bottlingRunId })
+                  }
                   disabled={disabled}
                 />
               </div>

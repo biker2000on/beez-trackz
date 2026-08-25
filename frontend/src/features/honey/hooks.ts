@@ -244,6 +244,7 @@ export function useAdjustJars() {
 export interface SaleLineBody {
   kind: SaleLineKind;
   jarSizeId?: string;
+  bottlingRunId?: string;
   hiveId?: string;
   equipmentStockId?: string;
   productId?: string;

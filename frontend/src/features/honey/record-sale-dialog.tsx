@@ -233,6 +233,7 @@ export function RecordSaleDialog({
       .map((line) => ({
         kind: "jar" as const,
         jarSizeId: line.jarSizeId,
+        bottlingRunId: line.bottlingRunId,
         quantity: parseNum(line.quantity) ?? 0,
         unitPrice: parseNum(line.unitPrice ?? "") ?? 0,
       }))

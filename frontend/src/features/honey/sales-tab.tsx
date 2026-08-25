@@ -101,7 +101,7 @@ export function SalesTab() {
                   <ul className="grid gap-0.5">
                     {sale.lineItems.map((item) => (
                       <li
-                        key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId}`}
+                        key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
                         className="text-sm"
                       >
                         {item.quantity} × {item.label}
@@ -113,6 +113,11 @@ export function SalesTab() {
                         <span className="ml-1 text-xs text-muted-foreground">
                           @ {formatMoney(item.unitPrice)}
                         </span>
+                        {item.lotCode && (
+                          <span className="block text-xs text-muted-foreground">
+                            Lot {item.lotCode}
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>

@@ -65,26 +65,17 @@ export function ReceiptView({ saleId }: { saleId: string }) {
             </div>
           )}
           <div className="grid gap-2">
-            {sale.lineItems.map((item) => {
-              // Per-line provenance (migration 00038): a jar line that names a
-              // bottling run resolves to a lot, and the receipt is where the
-              // customer sees which one. Read structurally because HoneySale
-              // lives in features/honey/types, outside this feature.
-              const { lotCode, bottlingRunId } = item as {
-                lotCode?: string | null;
-                bottlingRunId?: string | null;
-              };
-              return (
+            {sale.lineItems.map((item) => (
               <div
-                key={`${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${bottlingRunId ?? ""}`}
+                key={`${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
                 className="grid grid-cols-[1fr_auto_auto] gap-4 border-b py-2 text-sm"
               >
                 <span>
                   {item.label}
                   {item.kind && item.kind !== "jar" ? ` (${item.kind})` : ""}
-                  {lotCode && (
+                  {item.lotCode && (
                     <span className="block text-xs text-muted-foreground">
-                      Lot {lotCode}
+                      Lot {item.lotCode}
                     </span>
                   )}
                 </span>
@@ -93,8 +84,7 @@ export function ReceiptView({ saleId }: { saleId: string }) {
                   {formatMoney(item.quantity * item.unitPrice)}
                 </span>
               </div>
-              );
-            })}
+            ))}
           </div>
           <div className="ml-auto grid w-full max-w-xs gap-2 text-sm">
             {sale.discountAmount > 0 && (

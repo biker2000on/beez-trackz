@@ -747,6 +747,7 @@ type honeySaleItemRow struct {
 	ProductID        *uuid.UUID `json:"productId"`
 	Quantity         int        `json:"quantity"`
 	UnitPrice        money      `json:"unitPrice"`
+	CostBasisCents   *int64     `json:"costBasisCents"`
 	Label            string     `json:"label"`
 	// Provenance of a jar line: the run that filled it and the lot that run
 	// drew from. Both nil on non-jar lines and on sales recorded before 00038.
@@ -821,7 +822,7 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 
 	itemRows, err := s.pool.Query(ctx, `
 		SELECT si.sale_id, si.kind, si.jar_size_id, si.hive_id, si.equipment_stock_id,
-		       si.product_id, si.quantity, si.unit_price_cents,
+		       si.product_id, si.quantity, si.unit_price_cents, si.cost_basis_cents,
 		       COALESCE(js.label,
 		         CASE WHEN si.kind='colony' THEN h.position_label || ' · ' || a.name END,
 		         et.name,
@@ -845,7 +846,8 @@ func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 	for itemRows.Next() {
 		var item honeySaleItemRow
 		if err := itemRows.Scan(&item.SaleID, &item.Kind, &item.JarSizeID, &item.HiveID,
-			&item.EquipmentStockID, &item.ProductID, &item.Quantity, &item.UnitPrice, &item.Label,
+			&item.EquipmentStockID, &item.ProductID, &item.Quantity, &item.UnitPrice,
+			&item.CostBasisCents, &item.Label,
 			&item.BottlingRunID, &item.LotID, &item.LotCode); err != nil {
 			return nil, err
 		}

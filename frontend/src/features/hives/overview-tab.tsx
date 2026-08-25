@@ -350,9 +350,9 @@ function HiveGpsCard({
             </p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">
-            While the hive sits on a mapped stand, its GPS is derived from the
-            stand slot and a yard-map save overwrites a capture. Unplaced
-            hives keep captured coordinates.
+            A manual capture survives yard-map layout saves, even while the
+            hive sits on a mapped stand, until you clear it. Without a manual
+            capture, GPS is derived from the stand slot.
           </p>
         </div>
         {canEdit ? (

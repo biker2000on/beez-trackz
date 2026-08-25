@@ -173,7 +173,12 @@ export interface Profitability {
     expenses: number;
     margin: number;
   }[];
-  byKind?: { kind: string; revenue: number }[];
+  byKind?: {
+    kind: string;
+    revenue: number;
+    cost: number | null;
+    margin: number | null;
+  }[];
 }
 
 export interface ProductionPlan {

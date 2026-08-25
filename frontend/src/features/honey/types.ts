@@ -84,7 +84,11 @@ export interface SaleLineItem {
   productId?: string | null;
   quantity: number;
   unitPrice: number;
+  costBasisCents: number | null;
   label: string;
+  bottlingRunId: string | null;
+  lotId: string | null;
+  lotCode: string | null;
 }
 
 export interface CatalogProduct {
