@@ -6,5 +6,5 @@ export default async function HarvestReceiptRedirect({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  redirect(`/sales/${id}`);
+  redirect(`/honey/sales/${id}`);
 }

@@ -1,7 +1,7 @@
 import { HoneySectionNav } from "@/features/honey/section-nav";
 
 /**
- * Honey module chrome. The section menu replaces the old `/harvest` tab strip;
+ * Honey module chrome. The section menu replaces the old tab strip;
  * it hides itself on the full-screen market-day route.
  */
 export default function HoneyLayout({

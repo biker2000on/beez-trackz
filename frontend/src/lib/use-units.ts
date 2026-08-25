@@ -10,8 +10,8 @@ import {
   formatFeeding,
   formatHoneyMass,
   formatPropolisMass,
-  formatTemperatureF,
-  formatWindMph,
+  formatTemperatureC,
+  formatWindKmh,
   parseFeedingQuantity,
   parseMass,
   preferredMassSuffix,
@@ -34,8 +34,8 @@ export function useUnits(): UnitsPreference & {
   formatHoneyDual: (pounds: number | null | undefined) => string;
   formatPropolis: (grams: number | null | undefined) => string;
   formatElevation: (meters: number | null | undefined) => string;
-  formatTemperature: (fahrenheit: number | null | undefined) => string;
-  formatWind: (mph: number | null | undefined) => string;
+  formatTemperature: (celsius: number | null | undefined) => string;
+  formatWind: (kmh: number | null | undefined) => string;
   formatFeeding: (
     quantity: number | null | undefined,
     unit: string | null | undefined,
@@ -72,10 +72,10 @@ export function useUnits(): UnitsPreference & {
         formatPropolisMass(grams, units)?.text ?? "",
       formatElevation: (meters: number | null | undefined) =>
         formatElevation(meters, units)?.text ?? "",
-      formatTemperature: (fahrenheit: number | null | undefined) =>
-        formatTemperatureF(fahrenheit, temperature)?.text ?? "",
-      formatWind: (mph: number | null | undefined) =>
-        formatWindMph(mph, units)?.text ?? "",
+      formatTemperature: (celsius: number | null | undefined) =>
+        formatTemperatureC(celsius, temperature)?.text ?? "",
+      formatWind: (kmh: number | null | undefined) =>
+        formatWindKmh(kmh, units)?.text ?? "",
       formatFeeding: (
         quantity: number | null | undefined,
         unit: string | null | undefined,

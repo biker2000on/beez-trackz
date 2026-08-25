@@ -81,7 +81,7 @@ export function SaleSerials({ saleId }: { saleId: string }) {
               >
                 <div className="min-w-0">
                   <Link
-                    href={`/harvest/serials?serial=${encodeURIComponent(item.serialNumber)}`}
+                    href={`/honey/serials?serial=${encodeURIComponent(item.serialNumber)}`}
                     className="break-all font-mono text-sm underline-offset-4 hover:underline"
                   >
                     {item.serialNumber}

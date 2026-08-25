@@ -26,7 +26,7 @@ export function HoneySummaryWidget() {
       isError={overview.isError}
       action={
         <Link
-          href="/harvest"
+          href="/honey"
           className="text-xs font-medium text-primary underline-offset-4 hover:underline"
         >
           Honey

@@ -37,7 +37,7 @@ const CALM_ROUTES = new Set([
   "/apiaries",
   "/hives",
   "/genealogy",
-  "/harvest",
+  "/honey",
   "/inventory",
   "/recommendations",
   "/reports",

@@ -32,7 +32,7 @@ export default function manifest(): MetadataRoute.Manifest {
         name: "Honey harvest",
         short_name: "Harvest",
         description: "Open the honey ledger",
-        url: "/harvest",
+        url: "/honey",
         icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }],
       },
     ],

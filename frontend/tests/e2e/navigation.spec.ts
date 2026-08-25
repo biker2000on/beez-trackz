@@ -178,14 +178,14 @@ test("detail pages expose no more than three peer tabs and preserve URL state", 
 test("Honey keeps the same three workflow groups on hidden detail routes", async ({
   page,
 }) => {
-  await page.goto("/harvest");
+  await page.goto("/honey");
   const nav = page.getByRole("navigation", { name: "Honey sections" });
   await expect(nav.getByRole("link")).toHaveText([
     "Overview",
     "Production",
   ]);
 
-  await page.goto("/harvest/activity");
+  await page.goto("/honey/activity");
   await expect(nav.getByRole("link")).toHaveText([
     "Overview",
     "Production",
@@ -240,7 +240,7 @@ test("phone-width pages never scroll the document sideways", async ({
 
 test("Home remains pinned in the mobile bottom bar", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/harvest/activity");
+  await page.goto("/honey/activity");
   const mainNav = page.getByRole("navigation", { name: "Mobile navigation" });
   await expect(mainNav.getByRole("link", { name: "Home" })).toBeVisible();
 });

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Section menu for the Honey module. The old `/harvest` tab strip became real
+ * Section menu for the Honey module. The old tab strip became real
  * routes, so this is a link bar rather than a `<Tabs>` — every section is
  * deep-linkable and back-button safe for free.
  *
@@ -24,40 +24,40 @@ import { HoneyQuickActions } from "./quick-actions";
 
 export const HONEY_SECTIONS = [
   {
-    href: "/harvest",
+    href: "/honey",
     label: "Overview",
-    matches: ["/harvest/activity"],
+    matches: ["/honey/activity"],
   },
   {
-    href: "/harvest/production",
+    href: "/honey/production",
     label: "Production",
     matches: [
-      "/harvest/harvests",
-      "/harvest/jars",
-      "/harvest/lots",
-      "/harvest/serials",
-      "/harvest/sessions",
-      "/harvest/products",
+      "/honey/harvests",
+      "/honey/jars",
+      "/honey/lots",
+      "/honey/serials",
+      "/honey/sessions",
+      "/honey/products",
     ],
   },
 ] as const;
 
 export function HoneySectionNav() {
   const pathname = usePathname();
-  if (pathname.startsWith("/harvest/market-day") || pathname.startsWith("/sales/market-day")) return null;
+  if (pathname.startsWith("/honey/market-day") || pathname.startsWith("/sales/market-day")) return null;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-3">
       <SectionNav
         label="Honey sections"
         sections={HONEY_SECTIONS}
-        rootHref="/harvest"
+        rootHref="/honey"
         pathname={pathname}
       />
       <div className="flex items-center gap-2">
         {/* The overview owns the quick-action row; on sub-routes the same six
             dialogs (and their shortcuts) live behind this menu. */}
-        {pathname !== "/harvest" && <HoneyQuickActions variant="menu" />}
+        {pathname !== "/honey" && <HoneyQuickActions variant="menu" />}
         <Button asChild size="sm" variant="outline">
           <Link href="/sales/market-day">
             <ShoppingBasket />

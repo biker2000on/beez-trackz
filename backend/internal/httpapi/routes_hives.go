@@ -533,8 +533,8 @@ func (s *Server) handleHiveUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // PATCH /hives/{id}/gps {latitude, longitude} — both present or both null.
-// A yard-map save still refreshes GPS from the stand slot when the hive is
-// placed; this is for unplaced hives and an explicit recapture/clear.
+// A coordinate pair is manual and survives yard-map saves. Explicit nulls
+// clear the pair and return the hive to layout-managed GPS.
 func (s *Server) handleHiveGps(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -570,7 +570,9 @@ func (s *Server) handleHiveGps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tag, err := s.pool.Exec(r.Context(),
-		`UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`,
+		`UPDATE hives SET latitude = $1, longitude = $2,
+			gps_source = CASE WHEN $1::double precision IS NULL THEN NULL ELSE 'manual' END
+		 WHERE id = $3`,
 		apiaryRoundCoord(req.Latitude), apiaryRoundCoord(req.Longitude), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")

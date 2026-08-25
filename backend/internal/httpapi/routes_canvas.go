@@ -214,7 +214,8 @@ func canvasSyncYardGps(ctx context.Context, db canvasDB, apiaryID uuid.UUID, sta
 		SELECT id, stand_id, slot_row, slot_col
 		FROM hives
 		WHERE apiary_id = $1 AND stand_id IS NOT NULL
-		  AND slot_row IS NOT NULL AND slot_col IS NOT NULL`, apiaryID)
+		  AND slot_row IS NOT NULL AND slot_col IS NOT NULL
+		  AND gps_source IS DISTINCT FROM 'manual'`, apiaryID)
 	if err != nil {
 		return err
 	}
@@ -245,18 +246,19 @@ func canvasSyncYardGps(ctx context.Context, db canvasDB, apiaryID uuid.UUID, sta
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// The layout is authoritative only for PLACED hives — a stand slot derives
-	// their position. An unplaced hive's coordinates came from an operator's
-	// explicit capture (PATCH /hives/{id}/gps) and must survive a layout save.
+	// The layout is authoritative only for placed, layout-managed hives. Manual
+	// captures survive saves even while the hive occupies a mapped stand.
 	if _, err := db.Exec(ctx, `
-		UPDATE hives SET latitude = NULL, longitude = NULL
+		UPDATE hives SET latitude = NULL, longitude = NULL, gps_source = NULL
 		WHERE apiary_id = $1 AND stand_id IS NOT NULL
-		  AND slot_row IS NOT NULL AND slot_col IS NOT NULL`, apiaryID); err != nil {
+		  AND slot_row IS NOT NULL AND slot_col IS NOT NULL
+		  AND gps_source IS DISTINCT FROM 'manual'`, apiaryID); err != nil {
 		return err
 	}
 	for _, u := range updates {
 		if _, err := db.Exec(ctx, `
-			UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`,
+			UPDATE hives SET latitude = $1, longitude = $2, gps_source = 'layout'
+			WHERE id = $3 AND gps_source IS DISTINCT FROM 'manual'`,
 			u.lat, u.lng, u.id); err != nil {
 			return err
 		}
@@ -272,12 +274,16 @@ func canvasSyncHiveGps(ctx context.Context, db canvasDB, hiveID uuid.UUID) error
 		standID          *string
 		slotRow, slotCol *int
 		blob             []byte
+		gpsSource        *string
 	)
 	if err := db.QueryRow(ctx, `
-		SELECT h.stand_id, h.slot_row, h.slot_col, a.canvas_layout
+		SELECT h.stand_id, h.slot_row, h.slot_col, a.canvas_layout, h.gps_source
 		FROM hives h JOIN apiaries a ON a.id = h.apiary_id
-		WHERE h.id = $1`, hiveID).Scan(&standID, &slotRow, &slotCol, &blob); err != nil {
+		WHERE h.id = $1`, hiveID).Scan(&standID, &slotRow, &slotCol, &blob, &gpsSource); err != nil {
 		return err
+	}
+	if gpsSource != nil && *gpsSource == "manual" {
+		return nil
 	}
 	var lat, lng *float64
 	if standID != nil && slotRow != nil && slotCol != nil && len(blob) > 0 {
@@ -295,7 +301,9 @@ func canvasSyncHiveGps(ctx context.Context, db canvasDB, hiveID uuid.UUID) error
 		}
 	}
 	_, err := db.Exec(ctx, `
-		UPDATE hives SET latitude = $1, longitude = $2 WHERE id = $3`, lat, lng, hiveID)
+		UPDATE hives SET latitude = $1, longitude = $2,
+			gps_source = CASE WHEN $1::double precision IS NULL THEN NULL ELSE 'layout' END
+		WHERE id = $3 AND gps_source IS DISTINCT FROM 'manual'`, lat, lng, hiveID)
 	return err
 }
 

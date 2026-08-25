@@ -22,7 +22,7 @@ import {
   formatElevation,
   formatHoneyMass,
   formatPropolisMass,
-  formatTemperatureF,
+  formatTemperatureC,
   resolveUnitsPreference,
 } from "@/lib/units";
 
@@ -171,7 +171,7 @@ export function PreferencesSection() {
   });
   const honeyPreview = formatHoneyMass(1, resolved.units);
   const elevationPreview = formatElevation(640, resolved.units);
-  const tempPreview = formatTemperatureF(50, resolved.temperature);
+  const tempPreview = formatTemperatureC(10, resolved.temperature);
   const propolisPreview = formatPropolisMass(28.35, resolved.units);
 
   return (

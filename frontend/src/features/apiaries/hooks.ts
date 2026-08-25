@@ -130,12 +130,12 @@ export interface FlowCalendar {
 /** Night lows at the pin, read out of the weather snapshot already cached. */
 export interface FrostSummary {
   available: boolean;
-  thresholdF: number;
+  thresholdC: number;
   windowStart: string;
   windowEnd: string;
   nightsLastWeek: number;
   hardFreezeNights: number;
-  lowestF: number | null;
+  lowestC: number | null;
   dates: string[];
   upcomingNights: number;
   nextFrostDate: string | null;
@@ -163,8 +163,10 @@ export interface ApiaryWeather {
     needsAttention: boolean;
   };
   forecast: {
+    unitsSystem: "metric";
     timezone: string;
     current: {
+      unitsSystem: "metric";
       time: string;
       temperature_2m: number;
       apparent_temperature: number;

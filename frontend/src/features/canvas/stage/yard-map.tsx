@@ -28,6 +28,7 @@ interface YardMapProps {
   initialView?: CanvasMapView;
   onViewChange: (view: CanvasMapView) => void;
   onTransform: (transform: GeoOverlayTransform, map: LeafletMap) => void;
+  onMapError: (message: string) => void;
 }
 
 /**
@@ -45,21 +46,24 @@ export function YardMap({
   initialView,
   onViewChange,
   onTransform,
+  onMapError,
 }: YardMapProps) {
   const elRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const tileRef = useRef<import("leaflet").TileLayer | null>(null);
   const onViewChangeRef = useRef(onViewChange);
   const onTransformRef = useRef(onTransform);
+  const onMapErrorRef = useRef(onMapError);
   const originRef = useRef(origin);
   const pinRef = useRef({ lat: latitude, lng: longitude });
 
   useEffect(() => {
     onViewChangeRef.current = onViewChange;
     onTransformRef.current = onTransform;
+    onMapErrorRef.current = onMapError;
     originRef.current = origin;
     pinRef.current = { lat: latitude, lng: longitude };
-  }, [onViewChange, onTransform, origin, latitude, longitude]);
+  }, [onViewChange, onTransform, onMapError, origin, latitude, longitude]);
 
   useEffect(() => {
     const el = elRef.current;
@@ -96,6 +100,9 @@ export function YardMap({
         maxZoom: def.maxZoom,
         opacity: layerId === "imagery" ? imageryOpacity : 1,
       }).addTo(map);
+      tile.on("tileerror", () => {
+        onMapErrorRef.current("Map tiles unavailable (offline?)");
+      });
       tileRef.current = tile;
 
       const publishTransform = () => {
@@ -123,6 +130,12 @@ export function YardMap({
       publishTransform();
       requestAnimationFrame(() => map?.invalidateSize());
       mapRef.current = map;
+    }).catch(() => {
+      if (!cancelled) {
+        onMapErrorRef.current(
+          "Map unavailable because the map library could not load. Stands remain editable.",
+        );
+      }
     });
 
     return () => {
@@ -148,7 +161,14 @@ export function YardMap({
         maxZoom: def.maxZoom,
         opacity: layerId === "imagery" ? imageryOpacity : 1,
       }).addTo(map);
+      tile.on("tileerror", () => {
+        onMapErrorRef.current("Map tiles unavailable (offline?)");
+      });
       tileRef.current = tile;
+    }).catch(() => {
+      onMapErrorRef.current(
+        "Map unavailable because the map library could not load. Stands remain editable.",
+      );
     });
   }, [layerId, imageryOpacity]);
 
@@ -187,7 +207,7 @@ export function YardMap({
   return (
     <div
       ref={elRef}
-      className="absolute inset-0 z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-muted [&_.leaflet-container]:font-sans [&_.leaflet-control-attribution]:text-[10px]"
+      className="absolute inset-0 z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-muted [&_.leaflet-container]:font-sans [&_.leaflet-control-attribution]:bg-background/90 [&_.leaflet-control-attribution]:px-1 [&_.leaflet-control-attribution]:text-[10px] [&_.leaflet-control-attribution]:text-foreground [&_.leaflet-control-attribution_a]:text-foreground [&_.leaflet-control-attribution_a]:underline"
     />
   );
 }

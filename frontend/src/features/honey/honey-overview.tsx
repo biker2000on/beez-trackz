@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Honey overview (`/harvest`): the default page for the Honey module.
+ * Honey overview (`/honey`): the default page for the Honey module.
  *
  * This replaces the old seven-tab hub. It carries operational numbers only —
  * what is on hand and what needs doing. Money lives in one place, `/reports`,
@@ -154,7 +154,7 @@ export function HoneyOverview() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Recent harvests</CardTitle>
             <Button asChild variant="ghost" size="sm">
-              <Link href="/harvest/harvests">
+              <Link href="/honey/harvests">
                 All harvests
                 <ArrowRight />
               </Link>
@@ -204,7 +204,7 @@ export function HoneyOverview() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Recent activity</CardTitle>
             <Button asChild variant="ghost" size="sm">
-              <Link href="/harvest/activity">
+              <Link href="/honey/activity">
                 Full ledger
                 <ArrowRight />
               </Link>
@@ -291,7 +291,7 @@ function NextActions({
       key: "bulk-short",
       title: "Bulk honey is short of what was jarred",
       detail: `${formatHoney(Math.abs(bulkOnHandLbs))} more has been jarred than harvested. Record the missing harvests or write off the gap.`,
-      href: "/harvest/harvests",
+      href: "/honey/harvests",
       cta: "Record harvests",
     });
   } else if (bulkOnHandLbs > 0) {
@@ -310,7 +310,7 @@ function NextActions({
       detail: lowStock
         .map((row) => `${row.label} ${row.onHand}/${row.threshold}`)
         .join(" · "),
-      href: "/harvest/jars",
+      href: "/honey/jars",
       cta: "Review jars",
     });
   }

@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatDate } from "@/features/hives/lib";
 import { usePhotos } from "@/features/photos/hooks";
 import { useUnits } from "@/lib/use-units";
+import { fahrenheitToCelsius, milesPerHourToKmh } from "@/lib/units";
 import { useDeleteInspection, type Inspection } from "./hooks";
 import { InspectionFormDialog } from "./inspection-form-dialog";
 
@@ -45,6 +46,15 @@ export function InspectionCard({
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const deleteInspection = useDeleteInspection();
   const photos = usePhotos("inspection", inspection.id);
+  const snapshotIsMetric =
+    (inspection.weather as { unitsSystem?: string } | null)?.unitsSystem ===
+      "metric" ||
+    (inspection.weather?.current as { unitsSystem?: string } | undefined)
+      ?.unitsSystem === "metric";
+  const snapshotTemperature = (value: number) =>
+    snapshotIsMetric ? value : fahrenheitToCelsius(value);
+  const snapshotWind = (value: number) =>
+    snapshotIsMetric ? value : milesPerHourToKmh(value);
 
   async function onDelete() {
     try {
@@ -104,14 +114,24 @@ export function InspectionCard({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1 font-medium text-foreground">
               <CloudSun className="size-3.5" />
-              {formatTemperature(inspection.weather.current.temperature_2m)}
+              {formatTemperature(
+                snapshotTemperature(inspection.weather.current.temperature_2m),
+              )}
             </span>
             <span>
-              Feels {formatTemperature(inspection.weather.current.apparent_temperature)}
+              Feels{" "}
+              {formatTemperature(
+                snapshotTemperature(
+                  inspection.weather.current.apparent_temperature,
+                ),
+              )}
             </span>
             <span>{inspection.weather.current.relative_humidity_2m}% humidity</span>
             <span>
-              {formatWind(inspection.weather.current.wind_speed_10m)} wind
+              {formatWind(
+                snapshotWind(inspection.weather.current.wind_speed_10m),
+              )}{" "}
+              wind
             </span>
           </div>
         ) : null}

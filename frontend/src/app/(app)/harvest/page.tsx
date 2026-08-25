@@ -1,9 +1,5 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { HoneyOverview } from "@/features/honey/honey-overview";
-
-export const metadata: Metadata = { title: "Honey" };
-
-export default function HoneyPage() {
-  return <HoneyOverview />;
+export default function HarvestRedirect() {
+  redirect("/honey");
 }

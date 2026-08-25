@@ -12,7 +12,11 @@ import { cn } from "@/lib/utils";
 
 import { useUnits } from "@/lib/use-units";
 
-import { lookupTerrainElevation, type ElevationSource } from "./elevation";
+import {
+  ELEVATION_SOURCE_LABEL,
+  lookupTerrainElevation,
+  type ElevationSource,
+} from "./elevation";
 import {
   clampForageRadius,
   formatForageRadius,
@@ -60,7 +64,8 @@ function roundCoord(n: number): number {
 
 /**
  * Leaflet pin picker. Click or drag the pin; typed lat/lng write the pin.
- * Device location seeds lat/lng and altitude when the browser supplies it.
+ * Device location seeds lat/lng, then prefers an MSL terrain elevation.
+ * Browser altitude is WGS84 ellipsoidal and is only a fallback.
  * No invented coordinates — empty stays empty, no map until a pin exists.
  */
 function pinDistanceM(
@@ -356,22 +361,38 @@ export function LocationPicker({
     }
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setLocating(false);
+      async (position) => {
         const altitude = position.coords.altitude;
         const hasAlt = altitude != null && Number.isFinite(altitude);
+        setLookingUp(true);
+        const terrain = await lookupTerrainElevation(
+          position.coords.latitude,
+          position.coords.longitude,
+        );
+        setLookingUp(false);
+        setLocating(false);
         onChange({
           ...value,
           latitude: roundCoord(position.coords.latitude),
           longitude: roundCoord(position.coords.longitude),
-          elevationM: hasAlt ? Math.round(altitude * 10) / 10 : value.elevationM,
-          elevationSource: hasAlt ? "geolocation" : value.elevationSource,
+          elevationM:
+            terrain != null
+              ? Math.round(terrain * 10) / 10
+              : hasAlt
+                ? Math.round(altitude * 10) / 10
+                : value.elevationM,
+          elevationSource:
+            terrain != null
+              ? "terrain"
+              : hasAlt
+                ? "geolocation"
+                : value.elevationSource,
         });
-        if (!hasAlt) {
-          void fillTerrain(
-            position.coords.latitude,
-            position.coords.longitude,
-            value.elevationSource === "override",
+        if (terrain == null) {
+          toast.error(
+            hasAlt
+              ? "Terrain lookup failed; using GPS altitude (ellipsoidal)."
+              : "Terrain lookup failed. Enter elevation yourself if you know it.",
           );
         }
       },
@@ -543,10 +564,10 @@ export function LocationPicker({
           }}
         />
         <p className="text-xs text-muted-foreground">
-          Ground height, not solar altitude. Device GPS, Open-Meteo terrain,
-          or type your own. Empty is fine.
+          Ground height, not solar altitude. Open-Meteo terrain (MSL), GPS
+          altitude (ellipsoidal fallback), or type your own. Empty is fine.
           {value.elevationSource
-            ? ` Current source: ${value.elevationSource}.`
+            ? ` Current source: ${ELEVATION_SOURCE_LABEL[value.elevationSource]}.`
             : ""}
         </p>
       </div>

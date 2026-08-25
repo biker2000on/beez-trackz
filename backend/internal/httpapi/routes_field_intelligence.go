@@ -32,10 +32,12 @@ func (s *Server) mountFieldIntelligence(r chi.Router) {
 }
 
 type weatherForecast struct {
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
-	Timezone  string  `json:"timezone"`
-	Current   struct {
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	Timezone    string  `json:"timezone"`
+	UnitsSystem string  `json:"unitsSystem"`
+	Current     struct {
+		UnitsSystem string  `json:"unitsSystem"`
 		Time        string  `json:"time"`
 		Temperature float64 `json:"temperature_2m"`
 		Apparent    float64 `json:"apparent_temperature"`
@@ -79,10 +81,12 @@ type apiaryWeatherResponse struct {
 const frostLookbackDays = 7
 
 // Freezing, and the hard freeze that ends a bloom rather than nipping it.
-// Canonical Fahrenheit, matching the Open-Meteo request the app already makes.
+// Weather is canonical Celsius / km/h / mm from the provider onward.
 const (
-	frostThresholdF      = 32.0
-	hardFreezeThresholdF = 28.0
+	metricWeatherUnits   = "metric"
+	frostThresholdC      = 0.0
+	hardFreezeThresholdC = -2.2222222222
+	strongWindKmh        = 25 * 1.609344
 )
 
 // frostSummary is the night-lows read of the pin: what already happened in the
@@ -92,12 +96,12 @@ const (
 // "no frost" when it means "not known".
 type frostSummary struct {
 	Available        bool     `json:"available"`
-	ThresholdF       float64  `json:"thresholdF"`
+	ThresholdC       float64  `json:"thresholdC"`
 	WindowStart      string   `json:"windowStart"`
 	WindowEnd        string   `json:"windowEnd"`
 	NightsLastWeek   int      `json:"nightsLastWeek"`
 	HardFreezeNights int      `json:"hardFreezeNights"`
-	LowestF          *float64 `json:"lowestF"`
+	LowestC          *float64 `json:"lowestC"`
 	Dates            []string `json:"dates"`
 	UpcomingNights   int      `json:"upcomingNights"`
 	NextFrostDate    *string  `json:"nextFrostDate"`
@@ -149,7 +153,14 @@ func dailyMin(forecast weatherForecast, index int) (float64, bool) {
 // already cached for the pin. No new provider.
 func frostRead(forecast weatherForecast) frostSummary {
 	start := forecastStartIndex(forecast)
-	value := frostSummary{ThresholdF: frostThresholdF, Dates: []string{}}
+	frostThreshold := frostThresholdC
+	hardFreezeThreshold := hardFreezeThresholdC
+	if forecast.UnitsSystem != metricWeatherUnits {
+		// Compatibility for in-process callers built around the legacy shape.
+		frostThreshold = 32
+		hardFreezeThreshold = 28
+	}
+	value := frostSummary{ThresholdC: frostThreshold, Dates: []string{}}
 	if start > 0 {
 		value.Available = true
 		value.WindowStart = forecast.Daily.Time[0]
@@ -160,21 +171,21 @@ func frostRead(forecast weatherForecast) frostSummary {
 		if !ok {
 			continue
 		}
-		if value.LowestF == nil || low < *value.LowestF {
+		if value.LowestC == nil || low < *value.LowestC {
 			lowest := low
-			value.LowestF = &lowest
+			value.LowestC = &lowest
 		}
-		if low <= frostThresholdF {
+		if low <= frostThreshold {
 			value.NightsLastWeek++
 			value.Dates = append(value.Dates, forecast.Daily.Time[index])
 		}
-		if low <= hardFreezeThresholdF {
+		if low <= hardFreezeThreshold {
 			value.HardFreezeNights++
 		}
 	}
 	for index := start; index < len(forecast.Daily.Time); index++ {
 		low, ok := dailyMin(forecast, index)
-		if !ok || low > frostThresholdF {
+		if !ok || low > frostThreshold {
 			continue
 		}
 		value.UpcomingNights++
@@ -208,14 +219,24 @@ func frostSentence(value frostSummary) string {
 func weatherAlerts(forecast weatherForecast, feeding feedingStatus) []weatherAlert {
 	start := forecastStartIndex(forecast)
 	alerts := []weatherAlert{}
+	coldThreshold := frostThresholdC
+	windThreshold := strongWindKmh
+	temperatureUnit := "°C"
+	windUnit := "km/h"
+	if forecast.UnitsSystem != metricWeatherUnits {
+		coldThreshold = 32
+		windThreshold = 25
+		temperatureUnit = "°F"
+		windUnit = "mph"
+	}
 	for index, date := range forecast.Daily.Time {
 		if index < start {
 			continue
 		}
 		if index < len(forecast.Daily.TemperatureMin) &&
-			forecast.Daily.TemperatureMin[index] <= 32 {
-			message := fmt.Sprintf("Cold snap: %.0f°F low; check feed and wind protection.",
-				forecast.Daily.TemperatureMin[index])
+			forecast.Daily.TemperatureMin[index] <= coldThreshold {
+			message := fmt.Sprintf("Cold snap: %.0f%s low; check feed and wind protection.",
+				forecast.Daily.TemperatureMin[index], temperatureUnit)
 			if feeding.ActiveFeeders == 0 {
 				message += " No active feeder is recorded for this apiary."
 			}
@@ -225,11 +246,11 @@ func weatherAlerts(forecast weatherForecast, feeding feedingStatus) []weatherAle
 			})
 		}
 		if index < len(forecast.Daily.WindSpeedMax) &&
-			forecast.Daily.WindSpeedMax[index] >= 25 {
+			forecast.Daily.WindSpeedMax[index] >= windThreshold {
 			alerts = append(alerts, weatherAlert{
 				Date: date, Severity: "normal",
-				Message: fmt.Sprintf("Strong wind: %.0f mph; secure covers and loose equipment.",
-					forecast.Daily.WindSpeedMax[index]),
+				Message: fmt.Sprintf("Strong wind: %.0f %s; secure covers and loose equipment.",
+					forecast.Daily.WindSpeedMax[index], windUnit),
 			})
 		}
 	}
@@ -274,7 +295,8 @@ func (s *Server) loadApiaryWeather(
 		apiaryID, latitude, longitude).Scan(&cached, &fetched)
 	if err == nil {
 		var forecast weatherForecast
-		if json.Unmarshal(cached, &forecast) == nil {
+		if json.Unmarshal(cached, &forecast) == nil &&
+			forecast.UnitsSystem == metricWeatherUnits {
 			return &apiaryWeatherResponse{
 				ApiaryID: apiaryID, Source: "Open-Meteo", Fetched: fetched,
 				Forecast: forecast, ForecastStart: forecastStartIndex(forecast),
@@ -293,9 +315,9 @@ func (s *Server) loadApiaryWeather(
 		"temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m")
 	query.Set("daily",
 		"weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max")
-	query.Set("temperature_unit", "fahrenheit")
-	query.Set("wind_speed_unit", "mph")
-	query.Set("precipitation_unit", "inch")
+	query.Set("temperature_unit", "celsius")
+	query.Set("wind_speed_unit", "kmh")
+	query.Set("precipitation_unit", "mm")
 	query.Set("forecast_days", "10")
 	// Frost and night lows at the pin come from the same snapshot, not a new
 	// provider: the forecast endpoint returns the past week's daily minimum
@@ -322,6 +344,8 @@ func (s *Server) loadApiaryWeather(
 	if err := decoder.Decode(&forecast); err != nil {
 		return nil, err
 	}
+	forecast.UnitsSystem = metricWeatherUnits
+	forecast.Current.UnitsSystem = metricWeatherUnits
 	raw, err := json.Marshal(forecast)
 	if err != nil {
 		return nil, err
@@ -414,14 +438,21 @@ func forecastWarmthShift(forecast weatherForecast) int {
 		sum += value
 	}
 	average := sum / float64(len(window))
+	warmest := 23.8888888889
+	warm := 18.3333333333
+	coldest := 7.2222222222
+	cold := 12.7777777778
+	if forecast.UnitsSystem != metricWeatherUnits {
+		warmest, warm, coldest, cold = 75, 65, 45, 55
+	}
 	switch {
-	case average >= 75:
+	case average >= warmest:
 		return -4
-	case average >= 65:
+	case average >= warm:
 		return -2
-	case average <= 45:
+	case average <= coldest:
 		return 4
-	case average <= 55:
+	case average <= cold:
 		return 2
 	default:
 		return 0

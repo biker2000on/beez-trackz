@@ -1,7 +1,7 @@
 export type ElevationSource = "geolocation" | "terrain" | "override";
 
 export const ELEVATION_SOURCE_LABEL: Record<ElevationSource, string> = {
-  geolocation: "device GPS",
+  geolocation: "GPS (ellipsoidal)",
   terrain: "terrain lookup",
   override: "set by you",
 };

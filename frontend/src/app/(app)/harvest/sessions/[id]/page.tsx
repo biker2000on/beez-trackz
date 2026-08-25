@@ -1,14 +1,10 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { SessionDetail } from "@/features/honey/session-detail";
-
-export const metadata: Metadata = { title: "Harvest session" };
-
-export default async function SessionPage({
+export default async function HarvestSessionRedirect({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <SessionDetail id={id} />;
+  redirect(`/honey/sessions/${id}`);
 }

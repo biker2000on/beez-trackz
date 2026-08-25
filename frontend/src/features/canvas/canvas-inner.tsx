@@ -231,6 +231,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     () => new Date().getHours() * 60 + new Date().getMinutes(),
   );
   const [geo, setGeo] = useState<GeoOverlayTransform | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
   const [overlayActive, setOverlayActive] = useState(false);
 
   const hasLocation = apiary.latitude != null && apiary.longitude != null;
@@ -1414,7 +1415,25 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
             initialView={mapView}
             onViewChange={handleMapViewChange}
             onTransform={handleGeoTransform}
+            onMapError={setMapError}
           />
+        )}
+
+        {mapError && (
+          <div
+            role="status"
+            className="absolute bottom-2 left-1/2 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-2 rounded-md border bg-background/95 px-3 py-2 text-xs shadow-sm"
+          >
+            <span>{mapError}</span>
+            <button
+              type="button"
+              className="shrink-0 rounded px-1 font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Dismiss map notice"
+              onClick={() => setMapError(null)}
+            >
+              Dismiss
+            </button>
+          </div>
         )}
 
         <canvas
@@ -1481,7 +1500,6 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           }}
         >
           <Layer
-            visible={!hasLocation || geo != null}
             x={hasLocation && geo ? geo.x : 0}
             y={hasLocation && geo ? geo.y : 0}
             offsetX={hasLocation && geo ? geo.offsetX : 0}

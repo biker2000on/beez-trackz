@@ -8,8 +8,8 @@
  *   honey mass / lot weight  → pounds
  *   propolis                 → grams (amount_grams; amount+unit still written)
  *   elevation                → meters
- *   weather temperature      → Fahrenheit (Open-Meteo request today)
- *   weather wind             → miles per hour
+ *   weather temperature      → Celsius
+ *   weather wind             → kilometers per hour
  *   feedings                 → quantity + quantity_unit as stored
  */
 
@@ -124,30 +124,38 @@ export function formatElevation(
   return qty(Math.round(meters * 10) / 10, "m", `${trimNumber(meters / METERS_PER_FOOT, 0)} ft`);
 }
 
-/** Weather temperature. Canonical: Fahrenheit (current Open-Meteo request). */
-export function formatTemperatureF(
-  fahrenheit: number | null | undefined,
-  temp: TemperatureUnit,
-): FormattedQuantity | null {
-  if (fahrenheit == null || !Number.isFinite(fahrenheit)) return null;
-  if (temp === "c") {
-    const celsius = ((fahrenheit - 32) * 5) / 9;
-    return qty(Math.round(celsius), "°C", `${Math.round(fahrenheit)}°F`);
-  }
-  return qty(Math.round(fahrenheit), "°F", `${Math.round(((fahrenheit - 32) * 5) / 9)}°C`);
+export function fahrenheitToCelsius(fahrenheit: number): number {
+  return ((fahrenheit - 32) * 5) / 9;
 }
 
-/** Weather wind. Canonical: mph. */
-export function formatWindMph(
-  mph: number | null | undefined,
+export function milesPerHourToKmh(mph: number): number {
+  return mph * KM_PER_MILE;
+}
+
+/** Weather temperature. Canonical: Celsius. */
+export function formatTemperatureC(
+  celsius: number | null | undefined,
+  temp: TemperatureUnit,
+): FormattedQuantity | null {
+  if (celsius == null || !Number.isFinite(celsius)) return null;
+  const fahrenheit = (celsius * 9) / 5 + 32;
+  if (temp === "f") {
+    return qty(Math.round(fahrenheit), "°F", `${Math.round(celsius)}°C`);
+  }
+  return qty(Math.round(celsius), "°C", `${Math.round(fahrenheit)}°F`);
+}
+
+/** Weather wind. Canonical: kilometers per hour. */
+export function formatWindKmh(
+  kmh: number | null | undefined,
   units: UnitsSystem,
 ): FormattedQuantity | null {
-  if (mph == null || !Number.isFinite(mph)) return null;
-  if (units === "metric") {
-    const kmh = mph * KM_PER_MILE;
-    return qty(Math.round(kmh), "km/h", `${Math.round(mph)} mph`);
+  if (kmh == null || !Number.isFinite(kmh)) return null;
+  const mph = kmh / KM_PER_MILE;
+  if (units === "us") {
+    return qty(Math.round(mph), "mph", `${Math.round(kmh)} km/h`);
   }
-  return qty(Math.round(mph), "mph", `${Math.round(mph * KM_PER_MILE)} km/h`);
+  return qty(Math.round(kmh), "km/h", `${Math.round(mph)} mph`);
 }
 
 export type FeedingUnit = "lbs" | "oz" | "quarts" | "gallons";

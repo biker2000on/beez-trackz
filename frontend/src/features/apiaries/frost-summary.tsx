@@ -29,7 +29,7 @@ export function FrostLine({
 }) {
   const units = useUnits();
   if (!frost?.available) return null;
-  const lowest = units.formatTemperature(frost.lowestF);
+  const lowest = units.formatTemperature(frost.lowestC);
   return (
     <span
       className={cn(
@@ -61,7 +61,7 @@ export function FrostPanel({ frost }: { frost: FrostSummary | undefined }) {
     );
   }
 
-  const threshold = units.formatTemperature(frost.thresholdF);
+  const threshold = units.formatTemperature(frost.thresholdC);
   return (
     <div className="grid gap-3">
       <div className="grid grid-cols-3 gap-2 rounded-lg bg-muted/50 p-3 text-center">
@@ -81,7 +81,7 @@ export function FrostPanel({ frost }: { frost: FrostSummary | undefined }) {
         </div>
         <div>
           <p className="text-xl font-semibold tabular-nums">
-            {units.formatTemperature(frost.lowestF) || "—"}
+            {units.formatTemperature(frost.lowestC) || "—"}
           </p>
           <p className="text-xs text-muted-foreground">lowest night</p>
         </div>

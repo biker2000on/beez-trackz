@@ -360,7 +360,7 @@ export function ShortcutsProvider({
         });
       }
       for (const session of sessions.data ?? []) {
-        const href = `/harvest/sessions/${session.id}`;
+        const href = `/honey/sessions/${session.id}`;
         commands.push({
           id: `session:${session.id}`,
           label: `Honey › Production › ${session.apiaryName} extraction ${session.date}`,

@@ -1,6 +1,9 @@
 /**
- * Switchable Leaflet raster layers. Adding a layer later is a URL +
- * attribution + who-sees-the-coords note — not a new renderer.
+ * Switchable Leaflet raster layers. Streets use OpenStreetMap's standard
+ * tile service; imagery stays on Esri World Imagery. Both providers require
+ * visible attribution, supplied here and rendered by Leaflet's attribution
+ * control. Adding a layer later is a URL + attribution +
+ * who-sees-the-coords note — not a new renderer.
  *
  * Whoever serves tiles sees the requested tile coordinates, which locate
  * the yard to roughly a few hundred meters. Documented in the README.
@@ -40,10 +43,9 @@ export const TILE_LAYERS: Record<TileLayerId, TileLayerDef> = {
   streets: {
     id: "streets",
     label: "Streets",
-    seenBy: "Esri / ArcGIS Online (server.arcgisonline.com)",
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-    attribution:
-      "Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom",
+    seenBy: "OpenStreetMap (tile.openstreetmap.org)",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: "&copy; OpenStreetMap contributors",
     maxNativeZoom: 19,
     maxZoom: YARD_MAX_ZOOM,
   },

@@ -119,8 +119,8 @@ test("offline navigation serves cached pages before /offline (README.md)", () =>
     "/login",
     "/dashboard",
     "/operations/yard-queue",
-    "/harvest",
-    "/harvest/market-day",
+    "/honey",
+    "/honey/market-day",
     "/sales",
     "/sales/market-day",
   ]) {

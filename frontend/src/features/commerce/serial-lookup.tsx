@@ -141,7 +141,7 @@ function TraceChain({ trace }: { trace: JarSerialTrace }) {
         }
         action={
           <Button asChild size="sm" variant="outline">
-            <Link href="/harvest/lots">
+            <Link href="/honey/lots">
               Lots &amp; QR <ArrowRight />
             </Link>
           </Button>
