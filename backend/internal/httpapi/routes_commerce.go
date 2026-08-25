@@ -2180,7 +2180,9 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 
 	kindRows, err := s.pool.Query(r.Context(), `
 		SELECT si.kind, COALESCE(SUM(si.quantity * si.unit_price_cents),0),
-			SUM(si.cost_basis_cents) FILTER (WHERE s.physical_applied_at IS NOT NULL)
+			SUM(si.cost_basis_cents) FILTER (WHERE s.physical_applied_at IS NOT NULL),
+			COUNT(*) FILTER (WHERE si.cost_basis_cents IS NULL OR s.physical_applied_at IS NULL),
+			COUNT(*)
 		FROM sale_items si
 		JOIN sales s ON s.id=si.sale_id
 		WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
@@ -2194,10 +2196,14 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		var kind string
 		var kindRevenue money
 		var kindCost *money
-		if err := kindRows.Scan(&kind, &kindRevenue, &kindCost); err != nil {
+		var unknownCostLines, totalLines int
+		if err := kindRows.Scan(&kind, &kindRevenue, &kindCost, &unknownCostLines, &totalLines); err != nil {
 			kindRows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
+		}
+		if unknownCostLines > 0 {
+			kindCost = nil
 		}
 		var kindMargin *money
 		if kindCost != nil {
@@ -2207,6 +2213,7 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		byKind = append(byKind, map[string]any{
 			"kind": kind, "revenue": kindRevenue,
 			"cost": kindCost, "margin": kindMargin,
+			"costedLines": totalLines - unknownCostLines, "totalLines": totalLines,
 		})
 	}
 	kindRows.Close()

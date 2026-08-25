@@ -178,6 +178,8 @@ export interface Profitability {
     revenue: number;
     cost: number | null;
     margin: number | null;
+    costedLines: number;
+    totalLines: number;
   }[];
 }
 

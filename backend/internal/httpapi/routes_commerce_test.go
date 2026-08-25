@@ -156,53 +156,38 @@ func TestBottlingRunRejectsUnboundedSerializedQuantity(t *testing.T) {
 func TestProfitabilityByKindIncludesAppliedCostAndMargin(t *testing.T) {
 	server := honeyTestServer(t)
 	ctx := context.Background()
-	jarSizeID := seedJarSize(t, server, "Profitability 1 lb", 16, 1200)
-	var productID uuid.UUID
+	world := seedMixedSaleWorld(t, server)
+	if _, err := server.pool.Exec(ctx,
+		`UPDATE equipment_stock SET unit_cost_cents=450 WHERE id=$1`, world.stockID); err != nil {
+		t.Fatalf("seed equipment unit cost: %v", err)
+	}
+	var uncostedHiveID uuid.UUID
 	if err := server.pool.QueryRow(ctx, `
-		INSERT INTO product_catalog (name, kind, unit, default_price_cents)
-		VALUES ('Test mead', 'mead', 'bottle', 2500) RETURNING id`).Scan(&productID); err != nil {
-		t.Fatalf("seed product: %v", err)
+		INSERT INTO hives (apiary_id, position_label)
+		VALUES ($1, 'A2') RETURNING id`, world.apiaryID).Scan(&uncostedHiveID); err != nil {
+		t.Fatalf("seed uncosted hive: %v", err)
 	}
-	insertSale := func(status string, applied bool) uuid.UUID {
-		t.Helper()
-		var id uuid.UUID
-		if err := server.pool.QueryRow(ctx, `
-			INSERT INTO sales
-				(date, total_amount_cents, order_status, physical_applied_at)
-			VALUES ('2026-06-01', 0, $1,
-				CASE WHEN $2 THEN '2026-06-01'::timestamptz ELSE NULL END)
-			RETURNING id`, status, applied).Scan(&id); err != nil {
-			t.Fatalf("seed %s sale: %v", status, err)
-		}
-		return id
-	}
-	insertJarLine := func(saleID uuid.UUID, quantity int, basis *int64) {
-		t.Helper()
-		if _, err := server.pool.Exec(ctx, `
-			INSERT INTO sale_items
-				(sale_id, kind, jar_size_id, quantity, unit_price_cents, cost_basis_cents)
-			VALUES ($1, 'jar', $2, $3, 1200, $4)`,
-			saleID, jarSizeID, quantity, basis); err != nil {
-			t.Fatalf("seed jar line: %v", err)
-		}
-	}
-
-	knownBasis := int64(700)
-	insertJarLine(insertSale("paid", true), 2, &knownBasis)
-	staleBasis := int64(900)
-	insertJarLine(insertSale("pending", false), 1, &staleBasis)
-	cancelledBasis := int64(500)
-	insertJarLine(insertSale("cancelled", true), 1, &cancelledBasis)
-
-	meadSaleID := insertSale("paid", true)
 	if _, err := server.pool.Exec(ctx, `
-		INSERT INTO sale_items
-			(sale_id, kind, product_id, quantity, unit_price_cents, cost_basis_cents)
-		VALUES ($1, 'mead', $2, 1, 2500, NULL)`, meadSaleID, productID); err != nil {
-		t.Fatalf("seed mead line: %v", err)
+		INSERT INTO expenses (expense_date, category, description, amount_cents, hive_id)
+		VALUES ('2026-05-01', 'bees_queens', 'Purchased colony', 700, $1)`,
+		world.hiveID); err != nil {
+		t.Fatalf("seed colony cost: %v", err)
 	}
 
-	response, body := call(t, server.profitabilityAnalytics,
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date": "2026-06-01",
+			"lines": []map[string]any{
+				{"kind": "colony", "hiveId": world.hiveID.String(), "quantity": 1, "unitPrice": 10},
+				{"kind": "colony", "hiveId": uncostedHiveID.String(), "quantity": 1, "unitPrice": 20},
+				{"kind": "equipment", "equipmentStockId": world.stockID.String(), "quantity": 2, "unitPrice": 40},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("sale = %d: %v", response.Code, body)
+	}
+
+	response, body = call(t, server.profitabilityAnalytics,
 		adminRequest(http.MethodGet, "/analytics/profitability?year=2026", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("profitability = %d: %s", response.Code, response.Body.String())
@@ -219,12 +204,14 @@ func TestProfitabilityByKindIncludesAppliedCostAndMargin(t *testing.T) {
 		}
 		byKind[row["kind"].(string)] = row
 	}
-	jar := byKind["jar"]
-	if jar["revenue"] != 36.0 || jar["cost"] != 7.0 || jar["margin"] != 29.0 {
-		t.Fatalf("jar profitability = %#v, want revenue 36, cost 7, margin 29", jar)
+	equipment := byKind["equipment"]
+	if equipment["revenue"] != 80.0 || equipment["cost"] != 9.0 || equipment["margin"] != 71.0 ||
+		equipment["costedLines"] != 1.0 || equipment["totalLines"] != 1.0 {
+		t.Fatalf("equipment profitability = %#v (all kinds %#v), want revenue 80, cost 9, margin 71, coverage 1/1", equipment, byKind)
 	}
-	mead := byKind["mead"]
-	if mead["revenue"] != 25.0 || mead["cost"] != nil || mead["margin"] != nil {
-		t.Fatalf("mead profitability = %#v, want revenue 25 and unknown cost/margin", mead)
+	colony := byKind["colony"]
+	if colony["revenue"] != 30.0 || colony["cost"] != nil || colony["margin"] != nil ||
+		colony["costedLines"] != 1.0 || colony["totalLines"] != 2.0 {
+		t.Fatalf("colony profitability = %#v, want revenue 30, unknown cost/margin, coverage 1/2", colony)
 	}
 }
