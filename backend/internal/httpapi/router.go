@@ -20,11 +20,12 @@ const apiJSONBodyLimit = 1 << 20 // 1MB; photo/transcription uploads opt out.
 
 // Server bundles shared dependencies for all HTTP handlers.
 type Server struct {
-	cfg    *config.Config
-	pool   *pgxpool.Pool
-	store  *storage.Store
-	queue  *asynq.Client
-	photos *photostore.Resolver
+	cfg               *config.Config
+	pool              *pgxpool.Pool
+	store             *storage.Store
+	queue             *asynq.Client
+	photos            *photostore.Resolver
+	weatherHTTPClient *http.Client
 }
 
 func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, queue *asynq.Client) http.Handler {

@@ -77,13 +77,14 @@ Copy `.env.example` values into your environment (`SESSION_SECRET` and
   writing requires compatible Android Chrome hardware.
 - Privacy note: the yard map is Leaflet. Whoever serves the active tile
   layer sees the requested tile coordinates (and therefore the approximate
-  apiary location). **Imagery** (default, used when registering stands)
-  and **Streets** both come from Esri / ArcGIS Online
-  (`server.arcgisonline.com`). Looking up terrain elevation for the pin
-  sends lat/lng to Open-Meteo (`api.open-meteo.com`). Device geolocation
-  stays in the browser. No pin means no map, no tiles, and no sun model
-  — coordinates are never invented. Skip the map (leave location empty)
-  if that is a concern.
+  apiary location). **Streets** comes from OpenStreetMap
+  (`tile.openstreetmap.org`), while **Imagery** (default, used when
+  registering stands) comes from Esri / ArcGIS Online
+  (`server.arcgisonline.com`). Looking up terrain elevation for the pin sends
+  lat/lng to Open-Meteo (`api.open-meteo.com`). Device geolocation stays in
+  the browser. No pin means no map, no tiles, and no sun model — coordinates
+  are never invented. Skip the map (leave location empty) if that is a
+  concern.
 
 ## Migrating data from the legacy app
 

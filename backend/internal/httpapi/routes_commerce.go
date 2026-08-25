@@ -929,6 +929,10 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := commerceSlug(req.PublicSlug)
+	if commerceSlugReserved(slug) {
+		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
+		return
+	}
 	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")

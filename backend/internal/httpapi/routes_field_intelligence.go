@@ -330,7 +330,10 @@ func (s *Server) loadApiaryWeather(
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 12 * time.Second}
+	client := s.weatherHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 12 * time.Second}
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, err

@@ -53,7 +53,9 @@ export interface Inspection {
     source: string;
     fetchedAt: string;
     timezone: string;
+    unitsSystem?: string;
     current: {
+      unitsSystem?: string;
       time: string;
       temperature_2m: number;
       apparent_temperature: number;

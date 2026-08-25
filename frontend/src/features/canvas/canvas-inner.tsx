@@ -1500,6 +1500,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           }}
         >
           <Layer
+            visible={!hasLocation || geo != null || mapError != null}
             x={hasLocation && geo ? geo.x : 0}
             y={hasLocation && geo ? geo.y : 0}
             offsetX={hasLocation && geo ? geo.offsetX : 0}

@@ -47,10 +47,8 @@ export function InspectionCard({
   const deleteInspection = useDeleteInspection();
   const photos = usePhotos("inspection", inspection.id);
   const snapshotIsMetric =
-    (inspection.weather as { unitsSystem?: string } | null)?.unitsSystem ===
-      "metric" ||
-    (inspection.weather?.current as { unitsSystem?: string } | undefined)
-      ?.unitsSystem === "metric";
+    inspection.weather?.unitsSystem === "metric" ||
+    inspection.weather?.current.unitsSystem === "metric";
   const snapshotTemperature = (value: number) =>
     snapshotIsMetric ? value : fahrenheitToCelsius(value);
   const snapshotWind = (value: number) =>

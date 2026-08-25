@@ -73,7 +73,7 @@ export function LotsTab() {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button asChild size="sm" variant="outline">
-          <Link href="/harvest/serials">
+          <Link href="/honey/serials">
             <ScanSearch />
             Serial lookup
           </Link>
