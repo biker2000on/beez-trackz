@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/google/uuid"
 )
@@ -14,36 +18,81 @@ import (
 // --- A2: forward-dating a record must not clear a withdrawal window --------
 
 func TestDateIsFuture(t *testing.T) {
-	now := time.Date(2026, 8, 25, 15, 4, 5, 0, time.UTC)
 	day := func(y int, m time.Month, d int, loc *time.Location) time.Time {
 		return time.Date(y, m, d, 0, 0, 0, 0, loc)
 	}
+	at := func(y int, m time.Month, d, hh, mm int) time.Time {
+		return time.Date(y, m, d, hh, mm, 0, 0, time.UTC)
+	}
 	east := time.FixedZone("UTC+10", 10*3600)
 	west := time.FixedZone("UTC-08", -8*3600)
+	// Spring forward 2026 in America/New_York is 02:00 on Sunday 8 March:
+	// EST (-05) before, EDT (-04) after. Embedded via time/tzdata so the case
+	// runs on a machine with no system zoneinfo.
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load America/New_York: %v", err)
+	}
 
+	// Every case is a genuine cross-midnight instant: the UTC calendar day and
+	// the supplied date's local calendar day disagree. Relabelling now.Date()
+	// with the date's location (rather than projecting the instant into it)
+	// gives the wrong answer on each of them.
 	cases := []struct {
 		name string
+		now  time.Time
 		date time.Time
 		want bool
 	}{
-		{"today is allowed", day(2026, 8, 25, time.UTC), false},
-		{"yesterday is allowed", day(2026, 8, 24, time.UTC), false},
-		{"a backdated season is allowed", day(2025, 6, 1, time.UTC), false},
-		{"tomorrow is refused", day(2026, 8, 26, time.UTC), true},
-		{"next month is refused", day(2026, 9, 25, time.UTC), true},
-		// The comparison projects today into the supplied date's own zone, so
-		// an operator ten hours ahead of UTC is not told their today is the
-		// future, and one eight hours behind is not handed an extra day.
-		{"today east of UTC is allowed", day(2026, 8, 25, east), false},
-		{"tomorrow east of UTC is refused", day(2026, 8, 26, east), true},
-		{"today west of UTC is allowed", day(2026, 8, 25, west), false},
-		{"tomorrow west of UTC is refused", day(2026, 8, 26, west), true},
+		// Mid-afternoon UTC: already tomorrow ten hours east.
+		{"UTC today is allowed", at(2026, 8, 25, 15, 4), day(2026, 8, 25, time.UTC), false},
+		{"UTC tomorrow is refused", at(2026, 8, 25, 15, 4), day(2026, 8, 26, time.UTC), true},
+		{"a backdated season is allowed", at(2026, 8, 25, 15, 4), day(2025, 6, 1, time.UTC), false},
+		{"east of UTC, the operator's own today is allowed",
+			at(2026, 8, 25, 15, 4), day(2026, 8, 26, east), false},
+		{"east of UTC, their tomorrow is still refused",
+			at(2026, 8, 25, 15, 4), day(2026, 8, 27, east), true},
+		{"west of UTC at the same instant is a day behind",
+			at(2026, 8, 25, 15, 4), day(2026, 8, 25, west), false},
+		{"west of UTC, their tomorrow is refused",
+			at(2026, 8, 25, 15, 4), day(2026, 8, 26, west), true},
+
+		// Early UTC morning: still yesterday eight hours west. This is the
+		// extra bypass day — the west's "25th" has not started yet.
+		{"west of UTC, a date their clock has not reached is refused",
+			at(2026, 8, 25, 3, 0), day(2026, 8, 25, west), true},
+		{"west of UTC, their current day is allowed",
+			at(2026, 8, 25, 3, 0), day(2026, 8, 24, west), false},
+		{"east of UTC at that instant is on the UTC day",
+			at(2026, 8, 25, 3, 0), day(2026, 8, 25, east), false},
+		{"east of UTC, their tomorrow is refused",
+			at(2026, 8, 25, 3, 0), day(2026, 8, 26, east), true},
+
+		// DST boundary. 06:30 UTC is 01:30 EST on the 8th, minutes before the
+		// clocks jump; 07:30 UTC is 03:30 EDT the same morning, minutes after.
+		{"New York before the spring-forward jump: that day is today",
+			at(2026, 3, 8, 6, 30), day(2026, 3, 8, newYork), false},
+		{"New York before the jump: the next day is refused",
+			at(2026, 3, 8, 6, 30), day(2026, 3, 9, newYork), true},
+		{"New York after the jump: the same day is still today",
+			at(2026, 3, 8, 7, 30), day(2026, 3, 8, newYork), false},
+		{"New York after the jump: the next day is refused",
+			at(2026, 3, 8, 7, 30), day(2026, 3, 9, newYork), true},
+		{"New York on the eve of the jump: the jump day is the future",
+			at(2026, 3, 8, 4, 0), day(2026, 3, 8, newYork), true},
+		{"New York on the eve of the jump: that evening is today",
+			at(2026, 3, 8, 4, 0), day(2026, 3, 7, newYork), false},
+		{"New York late on the jump day, already tomorrow in UTC",
+			at(2026, 3, 9, 3, 30), day(2026, 3, 9, newYork), true},
+		{"New York late on the jump day: their day is allowed",
+			at(2026, 3, 9, 3, 30), day(2026, 3, 8, newYork), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := dateIsFuture(tc.date, now); got != tc.want {
-				t.Fatalf("dateIsFuture(%s) = %v, want %v",
-					tc.date.Format(time.RFC3339), got, tc.want)
+			if got := dateIsFuture(tc.date, tc.now); got != tc.want {
+				t.Fatalf("dateIsFuture(%s, now=%s) = %v, want %v",
+					tc.date.Format(time.RFC3339), tc.now.Format(time.RFC3339),
+					got, tc.want)
 			}
 		})
 	}
@@ -618,5 +667,237 @@ func TestHarvestLotWeightDerivesAndRecomputes(t *testing.T) {
 	if lot["derivedWeightLbs"] != 12.0 {
 		t.Fatalf("derivedWeightLbs = %v, want the 12 the harvests still say",
 			lot["derivedWeightLbs"])
+	}
+}
+
+// --- derived lot weight vs. concurrent bottling -----------------------------
+
+// seedDerivedLotHarvest inserts a standalone (sessionless) harvest so the lot
+// tests have live pounds to derive from.
+func seedDerivedLotHarvest(t *testing.T, server *Server, hiveID uuid.UUID, pounds float64) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := server.pool.QueryRow(context.Background(), `
+		INSERT INTO honey_harvests
+			(hive_id, date, super_weight_before, super_weight_after, calculated_honey_weight)
+		VALUES ($1,$2,$3,0,$3) RETURNING id`, hiveID, harvestDay(-10), pounds).
+		Scan(&id); err != nil {
+		t.Fatalf("seed harvest: %v", err)
+	}
+	return id
+}
+
+func seedDerivedLot(
+	t *testing.T,
+	server *Server,
+	lotCode string,
+	harvestIDs []uuid.UUID,
+	extra map[string]any,
+) uuid.UUID {
+	t.Helper()
+	ids := make([]string, len(harvestIDs))
+	for i, id := range harvestIDs {
+		ids[i] = id.String()
+	}
+	payload := map[string]any{
+		"lotCode": lotCode, "extractionDate": harvestDay(-10), "harvestIds": ids,
+	}
+	for key, value := range extra {
+		payload[key] = value
+	}
+	created, body := call(t, server.harvestLotCreate, adminRequest(
+		http.MethodPost, "/harvest-lots", payload))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create lot %s = %d %v", lotCode, created.Code, body)
+	}
+	return uuid.MustParse(body["id"].(string))
+}
+
+func lotStoredWeight(t *testing.T, server *Server, lotID uuid.UUID) float64 {
+	t.Helper()
+	var lbs float64
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT honey_weight_lbs FROM harvest_lots WHERE id=$1`, lotID).Scan(&lbs); err != nil {
+		t.Fatalf("read lot weight: %v", err)
+	}
+	return lbs
+}
+
+// A bottling run committing between the update's read of the bottled total and
+// its UPDATE used to store a derived weight below what live runs had already
+// taken out of the lot. The update now holds the same row lock
+// bottlingRunCreate takes, so the two serialise: this test drives the
+// interleaving explicitly by holding that lock in another transaction and
+// asserting the handler waits for it.
+func TestDerivedLotUpdateSerialisesWithBottling(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	ctx := context.Background()
+
+	first := seedDerivedLotHarvest(t, server, hiveID, 12)
+	second := seedDerivedLotHarvest(t, server, hiveID, 8)
+	lotID := seedDerivedLot(t, server, "RACE-1", []uuid.UUID{first, second}, nil)
+	if got := lotStoredWeight(t, server, lotID); got != 20 {
+		t.Fatalf("seeded lot = %v lbs, want 20", got)
+	}
+	jarSizeID := seedJarSize(t, server, "RACE-1 1 lb", 16, 1200)
+
+	// The bottling side of the race: lock the lot the way bottlingRunCreate
+	// does, then insert a run that uses 15 of the lot's 20 lbs. Uncommitted, so
+	// a handler reading the bottled total without the lock still sees 0.
+	bottling, err := server.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin bottling tx: %v", err)
+	}
+	defer bottling.Rollback(ctx)
+	var lockedCode string
+	if err := bottling.QueryRow(ctx,
+		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
+		Scan(&lockedCode); err != nil {
+		t.Fatalf("lock lot: %v", err)
+	}
+	if _, err := bottling.Exec(ctx, `
+		INSERT INTO bottling_runs (lot_id, bottled_date, jar_size_id, quantity, honey_lbs)
+		VALUES ($1, current_date, $2, 15, 15)`, lotID, jarSizeID); err != nil {
+		t.Fatalf("insert run: %v", err)
+	}
+
+	// Drop the 8 lb harvest: the lot would derive 12 lbs, below the 15 the run
+	// in flight has already used.
+	payload, err := json.Marshal(map[string]any{
+		"lotCode": "RACE-1", "extractionDate": harvestDay(-10),
+		"harvestIds": []string{first.String()},
+	})
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	request := adminRequest(http.MethodPut, "/harvest-lots/x", nil, "id", lotID.String())
+	request.Body = io.NopCloser(bytes.NewReader(payload))
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.harvestLotUpdate(response, request)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("harvestLotUpdate finished while another transaction held the lot " +
+			"row: it reads the bottled total without taking the lock, so a run can " +
+			"commit underneath it")
+	case <-time.After(750 * time.Millisecond):
+	}
+
+	if err := bottling.Commit(ctx); err != nil {
+		t.Fatalf("commit bottling tx: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("harvestLotUpdate never returned after the lock was released")
+	}
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("update = %d %s, want 400: the run that committed first used "+
+			"more pounds than the new derivation", response.Code, response.Body)
+	}
+	if !strings.Contains(response.Body.String(), "15.00") {
+		t.Errorf("refusal %q does not name the already-bottled pounds", response.Body)
+	}
+	if got := lotStoredWeight(t, server, lotID); got != 20 {
+		t.Errorf("lot weight = %v, want the original 20 lbs left intact", got)
+	}
+}
+
+// --- soft-deleting a harvest behind a derived lot ---------------------------
+
+func TestSoftDeletingAHarvestRecomputesItsDerivedLot(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+
+	first := seedDerivedLotHarvest(t, server, hiveID, 12)
+	second := seedDerivedLotHarvest(t, server, hiveID, 8)
+	lotID := seedDerivedLot(t, server, "DELETE-DERIVED", []uuid.UUID{first, second}, nil)
+
+	response, body := call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/harvest-entries/x",
+		map[string]any{"reason": "double counted"}, "id", second.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete entry = %d %v", response.Code, body)
+	}
+	if got := lotStoredWeight(t, server, lotID); got != 12 {
+		t.Fatalf("lot weight = %v lbs, want 12: a derived lot may not keep "+
+			"claiming pounds from a harvest that no longer exists", got)
+	}
+}
+
+func TestSoftDeleteRefusedWhenADerivedLotWouldFallBelowWhatItBottled(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+	ctx := context.Background()
+
+	first := seedDerivedLotHarvest(t, server, hiveID, 30)
+	second := seedDerivedLotHarvest(t, server, hiveID, 10)
+	// Unlinked bulk honey, so the delete is not stopped by the bulk-ledger
+	// guard before it ever reaches the lot check.
+	seedDerivedLotHarvest(t, server, hiveID, 100)
+	lotID := seedDerivedLot(t, server, "DELETE-CEILING", []uuid.UUID{first, second}, nil)
+
+	jarSizeID := seedJarSize(t, server, "DELETE-CEILING 1 lb", 16, 1200)
+	created, body := call(t, server.bottlingRunCreate, adminRequest(
+		http.MethodPost, "/harvest-lots/x/bottling-runs", map[string]any{
+			"bottledDate": harvestDay(-1), "jarSizeId": jarSizeID.String(), "quantity": 12,
+		}, "id", lotID.String()))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("bottle lot = %d %v", created.Code, body)
+	}
+
+	response, decoded := call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/harvest-entries/x",
+		map[string]any{"reason": "mis-keyed"}, "id", first.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete entry = %d %v, want 409: the lot would derive 10 lbs "+
+			"after the delete but has already bottled 12", response.Code, decoded)
+	}
+	message, _ := decoded["error"].(string)
+	for _, want := range []string{"DELETE-CEILING", "10.00", "12.00"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("refusal %q does not name %q", message, want)
+		}
+	}
+
+	// Refused means refused: the harvest is still live and the lot untouched,
+	// so the bottled jars keep the harvest — and its hive's treatment history —
+	// behind them.
+	var deletedAt *time.Time
+	if err := server.pool.QueryRow(ctx,
+		`SELECT deleted_at FROM honey_harvests WHERE id=$1`, first).Scan(&deletedAt); err != nil {
+		t.Fatalf("read harvest: %v", err)
+	}
+	if deletedAt != nil {
+		t.Error("the harvest was soft-deleted despite the refusal")
+	}
+	if got := lotStoredWeight(t, server, lotID); got != 40 {
+		t.Errorf("lot weight = %v, want the original 40 lbs", got)
+	}
+}
+
+func TestSoftDeletingAHarvestLeavesAManualLotWeightAlone(t *testing.T) {
+	server := honeyTestServer(t)
+	_, hiveID := seedLockoutHive(t, server)
+
+	first := seedDerivedLotHarvest(t, server, hiveID, 12)
+	second := seedDerivedLotHarvest(t, server, hiveID, 8)
+	lotID := seedDerivedLot(t, server, "DELETE-MANUAL", []uuid.UUID{first, second},
+		map[string]any{"honeyWeightLbs": 25})
+
+	response, body := call(t, server.hsDeleteEntry, adminRequest(
+		http.MethodDelete, "/harvest-entries/x", nil, "id", second.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete entry = %d %v", response.Code, body)
+	}
+	if got := lotStoredWeight(t, server, lotID); got != 25 {
+		t.Fatalf("lot weight = %v, want the typed 25 lbs: a manual weight is "+
+			"not derived from the harvests and must not move", got)
 	}
 }

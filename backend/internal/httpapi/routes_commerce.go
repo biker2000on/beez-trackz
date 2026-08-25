@@ -239,6 +239,97 @@ func harvestLotDerivedWeight(
 	return total, count, err
 }
 
+// reconcileDerivedLotsForHarvest keeps derived lots honest when one of the
+// harvests behind them is soft-deleted. Called inside the deleting
+// transaction, AFTER the harvest row has been marked deleted, so the
+// recomputed sum already excludes it.
+//
+// A derived lot claims to be the sum of its live harvests. Letting a harvest
+// vanish without touching the lot leaves that claim false, and if the new sum
+// falls under what the lot's runs have already bottled the lot is claiming
+// fewer pounds than it demonstrably produced. The delete is refused in that
+// case: the operator has to type a manual weight on the lot or void the runs
+// first, which is the deliberate act that belongs in the audit trail.
+//
+// Refusing also preserves treatment-lockout provenance. refuseLotBottling
+// walks a lot's linked harvests back to their hives to find the treatment
+// covering them; a harvest that disappeared from under an already-bottled lot
+// takes its hive — and therefore the withdrawal window that justified or
+// blocked those runs — out of that walk, leaving bottled jars whose lockout
+// history can no longer be reconstructed. While the lot's runs stand, the
+// harvest behind them cannot silently leave.
+//
+// Manual-weight lots are untouched: their weight was typed, not derived, so a
+// harvest leaving the link set changes nothing they assert.
+//
+// Returns a user-facing refusal ("" when the delete may proceed).
+func reconcileDerivedLotsForHarvest(
+	ctx context.Context,
+	tx pgx.Tx,
+	harvestID uuid.UUID,
+) (string, error) {
+	type lotRecompute struct {
+		id      uuid.UUID
+		code    string
+		derived float64
+		bottled float64
+	}
+	// FOR UPDATE OF l takes the same harvest_lots row lock bottlingRunCreate
+	// and harvestLotUpdate take, so a run cannot commit between this read and
+	// the UPDATE below. ORDER BY l.id keeps multi-lot deletes in a stable lock
+	// order.
+	rows, err := tx.Query(ctx, `
+		SELECT l.id, l.lot_code,
+			COALESCE((SELECT SUM(hh.calculated_honey_weight)
+				FROM harvest_lot_harvests link
+				JOIN honey_harvests hh
+					ON hh.id = link.harvest_id AND hh.deleted_at IS NULL
+				WHERE link.lot_id = l.id), 0) AS derived_lbs,
+			COALESCE((SELECT SUM(COALESCE(run.honey_lbs,
+					run.quantity * COALESCE(size.honey_oz, 0) / 16.0))
+				FROM bottling_runs run
+				LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
+				WHERE run.lot_id = l.id AND run.voided_at IS NULL), 0) AS bottled_lbs
+		FROM harvest_lots l
+		JOIN harvest_lot_harvests hl ON hl.lot_id = l.id
+		WHERE hl.harvest_id = $1 AND l.honey_weight_source = $2
+		ORDER BY l.id
+		FOR UPDATE OF l`, harvestID, lotWeightSourceDerived)
+	if err != nil {
+		return "", err
+	}
+	var lots []lotRecompute
+	for rows.Next() {
+		var lot lotRecompute
+		if err := rows.Scan(&lot.id, &lot.code, &lot.derived, &lot.bottled); err != nil {
+			rows.Close()
+			return "", err
+		}
+		lots = append(lots, lot)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	for _, lot := range lots {
+		if lot.derived < lot.bottled-honeyPoundTolerance {
+			return fmt.Sprintf(
+				"Lot %s derives its weight from this harvest: without it the lot "+
+					"totals %.2f lbs but its bottling runs already used %.2f lbs. "+
+					"Type a manual weight on the lot or void those runs first.",
+				lot.code, lot.derived, lot.bottled), nil
+		}
+	}
+	for _, lot := range lots {
+		if _, err := tx.Exec(ctx,
+			`UPDATE harvest_lots SET honey_weight_lbs=$2 WHERE id=$1`,
+			lot.id, lot.derived); err != nil {
+			return "", err
+		}
+	}
+	return "", nil
+}
+
 // resolveLotWeight decides the stored weight and its source.
 //
 //   - honeyWeightSource:"derived" — always the SUM; refused with no harvests
@@ -692,6 +783,24 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	// Lock the lot row FIRST, before anything is read off it. The bottled
+	// total below and the UPDATE that acts on it have to be one atomic step:
+	// without this, a bottling run committing between the two stores a derived
+	// weight lower than the pounds live runs have already taken out of the lot,
+	// and every later run 400s on a ceiling that was never really there.
+	// bottlingRunCreate takes the same lock on the same row first, so both
+	// paths order their locks identically and neither can deadlock the other.
+	var lockedLotCode string
+	if err := tx.QueryRow(r.Context(),
+		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, id).
+		Scan(&lockedLotCode); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "harvest lot not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	claimElevation, err = fillClaimElevation(r.Context(), tx, claimApiaryID, claimElevation)
 	if err != nil {
 		if err.Error() == "invalid claimApiaryId" {
@@ -741,7 +850,9 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 			alreadyBottledLbs))
 		return
 	}
-	tag, err := tx.Exec(r.Context(), `
+	// The row has been held FOR UPDATE since the top of this transaction, so
+	// the bottled total read above is still current and the row still exists.
+	_, err = tx.Exec(r.Context(), `
 		UPDATE harvest_lots SET lot_code=$1, public_slug=$2, extraction_date=$3,
 			honey_weight_lbs=$4, honey_weight_entered=$5, honey_variety=$6, season=$7,
 			apiary_region=$8, bloom_notes=$9, beekeeper_story=$10, testing_data=$11,
@@ -759,10 +870,6 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "harvest lot not found")
 		return
 	}
 	// nil reason (reading within threshold) clears any previous override, so a

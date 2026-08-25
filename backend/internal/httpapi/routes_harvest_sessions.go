@@ -713,6 +713,19 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	// A derived harvest lot is the sum of its live harvests, so this delete
+	// changes lot weights too. Recompute them here, in the same transaction —
+	// or refuse the delete outright when a lot would end up claiming fewer
+	// pounds than its bottling runs already took. See
+	// reconcileDerivedLotsForHarvest for why refusal is what preserves the
+	// treatment-lockout provenance of the jars already on the shelf.
+	if msg, err := reconcileDerivedLotsForHarvest(ctx, tx, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusConflict, msg)
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

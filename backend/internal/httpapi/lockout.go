@@ -91,7 +91,13 @@ func calendarDate(t time.Time) time.Time {
 // against a midnight in someone else's zone.
 func dateIsFuture(date, now time.Time) bool {
 	day := calendarDate(date)
-	y, m, d := now.Date()
+	// Project the instant into the date's zone FIRST. Taking now.Date() and
+	// then relabelling those fields with day.Location() keeps UTC's calendar
+	// day under another zone's name: at 03:00 UTC on the 25th it is still the
+	// 24th in UTC-08, so a submitted local "25th" would be waved through as
+	// today — a whole extra bypass day — while east of UTC the operator's real
+	// today gets refused as the future.
+	y, m, d := now.In(day.Location()).Date()
 	today := time.Date(y, m, d, 0, 0, 0, 0, day.Location())
 	return day.After(today)
 }
