@@ -90,6 +90,21 @@ func TestOfflineRouteManifestRules(t *testing.T) {
 		{http.MethodDelete, "/api/v1/splits/abc", true},
 		{http.MethodPost, "/api/v1/splits", false},
 		{http.MethodPost, "/api/v1/auth/login", false},
+		{http.MethodPost, "/api/v1/equipment/stock/abc/receive", true},
+		{http.MethodPost, "/api/v1/equipment/stock/abc/adjust", true},
+		{http.MethodPost, "/api/v1/equipment/stock/abc/damage", true},
+		{http.MethodPost, "/api/v1/equipment/stock/abc/repair", true},
+		{http.MethodPost, "/api/v1/equipment/stock/abc/retire", true},
+		{http.MethodPost, "/api/v1/equipment/physical-count", true},
+		{http.MethodPost, "/api/v1/equipment/deployments", true},
+		{http.MethodPost, "/api/v1/equipment/deployments/abc/return", true},
+		{http.MethodPost, "/api/v1/equipment/deployments/abc/remove", true},
+		{http.MethodGet, "/api/v1/equipment/stock", false},
+		{http.MethodGet, "/api/v1/equipment/deployments/active", false},
+		{http.MethodPost, "/api/v1/equipment/seed-defaults", false},
+		{http.MethodPost, "/api/v1/equipment/types", false},
+		{http.MethodPost, "/api/v1/equipment/stock", false},
+		{http.MethodPatch, "/api/v1/equipment/stock/abc", false},
 	}
 	for _, tc := range cases {
 		if got := offlineMutationSupported(tc.method, tc.path); got != tc.want {

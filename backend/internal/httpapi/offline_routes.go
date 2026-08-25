@@ -68,6 +68,15 @@ var offlineRoutes = offlineRouteManifest{
 		{Prefix: "/api/v1/splits/", Methods: []string{"DELETE"}},
 		{Prefix: "/api/v1/ops/labor/start", Exact: true, Methods: []string{"POST"}},
 		{Prefix: "/api/v1/ops/labor/stop", Exact: true, Methods: []string{"POST"}},
+		// Equipment ledger writes. Field work (receive, adjust, damage,
+		// repair, retire, physical count, deploy, return) is the other
+		// offline-prone surface; these routes were missing from the PWA
+		// allowlist, so queued stock changes could never replay. GET
+		// list/read routes, catalog/stock creates, PATCH metadata, and
+		// seed-defaults stay out — only the idempotent ledger mutations.
+		{Prefix: "/api/v1/equipment/stock/", Methods: []string{"POST"}},
+		{Prefix: "/api/v1/equipment/physical-count", Exact: true, Methods: []string{"POST"}},
+		{Prefix: "/api/v1/equipment/deployments", Methods: []string{"POST"}},
 	},
 	POSTExclusions: []string{
 		"/api/v1/canvas/hives",

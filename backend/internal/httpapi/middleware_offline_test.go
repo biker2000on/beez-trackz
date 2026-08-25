@@ -53,6 +53,22 @@ func TestOfflineMutationSupported(t *testing.T) {
 		{"product batch", http.MethodPost, "/api/v1/product-batches", true},
 		// Read-only honey routes are still out of scope.
 		{"honey overview", http.MethodGet, "/api/v1/honey/overview", false},
+		// Equipment ledger writes belong in the PWA queue; catalog/seed/GET
+		// do not.
+		{"equipment receive", http.MethodPost, "/api/v1/equipment/stock/a/receive", true},
+		{"equipment adjust", http.MethodPost, "/api/v1/equipment/stock/a/adjust", true},
+		{"equipment damage", http.MethodPost, "/api/v1/equipment/stock/a/damage", true},
+		{"equipment repair", http.MethodPost, "/api/v1/equipment/stock/a/repair", true},
+		{"equipment retire", http.MethodPost, "/api/v1/equipment/stock/a/retire", true},
+		{"equipment physical count", http.MethodPost, "/api/v1/equipment/physical-count", true},
+		{"equipment deploy", http.MethodPost, "/api/v1/equipment/deployments", true},
+		{"equipment return", http.MethodPost, "/api/v1/equipment/deployments/a/return", true},
+		{"equipment remove", http.MethodPost, "/api/v1/equipment/deployments/a/remove", true},
+		{"equipment list", http.MethodGet, "/api/v1/equipment/stock", false},
+		{"equipment seed", http.MethodPost, "/api/v1/equipment/seed-defaults", false},
+		{"equipment type create", http.MethodPost, "/api/v1/equipment/types", false},
+		{"equipment stock create", http.MethodPost, "/api/v1/equipment/stock", false},
+		{"equipment stock patch", http.MethodPatch, "/api/v1/equipment/stock/a", false},
 	}
 
 	for _, test := range tests {
@@ -136,5 +152,74 @@ func TestOfflineSuccessFlushesAfterReceiptCompletes(t *testing.T) {
 	}
 	if state != "complete" {
 		t.Fatalf("receipt state = %q after 201, want complete", state)
+	}
+}
+
+// A queued POST /equipment/stock/{id}/adjust must apply once. The second
+// request with the same X-Offline-Mutation-ID is served from the receipt
+// and must not append another ledger row.
+func TestOfflineIdempotencyCoversEquipmentAdjust(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	var typeID, stockID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO equipment_types (name, category) VALUES ($1,'box') RETURNING id`,
+		"Offline adjust "+uuid.NewString()).Scan(&typeID); err != nil {
+		t.Fatalf("seed type: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO equipment_stock (type_id, total_owned) VALUES ($1, 0) RETURNING id`,
+		typeID).Scan(&stockID); err != nil {
+		t.Fatalf("seed stock: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO equipment_stock_adjustments (stock_id, quantity, reason, date)
+		VALUES ($1, 10, 'purchased', now())`, stockID); err != nil {
+		t.Fatalf("seed owned: %v", err)
+	}
+
+	mutationID := uuid.New().String()
+	handler := server.offlineMutations(http.HandlerFunc(server.equipAdjustStock))
+	send := func() *httptest.ResponseRecorder {
+		request := adminRequest(
+			http.MethodPost,
+			"/api/v1/equipment/stock/"+stockID.String()+"/adjust",
+			map[string]any{"quantity": 2, "reason": "purchased"},
+			"id", stockID.String(),
+		)
+		request.Header.Set("X-Offline-Mutation-ID", mutationID)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	first := send()
+	if first.Code != http.StatusOK {
+		t.Fatalf("first submission = %d %s", first.Code, first.Body.String())
+	}
+	second := send()
+	if second.Code != http.StatusOK {
+		t.Fatalf("replay = %d %s", second.Code, second.Body.String())
+	}
+	if second.Header().Get("X-Offline-Replayed") != "true" {
+		t.Error("replayed equipment adjust was not served from the receipt")
+	}
+
+	var n int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM equipment_stock_adjustments WHERE stock_id=$1`,
+		stockID).Scan(&n); err != nil {
+		t.Fatalf("count adjustments: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("replaying the mutation wrote %d ledger rows, want 2 (opening + one adjust)", n)
+	}
+	var owned int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT total_owned FROM equipment_stock WHERE id=$1`, stockID).Scan(&owned); err != nil {
+		t.Fatalf("read owned: %v", err)
+	}
+	if owned != 12 {
+		t.Errorf("total_owned = %d, want 12 (applied once)", owned)
 	}
 }

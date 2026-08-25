@@ -140,6 +140,25 @@ export const OFFLINE_ROUTE_MANIFEST: OfflineRouteManifest = {
       "methods": [
         "POST"
       ]
+    },
+    {
+      "prefix": "/api/v1/equipment/stock/",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "prefix": "/api/v1/equipment/physical-count",
+      "exact": true,
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "prefix": "/api/v1/equipment/deployments",
+      "methods": [
+        "POST"
+      ]
     }
   ],
   "postExclusions": [
