@@ -206,7 +206,7 @@ func equipAdjustTx(
 	if err != nil {
 		return nil, err
 	}
-	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_stock_adjustments", parsed.IdempotencyKey); err != nil {
+	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_stock_adjustments", parsed.IdempotencyKey, "stock_id", parsed.StockID); err != nil {
 		return nil, err
 	} else if found {
 		return equipStateSnapshot(state), nil
@@ -249,6 +249,11 @@ func equipAdjustTx(
 	if replayed {
 		return equipStateSnapshot(state), nil
 	}
+	// The same client key is written onto both the adjustment and the
+	// accompanying state-change row (when disposing from damaged/retired).
+	// Keys are unique per table, not per operation, so a later /damage or
+	// /repair that reuses this key will find the state-change row and
+	// silently no-op. Callers must not reuse a key across ledgers.
 	// Disposing of damaged or retired units also empties that pool, so the
 	// states keep partitioning what is owned.
 	if parsed.Quantity < 0 && parsed.From != "serviceable" {
@@ -303,7 +308,7 @@ func equipMoveState(
 	if err != nil {
 		return nil, err
 	}
-	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_state_changes", parsed.IdempotencyKey); err != nil {
+	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_state_changes", parsed.IdempotencyKey, "stock_id", parsed.StockID); err != nil {
 		return nil, err
 	} else if found {
 		return equipStateSnapshot(state), nil

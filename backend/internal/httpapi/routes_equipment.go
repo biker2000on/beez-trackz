@@ -228,11 +228,11 @@ type equipAdjustmentEntry struct {
 // equipInsertAdjustment appends an ownership-ledger row. A duplicate
 // idempotency key returns (true, nil) so the caller can surface the
 // previously-created row instead of applying the quantity twice.
+// Serialization is the stock row lock (FOR UPDATE), not a 23505 retry.
 func equipInsertAdjustment(ctx context.Context, q inspectionQuerier, e equipAdjustmentEntry) (bool, error) {
-	if id, found, err := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey); err != nil {
+	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey, "stock_id", e.StockID); err != nil {
 		return false, err
 	} else if found {
-		_ = id
 		return true, nil
 	}
 	_, err := q.Exec(ctx, `
@@ -242,13 +242,6 @@ func equipInsertAdjustment(ctx context.Context, q inspectionQuerier, e equipAdju
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		e.StockID, e.Quantity, e.Reason, e.Notes, e.UnitCostCents, e.Date, e.CreatedBy,
 		e.IdempotencyKey)
-	if err != nil && e.IdempotencyKey != nil && pgErrCode(err) == "23505" {
-		if _, found, lookupErr := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey); lookupErr != nil {
-			return false, lookupErr
-		} else if found {
-			return true, nil
-		}
-	}
 	return false, err
 }
 
@@ -265,8 +258,9 @@ type equipStateEntry struct {
 	IdempotencyKey *string
 }
 
+// Serialization is the stock row lock (FOR UPDATE), not a 23505 retry.
 func equipInsertStateChange(ctx context.Context, q inspectionQuerier, e equipStateEntry) (bool, error) {
-	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey); err != nil {
+	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey, "stock_id", e.StockID); err != nil {
 		return false, err
 	} else if found {
 		return true, nil
@@ -278,37 +272,56 @@ func equipInsertStateChange(ctx context.Context, q inspectionQuerier, e equipSta
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		e.StockID, e.From, e.To, e.Quantity, e.Reason, e.Notes,
 		e.UnitCostCents, e.Date, e.CreatedBy, e.IdempotencyKey)
-	if err != nil && e.IdempotencyKey != nil && pgErrCode(err) == "23505" {
-		if _, found, lookupErr := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey); lookupErr != nil {
-			return false, lookupErr
-		} else if found {
-			return true, nil
-		}
-	}
 	return false, err
 }
 
-// equipLookupIdempotent finds a previously-written ledger row by key.
-// table is a compile-time identifier, never request input.
+// equipLookupIdempotent finds a previously-written ledger row by key bound
+// to this target (stock_id or deployment_id). A key already used on a
+// different resource is a 409, not a replay. Duplicate keys on the same
+// target are serialized by the stock row lock (FOR UPDATE): the second
+// writer waits, then this lookup finds the existing row. table and
+// targetColumn are compile-time identifiers, never request input.
 func equipLookupIdempotent(
 	ctx context.Context,
 	q inspectionQuerier,
 	table string,
 	key *string,
+	targetColumn string,
+	targetID uuid.UUID,
 ) (uuid.UUID, bool, error) {
 	if key == nil {
 		return uuid.Nil, false, nil
 	}
+	switch table {
+	case "equipment_stock_adjustments", "equipment_state_changes",
+		"equipment_deployments", "equipment_deployment_returns":
+	default:
+		return uuid.Nil, false, fmt.Errorf("invalid idempotency table")
+	}
+	if targetColumn != "stock_id" && targetColumn != "deployment_id" {
+		return uuid.Nil, false, fmt.Errorf("invalid idempotency target")
+	}
 	var id uuid.UUID
 	err := q.QueryRow(ctx,
-		`SELECT id FROM `+table+` WHERE idempotency_key = $1`, *key).Scan(&id)
+		`SELECT id FROM `+table+` WHERE idempotency_key = $1 AND `+targetColumn+` = $2`,
+		*key, targetID).Scan(&id)
+	if err == nil {
+		return id, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, err
+	}
+	var other uuid.UUID
+	err = q.QueryRow(ctx,
+		`SELECT id FROM `+table+` WHERE idempotency_key = $1`, *key).Scan(&other)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, false, nil
 	}
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	return id, true, nil
+	return uuid.Nil, false, equipFail(http.StatusConflict,
+		"idempotency key already used on a different resource")
 }
 
 // --- types ---
@@ -788,13 +801,14 @@ type equipDeployInput struct {
 
 // equipDeployTx locks the stock row, refuses to deploy more than is available,
 // and records the deployment. replayed is true when idempotencyKey matched an
-// existing row, in which case nothing is applied again.
+// existing row, in which case nothing is applied again. Serialization is the
+// stock row lock (FOR UPDATE), not a 23505 retry.
 func equipDeployTx(ctx context.Context, tx pgx.Tx, in equipDeployInput) (uuid.UUID, bool, error) {
 	state, err := equipLockStock(ctx, tx, in.StockID)
 	if err != nil {
 		return uuid.Nil, false, err
 	}
-	if id, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey); err != nil {
+	if id, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey, "stock_id", in.StockID); err != nil {
 		return uuid.Nil, false, err
 	} else if found {
 		return id, true, nil
@@ -814,13 +828,6 @@ func equipDeployTx(ctx context.Context, tx pgx.Tx, in equipDeployInput) (uuid.UU
 		in.StockID, in.HiveID, in.Quantity, in.Date, in.Notes, in.CreatedBy,
 		in.IdempotencyKey).Scan(&id)
 	if err != nil {
-		if in.IdempotencyKey != nil && pgErrCode(err) == "23505" {
-			if existing, found, lookupErr := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey); lookupErr != nil {
-				return uuid.Nil, false, lookupErr
-			} else if found {
-				return existing, true, nil
-			}
-		}
 		if equipPgErrCode(err, "23503") {
 			return uuid.Nil, false, equipBadRequest("invalid stockId or hiveId")
 		}
@@ -936,7 +943,8 @@ type equipReturnResult struct {
 
 // equipReturnTx returns equipment from a hive. The `date_removed IS NULL`
 // guard is what makes a second return fail loudly instead of silently
-// overwriting the first return date.
+// overwriting the first return date. Serialization of a replayed key is
+// the stock row lock (FOR UPDATE), not a 23505 retry.
 func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipReturnResult, error) {
 	var result equipReturnResult
 
@@ -955,7 +963,7 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 	if _, err := equipLockStock(ctx, tx, stockID); err != nil {
 		return result, err
 	}
-	if existingID, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey); err != nil {
+	if existingID, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey, "deployment_id", in.DeploymentID); err != nil {
 		return result, err
 	} else if found {
 		return equipLoadReturnResult(ctx, tx, existingID, true)
@@ -998,13 +1006,6 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 		in.DeploymentID, quantity, in.Reason, in.Condition, in.Notes,
 		in.Date, in.CreatedBy, in.SaleID, in.IdempotencyKey).Scan(&returnID)
 	if err != nil {
-		if in.IdempotencyKey != nil && pgErrCode(err) == "23505" {
-			if existingID, found, lookupErr := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey); lookupErr != nil {
-				return result, lookupErr
-			} else if found {
-				return equipLoadReturnResult(ctx, tx, existingID, true)
-			}
-		}
 		return result, err
 	}
 
@@ -1027,6 +1028,10 @@ func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipRe
 
 	// Equipment that came back broken or worn out does not silently rejoin the
 	// serviceable pool: it lands in a real state with a quantity.
+	//
+	// The return row and this state-change row share the client key. Keys are
+	// unique per table, so a later /damage or /repair that reuses the key
+	// finds the state-change row and silently no-ops.
 	if in.Condition == "damaged" || in.Condition == "retired" {
 		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
 			StockID:        stockID,

@@ -870,3 +870,125 @@ func TestEquipmentPhysicalCountIdempotencyKeyDoesNotDoubleApply(t *testing.T) {
 		t.Fatalf("physical_count adjustments = %d, want 1", rows)
 	}
 }
+
+func TestEquipmentIdempotencyKeyDifferentTargetConflicts(t *testing.T) {
+	ctx, tx := equipTx(t)
+	typeA := equipFixtureType(t, ctx, tx, "box")
+	typeB := equipFixtureType(t, ctx, tx, "frame")
+	stockA := equipFixtureStock(t, ctx, tx, typeA, 8)
+	stockB := equipFixtureStock(t, ctx, tx, typeB, 8)
+	hiveID := equipFixtureHive(t, ctx, tx)
+
+	t.Run("receive", func(t *testing.T) {
+		key := "recv-cross-" + uuid.NewString()
+		entryA := equipAdjustmentEntry{
+			StockID: stockA, Quantity: 1, Reason: "purchased", Date: time.Now(),
+			IdempotencyKey: &key,
+		}
+		if replayed, err := equipInsertAdjustment(ctx, tx, entryA); err != nil || replayed {
+			t.Fatalf("first receive: replayed=%v err=%v", replayed, err)
+		}
+		entryB := entryA
+		entryB.StockID = stockB
+		_, err := equipInsertAdjustment(ctx, tx, entryB)
+		if err == nil {
+			t.Fatal("same key on a different stock succeeded")
+		}
+		if status := equipHTTPStatus(t, err); status != 409 {
+			t.Fatalf("status = %d, want 409: %v", status, err)
+		}
+	})
+
+	t.Run("adjust", func(t *testing.T) {
+		key := "adj-cross-" + uuid.NewString()
+		parsedA := equipParsedRequest{
+			StockID: stockA, Quantity: -1, Reason: "discarded",
+			Date: time.Now(), From: "serviceable", IdempotencyKey: &key,
+		}
+		if _, err := equipAdjustTx(ctx, tx, parsedA); err != nil {
+			t.Fatalf("first adjust: %v", err)
+		}
+		parsedB := parsedA
+		parsedB.StockID = stockB
+		_, err := equipAdjustTx(ctx, tx, parsedB)
+		if err == nil {
+			t.Fatal("same key on a different stock succeeded")
+		}
+		if status := equipHTTPStatus(t, err); status != 409 {
+			t.Fatalf("status = %d, want 409: %v", status, err)
+		}
+	})
+
+	t.Run("state change", func(t *testing.T) {
+		key := "dmg-cross-" + uuid.NewString()
+		parsedA := equipParsedRequest{
+			StockID: stockA, Quantity: 1, Reason: "broken",
+			Date: time.Now(), From: "serviceable", IdempotencyKey: &key,
+		}
+		if _, err := equipMoveState(ctx, tx, parsedA, "damaged"); err != nil {
+			t.Fatalf("first damage: %v", err)
+		}
+		parsedB := parsedA
+		parsedB.StockID = stockB
+		_, err := equipMoveState(ctx, tx, parsedB, "damaged")
+		if err == nil {
+			t.Fatal("same key on a different stock succeeded")
+		}
+		if status := equipHTTPStatus(t, err); status != 409 {
+			t.Fatalf("status = %d, want 409: %v", status, err)
+		}
+	})
+
+	t.Run("deploy", func(t *testing.T) {
+		key := "deploy-cross-" + uuid.NewString()
+		if _, replayed, err := equipDeployTx(ctx, tx, equipDeployInput{
+			StockID: stockA, HiveID: hiveID, Quantity: 1, Date: time.Now(),
+			IdempotencyKey: &key,
+		}); err != nil || replayed {
+			t.Fatalf("first deploy: replayed=%v err=%v", replayed, err)
+		}
+		_, _, err := equipDeployTx(ctx, tx, equipDeployInput{
+			StockID: stockB, HiveID: hiveID, Quantity: 1, Date: time.Now(),
+			IdempotencyKey: &key,
+		})
+		if err == nil {
+			t.Fatal("same key on a different stock succeeded")
+		}
+		if status := equipHTTPStatus(t, err); status != 409 {
+			t.Fatalf("status = %d, want 409: %v", status, err)
+		}
+	})
+
+	t.Run("return", func(t *testing.T) {
+		depA, _, err := equipDeployTx(ctx, tx, equipDeployInput{
+			StockID: stockA, HiveID: hiveID, Quantity: 1, Date: time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("deploy A: %v", err)
+		}
+		depB, _, err := equipDeployTx(ctx, tx, equipDeployInput{
+			StockID: stockB, HiveID: hiveID, Quantity: 1, Date: time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("deploy B: %v", err)
+		}
+		key := "ret-cross-" + uuid.NewString()
+		qty := 1
+		if _, err := equipReturnTx(ctx, tx, equipReturnInput{
+			DeploymentID: depA, Quantity: &qty, Reason: "season_end",
+			Condition: "good", Date: time.Now(), IdempotencyKey: &key,
+		}); err != nil {
+			t.Fatalf("first return: %v", err)
+		}
+		_, err = equipReturnTx(ctx, tx, equipReturnInput{
+			DeploymentID: depB, Quantity: &qty, Reason: "season_end",
+			Condition: "good", Date: time.Now(), IdempotencyKey: &key,
+		})
+		if err == nil {
+			t.Fatal("same key on a different deployment succeeded")
+		}
+		if status := equipHTTPStatus(t, err); status != 409 {
+			t.Fatalf("status = %d, want 409: %v", status, err)
+		}
+	})
+}

@@ -3,11 +3,16 @@
 -- honey_sale_item -> sale / sale_item) and extend the allowlist for the
 -- domains that have grown since 00005/00024. Unique indexes, including
 -- the 00024 COALESCE(location_id, all-zero uuid) identity key, stay put.
+--
+-- Postgres re-evaluates CHECK on every updated row, so the 00024
+-- allowlist must drop before the rename UPDATEs; otherwise a database
+-- that actually holds honey_sale rows aborts with 23514.
+
+ALTER TABLE external_sync DROP CONSTRAINT IF EXISTS external_sync_entity_type_check;
 
 UPDATE external_sync SET entity_type = 'sale' WHERE entity_type = 'honey_sale';
 UPDATE external_sync SET entity_type = 'sale_item' WHERE entity_type = 'honey_sale_item';
 
-ALTER TABLE external_sync DROP CONSTRAINT IF EXISTS external_sync_entity_type_check;
 ALTER TABLE external_sync
   ADD CONSTRAINT external_sync_entity_type_check CHECK (
     entity_type IN (
@@ -25,10 +30,12 @@ DELETE FROM external_sync
     'hive', 'equipment_stock', 'equipment_stock_adjustment',
     'product_catalog', 'product_batch', 'product_adjustment'
   );
+
+ALTER TABLE external_sync DROP CONSTRAINT IF EXISTS external_sync_entity_type_check;
+
 UPDATE external_sync SET entity_type = 'honey_sale' WHERE entity_type = 'sale';
 UPDATE external_sync SET entity_type = 'honey_sale_item' WHERE entity_type = 'sale_item';
 
-ALTER TABLE external_sync DROP CONSTRAINT IF EXISTS external_sync_entity_type_check;
 ALTER TABLE external_sync
   ADD CONSTRAINT external_sync_entity_type_check CHECK (
     entity_type IN (
