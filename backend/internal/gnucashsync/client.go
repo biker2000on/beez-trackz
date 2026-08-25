@@ -95,30 +95,70 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// ValidBaseURL accepts only absolute http/https URLs with a host. The base URL
-// is fetched server-side, so any other scheme is an SSRF-shaped input.
+// errRedirect is returned by the redirect policy below. It is deliberately
+// not an *APIError: a redirect is a configuration problem, not something a
+// row can be marked failed for.
+var errRedirect = errors.New("gnucash refused: the server answered with a redirect, which this integration does not follow")
+
+// denyRedirects refuses every 3xx. Folio never redirects its API calls, so a
+// redirect means the base URL points at something else — a proxy, a login
+// page, or an attacker-controlled hop that would receive the bearer token.
+func denyRedirects(req *http.Request, _ []*http.Request) error {
+	_ = req
+	return errRedirect
+}
+
+// ValidBaseURL accepts only absolute http/https URLs with a host and nothing
+// else: no userinfo, query, or fragment. The base URL is fetched server-side
+// with the API token attached, so anything that could redirect the request,
+// smuggle credentials, or graft a query onto every contract path is an
+// SSRF-shaped input.
 func ValidBaseURL(raw string) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return false
 	}
 	parsed, err := url.Parse(raw)
-	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
-		parsed.Host != ""
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	if parsed.Host == "" || parsed.Opaque != "" {
+		return false
+	}
+	// user:pass@host would put a second credential on the wire, and a query
+	// or fragment on the base would be re-emitted in front of ours by
+	// endpoint(), silently rewriting "changes?since=..." into something else.
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery ||
+		parsed.Fragment != "" || parsed.RawFragment != "" {
+		return false
+	}
+	return true
 }
 
 // NewClient builds a client for baseURL. The caller has already validated the
 // URL with ValidBaseURL; httpClient may be nil for a sane default.
+//
+// Redirects are denied on every client, including a caller-supplied one. The
+// supplied client is copied rather than mutated so a shared *http.Client is
+// not reconfigured behind its owner's back.
 func NewClient(baseURL, token string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
+	transport := *httpClient
+	transport.CheckRedirect = denyRedirects
 	return &Client{
 		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		token:      strings.TrimSpace(token),
-		httpClient: httpClient,
+		httpClient: &transport,
 	}
 }
+
+// IsRedirect reports the fail-closed redirect refusal.
+func IsRedirect(err error) bool { return errors.Is(err, errRedirect) }
 
 // endpoint joins the configured base URL with a contract path. The base URL
 // may already end in the integration prefix, in which case it is not

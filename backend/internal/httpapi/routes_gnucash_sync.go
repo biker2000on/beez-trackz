@@ -170,24 +170,34 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Either half of the credential identifies the book we are talking to: a
+	// folio token is bound to one book, so rotating it can land us on a
+	// different book at the same host. Whenever either changes, the cached
+	// book identity and the changes cursor belong to someone else and are
+	// dropped, which also forces a fresh connection test before the next sync.
+	identityChanged := false
 	if req.BaseURL != nil {
 		baseURL := strings.TrimSpace(*req.BaseURL)
 		if baseURL != "" && !gnucashsync.ValidBaseURL(baseURL) {
 			writeError(w, http.StatusBadRequest,
-				"Base URL must be an absolute http(s) URL")
+				"Base URL must be an absolute http(s) URL with no userinfo, query, or fragment")
 			return
 		}
-		// A different server means the cached book identity and the changes
-		// cursor belong to someone else. Dropping them here stops a cursor
-		// from one book being replayed against another.
 		if baseURL != settings.BaseURL {
-			settings.BookGUID, settings.BookName, settings.RootCurrency = "", "", ""
-			settings.ChangesCursor = ""
+			identityChanged = true
 		}
 		settings.BaseURL = baseURL
 	}
 	if req.APIToken != nil {
-		settings.Token = strings.TrimSpace(*req.APIToken)
+		token := strings.TrimSpace(*req.APIToken)
+		if token != settings.Token {
+			identityChanged = true
+		}
+		settings.Token = token
+	}
+	if identityChanged {
+		settings.BookGUID, settings.BookName, settings.RootCurrency = "", "", ""
+		settings.ChangesCursor = ""
 	}
 	if req.SyncEnabled != nil {
 		settings.SyncEnabled = *req.SyncEnabled
@@ -385,8 +395,12 @@ func (s *Server) handleGnuCashRows(w http.ResponseWriter, r *http.Request) {
 // with a human summary of the underlying sale or expense.
 func (s *Server) gnucashAttentionRows(ctx context.Context, conflicted bool) ([]gnucashRow, error) {
 	const filterConflict = `es.conflict_state IS NOT NULL AND es.conflict_state <> 'none'`
-	const filterFailed = `es.sync_state = 'failed'
-		AND (es.conflict_state IS NULL OR es.conflict_state = 'none')`
+	// A row left pending with last_error set is a transient push failure that
+	// will be retried. It still needs to be visible: a folio that is down for
+	// a week must not look like a clean sync.
+	const filterFailed = `(es.conflict_state IS NULL OR es.conflict_state = 'none')
+		AND (es.sync_state = 'failed'
+			OR (es.sync_state = 'pending' AND COALESCE(es.last_error, '') <> ''))`
 	filter := filterFailed
 	if conflicted {
 		filter = filterConflict
@@ -443,8 +457,16 @@ type gnucashSyncReport struct {
 	Errors      []string `json:"errors"`
 }
 
-// POST /settings/gnucash/sync — scan, push, then pull. Manual by design: the
+// POST /settings/gnucash/sync — scan, pull, then push. Manual by design: the
 // operator watches the first runs before anything is put on a timer.
+//
+// The pull runs first on purpose. A row whose content changed locally would
+// otherwise be PUT over a bookkeeper edit that beez had not seen yet, and the
+// pull afterwards would only find our own echo. Consuming the change feed
+// first turns that case into a conflict, and the push query skips conflicted
+// rows; "Push local again" stays the explicit operator override. For the same
+// reason a pull that fails cancels the push: we cannot know what we would be
+// overwriting.
 func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	settings, err := loadGnuCashSettings(ctx, s.pool)
@@ -462,17 +484,25 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 			"Map a cash account before syncing")
 		return
 	}
+	// No cached book identity means the credentials have never been proven
+	// against a book, or were changed since. Syncing now could push into
+	// whatever book the new token happens to open.
+	if settings.BookGUID == "" {
+		writeError(w, http.StatusBadRequest,
+			"Test the connection before syncing so beez knows which book these credentials open")
+		return
+	}
 
 	report := &gnucashSyncReport{Errors: []string{}}
 	if err := s.gnucashScan(ctx, report); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if err := s.gnucashPush(ctx, client, settings.Mapping, report); err != nil {
-		report.Errors = append(report.Errors, err.Error())
-	}
-	cursor, err := s.gnucashPull(ctx, client, settings.ChangesCursor, report)
-	if err != nil {
+	cursor, pullErr := s.gnucashPull(ctx, client, settings.ChangesCursor, report)
+	if pullErr != nil {
+		report.Errors = append(report.Errors,
+			"Pull failed, so nothing was pushed this run: "+pullErr.Error())
+	} else if err := s.gnucashPush(ctx, client, settings.Mapping, report); err != nil {
 		report.Errors = append(report.Errors, err.Error())
 	}
 	settings.ChangesCursor = cursor
@@ -680,8 +710,14 @@ func (s *Server) gnucashPushRow(
 			report.Failed++
 			return s.gnucashMarkFailed(ctx, row.ID, gnucashUserMessage(err))
 		default:
-			// Transport or 5xx: keep it pending and retry next run.
-			return s.gnucashMarkRetryable(ctx, row.ID, gnucashUserMessage(err))
+			// Transport or 5xx: keep it pending so the next run retries, but
+			// still report the failure. Swallowing it here would make a dead
+			// folio look like a clean sync.
+			report.Failed++
+			if markErr := s.gnucashMarkRetryable(ctx, row.ID, gnucashUserMessage(err)); markErr != nil {
+				return markErr
+			}
+			return err
 		}
 	}
 	if created {
@@ -969,6 +1005,20 @@ func (s *Server) gnucashPull(
 		if err != nil {
 			return cursor, fmt.Errorf("pull changes: %s", gnucashUserMessage(err))
 		}
+		// A page that claims more but cannot say where to resume would replay
+		// itself until the page cap, every run, forever. That is a broken
+		// server, not a state beez can recover from: stop with the cursor
+		// where it was and tell the operator.
+		if result.HasMore {
+			switch result.NextCursor {
+			case "":
+				return cursor, errors.New(
+					"pull changes: GnuCash reported more changes without a nextCursor")
+			case cursor:
+				return cursor, errors.New(
+					"pull changes: GnuCash returned the same nextCursor twice, so the change feed cannot advance")
+			}
+		}
 		for _, item := range result.Items {
 			report.PulledItems++
 			flagged, err := s.gnucashReconcileItem(ctx, item)
@@ -981,7 +1031,7 @@ func (s *Server) gnucashPull(
 				report.Conflicts++
 			}
 		}
-		if result.NextCursor != "" {
+		if result.NextCursor != "" && result.NextCursor != cursor {
 			cursor = result.NextCursor
 			if err := saveGnuCashCursor(ctx, s.pool, cursor); err != nil {
 				return cursor, err
@@ -989,10 +1039,6 @@ func (s *Server) gnucashPull(
 		}
 		if !result.HasMore {
 			break
-		}
-		if result.NextCursor == "" {
-			// hasMore with no cursor would loop forever on the same page.
-			return cursor, errors.New("pull changes: hasMore without a nextCursor")
 		}
 	}
 	return cursor, nil

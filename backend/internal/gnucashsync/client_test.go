@@ -203,3 +203,57 @@ func TestValidBaseURLRejectsNonHTTPSchemes(t *testing.T) {
 		}
 	}
 }
+
+// The base URL is fetched server-side with the API token attached, so the
+// parts of a URL that could carry a second credential or rewrite the query of
+// every contract call are rejected outright.
+func TestValidBaseURLRejectsUserinfoQueryAndFragment(t *testing.T) {
+	for _, raw := range []string{
+		"https://user:pass@folio.example.com",
+		"https://user@folio.example.com/api/integrations/beez",
+		"https://folio.example.com/api/integrations/beez?token=leak",
+		"https://folio.example.com/api/integrations/beez?",
+		"https://folio.example.com/api/integrations/beez#frag",
+		"https://folio.example.com?",
+		"http:opaque",
+	} {
+		if ValidBaseURL(raw) {
+			t.Fatalf("%q must be rejected", raw)
+		}
+	}
+}
+
+// Folio never redirects an API call. Following one would hand the bearer
+// token to whatever host the redirect names, so every 3xx fails closed.
+func TestClientRefusesToFollowRedirects(t *testing.T) {
+	target, targetSeen := fakeFolio(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		redirector, _ := fakeFolio(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Redirect(w, &http.Request{}, target.URL+"/api/integrations/beez/status", status)
+		})
+		client := NewClient(redirector.URL, "gcw_token", redirector.Client())
+		if _, err := client.Status(context.Background()); err == nil {
+			t.Fatalf("HTTP %d was followed", status)
+		} else if !IsRedirect(err) {
+			t.Fatalf("HTTP %d gave %v, want a redirect refusal", status, err)
+		}
+		if len(*targetSeen) != 0 {
+			t.Fatalf("HTTP %d leaked the request to the redirect target", status)
+		}
+	}
+}
+
+// A caller-supplied client is copied, not reconfigured behind its owner.
+func TestNewClientDoesNotMutateTheSuppliedHTTPClient(t *testing.T) {
+	server, _ := fakeFolio(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	supplied := server.Client()
+	NewClient(server.URL, "gcw_token", supplied)
+	if supplied.CheckRedirect != nil {
+		t.Fatal("NewClient rewrote the redirect policy of the caller's client")
+	}
+}

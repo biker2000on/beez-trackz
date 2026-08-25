@@ -42,6 +42,12 @@ type folioFake struct {
 	clock     time.Time
 	seq       int
 
+	// writesFail turns every POST/PUT into a 502, the retryable shape.
+	writesFail bool
+	// stuckCursor makes GET changes claim hasMore while refusing to advance:
+	// "" returns no nextCursor at all, "repeat" echoes the one it was given.
+	stuckCursor string
+
 	posts, puts, deletes, changeCalls int
 	unbalanced                        []gnucashsync.Transaction
 }
@@ -113,8 +119,22 @@ func (f *folioFake) route(w http.ResponseWriter, r *http.Request) {
 				"type": "INCOME", "commodityMnemonic": "USD"},
 		}})
 	case r.Method == http.MethodPost && path == "/transactions":
+		if f.writesFail {
+			f.posts++
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error": "bad_gateway", "detail": "folio is restarting",
+			})
+			return
+		}
 		f.create(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, "/transactions/"):
+		if f.writesFail {
+			f.puts++
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error": "bad_gateway", "detail": "folio is restarting",
+			})
+			return
+		}
 		f.update(w, r, strings.TrimPrefix(path, "/transactions/"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/transactions/"):
 		f.remove(w, strings.TrimPrefix(path, "/transactions/"))
@@ -223,6 +243,16 @@ func (f *folioFake) remove(w http.ResponseWriter, externalID string) {
 
 func (f *folioFake) changesPage(w http.ResponseWriter, r *http.Request) {
 	f.changeCalls++
+	if f.stuckCursor != "" {
+		next := ""
+		if f.stuckCursor == "repeat" {
+			next = r.URL.Query().Get("since")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"items": []gnucashsync.Change{}, "nextCursor": next, "hasMore": true,
+		})
+		return
+	}
 	start := 0
 	if since := r.URL.Query().Get("since"); since != "" {
 		parsed, err := strconv.Atoi(since)
@@ -311,6 +341,12 @@ func (f *folioFake) unrepresentable(externalID string) {
 	})
 }
 
+func (f *folioFake) changeCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.changeCalls
+}
+
 func (f *folioFake) counts() (posts, puts, deletes int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -337,11 +373,16 @@ func gnucashTestServer(t *testing.T, fake *folioFake, mapping gnucashsync.Accoun
 		`DELETE FROM gnucash_sync_settings`); err != nil {
 		t.Fatalf("reset gnucash settings: %v", err)
 	}
+	// The book identity is what POST /test caches; sync refuses to run
+	// without it, so every fixture starts from a tested connection.
 	if err := saveGnuCashSettings(context.Background(), server.pool, gnucashSettings{
-		BaseURL:     fake.server.URL,
-		Token:       "gcw_test",
-		SyncEnabled: true,
-		Mapping:     mapping,
+		BaseURL:      fake.server.URL,
+		Token:        "gcw_test",
+		BookGUID:     "book-1",
+		BookName:     "Yard Books",
+		RootCurrency: "USD",
+		SyncEnabled:  true,
+		Mapping:      mapping,
 	}); err != nil {
 		t.Fatalf("save gnucash settings: %v", err)
 	}
@@ -390,6 +431,26 @@ func seedAppliedSale(
 	return saleID
 }
 
+// repriceSale changes a sale the way the sale handler would: the line price
+// and the sale totals move together, so the entry still balances and the push
+// has real work to do.
+func repriceSale(t *testing.T, server *Server, saleID uuid.UUID, unitPriceCents int64) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := server.pool.Exec(ctx, `
+		UPDATE sale_items SET unit_price_cents = $2 WHERE sale_id = $1`,
+		saleID, unitPriceCents); err != nil {
+		t.Fatalf("edit sale item: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		UPDATE sales SET total_amount_cents = line.total, amount_paid_cents = line.total
+		FROM (SELECT COALESCE(sum(quantity * unit_price_cents), 0) AS total
+			FROM sale_items WHERE sale_id = $1) line
+		WHERE sales.id = $1`, saleID); err != nil {
+		t.Fatalf("edit sale: %v", err)
+	}
+}
+
 func seedExpense(t *testing.T, server *Server, category string, amountCents int64) uuid.UUID {
 	t.Helper()
 	expenseID := uuid.New()
@@ -411,6 +472,22 @@ func runSync(t *testing.T, server *Server) map[string]any {
 	}
 	if errs, ok := body["errors"].([]any); ok && len(errs) > 0 {
 		t.Fatalf("sync reported errors: %v", errs)
+	}
+	return body
+}
+
+// syncExpectingErrors runs one sync and returns the report without failing on
+// report.errors, which is what the failure paths are about.
+func syncExpectingErrors(t *testing.T, server *Server) map[string]any {
+	t.Helper()
+	response, body := call(t, server.handleGnuCashSyncNow,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/sync", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("sync now: %d %v", response.Code, body)
+	}
+	errs, _ := body["errors"].([]any)
+	if len(errs) == 0 {
+		t.Fatalf("sync reported no errors: %v", body)
 	}
 	return body
 }
@@ -585,18 +662,24 @@ func TestGnuCashSyncRecoversFromAnOrphanedLink(t *testing.T) {
 	runSync(t, server)
 	externalID := syncRowFor(t, server, SyncEntitySale, saleID).ExternalID
 
-	// The transaction is deleted in folio but the link row survives, and the
-	// local sale changes so beez wants to write again.
+	// The transaction is deleted in folio but the link row survives. The pull
+	// surfaces that as a conflict; the operator answers "push local again",
+	// which is where the orphaned link has to be recovered from.
 	fake.externalDelete(externalID)
-	if _, err := server.pool.Exec(context.Background(), `
-		UPDATE external_sync SET conflict_state = NULL, sync_state = 'pending'
-		WHERE external_id = $1`, externalID); err != nil {
-		t.Fatalf("clear conflict: %v", err)
-	}
-
 	runSync(t, server)
 	row := syncRowFor(t, server, SyncEntitySale, saleID)
-	if row.SyncState != "synced" {
+	if row.ConflictState == "" {
+		t.Fatalf("a remote deletion must surface as a conflict: %+v", row)
+	}
+
+	response, body := call(t, server.handleGnuCashRowPush,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/rows/x/push", nil,
+			"id", row.ID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("push local again: %d %v", response.Code, body)
+	}
+	row = syncRowFor(t, server, SyncEntitySale, saleID)
+	if row.SyncState != "synced" || row.ConflictState != "" {
 		t.Fatalf("row after orphan recovery %+v", row)
 	}
 	if _, _, deletes := fake.counts(); deletes == 0 {
@@ -746,7 +829,15 @@ func TestGnuCashPullPersistsTheCursorAcrossPages(t *testing.T) {
 	seedAppliedSale(t, server, jarSizeID, 2, 1200)
 	seedExpense(t, server, "feed", 700)
 
+	// The first run pulls an empty feed (nothing has been pushed yet) and
+	// then creates the three transactions.
 	report := runSync(t, server)
+	if report["pulledItems"] != float64(0) {
+		t.Fatalf("pulled %v items before anything was pushed", report["pulledItems"])
+	}
+
+	// The second run drains the three echoes, one page at a time.
+	report = runSync(t, server)
 	if report["pulledItems"] != float64(3) {
 		t.Fatalf("pulled %v items, want 3", report["pulledItems"])
 	}
@@ -755,7 +846,7 @@ func TestGnuCashPullPersistsTheCursorAcrossPages(t *testing.T) {
 		t.Fatalf("stored cursor %q, want 3", cursor)
 	}
 
-	// A second run starts where the first stopped and re-reads nothing.
+	// A third run starts where the second stopped and re-reads nothing.
 	report = runSync(t, server)
 	if report["pulledItems"] != float64(0) {
 		t.Fatalf("re-pulled %v items; the cursor was not honoured", report["pulledItems"])
@@ -877,5 +968,230 @@ func TestGnuCashSettingsPutClearsTheCursorOnANewServer(t *testing.T) {
 		}))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("a bad base URL returned %d %v", response.Code, body)
+	}
+}
+
+// The push must never run against a change feed beez has not read yet: a
+// local edit would silently overwrite the bookkeeper's.
+func TestGnuCashSyncPullsBeforePushingSoARemoteEditIsNotOverwritten(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	editedID := seedAppliedSale(t, server, jarSizeID, 2, 1200)
+	deletedID := seedAppliedSale(t, server, jarSizeID, 3, 1200)
+	runSync(t, server)
+
+	editedRow := syncRowFor(t, server, SyncEntitySale, editedID)
+	deletedRow := syncRowFor(t, server, SyncEntitySale, deletedID)
+	postsBefore, putsBefore, deletesBefore := fake.counts()
+
+	// Both are edited locally, so the push wants to write both...
+	for _, id := range []uuid.UUID{editedID, deletedID} {
+		repriceSale(t, server, id, 1900)
+	}
+	// ...while the bookkeeper has already touched both in GnuCash, and beez
+	// has not consumed either change yet.
+	fake.externalEdit(editedRow.ExternalID, "Recategorised by the bookkeeper")
+	fake.externalDelete(deletedRow.ExternalID)
+
+	report := runSync(t, server)
+	if report["conflicts"] != float64(2) {
+		t.Fatalf("conflicts %v, want 2 (report %v)", report["conflicts"], report)
+	}
+	posts, puts, deletes := fake.counts()
+	if posts != postsBefore || puts != putsBefore || deletes != deletesBefore {
+		t.Fatalf("an unseen remote change was overwritten (%d/%d/%d -> %d/%d/%d)",
+			postsBefore, putsBefore, deletesBefore, posts, puts, deletes)
+	}
+
+	editedRow = syncRowFor(t, server, SyncEntitySale, editedID)
+	if editedRow.ConflictState == "" || editedRow.ConflictState == "none" {
+		t.Fatalf("locally edited row was pushed over a remote edit: %+v", editedRow)
+	}
+	deletedRow = syncRowFor(t, server, SyncEntitySale, deletedID)
+	if deletedRow.ConflictState == "" || deletedRow.ConflictState == "none" ||
+		!strings.Contains(deletedRow.LastError, "Deleted in GnuCash") {
+		t.Fatalf("locally edited row was pushed over a remote deletion: %+v", deletedRow)
+	}
+
+	// The bookkeeper's version is still what GnuCash holds.
+	if got := fake.bodyFor(t, editedRow.ExternalID).Description; !strings.Contains(got, "bookkeeper") {
+		t.Fatalf("GnuCash description %q — the local edit was pushed over it", got)
+	}
+
+	// Both are on the reconciliation list, where the operator can override.
+	response, body := call(t, server.handleGnuCashRows,
+		adminRequest(http.MethodGet, "/api/v1/settings/gnucash/rows", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("rows: %d %v", response.Code, body)
+	}
+	if conflicts, _ := body["conflicts"].([]any); len(conflicts) != 2 {
+		t.Fatalf("conflict list has %d rows, want 2", len(conflicts))
+	}
+}
+
+// A 502 is retryable, but it is still a failure: it has to reach the operator
+// instead of being reported as a clean run.
+func TestGnuCashPushReportsRetryableFailures(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	saleID := seedAppliedSale(t, server, jarSizeID, 1, 1200)
+
+	fake.mu.Lock()
+	fake.writesFail = true
+	fake.mu.Unlock()
+
+	report := syncExpectingErrors(t, server)
+	if report["failed"] != float64(1) {
+		t.Fatalf("failed %v, want 1 (report %v)", report["failed"], report)
+	}
+	if report["created"] != float64(0) {
+		t.Fatalf("created %v after a 502", report["created"])
+	}
+
+	// The row stays pending so the next run retries, but it carries the error.
+	row := syncRowFor(t, server, SyncEntitySale, saleID)
+	if row.SyncState != "pending" {
+		t.Fatalf("sync state %q, want pending", row.SyncState)
+	}
+	if row.LastError == "" {
+		t.Fatalf("row %+v has no last_error", row)
+	}
+
+	// And it is visible on the reconciliation list rather than hidden.
+	response, body := call(t, server.handleGnuCashRows,
+		adminRequest(http.MethodGet, "/api/v1/settings/gnucash/rows", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("rows: %d %v", response.Code, body)
+	}
+	failures, _ := body["failures"].([]any)
+	if len(failures) != 1 {
+		t.Fatalf("failure list has %d rows, want 1 (%v)", len(failures), body)
+	}
+
+	// The manual override must not claim success either.
+	response, body = call(t, server.handleGnuCashRowPush,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/rows/x/push", nil,
+			"id", row.ID.String()))
+	if response.Code == http.StatusOK {
+		t.Fatalf("manual push returned 200 on a 502: %v", body)
+	}
+
+	// Once folio is back, the retry succeeds and the error clears.
+	fake.mu.Lock()
+	fake.writesFail = false
+	fake.mu.Unlock()
+	runSync(t, server)
+	row = syncRowFor(t, server, SyncEntitySale, saleID)
+	if row.SyncState != "synced" || row.LastError != "" {
+		t.Fatalf("row after recovery %+v", row)
+	}
+}
+
+// A change feed that cannot advance must stop the run, not replay a page up
+// to the page cap on every sync forever.
+func TestGnuCashPullRejectsANonAdvancingCursor(t *testing.T) {
+	for _, testCase := range []struct {
+		name, mode, cursor, want string
+	}{
+		{"no cursor at all", "empty", "", "without a nextCursor"},
+		{"the same cursor twice", "repeat", "77", "cannot advance"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fake := newFolioFake(t)
+			server := gnucashTestServer(t, fake, fullMapping())
+			jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+			seedAppliedSale(t, server, jarSizeID, 1, 1200)
+			if testCase.cursor != "" {
+				if err := saveGnuCashCursor(context.Background(), server.pool,
+					testCase.cursor); err != nil {
+					t.Fatalf("save cursor: %v", err)
+				}
+			}
+			fake.mu.Lock()
+			fake.stuckCursor = testCase.mode
+			fake.mu.Unlock()
+
+			report := syncExpectingErrors(t, server)
+			errs, _ := report["errors"].([]any)
+			joined := ""
+			for _, entry := range errs {
+				joined += entry.(string)
+			}
+			if !strings.Contains(joined, testCase.want) {
+				t.Fatalf("errors %v do not name the broken cursor (%q)", errs, testCase.want)
+			}
+			if calls := fake.changeCallCount(); calls != 1 {
+				t.Fatalf("%d changes calls: the run replayed the page", calls)
+			}
+			if got := storedCursor(t, server); got != testCase.cursor {
+				t.Fatalf("cursor %q, want %q — a broken page must not move it",
+					got, testCase.cursor)
+			}
+			// A pull that failed must not be followed by a push.
+			if posts, _, _ := fake.counts(); posts != 0 {
+				t.Fatalf("%d posts after a failed pull", posts)
+			}
+		})
+	}
+}
+
+// A new token can open a different book on the same host, so it invalidates
+// the cached identity and the cursor exactly like a new base URL does.
+func TestGnuCashSettingsPutClearsTheBookOnATokenChange(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	if err := saveGnuCashCursor(context.Background(), server.pool, "42"); err != nil {
+		t.Fatalf("save cursor: %v", err)
+	}
+
+	// Same host, rotated token.
+	response, body := call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"baseUrl": fake.server.URL, "apiToken": "gcw_rotated",
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("put settings: %d %v", response.Code, body)
+	}
+	if cursor := storedCursor(t, server); cursor != "" {
+		t.Fatalf("cursor %q survived a token rotation", cursor)
+	}
+	response, body = call(t, server.handleGnuCashSettings,
+		adminRequest(http.MethodGet, "/api/v1/settings/gnucash", nil))
+	if response.Code != http.StatusOK || body["bookGuid"] != "" {
+		t.Fatalf("book identity %v survived a token rotation", body["bookGuid"])
+	}
+
+	// Sync refuses to run until the connection is tested again.
+	response, body = call(t, server.handleGnuCashSyncNow,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/sync", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("sync ran with an uncached book identity: %d %v", response.Code, body)
+	}
+	if posts, _, _ := fake.counts(); posts != 0 {
+		t.Fatalf("%d posts before the connection was re-tested", posts)
+	}
+
+	// Re-testing caches the book again and unblocks the sync.
+	if response, body = call(t, server.handleGnuCashTest,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/test", nil)); body["success"] != true {
+		t.Fatalf("test connection: %d %v", response.Code, body)
+	}
+	runSync(t, server)
+
+	// An unchanged token is not a rotation and must not reset anything.
+	if err := saveGnuCashCursor(context.Background(), server.pool, "9"); err != nil {
+		t.Fatalf("save cursor: %v", err)
+	}
+	response, body = call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"baseUrl": fake.server.URL, "apiToken": "gcw_rotated", "syncEnabled": true,
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("put settings: %d %v", response.Code, body)
+	}
+	if cursor := storedCursor(t, server); cursor != "9" {
+		t.Fatalf("cursor %q was reset by a no-op settings save", cursor)
 	}
 }
