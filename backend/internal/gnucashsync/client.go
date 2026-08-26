@@ -118,6 +118,14 @@ func ValidBaseURL(raw string) bool {
 	if raw == "" {
 		return false
 	}
+	// Checked on the raw string, before parsing: Go reports an empty
+	// fragment ("https://host#") with both Fragment and RawFragment empty,
+	// so the parsed-field checks below cannot see it, and endpoint() would
+	// then graft the contract path after the marker and send the authed
+	// request to the host root. A trailing "?" is the same shape.
+	if strings.ContainsAny(raw, "#?") {
+		return false
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return false

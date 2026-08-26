@@ -215,6 +215,12 @@ func TestValidBaseURLRejectsUserinfoQueryAndFragment(t *testing.T) {
 		"https://folio.example.com/api/integrations/beez?",
 		"https://folio.example.com/api/integrations/beez#frag",
 		"https://folio.example.com?",
+		// Go parses a bare trailing marker with Fragment and RawQuery both
+		// empty, so these only fail on the raw string.
+		"https://folio.example.com#",
+		"https://folio.example.com/api/integrations/beez#",
+		"https://folio.example.com/api/integrations/beez?",
+		"https://folio.example.com/api#/integrations/beez",
 		"http:opaque",
 	} {
 		if ValidBaseURL(raw) {

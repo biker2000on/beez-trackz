@@ -127,6 +127,24 @@ func (settings gnucashSettings) client() (*gnucashsync.Client, error) {
 	return gnucashsync.NewClient(settings.BaseURL, settings.Token, nil), nil
 }
 
+// writeClient is what every handler that can PUT, POST, or DELETE against
+// folio must build its client with. On top of the configuration check it
+// requires the cached book identity: an empty BookGUID means the credentials
+// have never been proven against a book, or were rotated since, and writing
+// now could land entries in whatever book the new token happens to open.
+// handleGnuCashSettingsPut clears the identity on exactly those changes.
+func (settings gnucashSettings) writeClient() (*gnucashsync.Client, error) {
+	client, err := settings.client()
+	if err != nil {
+		return nil, err
+	}
+	if settings.BookGUID == "" {
+		return nil, errors.New(
+			"Test the connection before syncing so beez knows which book these credentials open")
+	}
+	return client, nil
+}
+
 // GET /settings/gnucash — configuration with the token masked to a boolean.
 func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := loadGnuCashSettings(r.Context(), s.pool)
@@ -474,7 +492,7 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	client, err := settings.client()
+	client, err := settings.writeClient()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -484,26 +502,27 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 			"Map a cash account before syncing")
 		return
 	}
-	// No cached book identity means the credentials have never been proven
-	// against a book, or were changed since. Syncing now could push into
-	// whatever book the new token happens to open.
-	if settings.BookGUID == "" {
-		writeError(w, http.StatusBadRequest,
-			"Test the connection before syncing so beez knows which book these credentials open")
-		return
-	}
 
 	report := &gnucashSyncReport{Errors: []string{}}
 	if err := s.gnucashScan(ctx, report); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	cursor, pullErr := s.gnucashPull(ctx, client, settings.ChangesCursor, report)
-	if pullErr != nil {
+	cursor, pullComplete, pullErr := s.gnucashPull(ctx, client, settings.ChangesCursor, report)
+	switch {
+	case pullErr != nil:
 		report.Errors = append(report.Errors,
 			"Pull failed, so nothing was pushed this run: "+pullErr.Error())
-	} else if err := s.gnucashPush(ctx, client, settings.Mapping, report); err != nil {
-		report.Errors = append(report.Errors, err.Error())
+	case !pullComplete:
+		// The page cap stopped the drain early. The advanced cursor is
+		// persisted so the next run resumes, but pushing now would write
+		// over remote changes nobody has read yet.
+		report.Errors = append(report.Errors,
+			"pull incomplete - run sync again to continue draining. Nothing was pushed this run.")
+	default:
+		if err := s.gnucashPush(ctx, client, settings.Mapping, report); err != nil {
+			report.Errors = append(report.Errors, err.Error())
+		}
 	}
 	settings.ChangesCursor = cursor
 	now := time.Now()
@@ -684,6 +703,17 @@ func (s *Server) gnucashPushRow(
 					if gnucashsync.IsPermanent(err) {
 						report.Failed++
 						return s.gnucashMarkFailed(ctx, row.ID, gnucashUserMessage(err))
+					}
+					// Transport or 5xx, handled exactly as on the
+					// create/update path: leave the row pending with the
+					// error recorded so the retirement is retried and stays
+					// on the attention list. Falling through as "synced"
+					// would hide an entry beez has already decided does not
+					// belong in the books.
+					report.Failed++
+					if markErr := s.gnucashMarkRetryable(ctx, row.ID,
+						gnucashUserMessage(err)); markErr != nil {
+						return markErr
 					}
 					return err
 				}
@@ -996,14 +1026,14 @@ func (s *Server) gnucashPull(
 	client *gnucashsync.Client,
 	cursor string,
 	report *gnucashSyncReport,
-) (string, error) {
+) (string, bool, error) {
 	for page := 0; page < gnucashMaxPullPages; page++ {
 		if err := ctx.Err(); err != nil {
-			return cursor, err
+			return cursor, false, err
 		}
 		result, err := client.Changes(ctx, cursor, gnucashPullPageSize)
 		if err != nil {
-			return cursor, fmt.Errorf("pull changes: %s", gnucashUserMessage(err))
+			return cursor, false, fmt.Errorf("pull changes: %s", gnucashUserMessage(err))
 		}
 		// A page that claims more but cannot say where to resume would replay
 		// itself until the page cap, every run, forever. That is a broken
@@ -1012,10 +1042,10 @@ func (s *Server) gnucashPull(
 		if result.HasMore {
 			switch result.NextCursor {
 			case "":
-				return cursor, errors.New(
+				return cursor, false, errors.New(
 					"pull changes: GnuCash reported more changes without a nextCursor")
 			case cursor:
-				return cursor, errors.New(
+				return cursor, false, errors.New(
 					"pull changes: GnuCash returned the same nextCursor twice, so the change feed cannot advance")
 			}
 		}
@@ -1025,7 +1055,7 @@ func (s *Server) gnucashPull(
 			if err != nil {
 				// Stop before advancing the cursor so the unprocessed part
 				// of this page is re-read next run.
-				return cursor, err
+				return cursor, false, err
 			}
 			if flagged {
 				report.Conflicts++
@@ -1034,14 +1064,18 @@ func (s *Server) gnucashPull(
 		if result.NextCursor != "" && result.NextCursor != cursor {
 			cursor = result.NextCursor
 			if err := saveGnuCashCursor(ctx, s.pool, cursor); err != nil {
-				return cursor, err
+				return cursor, false, err
 			}
 		}
 		if !result.HasMore {
-			break
+			return cursor, true, nil
 		}
 	}
-	return cursor, nil
+	// The page cap ran out with the feed still claiming more. The cursor we
+	// reached is real and worth keeping, but everything past it is still
+	// unread, so as far as the push is concerned this run is no better
+	// informed than a pull that failed outright.
+	return cursor, false, nil
 }
 
 // gnucashReconcileItem applies one change item. Items whose externalId beez
@@ -1125,7 +1159,10 @@ func (s *Server) handleGnuCashRowPush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	client, err := settings.client()
+	// A manual override is still a write into a book, so it carries the same
+	// tested-identity prerequisite as the scheduled run, checked before any
+	// state is touched.
+	client, err := settings.writeClient()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

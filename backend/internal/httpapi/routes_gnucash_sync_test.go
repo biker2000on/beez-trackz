@@ -42,7 +42,7 @@ type folioFake struct {
 	clock     time.Time
 	seq       int
 
-	// writesFail turns every POST/PUT into a 502, the retryable shape.
+	// writesFail turns every POST/PUT/DELETE into a 502, the retryable shape.
 	writesFail bool
 	// stuckCursor makes GET changes claim hasMore while refusing to advance:
 	// "" returns no nextCursor at all, "repeat" echoes the one it was given.
@@ -137,6 +137,13 @@ func (f *folioFake) route(w http.ResponseWriter, r *http.Request) {
 		}
 		f.update(w, r, strings.TrimPrefix(path, "/transactions/"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/transactions/"):
+		if f.writesFail {
+			f.deletes++
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error": "bad_gateway", "detail": "folio is restarting",
+			})
+			return
+		}
 		f.remove(w, strings.TrimPrefix(path, "/transactions/"))
 	case r.Method == http.MethodGet && path == "/changes":
 		f.changesPage(w, r)
@@ -1193,5 +1200,177 @@ func TestGnuCashSettingsPutClearsTheBookOnATokenChange(t *testing.T) {
 	}
 	if cursor := storedCursor(t, server); cursor != "9" {
 		t.Fatalf("cursor %q was reset by a no-op settings save", cursor)
+	}
+}
+
+// The page cap can stop a drain with the feed still claiming more. Pushing
+// after that would put local rows over remote changes this run never read, so
+// the run must skip the push entirely, keep the cursor it reached, and say so.
+func TestGnuCashPullCapSkipsThePushUntilTheFeedIsDrained(t *testing.T) {
+	fake := newFolioFake(t)
+	fake.pageLimit = 1 // one item per page, so the cap bites at 20
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	saleID := seedAppliedSale(t, server, jarSizeID, 2, 1200)
+
+	// One more page of folio-native activity than a single run can drain.
+	for i := 0; i < gnucashMaxPullPages+1; i++ {
+		fake.nativeActivity()
+	}
+
+	report := syncExpectingErrors(t, server)
+	errs, _ := report["errors"].([]any)
+	joined := ""
+	for _, entry := range errs {
+		joined += entry.(string)
+	}
+	if !strings.Contains(joined, "pull incomplete") {
+		t.Fatalf("errors %v do not report the incomplete pull", errs)
+	}
+	if posts, puts, deletes := fake.counts(); posts != 0 || puts != 0 || deletes != 0 {
+		t.Fatalf("%d posts, %d puts, %d deletes over unread remote changes",
+			posts, puts, deletes)
+	}
+	if report["pulledItems"] != float64(gnucashMaxPullPages) {
+		t.Fatalf("pulled %v items, want %d", report["pulledItems"], gnucashMaxPullPages)
+	}
+	// The cursor still advances: the pages that were read are read for good.
+	if got, want := storedCursor(t, server), strconv.Itoa(gnucashMaxPullPages); got != want {
+		t.Fatalf("cursor %q, want %q", got, want)
+	}
+	if row := syncRowFor(t, server, SyncEntitySale, saleID); row.SyncState != "pending" {
+		t.Fatalf("sale row %+v; the push must simply not have run", row)
+	}
+
+	// The second run finishes the feed and only then pushes.
+	report = runSync(t, server)
+	if report["pulledItems"] != float64(1) {
+		t.Fatalf("second run pulled %v items, want 1", report["pulledItems"])
+	}
+	if report["created"] != float64(1) {
+		t.Fatalf("second run created %v, want 1 (report %v)", report["created"], report)
+	}
+	if row := syncRowFor(t, server, SyncEntitySale, saleID); row.SyncState != "synced" {
+		t.Fatalf("sale row after the drain %+v", row)
+	}
+}
+
+// "Push local again" writes into a book just like the scheduled run, so it
+// carries the same prerequisite: a token rotation clears the cached identity
+// and nothing may be written until the connection is tested again.
+func TestGnuCashRowPushRequiresATestedIdentity(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	saleID := seedAppliedSale(t, server, jarSizeID, 1, 1200)
+	runSync(t, server)
+	row := syncRowFor(t, server, SyncEntitySale, saleID)
+	before, beforePuts, beforeDeletes := fake.counts()
+
+	// Same host, rotated token: handleGnuCashSettingsPut drops the book.
+	response, body := call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"baseUrl": fake.server.URL, "apiToken": "gcw_rotated",
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("put settings: %d %v", response.Code, body)
+	}
+
+	response, body = call(t, server.handleGnuCashRowPush,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/rows/x/push", nil,
+			"id", row.ID.String()))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("manual push ran with an uncached book identity: %d %v",
+			response.Code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "Test the connection") {
+		t.Fatalf("error %v does not name the missing identity", body)
+	}
+	if posts, puts, deletes := fake.counts(); posts != before ||
+		puts != beforePuts || deletes != beforeDeletes {
+		t.Fatalf("folio was written to before the connection was re-tested: "+
+			"%d/%d/%d, want %d/%d/%d", posts, puts, deletes, before, beforePuts, beforeDeletes)
+	}
+
+	// Re-testing caches the book again and unblocks the same call.
+	if response, body = call(t, server.handleGnuCashTest,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/test", nil)); body["success"] != true {
+		t.Fatalf("test connection: %d %v", response.Code, body)
+	}
+	response, body = call(t, server.handleGnuCashRowPush,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/rows/x/push", nil,
+			"id", row.ID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("push after re-testing: %d %v", response.Code, body)
+	}
+}
+
+// A retirement is a DELETE, and a 5xx on it is as retryable as one on a
+// create. The row must not stay "synced" while a transaction beez has
+// disowned is still sitting in the books.
+func TestGnuCashRetirementReportsRetryableDeleteFailures(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	saleID := seedAppliedSale(t, server, jarSizeID, 1, 1200)
+	runSync(t, server)
+	externalID := syncRowFor(t, server, SyncEntitySale, saleID).ExternalID
+
+	if _, err := server.pool.Exec(context.Background(), `
+		UPDATE sales SET order_status = 'cancelled', cancelled_at = now(),
+			physical_applied_at = NULL WHERE id = $1`, saleID); err != nil {
+		t.Fatalf("cancel sale: %v", err)
+	}
+	fake.mu.Lock()
+	fake.writesFail = true
+	fake.mu.Unlock()
+
+	report := syncExpectingErrors(t, server)
+	if report["failed"] != float64(1) {
+		t.Fatalf("failed %v, want 1 (report %v)", report["failed"], report)
+	}
+	if report["retired"] != float64(0) {
+		t.Fatalf("retired %v after a 502 DELETE", report["retired"])
+	}
+
+	row := syncRowFor(t, server, SyncEntitySale, saleID)
+	if row.SyncState != "pending" {
+		t.Fatalf("sync state %q after a 502 DELETE, want pending", row.SyncState)
+	}
+	if row.LastError == "" {
+		t.Fatalf("row %+v has no last_error", row)
+	}
+	if row.ExternalID != externalID {
+		t.Fatalf("row %+v lost the link that still has to be deleted", row)
+	}
+
+	// And the operator can see it rather than it looking like a clean sync.
+	response, body := call(t, server.handleGnuCashRows,
+		adminRequest(http.MethodGet, "/api/v1/settings/gnucash/rows", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("rows: %d %v", response.Code, body)
+	}
+	failures, _ := body["failures"].([]any)
+	if len(failures) != 1 {
+		t.Fatalf("failure list has %d rows, want 1 (%v)", len(failures), body)
+	}
+
+	// Once folio is back the retirement completes on its own.
+	fake.mu.Lock()
+	fake.writesFail = false
+	fake.mu.Unlock()
+	report = runSync(t, server)
+	if report["retired"] != float64(1) {
+		t.Fatalf("retired %v after recovery, want 1", report["retired"])
+	}
+	row = syncRowFor(t, server, SyncEntitySale, saleID)
+	if row.SyncState != "ignored" || row.LastError != "" || row.ExternalID != "" {
+		t.Fatalf("row after recovery %+v", row)
+	}
+	fake.mu.Lock()
+	_, stillLinked := fake.linked[externalID]
+	fake.mu.Unlock()
+	if stillLinked {
+		t.Fatal("the cancelled sale is still in the books")
 	}
 }
