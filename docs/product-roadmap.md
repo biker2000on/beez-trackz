@@ -57,8 +57,15 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
 6. ~~**Inventory at more than one location**~~ — **shipped 2026-08-20**
    (Polyagent run `20260820-roadmap-6-8-w1`; migration 00024). Remaining
    gaps under "Shipped 2026-08-20 — remaining gaps" below.
-7. **Live GnuCash sync**, then **Zebra labels**. The `external_sync`
-   location dimension landed with item 6.
+7. ~~**Live GnuCash sync**~~ — **shipped 2026-08-26** (Polyagent waves
+   `20260825-gaps-w1-bz01` / `20260825-sync-w2-bz02`; migrations
+   00038–00045). Both sides: gnucash-web (folio) gained a
+   `/api/integrations/beez/*` integration API (external links, idempotent
+   writes, bounded-overlap change feed), and Beez gained the sync engine
+   (Settings > GnuCash sync: token, account mappings per line kind and
+   expense category, pull-first Sync now, conflict/reconciliation list).
+   Beez stays authoritative for physical quantities. Next: **Zebra
+   labels**.
 8. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
    Polyagent waves (migrations 00025–00029): field objects, health
    objects, units preference + display sweep, ntfy, labor, compliance
@@ -164,9 +171,10 @@ Polyagent run (consignment / field+health / units+ops; migrations
   after one release), inventory matrix is a fixed number of queries.
   Transfers/settlements stay online-only by design.
 - **Units.** Display sweep complete 2026-08-21 (forecast
-  current-conditions strip converts through the preference). Weather
-  stays °F/mph canonical until the Open-Meteo request switches to
-  Celsius in a coordinated change.
+  current-conditions strip converts through the preference). Closed
+  2026-08-25: the Open-Meteo request is Celsius/kmh/mm canonical with a
+  `unitsSystem` discriminator stamped into new snapshots; historical
+  Fahrenheit snapshots render through a compatibility branch.
 - **Ops.** Closed 2026-08-21: ntfy access token (migration 00031,
   bearer auth for reserved topics), dispatch runs hands-free after each
   recommendation pass (receipt-deduplicated), compliance packet has an
@@ -183,12 +191,15 @@ the review left open, by feature:
 
 - **Sales / products.** Product batches void 2026-08-21 (reverses the
   honey/propolis consumption; refused once output is drawn down), and
-  batch expenses now report cost-per-unit on the products page. Still
-  open: colony revenue is not paired against `bees_queens`; equipment
-  lines have no cost basis / COGS; `external_sync` entity types and
-  per-kind account mappings for colony/equipment/product lines were not
-  designed (do with GnuCash). (Propolis `net_grams` and deferred physical
-  effects for draft/pending sales landed 2026-08-19, migration 00022.)
+  batch expenses now report cost-per-unit on the products page. Closed
+  2026-08-25/26 (migrations 00040–00041): colony lines snapshot
+  `cost_basis_cents` from `bees_queens` expenses and equipment lines from
+  `unit_cost_cents` at physical apply; profitability by-kind reports
+  cost/margin only when basis coverage is complete (coverage counts
+  surfaced); `external_sync` entity types renamed/extended and per-kind
+  account mappings landed with the GnuCash sync. (Propolis `net_grams`
+  and deferred physical effects for draft/pending sales landed
+  2026-08-19, migration 00022.)
 - **Lockout / moisture / yard queue.** Migration 00022 seeds Apivar 14,
   CheckMite+ 14, ApiLife Var 30 days; verify the rest against labels in
   Settings > Treatment withdrawals. Sale lockout only bites when the sale names a lot; jar lines are not
@@ -200,10 +211,13 @@ the review left open, by feature:
   with re-resolved withdrawal days; withdrawal seeds audited against
   labels with missing products added insert-only. (The re-parse
   re-resolve sentence was stale — fixed earlier in `5e7a706`. Yard-queue
-  endpoint test added the same day.) Still open: jar lines are not
-  traced to lots, so a jar sale is only caught at bottling time; a
-  bottling run back-dated to after the window escapes the check (same
-  hole the sale path has).
+  endpoint test added the same day.) Closed 2026-08-25 (migration
+  00038): jar sale lines can carry a `bottling_run_id` (picker in the
+  sale form), and a run-carrying line is refused against a locked lot at
+  sale time even when the sale names no lot; future-dated bottling runs,
+  harvests, and session entries are refused outright, closing the
+  date-forging escape. An untraced jar line (no run selected) remains
+  legal by design for offline/POS flows.
 - **Varroa.** Closed 2026-08-21 (migration 00036): every mite count on
   an inspection is editable via dedicated `/mite-counts` endpoints;
   soft delete + audit on `mite_counts` (all aggregates filter deleted
@@ -220,16 +234,32 @@ the review left open, by feature:
   `satelliteImageKey` dropped (migration 00032), hive lat/lng surfaced
   on the hive overview (capture/clear via `PATCH /hives/{id}/gps`), sun
   times formatted in the apiary timezone from the weather snapshot.
-  Still open: tiles are cross-origin so the map is blank offline, and
-  the stand layer is hidden until geo loads. Browser `coords.altitude`
-  is ellipsoidal, stored as if MSL. Esri legacy tile endpoint ToS is
-  grey. A yard-map save still refreshes placed-hive GPS from stand
-  slots, so a recapture on a placed hive is overwritten on the next
-  layout save (the UI says so).
+  Closed 2026-08-25 (migration 00043): tile failures surface a
+  dismissible offline notice and stands render regardless; streets tiles
+  moved to OpenStreetMap with attribution (README privacy disclosure
+  updated), Esri imagery attributed; elevation capture prefers
+  Open-Meteo terrain MSL over ellipsoidal device altitude; and
+  `hives.gps_source` makes a manual GPS capture survive layout saves
+  until explicitly cleared.
 - **Auth.** Closed 2026-08-21: `.env` loading is scoped to
   `cmd/set-password`; the production server no longer reads one.
 
-## P1 — Live GnuCash sync and reconciliation
+## P1 — Live GnuCash sync and reconciliation — shipped 2026-08-26
+
+**Shipped 2026-08-26.** Everything below was delivered across both repos:
+folio exposes `/api/integrations/beez/*` (book-scoped `gcw_` tokens,
+`gnucash_web_external_links`, idempotent create/replace/delete keyed by
+`sale:<id>`/`expense:<id>` external ids, and a change feed with a
+bounded-overlap cursor, deletion tombstones, and quarantine sets for
+NULL/far-future timestamps); Beez pushes applied sales (revenue split per
+line kind, cash vs receivable from collected-vs-invoiced, tax, optional
+COGS/inventory pair from `cost_basis_cents`) and expenses per category,
+pulls the feed, and marks `remote_newer`/`diverged`/tombstone conflicts
+for operator resolution — pull always runs before push so a bookkeeper's
+edit is never overwritten unseen. Equipment mutations got idempotency
+keys (00042) and offline-manifest registration. Beez remains
+authoritative for physical quantities; folio for posted accounting. The
+original spec follows for reference.
 
 **Foundations delivered 2026-08-04** (integer cents, audit fields, reversals and
 soft deletes, a unified bulk formula, stock validation, collected-vs-invoiced
@@ -579,11 +609,18 @@ release; `/harvest` → `/honey` rename and lot-weight derivation stay in
 
 ## Smaller deferred items
 
-- **`/harvest` → `/honey` route rename**, deferred from the 2026-08-11 navigation
-  work because it collides with the public `/honey/[slug]` story pages.
-- **Lot weight is free-typed** against linked harvests rather than derived.
+- ~~**`/harvest` → `/honey` route rename**~~ — **shipped 2026-08-25.**
+  Authenticated tree moved to `(app)/honey` with redirect shims at every
+  old `/harvest` path (`?serial=` forwarded); public `/honey/[slug]`
+  stories unaffected; reserved-slug guard on lot create *and* update
+  keeps app subroutes from shadowing a story.
+- ~~**Lot weight is free-typed**~~ — **shipped 2026-08-25** (migration
+  00039): `honey_weight_source` manual|derived; derived lots sum linked
+  non-deleted harvests, recompute when links change, and are protected by
+  a global harvest→lot→bulk lock order; deleting a harvest under a lot
+  with live bottling runs is refused to preserve withdrawal provenance.
   Lot **moisture** is the sibling number and lives in the honey-product
-  item below, not here.
+  item, not here.
 
 ## Verified clean — do not re-litigate
 
