@@ -34,6 +34,12 @@ type Config struct {
 	// Base URL the app is served from, e.g. https://beez.example.com.
 	// Used for OIDC redirect URIs and absolute links.
 	AppURL string
+	// Base URL printed into public Honey Story links and QR codes when the
+	// stories are fronted by a different origin than the app (e.g. the apex
+	// marketing domain proxying /honey/* to the app). Empty means AppURL.
+	// Only public story URLs use this; auth, cookies, and internal links
+	// stay on AppURL.
+	PublicStoryBaseURL string
 
 	// OIDC (optional — local login always available)
 	OIDCIssuer       string
@@ -66,6 +72,7 @@ func Load() (*Config, error) {
 		MinioBucket:         getenv("MINIO_BUCKET", "beeztrackz-media"),
 		SessionSecret:       os.Getenv("SESSION_SECRET"),
 		AppURL:              getenv("APP_URL", "http://localhost:3000"),
+		PublicStoryBaseURL:  strings.TrimSpace(os.Getenv("PUBLIC_STORY_BASE_URL")),
 		OIDCIssuer:          os.Getenv("OIDC_ISSUER"),
 		OIDCClientID:        os.Getenv("OIDC_CLIENT_ID"),
 		OIDCClientSecret:    os.Getenv("OIDC_CLIENT_SECRET"),
@@ -99,10 +106,23 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	cfg.TrustedProxies = proxies
+	if cfg.PublicStoryBaseURL != "" && !validHTTPBaseURL(cfg.PublicStoryBaseURL) {
+		return nil, fmt.Errorf("PUBLIC_STORY_BASE_URL is not a valid http(s) URL")
+	}
 	if err := validatePhotoStorage(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// StoryBaseURL is the origin public Honey Story URLs are minted against:
+// PublicStoryBaseURL when set, otherwise AppURL. Trailing slash stripped.
+func (c *Config) StoryBaseURL() string {
+	base := c.AppURL
+	if c.PublicStoryBaseURL != "" {
+		base = c.PublicStoryBaseURL
+	}
+	return strings.TrimRight(base, "/")
 }
 
 const (

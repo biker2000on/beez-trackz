@@ -879,7 +879,7 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "publicSlug": slug,
-		"storyUrl": strings.TrimRight(s.cfg.AppURL, "/") + "/honey/" + slug,
+		"storyUrl": s.cfg.StoryBaseURL() + "/honey/" + slug,
 	})
 }
 
@@ -1473,7 +1473,7 @@ func (s *Server) publicHoneyStoryQR(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeHoneyStoryQR(w http.ResponseWriter, slug string) {
-	url := strings.TrimRight(s.cfg.AppURL, "/") + "/honey/" + slug
+	url := s.cfg.StoryBaseURL() + "/honey/" + slug
 	png, err := qrcode.Encode(url, qrcode.Medium, 512)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate QR code")

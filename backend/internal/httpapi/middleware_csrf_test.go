@@ -18,6 +18,9 @@ import (
 func csrfTestRouter() http.Handler {
 	return NewRouter(&config.Config{
 		SessionSecret: "test", AppURL: "https://beez.example.com",
+		// The apex domain whose proxy fronts public Honey Story pages; its
+		// origin is trusted alongside APP_URL.
+		PublicStoryBaseURL: "https://stories.example.com",
 	}, nil, nil, nil)
 }
 
@@ -39,6 +42,10 @@ func TestCSRFOriginCheck(t *testing.T) {
 			origin: "https://beez.example.com"},
 		{name: "same origin referer only", method: http.MethodPost,
 			referer: "https://beez.example.com/login"},
+		{name: "public story origin post", method: http.MethodPost,
+			origin: "https://stories.example.com"},
+		{name: "public story origin referer only", method: http.MethodPost,
+			referer: "https://stories.example.com/honey/lot-1"},
 		{name: "cross site post", method: http.MethodPost,
 			origin: "https://evil.example.com", rejected: true},
 		{name: "cross site referer", method: http.MethodPost,

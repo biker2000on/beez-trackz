@@ -38,6 +38,42 @@ func TestLoadRequiresCoreSecrets(t *testing.T) {
 	}
 }
 
+// Public story URLs can be minted against a marketing apex domain that
+// proxies /honey/* while auth and cookies stay on APP_URL.
+func TestPublicStoryBaseURL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example/db")
+	t.Setenv("SESSION_SECRET", "test-secret")
+	t.Setenv("MINIO_ACCESS_KEY", "access")
+	t.Setenv("MINIO_SECRET_KEY", "secret")
+	t.Setenv("PHOTO_STORAGE_BACKEND", "")
+	t.Setenv("IMMICH_BASE_URL", "")
+	t.Setenv("IMMICH_API_KEY", "")
+	t.Setenv("APP_URL", "https://trackz.example.com")
+
+	t.Setenv("PUBLIC_STORY_BASE_URL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.StoryBaseURL(); got != "https://trackz.example.com" {
+		t.Errorf("unset PUBLIC_STORY_BASE_URL should fall back to APP_URL, got %q", got)
+	}
+
+	t.Setenv("PUBLIC_STORY_BASE_URL", "https://example.com/")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.StoryBaseURL(); got != "https://example.com" {
+		t.Errorf("StoryBaseURL = %q, want trailing slash stripped", got)
+	}
+
+	t.Setenv("PUBLIC_STORY_BASE_URL", "not-a-url")
+	if _, err := Load(); err == nil {
+		t.Error("invalid PUBLIC_STORY_BASE_URL was accepted")
+	}
+}
+
 func TestLoadDefaultTrustedProxiesAreRFC1918(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example/db")
 	t.Setenv("SESSION_SECRET", "test-secret")

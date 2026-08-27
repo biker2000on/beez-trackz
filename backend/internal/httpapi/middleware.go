@@ -153,7 +153,10 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 // needs no origin proof.
 
 // originAllowed reports whether raw (an Origin header value, or the origin
-// half of a Referer) is this deployment's own origin, i.e. APP_URL. The
+// half of a Referer) is one of this deployment's own origins: APP_URL, plus
+// PUBLIC_STORY_BASE_URL when configured (the apex domain whose proxy fronts
+// the public Honey Story pages — its subscribe POST arrives with that
+// Origin). Both are operator-set values, never request-derived. The
 // request's own Host header is deliberately NOT accepted as a second
 // allowlist entry: an attacker controls Host as easily as Origin, so trusting
 // it would give away both the CSRF and the MCP DNS-rebinding guarantee.
@@ -165,12 +168,20 @@ func (s *Server) originAllowed(raw string) bool {
 	if err != nil || requestOrigin.Host == "" {
 		return false
 	}
-	appOrigin, err := url.Parse(s.cfg.AppURL)
-	if err != nil || appOrigin.Host == "" {
-		return false
+	for _, allowed := range []string{s.cfg.AppURL, s.cfg.PublicStoryBaseURL} {
+		if allowed == "" {
+			continue
+		}
+		appOrigin, err := url.Parse(allowed)
+		if err != nil || appOrigin.Host == "" {
+			continue
+		}
+		if strings.EqualFold(requestOrigin.Scheme, appOrigin.Scheme) &&
+			strings.EqualFold(requestOrigin.Host, appOrigin.Host) {
+			return true
+		}
 	}
-	return strings.EqualFold(requestOrigin.Scheme, appOrigin.Scheme) &&
-		strings.EqualFold(requestOrigin.Host, appOrigin.Host)
+	return false
 }
 
 // requestOrigin returns the Origin header, falling back to the origin of the
