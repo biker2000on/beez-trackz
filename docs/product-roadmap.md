@@ -41,6 +41,9 @@ Sources for the open items below:
 - Requested 2026-08-19 — inventory at more than one location. Finished
   goods consigned to the local bike shop, which pays as sales happen, not
   up front. Stock locations, transfers, consignment sales, settlement.
+- Requested 2026-08-31 — rearchitect inventory after comparing the current
+  schema with gnucash-web's inventory spine: one quantity authority, while
+  retaining Beez's bee, honey, batch, and traceability records.
 
 ## Order of work
 
@@ -64,9 +67,18 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    writes, bounded-overlap change feed), and Beez gained the sync engine
    (Settings > GnuCash sync: token, account mappings per line kind and
    expense category, pull-first Sync now, conflict/reconciliation list).
-   Beez stays authoritative for physical quantities. Next: **Zebra
-   labels**.
-8. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
+   Beez stays authoritative for physical quantities. Next: **inventory
+   ledger rearchitecture**, before further inventory expansion or Zebra
+   labels.
+8. **P1 — Inventory ledger rearchitecture.** Establish one canonical
+   quantity ledger, reconcile it against the existing ledgers, then make it
+   the only stock-changing path. The detailed design is below. Do not add
+   further inventory features or label flows until its cutover invariants
+   hold.
+9. **P1 — Zebra label printing and physical traceability.** Starts after the
+   inventory-ledger cutover, so printed stock and serialized jars consume a
+   single quantity authority.
+10. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
    Polyagent waves (migrations 00025–00029): field objects, health
    objects, units preference + display sweep, ntfy, labor, compliance
    packet, place/flow (elevation-banded flora, forage radius, Immich
@@ -74,10 +86,10 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    mating-yard field, floral claim. Deliberately still open per their
    sections: pollination contracts (skip until signed), grafting cycle
    (skip until recorded), MQTT scale ingest (CSV only for now).
-9. **Extractor controller** — long-term; hardware plus an ingest
+11. **Extractor controller** — long-term; hardware plus an ingest
    contract onto harvest sessions. Design the session payload when
    extraction IDs stabilize; do not wait to start the controller.
-10. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
+12. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
     2026-08-19 (see history); the ASI lows were already closed 2026-08-11.
 
 ## Shipped 2026-08-17 — review P0/P1 fixes
@@ -290,6 +302,84 @@ infer or overwrite physical stock solely from accounting data.
 kinds that do not map to honey's revenue-with-COGS shape, and selling equipment is
 itself an equipment mutation — so the entity mappings and mutation idempotency
 should be built once to cover both rather than twice.
+
+## P1 — Inventory ledger rearchitecture
+
+**Requested 2026-08-31; next P1.** The current inventory model has useful
+domain detail but too many competing quantity authorities: product and
+equipment ledgers, stored equipment totals, honey/lot-balance formulas,
+sales effects, stock-location residuals, and batch/bottling paths. That
+makes a physical count or a new inventory feature depend on knowing which
+formula wins. The target is a single signed movement ledger, not a removal
+of bee or honey provenance.
+
+**Strict boundary.** `inventory_movements` is the sole authority for
+on-hand quantity, by item × location × lot × condition. All stock-changing
+events create immutable signed lines under an `inventory_operation`;
+corrections reverse the operation rather than mutating a balance. Bee and
+honey records continue to own their facts and link to inventory operations;
+they do not independently change quantities.
+
+**Seven-table core.** Add `inventory_items`, `inventory_locations`,
+`inventory_lots`, `inventory_operations`, `inventory_movements`,
+`inventory_boms`, and `inventory_bom_lines`. A balance is a query or
+materialized projection of movement sums, never a second writable total.
+Items unify jar sizes, catalog products, equipment types, packaging, and
+future sellable/process inputs; lots preserve stable provenance and expiry
+attributes; condition is a movement dimension, with a condition change
+recorded as paired negative and positive lines; BOMs express bottling,
+assembly, and transformation.
+
+**Responsibility migration.** The current product-adjustment ledger,
+equipment ledger and totals, honey/lot balance views, stock-location
+calculation, sale stock effects, transfers, shrink, deployments, and
+bottling/batch consumption/output become operation-specific producers of
+the one movement ledger. Locations become explicit movement dimensions;
+`home` is a real location, never "global minus elsewhere." Sales remain
+commercial records and reference the physical operation that consumes
+stock; they no longer serve as a competing balance formula.
+
+**Keep these domain records.** Harvest sessions and allocations, hives,
+treatments and withdrawal rules, varietals and floral claims, Honey Story,
+bottling runs and jar serials, mead/hot-honey/propolis process facts,
+customers and consignment statements, payments and commissions, and
+GnuCash sync/conflict state stay first-class. They reference items, lots,
+and operations as needed; the core ledger must not flatten them into generic
+notes.
+
+**Additive strangler phases.**
+
+1. Add the core tables and stable mappings for every current item, location,
+   and known lot; use explicit `legacy-unassigned` lots where history cannot
+   prove provenance. Enable shadow writes of the legacy path and one inventory
+   operation in the same transaction before importing history, so no live
+   mutation can fall into a backfill gap.
+2. Idempotently backfill legacy history in causal order, excluding records
+   already captured by shadow writes, then calculate old-versus-new balances
+   by item, location, lot, varietal, and equipment condition.
+3. Move balance reads behind a feature flag to the canonical projection,
+   complete a physical count and consignment-settlement reconciliation, then
+   route every stock-changing command through one inventory service.
+4. Retire writable legacy ledgers and derived stock formulas only after the
+   invariants hold in production; retain read-only history and mappings for
+   audit and sync traceability.
+
+**Cutover invariants.** Every operation is idempotent and supports reversal.
+A reversal operation references its original, and the original records that
+link when one exists. Transfers net to zero for the same item and unit at
+their source and destination; transformations carry their required input and
+output lines. One-sided receive, sale, shrink, and adjustment operations are
+allowed, but each has a source/reference. Sales consume only their source
+location; no revenue is recognized on transfers; a lot cannot go negative
+where traceability is required; and new sums reconcile to the old reported
+balances until the approved physical-count adjustment.
+GnuCash remains authoritative for posted accounting, while this ledger is
+authoritative for physical quantity.
+
+**Rejected approaches.** Do not copy gnucash-web literally: borrow its
+movement-ledger spine, not its thinner domain model. Do not do a big-bang
+replacement: it would risk honey provenance, consignment settlement, and
+live accounting sync without a reconciled rollback path.
 
 ## P1 — Zebra label printing and physical traceability
 
