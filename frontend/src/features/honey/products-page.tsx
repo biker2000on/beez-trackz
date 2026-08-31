@@ -1,6 +1,11 @@
 "use client";
 
 import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { Plus } from "lucide-react";
 
 import {
@@ -15,6 +20,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import {
   Dialog,
   DialogContent,
@@ -34,14 +44,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useExpenses, useHarvestLots } from "@/features/commerce/api";
 import { GRAMS_PER_OUNCE, parsePropolisMassInput } from "@/lib/units";
@@ -60,7 +62,12 @@ import {
   usePropolisHarvests,
   useVoidProductBatch,
 } from "./hooks";
-import type { CatalogProduct, CatalogProductKind, ProductBatch } from "./types";
+import type {
+  CatalogProduct,
+  CatalogProductKind,
+  ProductBatch,
+  PropolisHarvest,
+} from "./types";
 
 const PRODUCT_KINDS: { value: CatalogProductKind; label: string }[] = [
   { value: "creamed_honey", label: "Creamed honey" },
@@ -82,11 +89,257 @@ function kindLabel(kind: string) {
   return PRODUCT_KINDS.find((item) => item.value === kind)?.label ?? kind.replaceAll("_", " ");
 }
 
+// --- table models ---
+
+const gridFeatures = tableFeatures({});
+const catalogColumnHelper = createColumnHelper<
+  typeof gridFeatures,
+  CatalogProduct
+>();
+const harvestColumnHelper = createColumnHelper<
+  typeof gridFeatures,
+  PropolisHarvest
+>();
+const batchColumnHelper = createColumnHelper<typeof gridFeatures, ProductBatch>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
+/** A voided batch row keeps its content but is dimmed, like the old row-level opacity. */
+function dimIfVoided(voided: boolean, content: React.ReactNode) {
+  return voided ? <div className="opacity-60">{content}</div> : content;
+}
+
 export function HiveProductsPage() {
   const { formatHoney, formatPropolis } = useUnits();
   const catalog = useProductCatalog();
   const harvests = usePropolisHarvests();
   const batches = useProductBatches();
+
+  const propolisOnHandGrams = catalog.data?.propolisOnHandGrams ?? 0;
+  const catalogItems = React.useMemo(
+    () => catalog.data?.items ?? [],
+    [catalog.data],
+  );
+  const harvestRows = React.useMemo(
+    () => harvests.data ?? [],
+    [harvests.data],
+  );
+  const batchRows = React.useMemo(() => batches.data ?? [], [batches.data]);
+
+  const catalogColumns = React.useMemo(
+    () =>
+      catalogColumnHelper.columns([
+        catalogColumnHelper.display({
+          id: "name",
+          header: "Name",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.name,
+        }),
+        catalogColumnHelper.display({
+          id: "kind",
+          header: "Kind",
+          meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => kindLabel(row.original.kind),
+        }),
+        catalogColumnHelper.display({
+          id: "size",
+          header: "Size",
+          cell: ({ row }) => row.original.sizeLabel ?? row.original.unit,
+        }),
+        catalogColumnHelper.display({
+          id: "netMass",
+          header: "Net mass",
+          meta: rightAligned,
+          cell: ({ row }) =>
+            row.original.netGrams != null
+              ? formatPropolis(row.original.netGrams)
+              : "—",
+        }),
+        catalogColumnHelper.display({
+          id: "price",
+          header: "Price",
+          cell: ({ row }) => formatMoney(row.original.defaultPrice),
+        }),
+        catalogColumnHelper.display({
+          id: "onHand",
+          header: "On hand",
+          meta: rightAligned,
+          cell: ({ row: { original: item } }) => (
+            <>
+              {item.kind === "propolis" && item.netGrams
+                ? propolisUnitsLeft(propolisOnHandGrams, item.netGrams)
+                : item.onHand}
+              {item.adjusted !== 0 && (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  ({item.adjusted > 0 ? "+" : ""}
+                  {item.adjusted} adj)
+                </span>
+              )}
+            </>
+          ),
+        }),
+        catalogColumnHelper.display({
+          id: "actions",
+          header: "",
+          meta: {
+            headClassName: "w-0",
+            cellClassName: "p-1 text-right",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: item } }) =>
+            item.kind !== "propolis" ? (
+              <DataGridCellAction className="flex justify-end">
+                <AdjustProductDialog product={item} />
+              </DataGridCellAction>
+            ) : null,
+        }),
+      ]),
+    [formatPropolis, propolisOnHandGrams],
+  );
+
+  const harvestColumns = React.useMemo(
+    () =>
+      harvestColumnHelper.columns([
+        harvestColumnHelper.display({
+          id: "date",
+          header: "Date",
+          cell: ({ row }) => formatDate(row.original.date),
+        }),
+        harvestColumnHelper.display({
+          id: "source",
+          header: "Source",
+          cell: ({ row: { original: row } }) =>
+            row.hiveName
+              ? `${row.hiveName}${row.apiaryName ? ` · ${row.apiaryName}` : ""}`
+              : row.apiaryName ?? "Yard",
+        }),
+        harvestColumnHelper.display({
+          id: "amount",
+          header: "Amount",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) =>
+            formatPropolis(
+              row.unit === "ounces" ? row.amount * GRAMS_PER_OUNCE : row.amount,
+            ),
+        }),
+      ]),
+    [formatPropolis],
+  );
+
+  const batchColumns = React.useMemo(
+    () =>
+      batchColumnHelper.columns([
+        batchColumnHelper.display({
+          id: "date",
+          header: "Date",
+          cell: ({ row: { original: row } }) =>
+            dimIfVoided(row.voidedAt != null, formatDate(row.startedAt)),
+        }),
+        batchColumnHelper.display({
+          id: "product",
+          header: "Product",
+          cell: ({ row: { original: row } }) =>
+            dimIfVoided(
+              row.voidedAt != null,
+              <>
+                {row.productName}
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {kindLabel(row.kind)}
+                </span>
+                {row.voidedAt && (
+                  <Badge variant="outline" className="ml-2">
+                    voided
+                  </Badge>
+                )}
+              </>,
+            ),
+        }),
+        batchColumnHelper.display({
+          id: "inputs",
+          header: "Inputs",
+          meta: {
+            cellClassName: "text-sm text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) =>
+            dimIfVoided(
+              row.voidedAt != null,
+              <>
+                {row.honeyLbs != null ? `${formatHoney(row.honeyLbs)} honey` : ""}
+                {row.harvestLotCode ? ` · ${row.harvestLotCode}` : ""}
+                {row.propolisAmount != null
+                  ? ` · ${formatPropolis(
+                      row.propolisUnit === "ounces"
+                        ? row.propolisAmount * GRAMS_PER_OUNCE
+                        : row.propolisAmount,
+                    )} propolis`
+                  : ""}
+              </>,
+            ),
+        }),
+        batchColumnHelper.display({
+          id: "out",
+          header: "Out",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) =>
+            dimIfVoided(row.voidedAt != null, row.quantityOut),
+        }),
+        batchColumnHelper.display({
+          id: "cost",
+          header: "Cost",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) =>
+            dimIfVoided(
+              row.voidedAt != null,
+              row.totalCost > 0 ? (
+                <>
+                  {formatMoney(row.totalCost)}
+                  <span className="ml-1 block text-xs text-muted-foreground">
+                    {formatMoney(row.costPerUnit)}/unit
+                  </span>
+                </>
+              ) : (
+                "—"
+              ),
+            ),
+        }),
+        batchColumnHelper.display({
+          id: "actions",
+          header: "",
+          meta: {
+            headClassName: "w-0",
+            cellClassName: "p-1 text-right",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) =>
+            !row.voidedAt ? (
+              <DataGridCellAction className="flex justify-end">
+                <VoidBatchButton batch={row} />
+              </DataGridCellAction>
+            ) : null,
+        }),
+      ]),
+    [formatHoney, formatPropolis],
+  );
+
+  const catalogTable = useTable({
+    features: gridFeatures,
+    columns: catalogColumns,
+    data: catalogItems,
+    getRowId: (row) => row.id,
+  });
+  const harvestTable = useTable({
+    features: gridFeatures,
+    columns: harvestColumns,
+    data: harvestRows,
+    getRowId: (row) => row.id,
+  });
+  const batchTable = useTable({
+    features: gridFeatures,
+    columns: batchColumns,
+    data: batchRows,
+    getRowId: (row) => row.id,
+  });
 
   if (catalog.isPending || harvests.isPending || batches.isPending) {
     return <Skeleton className="h-72" />;
@@ -115,44 +368,7 @@ export function HiveProductsPage() {
           <p className="text-sm text-muted-foreground">No catalog items yet.</p>
         ) : (
           <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Kind</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead className="text-right">Net mass</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead className="text-right">On hand</TableHead>
-                  <TableHead className="w-0" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {catalog.data?.items.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium">{item.name}</TableCell>
-                    <TableCell className="capitalize">{kindLabel(item.kind)}</TableCell>
-                    <TableCell>{item.sizeLabel ?? item.unit}</TableCell>
-                    <TableCell className="text-right tabular-nums">{item.netGrams != null ? formatPropolis(item.netGrams) : "—"}</TableCell>
-                    <TableCell>{formatMoney(item.defaultPrice)}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {item.kind === "propolis" && item.netGrams
-                        ? propolisUnitsLeft(catalog.data?.propolisOnHandGrams ?? 0, item.netGrams)
-                        : item.onHand}
-                      {item.adjusted !== 0 && (
-                        <span className="ml-1 text-xs text-muted-foreground">
-                          ({item.adjusted > 0 ? "+" : ""}
-                          {item.adjusted} adj)
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {item.kind !== "propolis" && <AdjustProductDialog product={item} />}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataGrid table={catalogTable} aria-label="Product catalog" />
           </div>
         )}
         {(catalog.data?.propolisOnHandGrams ?? 0) > 0 && (
@@ -177,32 +393,11 @@ export function HiveProductsPage() {
           <p className="text-sm text-muted-foreground">No propolis harvests yet.</p>
         ) : (
           <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {harvests.data.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell>{formatDate(row.date)}</TableCell>
-                    <TableCell>
-                      {row.hiveName
-                        ? `${row.hiveName}${row.apiaryName ? ` · ${row.apiaryName}` : ""}`
-                        : row.apiaryName ?? "Yard"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatPropolis(
-                        row.unit === "ounces" ? row.amount * GRAMS_PER_OUNCE : row.amount,
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataGrid
+              table={harvestTable}
+              aria-label="Propolis harvests"
+              listenOnWindow={false}
+            />
           </div>
         )}
       </section>
@@ -222,63 +417,11 @@ export function HiveProductsPage() {
           <p className="text-sm text-muted-foreground">No batches recorded yet.</p>
         ) : (
           <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Product</TableHead>
-                  <TableHead>Inputs</TableHead>
-                  <TableHead className="text-right">Out</TableHead>
-                  <TableHead className="text-right">Cost</TableHead>
-                  <TableHead className="w-0" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {batches.data.map((row) => (
-                  <TableRow key={row.id} className={row.voidedAt ? "opacity-60" : undefined}>
-                    <TableCell>{formatDate(row.startedAt)}</TableCell>
-                    <TableCell>
-                      {row.productName}
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        {kindLabel(row.kind)}
-                      </span>
-                      {row.voidedAt && (
-                        <Badge variant="outline" className="ml-2">
-                          voided
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {row.honeyLbs != null ? `${formatHoney(row.honeyLbs)} honey` : ""}
-                      {row.harvestLotCode ? ` · ${row.harvestLotCode}` : ""}
-                      {row.propolisAmount != null
-                        ? ` · ${formatPropolis(
-                            row.propolisUnit === "ounces"
-                              ? row.propolisAmount * GRAMS_PER_OUNCE
-                              : row.propolisAmount,
-                          )} propolis`
-                        : ""}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{row.quantityOut}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {row.totalCost > 0 ? (
-                        <>
-                          {formatMoney(row.totalCost)}
-                          <span className="ml-1 block text-xs text-muted-foreground">
-                            {formatMoney(row.costPerUnit)}/unit
-                          </span>
-                        </>
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {!row.voidedAt && <VoidBatchButton batch={row} />}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataGrid
+              table={batchTable}
+              aria-label="Product batches"
+              listenOnWindow={false}
+            />
           </div>
         )}
       </section>

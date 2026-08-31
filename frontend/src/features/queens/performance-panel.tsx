@@ -1,5 +1,11 @@
 "use client";
 
+import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { Award, ChartNoAxesCombined } from "lucide-react";
 
 import {
@@ -9,17 +15,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
+import { Skeleton } from "@/components/ui/skeleton";
 
-import { useQueenPerformance, useQueens } from "./api";
+import { useQueenPerformance, useQueens, type QueenPerformance } from "./api";
 import { useUnits } from "@/lib/use-units";
 
 function scoreTone(score: number) {
@@ -28,10 +30,105 @@ function scoreTone(score: number) {
   return "text-muted-foreground";
 }
 
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<typeof gridFeatures, QueenPerformance>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
 export function QueenPerformancePanel() {
   const { formatHoney } = useUnits();
   const performance = useQueenPerformance();
   const queens = useQueens();
+
+  const matingById = React.useMemo(
+    () => new Map((queens.data ?? []).map((queen) => [queen.id, queen] as const)),
+    [queens.data],
+  );
+  const ranked = React.useMemo(
+    () =>
+      [...(performance.data?.queens ?? [])]
+        .filter((queen) => queen.inspectionCount > 0)
+        .sort((a, b) => b.overallScore - a.overallScore),
+    [performance.data],
+  );
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "queen",
+          header: "Queen / hive",
+          cell: ({ row: { original: queen } }) => (
+            <>
+              <p className="font-medium">
+                {queen.apiaryName && queen.hiveName
+                  ? `${queen.apiaryName} · ${queen.hiveName}`
+                  : `Queen ${queen.id.slice(0, 8)}`}
+              </p>
+              <p className="text-xs capitalize text-muted-foreground">
+                {queen.status}
+              </p>
+            </>
+          ),
+        }),
+        columnHelper.display({
+          id: "matedAt",
+          header: "Mated at",
+          meta: {
+            cellClassName: "text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) =>
+            matingById.get(row.original.id)?.matedAtApiaryName ?? "—",
+        }),
+        columnHelper.display({
+          id: "overall",
+          header: "Overall",
+          meta: rightAligned,
+          cell: ({ row: { original: queen } }) => (
+            <span
+              className={`text-base font-bold ${scoreTone(queen.overallScore)}`}
+            >
+              {queen.overallScore.toFixed(1)}
+            </span>
+          ),
+        }),
+        columnHelper.display({
+          id: "brood",
+          header: "Brood",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.broodScore.toFixed(0),
+        }),
+        columnHelper.display({
+          id: "temperament",
+          header: "Temperament",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.temperamentScore.toFixed(0),
+        }),
+        columnHelper.display({
+          id: "yield",
+          header: "Yield",
+          meta: rightAligned,
+          cell: ({ row }) => formatHoney(row.original.yieldPounds),
+        }),
+        columnHelper.display({
+          id: "inspections",
+          header: "Inspections",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.inspectionCount,
+        }),
+      ]),
+    [matingById, formatHoney],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: ranked,
+    getRowId: (row) => row.id,
+  });
 
   if (performance.isPending) return <Skeleton className="h-56 rounded-xl" />;
   if (performance.isError || !performance.data) {
@@ -44,12 +141,6 @@ export function QueenPerformancePanel() {
     );
   }
 
-  const matingById = new Map(
-    (queens.data ?? []).map((queen) => [queen.id, queen] as const),
-  );
-  const ranked = [...performance.data.queens]
-    .filter((queen) => queen.inspectionCount > 0)
-    .sort((a, b) => b.overallScore - a.overallScore);
   const bestLine = [...performance.data.lineages].sort(
     (a, b) => b.averageScore - a.averageScore,
   )[0];
@@ -79,55 +170,11 @@ export function QueenPerformancePanel() {
           </div>
         ) : null}
         {ranked.length ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Queen / hive</TableHead>
-                <TableHead>Mated at</TableHead>
-                <TableHead className="text-right">Overall</TableHead>
-                <TableHead className="text-right">Brood</TableHead>
-                <TableHead className="text-right">Temperament</TableHead>
-                <TableHead className="text-right">Yield</TableHead>
-                <TableHead className="text-right">Inspections</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {ranked.map((queen) => (
-                <TableRow key={queen.id}>
-                  <TableCell>
-                    <p className="font-medium">
-                      {queen.apiaryName && queen.hiveName
-                        ? `${queen.apiaryName} · ${queen.hiveName}`
-                        : `Queen ${queen.id.slice(0, 8)}`}
-                    </p>
-                    <p className="text-xs capitalize text-muted-foreground">
-                      {queen.status}
-                    </p>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {matingById.get(queen.id)?.matedAtApiaryName ?? "—"}
-                  </TableCell>
-                  <TableCell
-                    className={`text-right text-base font-bold ${scoreTone(queen.overallScore)}`}
-                  >
-                    {queen.overallScore.toFixed(1)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {queen.broodScore.toFixed(0)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {queen.temperamentScore.toFixed(0)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {formatHoney(queen.yieldPounds)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {queen.inspectionCount}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <DataGrid
+            table={table}
+            aria-label="Queen performance"
+            listenOnWindow={false}
+          />
         ) : (
           <div className="grid place-items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center">
             <ChartNoAxesCombined className="size-7 text-muted-foreground" />

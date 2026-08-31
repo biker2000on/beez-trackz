@@ -4,6 +4,12 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { Ban, Check, FileText, PackageCheck } from "lucide-react";
 
 import {
@@ -18,26 +24,262 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 import { formatDate, formatMoney } from "./format";
 import { useDeleteSale, useHoneySales, useUpdateSale } from "./hooks";
 import type { HoneySale } from "./types";
 
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<typeof gridFeatures, HoneySale>();
+
+/** A cancelled sale keeps its row but reads as struck from the record. */
+function Dim({
+  sale,
+  className,
+  children,
+}: {
+  sale: HoneySale;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(sale.orderStatus === "cancelled" && "opacity-60", className)}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function SalesTab() {
+  const router = useRouter();
   const sales = useHoneySales();
   const deleteSale = useDeleteSale();
   const updateSale = useUpdateSale();
   const [confirmSale, setConfirmSale] = React.useState<HoneySale | null>(null);
+
+  const data = React.useMemo(() => sales.data ?? [], [sales.data]);
+
+  const updateSaleMutate = updateSale.mutate;
+  const updateSalePending = updateSale.isPending;
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "date",
+          header: "Date",
+          meta: { cellClassName: "align-top" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <Dim sale={sale}>{formatDate(sale.date)}</Dim>
+          ),
+        }),
+        columnHelper.display({
+          id: "items",
+          header: "Items",
+          meta: {
+            cellClassName: "whitespace-normal align-top",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <Dim sale={sale}>
+              {sale.lineItems.length === 0 ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                <ul className="grid gap-0.5">
+                  {sale.lineItems.map((item) => (
+                    <li
+                      key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
+                      className="text-sm"
+                    >
+                      {item.quantity} × {item.label}
+                      {item.kind && item.kind !== "jar" && (
+                        <span className="ml-1 text-xs capitalize text-muted-foreground">
+                          ({item.kind})
+                        </span>
+                      )}
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        @ {formatMoney(item.unitPrice)}
+                      </span>
+                      {item.lotCode && (
+                        <span className="block text-xs text-muted-foreground">
+                          Lot {item.lotCode}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {sale.notes && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {sale.notes}
+                </p>
+              )}
+            </Dim>
+          ),
+        }),
+        columnHelper.display({
+          id: "location",
+          header: "Location",
+          meta: {
+            cellClassName: "align-top text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <Dim sale={sale}>{sale.location ?? "—"}</Dim>
+          ),
+        }),
+        columnHelper.display({
+          id: "customer",
+          header: "Customer",
+          meta: {
+            cellClassName: "align-top text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <Dim sale={sale}>{sale.customerName ?? "—"}</Dim>
+          ),
+        }),
+        columnHelper.display({
+          id: "order",
+          header: "Order",
+          meta: { cellClassName: "align-top" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <Dim sale={sale}>
+              <p className="text-sm">{sale.orderNumber ?? "—"}</p>
+              {sale.harvestLotCode && (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Lot {sale.harvestLotCode}
+                </p>
+              )}
+              <div className="mt-1 flex flex-wrap gap-1">
+                <Badge variant="outline" className="capitalize">
+                  {sale.channel.replaceAll("_", " ")}
+                </Badge>
+                <Badge
+                  variant={
+                    sale.orderStatus === "cancelled"
+                      ? "outline"
+                      : sale.amountPaid >= sale.totalAmount
+                        ? "accent"
+                        : "secondary"
+                  }
+                  className="capitalize"
+                >
+                  {sale.orderStatus}
+                </Badge>
+              </div>
+              {sale.orderStatus !== "cancelled" &&
+                sale.amountPaid < sale.totalAmount && (
+                  <p className="mt-1 text-xs text-destructive">
+                    {formatMoney(sale.totalAmount - sale.amountPaid)} due
+                  </p>
+                )}
+            </Dim>
+          ),
+        }),
+        columnHelper.display({
+          id: "total",
+          header: "Total (invoiced)",
+          meta: {
+            align: "right",
+            cellClassName: "align-top font-medium tabular-nums",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <Dim sale={sale}>{formatMoney(sale.totalAmount)}</Dim>
+          ),
+        }),
+        columnHelper.display({
+          id: "actions",
+          header: "",
+          meta: {
+            cellClassName: "align-top p-1 text-right",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: sale } }) => (
+            <DataGridCellAction
+              className={cn(
+                "flex justify-end",
+                sale.orderStatus === "cancelled" && "opacity-60",
+              )}
+            >
+              {sale.orderStatus !== "cancelled" &&
+                sale.amountPaid < sale.totalAmount && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Mark order paid"
+                    disabled={updateSalePending}
+                    onClick={() =>
+                      updateSaleMutate({
+                        id: sale.id,
+                        orderStatus: "paid",
+                        amountPaid: sale.totalAmount,
+                        paymentMethod: sale.paymentMethod,
+                      })
+                    }
+                  >
+                    <Check className="size-4" />
+                  </Button>
+                )}
+              {sale.orderStatus !== "cancelled" &&
+                sale.amountPaid >= sale.totalAmount &&
+                sale.orderStatus !== "fulfilled" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Mark order fulfilled"
+                    disabled={updateSalePending}
+                    onClick={() =>
+                      updateSaleMutate({
+                        id: sale.id,
+                        orderStatus: "fulfilled",
+                        amountPaid: sale.totalAmount,
+                      })
+                    }
+                  >
+                    <PackageCheck className="size-4" />
+                  </Button>
+                )}
+              <Button type="button" variant="ghost" size="icon-sm" asChild>
+                <Link
+                  href={`/sales/${sale.id}`}
+                  aria-label="Open receipt or invoice"
+                >
+                  <FileText className="size-4" />
+                </Link>
+              </Button>
+              {sale.orderStatus !== "cancelled" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  aria-label="Cancel sale"
+                  onClick={() => setConfirmSale(sale)}
+                >
+                  <Ban className="size-4" />
+                </Button>
+              )}
+            </DataGridCellAction>
+          ),
+        }),
+      ]),
+    [updateSaleMutate, updateSalePending],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data,
+    getRowId: (sale) => sale.id,
+  });
 
   if (sales.isPending) {
     return <Skeleton className="h-48 w-full" />;
@@ -71,165 +313,14 @@ export function SalesTab() {
 
   return (
     <div className="rounded-lg border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Date</TableHead>
-            <TableHead>Items</TableHead>
-            <TableHead>Location</TableHead>
-            <TableHead>Customer</TableHead>
-            <TableHead>Order</TableHead>
-            <TableHead className="text-right">Total (invoiced)</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sales.data.map((sale) => (
-            <TableRow
-              key={sale.id}
-              className={
-                sale.orderStatus === "cancelled" ? "opacity-60" : undefined
-              }
-            >
-              <TableCell className="align-top">
-                {formatDate(sale.date)}
-              </TableCell>
-              <TableCell className="whitespace-normal align-top">
-                {sale.lineItems.length === 0 ? (
-                  <span className="text-muted-foreground">—</span>
-                ) : (
-                  <ul className="grid gap-0.5">
-                    {sale.lineItems.map((item) => (
-                      <li
-                        key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
-                        className="text-sm"
-                      >
-                        {item.quantity} × {item.label}
-                        {item.kind && item.kind !== "jar" && (
-                          <span className="ml-1 text-xs capitalize text-muted-foreground">
-                            ({item.kind})
-                          </span>
-                        )}
-                        <span className="ml-1 text-xs text-muted-foreground">
-                          @ {formatMoney(item.unitPrice)}
-                        </span>
-                        {item.lotCode && (
-                          <span className="block text-xs text-muted-foreground">
-                            Lot {item.lotCode}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {sale.notes && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {sale.notes}
-                  </p>
-                )}
-              </TableCell>
-              <TableCell className="align-top text-muted-foreground">
-                {sale.location ?? "—"}
-              </TableCell>
-              <TableCell className="align-top text-muted-foreground">
-                {sale.customerName ?? "—"}
-              </TableCell>
-              <TableCell className="align-top">
-                <p className="text-sm">{sale.orderNumber ?? "—"}</p>
-                {sale.harvestLotCode && (
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Lot {sale.harvestLotCode}
-                  </p>
-                )}
-                <div className="mt-1 flex flex-wrap gap-1">
-                  <Badge variant="outline" className="capitalize">
-                    {sale.channel.replaceAll("_", " ")}
-                  </Badge>
-                  <Badge
-                    variant={
-                      sale.orderStatus === "cancelled"
-                        ? "outline"
-                        : sale.amountPaid >= sale.totalAmount
-                          ? "accent"
-                          : "secondary"
-                    }
-                    className="capitalize"
-                  >
-                    {sale.orderStatus}
-                  </Badge>
-                </div>
-                {sale.orderStatus !== "cancelled" && sale.amountPaid < sale.totalAmount && (
-                  <p className="mt-1 text-xs text-destructive">
-                    {formatMoney(sale.totalAmount - sale.amountPaid)} due
-                  </p>
-                )}
-              </TableCell>
-              <TableCell className="align-top text-right font-medium tabular-nums">
-                {formatMoney(sale.totalAmount)}
-              </TableCell>
-              <TableCell className="align-top text-right">
-                {sale.orderStatus !== "cancelled" && sale.amountPaid < sale.totalAmount && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Mark order paid"
-                    disabled={updateSale.isPending}
-                    onClick={() =>
-                      updateSale.mutate({
-                        id: sale.id,
-                        orderStatus: "paid",
-                        amountPaid: sale.totalAmount,
-                        paymentMethod: sale.paymentMethod,
-                      })
-                    }
-                  >
-                    <Check className="size-4" />
-                  </Button>
-                )}
-                {sale.orderStatus !== "cancelled" && sale.amountPaid >= sale.totalAmount && sale.orderStatus !== "fulfilled" && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Mark order fulfilled"
-                    disabled={updateSale.isPending}
-                    onClick={() =>
-                      updateSale.mutate({
-                        id: sale.id,
-                        orderStatus: "fulfilled",
-                        amountPaid: sale.totalAmount,
-                      })
-                    }
-                  >
-                    <PackageCheck className="size-4" />
-                  </Button>
-                )}
-                <Button type="button" variant="ghost" size="icon-sm" asChild>
-                  <Link
-                    href={`/sales/${sale.id}`}
-                    aria-label="Open receipt or invoice"
-                  >
-                    <FileText className="size-4" />
-                  </Link>
-                </Button>
-                {sale.orderStatus !== "cancelled" && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label="Cancel sale"
-                    onClick={() => setConfirmSale(sale)}
-                  >
-                    <Ban className="size-4" />
-                  </Button>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <DataGrid
+        table={table}
+        aria-label="Honey sales"
+        onRowActivate={(sale) => router.push(`/sales/${sale.id}`)}
+        onRowDelete={(sale) => {
+          if (sale.orderStatus !== "cancelled") setConfirmSale(sale);
+        }}
+      />
 
       <AlertDialog
         open={confirmSale !== null}

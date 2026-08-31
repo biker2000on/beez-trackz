@@ -4,6 +4,11 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
+import {
   Archive,
   ArchiveRestore,
   CheckSquare,
@@ -27,26 +32,25 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import { useShortcut } from "@/components/shortcuts/provider";
 import { useBulkSelect } from "@/lib/use-bulk-select";
 import { useApiaries } from "@/features/apiaries/hooks";
 import { HiveCard, HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
 import { CatchBoxesPanel, FieldReadinessPanel } from "./field-health";
-import { useBulkUpdateHives, useHives } from "./hooks";
+import { useBulkUpdateHives, useHives, type Hive } from "./hooks";
 import { HIVE_STATUSES, HIVE_STATUS_LABELS, formatDate } from "./lib";
 
 const VIEW_STORAGE_KEY = "beez.hives.view";
 const ALL = "all";
 
 type ViewMode = "card" | "table";
+
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<typeof gridFeatures, Hive>();
 
 export function HivesListPage() {
   const router = useRouter();
@@ -127,7 +131,79 @@ export function HivesListPage() {
     }
   }
 
-  const list = hives.data ?? [];
+  const list = React.useMemo(() => hives.data ?? [], [hives.data]);
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        ...(bulkMode
+          ? [
+              columnHelper.display({
+                id: "select",
+                header: () => <span className="sr-only">Selected</span>,
+                meta: { headClassName: "w-10" } satisfies DataGridColumnMeta,
+                cell: ({ row }) => (
+                  <Checkbox
+                    checked={selected.has(row.original.id)}
+                    aria-hidden
+                    tabIndex={-1}
+                    className="pointer-events-none"
+                  />
+                ),
+              }),
+            ]
+          : []),
+        columnHelper.display({
+          id: "hive",
+          header: "Hive",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: hive } }) => (
+            <>
+              {/* The name stays a link in bulk mode so a row can be
+                  opened for a second look without losing the selection. */}
+              <Link
+                href={`/hives/${hive.id}`}
+                className="underline-offset-4 hover:underline"
+                onClick={(event) => event.stopPropagation()}
+              >
+                {hive.positionLabel}
+              </Link>
+              {hive.isArchived && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  (archived)
+                </span>
+              )}
+            </>
+          ),
+        }),
+        columnHelper.display({
+          id: "apiary",
+          header: "Apiary",
+          cell: ({ row }) => row.original.apiaryName,
+        }),
+        columnHelper.display({
+          id: "status",
+          header: "Status",
+          cell: ({ row }) => <HiveStatusBadge status={row.original.status} />,
+        }),
+        columnHelper.display({
+          id: "installed",
+          header: "Installed",
+          meta: {
+            cellClassName: "text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) => formatDate(row.original.installedDate),
+        }),
+      ]),
+    [bulkMode, selected],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: list,
+    getRowId: (hive) => hive.id,
+  });
 
   return (
     <div className="grid gap-6">
@@ -245,88 +321,38 @@ export function HivesListPage() {
           ))}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {bulkMode && (
-                  <TableHead className="w-10">
-                    <span className="sr-only">Selected</span>
-                  </TableHead>
-                )}
-                <TableHead>Hive</TableHead>
-                <TableHead>Apiary</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Installed</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.map((hive) => (
-                <TableRow
-                  key={hive.id}
-                  className={
-                    bulkMode
-                      ? "cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                      : undefined
-                  }
-                  // The row itself is the control in bulk mode: focusable,
-                  // Space/Enter toggles, and `aria-selected` reports state.
-                  tabIndex={bulkMode ? 0 : undefined}
-                  aria-selected={bulkMode ? selected.has(hive.id) : undefined}
-                  data-state={
-                    bulkMode && selected.has(hive.id) ? "selected" : undefined
-                  }
-                  onClick={
-                    bulkMode ? () => toggleSelect(hive.id) : undefined
-                  }
-                  onKeyDown={
-                    bulkMode
-                      ? (event) => {
-                          if (event.key !== " " && event.key !== "Enter") return;
-                          if (event.target !== event.currentTarget) return;
-                          event.preventDefault();
-                          toggleSelect(hive.id);
-                        }
-                      : undefined
-                  }
-                >
-                  {bulkMode && (
-                    <TableCell>
-                      <Checkbox
-                        checked={selected.has(hive.id)}
-                        aria-hidden
-                        tabIndex={-1}
-                        className="pointer-events-none"
-                      />
-                    </TableCell>
-                  )}
-                  <TableCell className="font-medium">
-                    {/* The name stays a link in bulk mode so a row can be
-                        opened for a second look without losing the selection. */}
-                    <Link
-                      href={`/hives/${hive.id}`}
-                      className="underline-offset-4 hover:underline"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      {hive.positionLabel}
-                    </Link>
-                    {hive.isArchived && (
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        (archived)
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell>{hive.apiaryName}</TableCell>
-                  <TableCell>
-                    <HiveStatusBadge status={hive.status} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatDate(hive.installedDate)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        <div className="rounded-xl border">
+          {/* In bulk mode the row itself is the control: click (or Enter on
+              the focused row) toggles the selection. Otherwise activating a
+              row opens the hive detail page. */}
+          <DataGrid
+            table={table}
+            aria-label="Hives"
+            onRowActivate={(hive) =>
+              bulkMode
+                ? toggleSelect(hive.id)
+                : router.push(`/hives/${hive.id}`)
+            }
+            rowProps={
+              bulkMode
+                ? (hive) => ({
+                    tabIndex: 0,
+                    "aria-selected": selected.has(hive.id),
+                    "data-state": selected.has(hive.id)
+                      ? "selected"
+                      : undefined,
+                    className: selected.has(hive.id) ? "bg-muted" : undefined,
+                    onKeyDown: (event) => {
+                      if (event.key === " " || event.key === "Enter") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        toggleSelect(hive.id);
+                      }
+                    },
+                  })
+                : undefined
+            }
+          />
         </div>
       )}
 

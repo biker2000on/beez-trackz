@@ -1,22 +1,25 @@
 "use client";
 
 import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 import {
   useCreateJarSize,
@@ -36,180 +39,289 @@ function numberToInput(value: number | null): string {
   return value === null ? "" : String(value);
 }
 
-function JarSizeRow({ jar }: { jar: JarSize }) {
-  const updateJar = useUpdateJarSize();
-  const [label, setLabel] = React.useState(jar.label);
-  const [honeyOz, setHoneyOz] = React.useState(numberToInput(jar.honeyOz));
-  const [price, setPrice] = React.useState(numberToInput(jar.defaultPrice));
-  const [lowStockThreshold, setLowStockThreshold] = React.useState(
-    String(jar.lowStockThreshold),
-  );
+// --- table model ---
 
-  // Re-sync the inline draft when the server row changes underneath it
-  // (render-time state adjustment keyed on the previous server values).
-  const [prevServer, setPrevServer] = React.useState({
-    label: jar.label,
-    honeyOz: jar.honeyOz,
-    defaultPrice: jar.defaultPrice,
-    lowStockThreshold: jar.lowStockThreshold,
-  });
-  if (
-    prevServer.label !== jar.label ||
-    prevServer.honeyOz !== jar.honeyOz ||
-    prevServer.defaultPrice !== jar.defaultPrice ||
-    prevServer.lowStockThreshold !== jar.lowStockThreshold
-  ) {
-    setPrevServer({
-      label: jar.label,
-      honeyOz: jar.honeyOz,
-      defaultPrice: jar.defaultPrice,
-      lowStockThreshold: jar.lowStockThreshold,
-    });
-    setLabel(jar.label);
-    setHoneyOz(numberToInput(jar.honeyOz));
-    setPrice(numberToInput(jar.defaultPrice));
-    setLowStockThreshold(String(jar.lowStockThreshold));
-  }
-
-  const dirty =
-    label.trim() !== jar.label ||
-    parseNumber(honeyOz) !== jar.honeyOz ||
-    parseNumber(price) !== jar.defaultPrice ||
-    Number(lowStockThreshold) !== jar.lowStockThreshold;
-
-  async function handleSave() {
-    if (label.trim() === "") {
-      toast.error("Label is required");
-      return;
-    }
-    try {
-      await updateJar.mutateAsync({
-        id: jar.id,
-        label: label.trim(),
-        honeyOz: parseNumber(honeyOz),
-        defaultPrice: parseNumber(price),
-        lowStockThreshold: Math.max(0, Math.floor(Number(lowStockThreshold) || 0)),
-      });
-      toast.success(`Saved "${label.trim()}"`);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Could not save jar size",
-      );
-    }
-  }
-
-  async function handleActiveToggle(checked: boolean) {
-    try {
-      await updateJar.mutateAsync({ id: jar.id, isActive: checked });
-    } catch (error) {
-      // Deactivating a size with jars still on hand is refused until the
-      // remaining stock is explicitly written off as a visible ledger entry.
-      if (error instanceof ApiError && error.status === 409 && !checked) {
-        const proceed = window.confirm(
-          `${error.message}\n\nWrite the remaining jars off and deactivate "${jar.label}"? The write-off is recorded in the honey ledger.`,
-        );
-        if (proceed) {
-          try {
-            await updateJar.mutateAsync({
-              id: jar.id,
-              isActive: false,
-              writeOffRemaining: true,
-              writeOffReason: "Deactivated from settings",
-            });
-            toast.success(`"${jar.label}" deactivated; remaining jars written off`);
-          } catch (retryError) {
-            toast.error(
-              retryError instanceof ApiError
-                ? retryError.message
-                : "Could not update jar size",
-            );
-          }
-        }
-        return;
-      }
-      toast.error(
-        error instanceof ApiError
-          ? error.message
-          : "Could not update jar size",
-      );
-    }
-  }
-
-  return (
-    <TableRow className={jar.isActive ? undefined : "opacity-60"}>
-      <TableCell>
-        <Input
-          aria-label={`Label for ${jar.label}`}
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-      </TableCell>
-      <TableCell>
-        <Input
-          aria-label={`Honey ounces for ${jar.label}`}
-          type="number"
-          inputMode="decimal"
-          min={0}
-          step="any"
-          className="w-24"
-          value={honeyOz}
-          onChange={(e) => setHoneyOz(e.target.value)}
-        />
-      </TableCell>
-      <TableCell>
-        <Input
-          aria-label={`Default price for ${jar.label}`}
-          type="number"
-          inputMode="decimal"
-          min={0}
-          step="0.01"
-          className="w-24"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-        />
-      </TableCell>
-      <TableCell>
-        <Input
-          aria-label={`Low stock threshold for ${jar.label}`}
-          type="number"
-          inputMode="numeric"
-          min={0}
-          step={1}
-          className="w-24"
-          value={lowStockThreshold}
-          onChange={(e) => setLowStockThreshold(e.target.value)}
-        />
-      </TableCell>
-      <TableCell className="text-center">
-        <Checkbox
-          aria-label={`${jar.label} active`}
-          checked={jar.isActive}
-          disabled={updateJar.isPending}
-          onCheckedChange={(checked) => handleActiveToggle(checked === true)}
-        />
-      </TableCell>
-      <TableCell>
-        <Button
-          size="icon-sm"
-          variant={dirty ? "default" : "ghost"}
-          aria-label={`Save ${jar.label}`}
-          disabled={!dirty || updateJar.isPending}
-          onClick={handleSave}
-        >
-          <Check />
-        </Button>
-      </TableCell>
-    </TableRow>
-  );
+/**
+ * Sparse per-row edit drafts: a field is stored only once the user has typed
+ * in it, so untouched cells always show the server value and a successful
+ * save simply drops the row's draft to re-sync with the round-tripped row.
+ */
+interface JarDraft {
+  label?: string;
+  honeyOz?: string;
+  price?: string;
+  lowStockThreshold?: string;
 }
+
+interface JarDraftValues {
+  label: string;
+  honeyOz: string;
+  price: string;
+  lowStockThreshold: string;
+}
+
+function jarDraftValues(jar: JarSize, draft: JarDraft | undefined): JarDraftValues {
+  return {
+    label: draft?.label ?? jar.label,
+    honeyOz: draft?.honeyOz ?? numberToInput(jar.honeyOz),
+    price: draft?.price ?? numberToInput(jar.defaultPrice),
+    lowStockThreshold:
+      draft?.lowStockThreshold ?? String(jar.lowStockThreshold),
+  };
+}
+
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<typeof gridFeatures, JarSize>();
 
 export function JarSizesSection() {
   const jarSizes = useJarSizes();
   const createJar = useCreateJarSize();
+  const updateJar = useUpdateJarSize();
+  const { mutateAsync: updateJarAsync } = updateJar;
+
+  const [drafts, setDrafts] = React.useState<Record<string, JarDraft>>({});
+  /** Which row's mutation is in flight, so other rows stay enabled. */
+  const [pendingId, setPendingId] = React.useState<string | null>(null);
   const [newLabel, setNewLabel] = React.useState("");
   const [newHoneyOz, setNewHoneyOz] = React.useState("");
   const [newPrice, setNewPrice] = React.useState("");
   const [newLowStockThreshold, setNewLowStockThreshold] = React.useState("6");
+
+  const setDraft = React.useCallback((id: string, patch: JarDraft) => {
+    setDrafts((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }, []);
+
+  const saveJar = React.useCallback(
+    async (jar: JarSize, values: JarDraftValues) => {
+      if (values.label.trim() === "") {
+        toast.error("Label is required");
+        return;
+      }
+      setPendingId(jar.id);
+      try {
+        await updateJarAsync({
+          id: jar.id,
+          label: values.label.trim(),
+          honeyOz: parseNumber(values.honeyOz),
+          defaultPrice: parseNumber(values.price),
+          lowStockThreshold: Math.max(
+            0,
+            Math.floor(Number(values.lowStockThreshold) || 0),
+          ),
+        });
+        toast.success(`Saved "${values.label.trim()}"`);
+        setDrafts((prev) => {
+          const next = { ...prev };
+          delete next[jar.id];
+          return next;
+        });
+      } catch (error) {
+        toast.error(
+          error instanceof ApiError ? error.message : "Could not save jar size",
+        );
+      } finally {
+        setPendingId(null);
+      }
+    },
+    [updateJarAsync],
+  );
+
+  const toggleActive = React.useCallback(
+    async (jar: JarSize, checked: boolean) => {
+      setPendingId(jar.id);
+      try {
+        await updateJarAsync({ id: jar.id, isActive: checked });
+      } catch (error) {
+        // Deactivating a size with jars still on hand is refused until the
+        // remaining stock is explicitly written off as a visible ledger entry.
+        if (error instanceof ApiError && error.status === 409 && !checked) {
+          const proceed = window.confirm(
+            `${error.message}\n\nWrite the remaining jars off and deactivate "${jar.label}"? The write-off is recorded in the honey ledger.`,
+          );
+          if (proceed) {
+            try {
+              await updateJarAsync({
+                id: jar.id,
+                isActive: false,
+                writeOffRemaining: true,
+                writeOffReason: "Deactivated from settings",
+              });
+              toast.success(
+                `"${jar.label}" deactivated; remaining jars written off`,
+              );
+            } catch (retryError) {
+              toast.error(
+                retryError instanceof ApiError
+                  ? retryError.message
+                  : "Could not update jar size",
+              );
+            }
+          }
+          return;
+        }
+        toast.error(
+          error instanceof ApiError
+            ? error.message
+            : "Could not update jar size",
+        );
+      } finally {
+        setPendingId(null);
+      }
+    },
+    [updateJarAsync],
+  );
+
+  const jars = React.useMemo(() => jarSizes.data ?? [], [jarSizes.data]);
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "label",
+          header: "Label",
+          cell: ({ row: { original: jar } }) => (
+            <DataGridCellAction
+              className={cn(!jar.isActive && "opacity-60")}
+            >
+              <Input
+                aria-label={`Label for ${jar.label}`}
+                value={jarDraftValues(jar, drafts[jar.id]).label}
+                onChange={(e) => setDraft(jar.id, { label: e.target.value })}
+              />
+            </DataGridCellAction>
+          ),
+        }),
+        columnHelper.display({
+          id: "honeyOz",
+          header: "Honey (oz)",
+          cell: ({ row: { original: jar } }) => (
+            <DataGridCellAction
+              className={cn(!jar.isActive && "opacity-60")}
+            >
+              <Input
+                aria-label={`Honey ounces for ${jar.label}`}
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="any"
+                className="w-24"
+                value={jarDraftValues(jar, drafts[jar.id]).honeyOz}
+                onChange={(e) => setDraft(jar.id, { honeyOz: e.target.value })}
+              />
+            </DataGridCellAction>
+          ),
+        }),
+        columnHelper.display({
+          id: "price",
+          header: "Default price ($)",
+          cell: ({ row: { original: jar } }) => (
+            <DataGridCellAction
+              className={cn(!jar.isActive && "opacity-60")}
+            >
+              <Input
+                aria-label={`Default price for ${jar.label}`}
+                type="number"
+                inputMode="decimal"
+                min={0}
+                step="0.01"
+                className="w-24"
+                value={jarDraftValues(jar, drafts[jar.id]).price}
+                onChange={(e) => setDraft(jar.id, { price: e.target.value })}
+              />
+            </DataGridCellAction>
+          ),
+        }),
+        columnHelper.display({
+          id: "lowStockThreshold",
+          header: "Low-stock alert",
+          cell: ({ row: { original: jar } }) => (
+            <DataGridCellAction
+              className={cn(!jar.isActive && "opacity-60")}
+            >
+              <Input
+                aria-label={`Low stock threshold for ${jar.label}`}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                step={1}
+                className="w-24"
+                value={jarDraftValues(jar, drafts[jar.id]).lowStockThreshold}
+                onChange={(e) =>
+                  setDraft(jar.id, { lowStockThreshold: e.target.value })
+                }
+              />
+            </DataGridCellAction>
+          ),
+        }),
+        columnHelper.display({
+          id: "active",
+          header: "Active",
+          meta: {
+            headClassName: "text-center",
+            cellClassName: "text-center",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: jar } }) => (
+            <DataGridCellAction
+              className={cn(
+                "flex justify-center",
+                !jar.isActive && "opacity-60",
+              )}
+            >
+              <Checkbox
+                aria-label={`${jar.label} active`}
+                checked={jar.isActive}
+                disabled={pendingId === jar.id}
+                onCheckedChange={(checked) =>
+                  toggleActive(jar, checked === true)
+                }
+              />
+            </DataGridCellAction>
+          ),
+        }),
+        columnHelper.display({
+          id: "save",
+          header: "",
+          meta: {
+            headClassName: "w-12",
+            cellClassName: "p-1 text-right",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: jar } }) => {
+            const values = jarDraftValues(jar, drafts[jar.id]);
+            const dirty =
+              values.label.trim() !== jar.label ||
+              parseNumber(values.honeyOz) !== jar.honeyOz ||
+              parseNumber(values.price) !== jar.defaultPrice ||
+              Number(values.lowStockThreshold) !== jar.lowStockThreshold;
+            return (
+              <DataGridCellAction
+                className={cn(
+                  "flex justify-end",
+                  !jar.isActive && "opacity-60",
+                )}
+              >
+                <Button
+                  size="icon-sm"
+                  variant={dirty ? "default" : "ghost"}
+                  aria-label={`Save ${jar.label}`}
+                  disabled={!dirty || pendingId === jar.id}
+                  onClick={() => saveJar(jar, values)}
+                >
+                  <Check />
+                </Button>
+              </DataGridCellAction>
+            );
+          },
+        }),
+      ]),
+    [drafts, pendingId, saveJar, setDraft, toggleActive],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: jars,
+    getRowId: (row) => row.id,
+  });
 
   async function handleAdd() {
     if (newLabel.trim() === "") {
@@ -259,7 +371,7 @@ export function JarSizesSection() {
     );
   }
 
-  const isEmpty = (jarSizes.data ?? []).length === 0;
+  const isEmpty = jars.length === 0;
 
   return (
     <div className="grid gap-3">
@@ -269,31 +381,21 @@ export function JarSizesSection() {
           counts stock in — add your first one in the row below.
         </p>
       ) : null}
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Label</TableHead>
-            <TableHead>Honey (oz)</TableHead>
-            <TableHead>Default price ($)</TableHead>
-            <TableHead>Low-stock alert</TableHead>
-            <TableHead className="text-center">Active</TableHead>
-            <TableHead className="w-12" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(jarSizes.data ?? []).map((jar) => (
-            <JarSizeRow key={jar.id} jar={jar} />
-          ))}
-          <TableRow>
-            <TableCell>
+      <DataGrid
+        table={table}
+        aria-label="Jar sizes"
+        listenOnWindow={false}
+        trailingRows={
+          <tr>
+            <td className="whitespace-nowrap p-3 align-middle">
               <Input
                 aria-label="New jar size label"
                 placeholder="New size…"
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
               />
-            </TableCell>
-            <TableCell>
+            </td>
+            <td className="whitespace-nowrap p-3 align-middle">
               <Input
                 aria-label="New jar size honey ounces"
                 type="number"
@@ -305,8 +407,8 @@ export function JarSizesSection() {
                 value={newHoneyOz}
                 onChange={(e) => setNewHoneyOz(e.target.value)}
               />
-            </TableCell>
-            <TableCell>
+            </td>
+            <td className="whitespace-nowrap p-3 align-middle">
               <Input
                 aria-label="New jar size default price"
                 type="number"
@@ -318,8 +420,8 @@ export function JarSizesSection() {
                 value={newPrice}
                 onChange={(e) => setNewPrice(e.target.value)}
               />
-            </TableCell>
-            <TableCell>
+            </td>
+            <td className="whitespace-nowrap p-3 align-middle">
               <Input
                 aria-label="New jar size low stock threshold"
                 type="number"
@@ -331,9 +433,9 @@ export function JarSizesSection() {
                 value={newLowStockThreshold}
                 onChange={(e) => setNewLowStockThreshold(e.target.value)}
               />
-            </TableCell>
-            <TableCell />
-            <TableCell>
+            </td>
+            <td className="whitespace-nowrap p-3 align-middle" />
+            <td className="whitespace-nowrap p-1 text-right align-middle">
               <Button
                 size="icon-sm"
                 aria-label="Add jar size"
@@ -342,10 +444,10 @@ export function JarSizesSection() {
               >
                 <Plus />
               </Button>
-            </TableCell>
-          </TableRow>
-        </TableBody>
-      </Table>
+            </td>
+          </tr>
+        }
+      />
     </div>
   );
 }

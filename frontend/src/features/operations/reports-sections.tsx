@@ -10,23 +10,27 @@
  * shareable.
  */
 
+import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { DollarSign, HeartPulse, Scale, TrendingUp } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { formatDate } from "@/features/hives/lib";
 import { formatLbs, formatMoney } from "@/features/honey/format";
 import { useNumberParam } from "@/lib/url-state";
@@ -36,9 +40,43 @@ import {
   useSurvivalReport,
   useVarroaFleet,
   useYieldReport,
+  type EconomicsReport as EconomicsReportData,
   type SurvivalGroup,
+  type VarroaFleetHive,
+  type YieldReport as YieldReportData,
 } from "./hooks";
 import { METHOD_LABELS } from "./varroa-panel";
+
+type YieldHiveRow = YieldReportData["byHive"][number];
+type EconomicsApiaryRow = EconomicsReportData["apiaries"][number];
+
+const gridFeatures = tableFeatures({});
+const varroaColumnHelper = createColumnHelper<
+  typeof gridFeatures,
+  VarroaFleetHive
+>();
+const survivalColumnHelper = createColumnHelper<
+  typeof gridFeatures,
+  SurvivalGroup
+>();
+const yieldColumnHelper = createColumnHelper<typeof gridFeatures, YieldHiveRow>();
+const economicsColumnHelper = createColumnHelper<
+  typeof gridFeatures,
+  EconomicsApiaryRow
+>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
+/**
+ * The DataGrid table has no `data-pin-first-column` hook into globals.css, so
+ * the first column pins itself with the same sticky + card background + 1px
+ * edge the old `<Table pinFirstColumn>` styling produced.
+ */
+const pinnedFirstColumn =
+  "sticky left-0 z-[1] bg-card after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-border";
 
 export function currentYear(): number {
   return new Date().getFullYear();
@@ -143,12 +181,6 @@ export function VarroaFleetSection() {
   const fleet = useVarroaFleet();
   if (fleet.isPending) return <Skeleton className="h-40" />;
   if (!fleet.data || !Array.isArray(fleet.data.hives)) return <ErrorText />;
-  const rows = [...fleet.data.hives]
-    .filter((row) => row.lastCount)
-    .sort((a, b) => {
-      if (a.overThreshold !== b.overThreshold) return a.overThreshold ? -1 : 1;
-      return (b.lastCount?.date ?? "").localeCompare(a.lastCount?.date ?? "");
-    });
   return (
     <Card>
       <CardHeader>
@@ -161,35 +193,107 @@ export function VarroaFleetSection() {
         </p>
       </CardHeader>
       <CardContent className="p-0">
-        {rows.length === 0 ? (
-          <p className="px-4 pb-4 text-sm text-muted-foreground">No mite counts recorded yet.</p>
-        ) : (
-          <Table>
-            <TableHeader><TableRow><TableHead>Hive</TableHead><TableHead>Apiary</TableHead><TableHead className="text-right">Latest</TableHead><TableHead>Method</TableHead><TableHead>Date</TableHead><TableHead /></TableRow></TableHeader>
-            <TableBody>
-              {rows.map((row) => {
-                const latest = row.lastCount!;
-                const display = miteDisplay(latest);
-                return (
-                  <TableRow key={row.hiveId}>
-                    <TableCell className="font-medium">
-                      <Link href={`/hives/${row.hiveId}?tab=health`} className="hover:underline">{row.hiveName}</Link>
-                    </TableCell>
-                    <TableCell>{row.apiaryName}</TableCell>
-                    <TableCell className="text-right tabular-nums">{display ? display.label : `${latest.mitesCount} mites`}</TableCell>
-                    <TableCell>{METHOD_LABELS[latest.method] ?? latest.method}</TableCell>
-                    <TableCell>{formatDate(latest.date)}</TableCell>
-                    <TableCell className="text-right">
-                      {row.overThreshold && <Badge variant="destructive">Over threshold</Badge>}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
+        <VarroaFleetGrid hives={fleet.data.hives} />
       </CardContent>
     </Card>
+  );
+}
+
+function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
+  const router = useRouter();
+
+  const rows = React.useMemo(
+    () =>
+      [...hives]
+        .filter((row) => row.lastCount)
+        .sort((a, b) => {
+          if (a.overThreshold !== b.overThreshold)
+            return a.overThreshold ? -1 : 1;
+          return (b.lastCount?.date ?? "").localeCompare(
+            a.lastCount?.date ?? "",
+          );
+        }),
+    [hives],
+  );
+
+  const columns = React.useMemo(
+    () =>
+      varroaColumnHelper.columns([
+        varroaColumnHelper.display({
+          id: "hive",
+          header: "Hive",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => (
+            <DataGridCellAction>
+              <Link
+                href={`/hives/${row.original.hiveId}?tab=health`}
+                className="hover:underline"
+              >
+                {row.original.hiveName}
+              </Link>
+            </DataGridCellAction>
+          ),
+        }),
+        varroaColumnHelper.display({
+          id: "apiary",
+          header: "Apiary",
+          cell: ({ row }) => row.original.apiaryName,
+        }),
+        varroaColumnHelper.display({
+          id: "latest",
+          header: "Latest",
+          meta: rightAligned,
+          cell: ({ row }) => {
+            const latest = row.original.lastCount!;
+            const display = miteDisplay(latest);
+            return display ? display.label : `${latest.mitesCount} mites`;
+          },
+        }),
+        varroaColumnHelper.display({
+          id: "method",
+          header: "Method",
+          cell: ({ row }) => {
+            const latest = row.original.lastCount!;
+            return METHOD_LABELS[latest.method] ?? latest.method;
+          },
+        }),
+        varroaColumnHelper.display({
+          id: "date",
+          header: "Date",
+          cell: ({ row }) => formatDate(row.original.lastCount!.date),
+        }),
+        varroaColumnHelper.display({
+          id: "threshold",
+          header: "",
+          meta: { align: "right" } satisfies DataGridColumnMeta,
+          cell: ({ row }) =>
+            row.original.overThreshold && (
+              <Badge variant="destructive">Over threshold</Badge>
+            ),
+        }),
+      ]),
+    [],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: rows,
+    getRowId: (row) => row.hiveId,
+  });
+
+  if (rows.length === 0) {
+    return (
+      <p className="px-4 pb-4 text-sm text-muted-foreground">No mite counts recorded yet.</p>
+    );
+  }
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Varroa across the fleet"
+      listenOnWindow={false}
+      onRowActivate={(row) => router.push(`/hives/${row.hiveId}?tab=health`)}
+    />
   );
 }
 
@@ -216,18 +320,7 @@ export function YieldReport({ year }: { year: number }) {
       <Card>
         <CardHeader><CardTitle className="text-base">Hive leaderboard</CardTitle></CardHeader>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader><TableRow><TableHead>Hive</TableHead><TableHead>Apiary</TableHead><TableHead className="text-right">Honey</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {yields.data.byHive.map((row) => (
-                <TableRow key={row.hiveId}>
-                  <TableCell className="font-medium">{row.hiveName}</TableCell>
-                  <TableCell>{row.apiaryName}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatLbs(row.pounds)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <YieldLeaderboardGrid rows={yields.data.byHive} />
         </CardContent>
       </Card>
       <Card>
@@ -256,35 +349,154 @@ export function EconomicsReport({ year }: { year: number }) {
   return (
     <Card>
       <CardContent className="overflow-x-auto p-0">
-        <Table pinFirstColumn>
-          <TableHeader><TableRow>
-            <TableHead>Apiary</TableHead><TableHead className="text-right">lb/hive</TableHead>
-            <TableHead className="text-right">Revenue (invoiced)</TableHead><TableHead className="text-right">Expenses</TableHead>
-            <TableHead className="text-right">Margin</TableHead><TableHead className="text-right">Feed/colony</TableHead>
-            <TableHead className="text-right">Treatment/colony</TableHead>
-            <TableHead className="text-right">Winter survival</TableHead>
-            <TableHead className="text-right">Splits surviving</TableHead>
-            <TableHead className="text-right">Introduced queens active</TableHead>
-          </TableRow></TableHeader>
-          <TableBody>
-            {economics.data.apiaries.map((row) => (
-              <TableRow key={row.apiaryId}>
-                <TableCell className="font-medium">{row.apiaryName}</TableCell>
-                <TableCell className="text-right">{row.poundsPerHive.toFixed(1)}</TableCell>
-                <TableCell className="text-right">{formatMoney(row.revenueAllocated)}</TableCell>
-                <TableCell className="text-right">{formatMoney(row.expenses)}</TableCell>
-                <TableCell className="text-right font-medium">{formatMoney(row.margin)}</TableCell>
-                <TableCell className="text-right">{formatMoney(row.feedCostPerColony)}</TableCell>
-                <TableCell className="text-right">{formatMoney(row.treatmentCostPerColony)}</TableCell>
-                <TableCell className="text-right">{row.survivedWinter}/{row.enteredWinter} ({row.winterSurvivalRate.toFixed(0)}%)</TableCell>
-                <TableCell className="text-right">{row.splitChildrenSurviving}/{row.splitsCreated}</TableCell>
-                <TableCell className="text-right">{row.introducedQueensActive}/{row.queensIntroduced}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <EconomicsGrid rows={economics.data.apiaries} />
       </CardContent>
     </Card>
+  );
+}
+
+function YieldLeaderboardGrid({ rows }: { rows: YieldHiveRow[] }) {
+  const columns = React.useMemo(
+    () =>
+      yieldColumnHelper.columns([
+        yieldColumnHelper.display({
+          id: "hive",
+          header: "Hive",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.hiveName,
+        }),
+        yieldColumnHelper.display({
+          id: "apiary",
+          header: "Apiary",
+          cell: ({ row }) => row.original.apiaryName,
+        }),
+        yieldColumnHelper.display({
+          id: "honey",
+          header: "Honey",
+          meta: rightAligned,
+          cell: ({ row }) => formatLbs(row.original.pounds),
+        }),
+      ]),
+    [],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: rows,
+    getRowId: (row) => row.hiveId,
+  });
+
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Hive leaderboard"
+      listenOnWindow={false}
+    />
+  );
+}
+
+function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
+  const columns = React.useMemo(
+    () =>
+      economicsColumnHelper.columns([
+        economicsColumnHelper.display({
+          id: "apiary",
+          header: "Apiary",
+          meta: {
+            headClassName: pinnedFirstColumn,
+            cellClassName: `font-medium ${pinnedFirstColumn}`,
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.apiaryName,
+        }),
+        economicsColumnHelper.display({
+          id: "poundsPerHive",
+          header: "lb/hive",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.poundsPerHive.toFixed(1),
+        }),
+        economicsColumnHelper.display({
+          id: "revenue",
+          header: "Revenue (invoiced)",
+          meta: rightAligned,
+          cell: ({ row }) => formatMoney(row.original.revenueAllocated),
+        }),
+        economicsColumnHelper.display({
+          id: "expenses",
+          header: "Expenses",
+          meta: rightAligned,
+          cell: ({ row }) => formatMoney(row.original.expenses),
+        }),
+        economicsColumnHelper.display({
+          id: "margin",
+          header: "Margin",
+          meta: {
+            align: "right",
+            cellClassName: "tabular-nums font-medium",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) => formatMoney(row.original.margin),
+        }),
+        economicsColumnHelper.display({
+          id: "feedPerColony",
+          header: "Feed/colony",
+          meta: rightAligned,
+          cell: ({ row }) => formatMoney(row.original.feedCostPerColony),
+        }),
+        economicsColumnHelper.display({
+          id: "treatmentPerColony",
+          header: "Treatment/colony",
+          meta: rightAligned,
+          cell: ({ row }) => formatMoney(row.original.treatmentCostPerColony),
+        }),
+        economicsColumnHelper.display({
+          id: "winterSurvival",
+          header: "Winter survival",
+          meta: rightAligned,
+          cell: ({ row }) => (
+            <>
+              {row.original.survivedWinter}/{row.original.enteredWinter} (
+              {row.original.winterSurvivalRate.toFixed(0)}%)
+            </>
+          ),
+        }),
+        economicsColumnHelper.display({
+          id: "splitsSurviving",
+          header: "Splits surviving",
+          meta: rightAligned,
+          cell: ({ row }) => (
+            <>
+              {row.original.splitChildrenSurviving}/{row.original.splitsCreated}
+            </>
+          ),
+        }),
+        economicsColumnHelper.display({
+          id: "queensActive",
+          header: "Introduced queens active",
+          meta: rightAligned,
+          cell: ({ row }) => (
+            <>
+              {row.original.introducedQueensActive}/
+              {row.original.queensIntroduced}
+            </>
+          ),
+        }),
+      ]),
+    [],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: rows,
+    getRowId: (row) => row.apiaryId,
+  });
+
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Apiary economics"
+      listenOnWindow={false}
+    />
   );
 }
 
@@ -303,16 +515,52 @@ function ReportStat({
 }
 
 function SurvivalTable({ title, rows }: { title: string; rows: SurvivalGroup[] }) {
+  const columns = React.useMemo(
+    () =>
+      survivalColumnHelper.columns([
+        survivalColumnHelper.display({
+          id: "group",
+          header: "Group",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.label,
+        }),
+        survivalColumnHelper.display({
+          id: "enteredWinter",
+          header: "Entered winter",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.enteredWinter,
+        }),
+        survivalColumnHelper.display({
+          id: "survived",
+          header: "Survived",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.survived,
+        }),
+        survivalColumnHelper.display({
+          id: "rate",
+          header: "Rate",
+          meta: {
+            align: "right",
+            cellClassName: "tabular-nums font-semibold",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) => `${row.original.survivalRate.toFixed(0)}%`,
+        }),
+      ]),
+    [],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: rows,
+    getRowId: (row) => row.key,
+  });
+
   return (
     <Card>
       <CardHeader><CardTitle className="text-base">{title}</CardTitle></CardHeader>
       <CardContent className="p-0">
-        <Table>
-          <TableHeader><TableRow><TableHead>Group</TableHead><TableHead className="text-right">Entered winter</TableHead><TableHead className="text-right">Survived</TableHead><TableHead className="text-right">Rate</TableHead></TableRow></TableHeader>
-          <TableBody>
-            {rows.map((row) => <TableRow key={row.key}><TableCell className="font-medium">{row.label}</TableCell><TableCell className="text-right">{row.enteredWinter}</TableCell><TableCell className="text-right">{row.survived}</TableCell><TableCell className="text-right font-semibold">{row.survivalRate.toFixed(0)}%</TableCell></TableRow>)}
-          </TableBody>
-        </Table>
+        <DataGrid table={table} aria-label={title} listenOnWindow={false} />
       </CardContent>
     </Card>
   );

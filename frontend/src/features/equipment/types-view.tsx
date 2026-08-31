@@ -8,6 +8,11 @@
 
 import * as React from "react";
 import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
+import {
   CornerDownRight,
   Hammer,
   MoreHorizontal,
@@ -27,12 +32,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import {
   Dialog,
   DialogContent,
@@ -61,14 +66,6 @@ import {
 } from "@/components/ui/select";
 import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useShortcut } from "@/components/shortcuts/provider";
 
@@ -96,6 +93,23 @@ function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return <p className="text-xs text-destructive">{message}</p>;
 }
+
+// --- table model ---
+
+interface TypeGridRow {
+  type: EquipmentType;
+  isVariant: boolean;
+  stock: EquipmentStockRow | undefined;
+  bom: EquipmentComponentLine[];
+}
+
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<typeof gridFeatures, TypeGridRow>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
 
 // --- page ---
 
@@ -133,9 +147,10 @@ export function TypesView() {
     return map;
   }, [components.data]);
 
-  // Bases first, each followed by its variants. A variant whose base no
-  // longer exists is shown at the top level rather than hidden.
-  const grouped = React.useMemo(() => {
+  // One flat, category-ordered list: bases first, each followed by its
+  // variants. A variant whose base no longer exists is shown at the top level
+  // rather than hidden. Category becomes the grid's group header.
+  const rows = React.useMemo<TypeGridRow[]>(() => {
     const byId = new Map(typeList.map((t) => [t.id, t]));
     const variantsOf = new Map<string, EquipmentType[]>();
     const bases: EquipmentType[] = [];
@@ -148,19 +163,152 @@ export function TypesView() {
         bases.push(t);
       }
     }
-    return CATEGORY_ORDER.map((category) => ({
-      category,
-      rows: bases
+    const toRow = (type: EquipmentType, isVariant: boolean): TypeGridRow => ({
+      type,
+      isVariant,
+      stock: stockByType.get(type.id),
+      bom: bomByParent.get(type.id) ?? [],
+    });
+    return CATEGORY_ORDER.flatMap((category) =>
+      bases
         .filter((t) => t.category === category)
         .flatMap((base) => [
-          { type: base, isVariant: false },
-          ...(variantsOf.get(base.id) ?? []).map((v) => ({
-            type: v,
-            isVariant: true,
-          })),
+          toRow(base, false),
+          ...(variantsOf.get(base.id) ?? []).map((v) => toRow(v, true)),
         ]),
-    })).filter((group) => group.rows.length > 0);
-  }, [typeList]);
+    );
+  }, [typeList, stockByType, bomByParent]);
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "name",
+          header: "Type",
+          cell: ({ row }) => {
+            const { type, isVariant } = row.original;
+            return (
+              <div className="flex items-center gap-2">
+                {isVariant && (
+                  <CornerDownRight className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <span className="font-medium">{type.name}</span>
+                {type.framesPerBox != null && (
+                  <Badge variant="outline">{type.framesPerBox} frames</Badge>
+                )}
+                {isVariant && <Badge variant="secondary">variant</Badge>}
+              </div>
+            );
+          },
+        }),
+        columnHelper.display({
+          id: "bom",
+          header: "Built from",
+          meta: {
+            cellClassName: "text-sm text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) =>
+            row.original.bom.length === 0
+              ? "—"
+              : row.original.bom
+                  .map((line) => `${line.quantity} × ${line.componentTypeName}`)
+                  .join(" + "),
+        }),
+        columnHelper.display({
+          id: "owned",
+          header: "Owned",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.stock?.totalOwned ?? 0,
+        }),
+        columnHelper.display({
+          id: "available",
+          header: "Available",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.stock?.available ?? 0,
+        }),
+        columnHelper.display({
+          id: "unitCost",
+          header: "Unit cost",
+          meta: rightAligned,
+          cell: ({ row }) => formatCents(row.original.stock?.unitCostCents),
+        }),
+        columnHelper.display({
+          id: "actions",
+          header: "",
+          meta: { cellClassName: "w-10 p-1 text-right" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => {
+            const { type, isVariant, bom } = row.original;
+            return (
+              <DataGridCellAction className="flex justify-end">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Actions for ${type.name}`}
+                  >
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => setEditorState({ type })}>
+                    <Wrench />
+                    Edit type
+                  </DropdownMenuItem>
+                  {!isVariant && (
+                    <DropdownMenuItem
+                      onSelect={() => setEditorState({ variantOf: type })}
+                    >
+                      <CornerDownRight />
+                      Add variant
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setBomType(type)}>
+                    <Hammer />
+                    Bill of materials
+                  </DropdownMenuItem>
+                  {bom.length > 0 && (
+                    <>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          setAssembleState({ type, action: "assemble" })
+                        }
+                      >
+                        Assemble…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          setAssembleState({ type, action: "disassemble" })
+                        }
+                      >
+                        Disassemble…
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => setDeleting(type)}
+                  >
+                    Delete type
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              </DataGridCellAction>
+            );
+          },
+        }),
+      ]),
+    [],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: rows,
+    getRowId: (row) => row.type.id,
+  });
 
   return (
     <div className="grid gap-6">
@@ -194,143 +342,20 @@ export function TypesView() {
           </CardContent>
         </Card>
       ) : (
-        grouped.map((group) => (
-          <Card key={group.category}>
-            <CardHeader>
-              <CardTitle className="text-base">
-                {CATEGORY_LABELS[group.category]}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Built from</TableHead>
-                    <TableHead className="text-right">Owned</TableHead>
-                    <TableHead className="text-right">Available</TableHead>
-                    <TableHead className="text-right">Unit cost</TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {group.rows.map(({ type, isVariant }) => {
-                    const row = stockByType.get(type.id);
-                    const bom = bomByParent.get(type.id) ?? [];
-                    return (
-                      <TableRow key={type.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            {isVariant && (
-                              <CornerDownRight className="size-4 shrink-0 text-muted-foreground" />
-                            )}
-                            <span className="font-medium">{type.name}</span>
-                            {type.framesPerBox != null && (
-                              <Badge variant="outline">
-                                {type.framesPerBox} frames
-                              </Badge>
-                            )}
-                            {isVariant && (
-                              <Badge variant="secondary">variant</Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {bom.length === 0
-                            ? "—"
-                            : bom
-                                .map(
-                                  (line) =>
-                                    `${line.quantity} × ${line.componentTypeName}`,
-                                )
-                                .join(" + ")}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row?.totalOwned ?? 0}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row?.available ?? 0}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatCents(row?.unitCostCents)}
-                        </TableCell>
-                        <TableCell>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                aria-label={`Actions for ${type.name}`}
-                              >
-                                <MoreHorizontal />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onSelect={() => setEditorState({ type })}
-                              >
-                                <Wrench />
-                                Edit type
-                              </DropdownMenuItem>
-                              {!isVariant && (
-                                <DropdownMenuItem
-                                  onSelect={() =>
-                                    setEditorState({ variantOf: type })
-                                  }
-                                >
-                                  <CornerDownRight />
-                                  Add variant
-                                </DropdownMenuItem>
-                              )}
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onSelect={() => setBomType(type)}
-                              >
-                                <Hammer />
-                                Bill of materials
-                              </DropdownMenuItem>
-                              {bom.length > 0 && (
-                                <>
-                                  <DropdownMenuItem
-                                    onSelect={() =>
-                                      setAssembleState({
-                                        type,
-                                        action: "assemble",
-                                      })
-                                    }
-                                  >
-                                    Assemble…
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onSelect={() =>
-                                      setAssembleState({
-                                        type,
-                                        action: "disassemble",
-                                      })
-                                    }
-                                  >
-                                    Disassemble…
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                variant="destructive"
-                                onSelect={() => setDeleting(type)}
-                              >
-                                Delete type
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        ))
+        <Card className="py-0">
+          <CardContent className="p-0">
+            <DataGrid
+              table={table}
+              aria-label="Equipment types"
+              getRowGroup={(row) => row.type.category}
+              renderGroupHeader={(category) =>
+                CATEGORY_LABELS[category as EquipmentCategory]
+              }
+              onRowActivate={(row) => setEditorState({ type: row.type })}
+              onRowDelete={(row) => setDeleting(row.type)}
+            />
+          </CardContent>
+        </Card>
       )}
 
       <TypeDialog

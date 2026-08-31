@@ -1,6 +1,11 @@
 "use client";
 
 import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { Minus, Plus, ShoppingBasket, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
@@ -19,18 +24,19 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import { formatMoney, todayISO } from "@/features/honey/format";
 import { useJarInventory, useProductCatalog, useRecordSale } from "@/features/honey/hooks";
 import type { CatalogProduct, SaleLineKind } from "@/features/honey/types";
 import { OfflineQueuedError } from "@/lib/api";
-import { useHarvestLots, useLowStock, useReconciliation } from "./api";
+import {
+  useHarvestLots,
+  useLowStock,
+  useReconciliation,
+  type Reconciliation,
+} from "./api";
 import {
   useStockInventory,
   useStockLocationSale,
@@ -434,11 +440,67 @@ function ReconciliationCard({ date, loading, data }: { date: string; loading: bo
         {loading ? <Skeleton className="h-24" /> : data ? (
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Summary label="Orders" value={String(data.orderCount)} /><Summary label="Gross sales (invoiced)" value={formatMoney(data.grossSales)} /><Summary label="Collected" value={formatMoney(data.amountCollected)} /><Summary label="Balance due" value={formatMoney(data.balanceDue)} /></div>
-            <Table><TableHeader><TableRow><TableHead>Payment</TableHead><TableHead>Channel</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Collected</TableHead></TableRow></TableHeader><TableBody>{data.breakdown.map((row) => <TableRow key={`${row.paymentMethod}-${row.channel}`}><TableCell className="capitalize">{row.paymentMethod}</TableCell><TableCell className="capitalize">{row.channel.replaceAll("_", " ")}</TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.paid)}</TableCell></TableRow>)}</TableBody></Table>
+            <BreakdownTable rows={data.breakdown} />
           </div>
         ) : <p className="text-sm text-muted-foreground">Reconciliation unavailable.</p>}
       </CardContent>
     </Card>
+  );
+}
+
+type BreakdownRow = Reconciliation["breakdown"][number];
+
+const gridFeatures = tableFeatures({});
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
+const breakdownHelper = createColumnHelper<typeof gridFeatures, BreakdownRow>();
+const breakdownColumns = breakdownHelper.columns([
+  breakdownHelper.display({
+    id: "payment",
+    header: "Payment",
+    meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.paymentMethod,
+  }),
+  breakdownHelper.display({
+    id: "channel",
+    header: "Channel",
+    meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.channel.replaceAll("_", " "),
+  }),
+  breakdownHelper.display({
+    id: "orders",
+    header: "Orders",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.orderCount,
+  }),
+  breakdownHelper.display({
+    id: "collected",
+    header: "Collected",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.paid),
+  }),
+]);
+
+function BreakdownTable({ rows }: { rows: BreakdownRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: breakdownColumns,
+    data,
+    getRowId: (row) => `${row.paymentMethod}-${row.channel}`,
+  });
+  // The market-day screen is a keyboard-heavy point of sale; this summary
+  // table must not grab window keystrokes.
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Reconciliation breakdown"
+      listenOnWindow={false}
+    />
   );
 }
 

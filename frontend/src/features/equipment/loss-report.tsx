@@ -7,6 +7,11 @@
  */
 
 import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { TrendingDown } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -22,22 +27,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 
 import { formatCents, formatDate } from "./format";
 import { useLossReport } from "./hooks";
-import { LOSS_KIND_LABELS, reasonLabel } from "./types";
+import { LOSS_KIND_LABELS, reasonLabel, type LossReport } from "./types";
 
 /** The first of January this year, as a date-input value. */
 function startOfYearISO(): string {
   return `${new Date().getFullYear()}-01-01`;
 }
+
+type LossByTypeRow = LossReport["byType"][number];
+
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<typeof gridFeatures, LossByTypeRow>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
 
 export function LossReportCard() {
   const [from, setFrom] = React.useState(startOfYearISO);
@@ -48,6 +59,55 @@ export function LossReportCard() {
   const hasLosses =
     totals != null &&
     totals.damaged + totals.retired + totals.writtenOff > 0;
+
+  const byType = React.useMemo(
+    () => report.data?.byType ?? [],
+    [report.data],
+  );
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "equipment",
+          header: "Equipment",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.typeName,
+        }),
+        columnHelper.display({
+          id: "damaged",
+          header: "Damaged",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.damaged || "—",
+        }),
+        columnHelper.display({
+          id: "retired",
+          header: "Retired",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.retired || "—",
+        }),
+        columnHelper.display({
+          id: "writtenOff",
+          header: "Written off",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.writtenOff || "—",
+        }),
+        columnHelper.display({
+          id: "value",
+          header: "Value",
+          meta: rightAligned,
+          cell: ({ row }) => formatCents(row.original.valueCents),
+        }),
+      ]),
+    [],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: byType,
+    getRowId: (row) => row.typeId,
+  });
 
   return (
     <Card>
@@ -127,39 +187,14 @@ export function LossReportCard() {
               />
             </div>
 
-            <div className="overflow-x-auto rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Equipment</TableHead>
-                    <TableHead className="text-right">Damaged</TableHead>
-                    <TableHead className="text-right">Retired</TableHead>
-                    <TableHead className="text-right">Written off</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {report.data.byType.map((row) => (
-                    <TableRow key={row.typeId}>
-                      <TableCell className="font-medium">
-                        {row.typeName}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.damaged || "—"}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.retired || "—"}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.writtenOff || "—"}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatCents(row.valueCents)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            <div className="rounded-lg border">
+              {/* The /inventory page's stock grid owns the window keyboard
+                  shortcuts, so this grid must not listen. */}
+              <DataGrid
+                table={table}
+                aria-label="Equipment losses by type"
+                listenOnWindow={false}
+              />
             </div>
 
             {report.data.events.length > 0 && (

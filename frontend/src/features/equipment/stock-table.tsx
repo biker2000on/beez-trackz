@@ -2,7 +2,9 @@
 
 /**
  * Equipment stock grouped by category, showing owned / deployed / available /
- * needed / damaged / retired per type.
+ * needed / damaged / retired per type. Rendered as a DataGrid: arrow keys (or
+ * j/k) move the focused row, Enter opens the row's edit dialog, and clicking
+ * a row does the same.
  *
  * The old bulk-edit mode is gone. In its place is a physical count (`c`): you
  * type what is actually on the shelf, the server works out each signed delta
@@ -11,6 +13,11 @@
  */
 
 import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import {
   ClipboardCheck,
   History,
@@ -25,6 +32,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -32,14 +44,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useShortcut } from "@/components/shortcuts/provider";
 import { apiLineErrors } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -58,6 +62,7 @@ import {
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  type EquipmentCategory,
   type EquipmentStockRow,
 } from "./types";
 
@@ -70,6 +75,17 @@ type RowDialog =
   | StateDialogMode;
 
 const STATE_DIALOGS: StateDialogMode[] = ["damage", "repair", "retire"];
+
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<
+  typeof gridFeatures,
+  EquipmentStockRow
+>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
 
 export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
   const physicalCount = usePhysicalCount();
@@ -150,10 +166,248 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
     );
   }
 
-  const groups = CATEGORY_ORDER.map((category) => ({
-    category,
-    items: rows.filter((row) => row.typeCategory === category),
-  })).filter((group) => group.items.length > 0);
+  const sortedRows = React.useMemo(
+    () =>
+      [...rows].sort(
+        (a, b) =>
+          CATEGORY_ORDER.indexOf(a.typeCategory) -
+            CATEGORY_ORDER.indexOf(b.typeCategory) ||
+          a.typeName.localeCompare(b.typeName),
+      ),
+    [rows],
+  );
+
+  const columns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "equipment",
+          header: "Equipment",
+          meta: {
+            cellClassName: "font-medium",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => (
+            <>
+              {row.typeName}
+              {row.frameCondition && (
+                <Badge variant="secondary" className="ml-2 capitalize">
+                  {row.frameCondition}
+                </Badge>
+              )}
+              {row.framesPerBox != null && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {row.framesPerBox} frames/box
+                </span>
+              )}
+              {row.combAgeYears != null && (
+                <span
+                  className={cn(
+                    "ml-2 text-xs",
+                    row.pullRecommended
+                      ? "font-semibold text-destructive"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {row.pullRecommended
+                    ? `This ${row.typeName.toLowerCase()} is ${row.combAgeYears} years old — pull it`
+                    : `${row.combAgeYears} years in service`}
+                </span>
+              )}
+              {lineErrors[row.id] && (
+                <p className="text-xs text-destructive">{lineErrors[row.id]}</p>
+              )}
+            </>
+          ),
+        }),
+        columnHelper.display({
+          id: "owned",
+          header: "Owned",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.totalOwned,
+        }),
+        columnHelper.display({
+          id: "deployed",
+          header: "In field",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.deployed,
+        }),
+        columnHelper.display({
+          id: "available",
+          header: countMode ? "Counted" : "Available",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) => {
+            if (!countMode) {
+              return (
+                <span
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    row.available < 0 && "text-destructive",
+                  )}
+                >
+                  {row.available}
+                </span>
+              );
+            }
+            const draft = drafts[row.id] ?? "";
+            const draftValue = parseNum(draft);
+            const changed = draftValue != null && draftValue !== row.available;
+            return (
+              <DataGridCellAction>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={0}
+                  aria-label={`${row.typeName} counted in storage`}
+                  className={cn(
+                    "ml-auto h-8 w-20 bg-background text-right",
+                    changed && "border-primary ring-1 ring-primary",
+                    lineErrors[row.id] &&
+                      "border-destructive ring-1 ring-destructive",
+                  )}
+                  value={draft}
+                  onChange={(e) =>
+                    setDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))
+                  }
+                />
+              </DataGridCellAction>
+            );
+          },
+        }),
+        columnHelper.display({
+          id: "needed",
+          header: "Needed",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) =>
+            row.needed === 0 ? (
+              <span className="text-muted-foreground">—</span>
+            ) : row.shortfall > 0 ? (
+              <Badge variant="destructive">
+                {row.needed} · {row.shortfall} short
+              </Badge>
+            ) : (
+              row.needed
+            ),
+        }),
+        columnHelper.display({
+          id: "damaged",
+          header: "Damaged",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) =>
+            row.damaged === 0 ? (
+              <span className="text-muted-foreground">—</span>
+            ) : (
+              <Badge variant="secondary">{row.damaged}</Badge>
+            ),
+        }),
+        columnHelper.display({
+          id: "retired",
+          header: "Retired",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) =>
+            row.retired === 0 ? (
+              <span className="text-muted-foreground">—</span>
+            ) : (
+              <Badge variant="secondary">{row.retired}</Badge>
+            ),
+        }),
+        columnHelper.display({
+          id: "location",
+          header: "Location",
+          meta: {
+            cellClassName: "max-w-40 truncate text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.storageLocation ?? "—",
+        }),
+        columnHelper.display({
+          id: "actions",
+          header: "",
+          meta: {
+            cellClassName: "p-1 text-right",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => (
+            <DataGridCellAction className="flex justify-end">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`${row.typeName} actions`}
+                  >
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onSelect={() => setActive({ stock: row, dialog: "receive" })}
+                  >
+                    <PackagePlus className="size-4" />
+                    Receive
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={row.available < 1}
+                    onSelect={() => setActive({ stock: row, dialog: "deploy" })}
+                  >
+                    <Truck className="size-4" />
+                    Deploy to hive
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={row.available < 1}
+                    onSelect={() => setActive({ stock: row, dialog: "damage" })}
+                  >
+                    <Wrench className="size-4" />
+                    Mark damaged
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={row.damaged < 1}
+                    onSelect={() => setActive({ stock: row, dialog: "repair" })}
+                  >
+                    <Wrench className="size-4" />
+                    Back in service
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={row.available < 1 && row.damaged < 1}
+                    onSelect={() => setActive({ stock: row, dialog: "retire" })}
+                  >
+                    <SquarePen className="size-4" />
+                    Retire
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={() => setActive({ stock: row, dialog: "adjust" })}
+                  >
+                    <SlidersHorizontal className="size-4" />
+                    Adjust count
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => setActive({ stock: row, dialog: "details" })}
+                  >
+                    <SquarePen className="size-4" />
+                    Location, needed &amp; cost
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => setActive({ stock: row, dialog: "history" })}
+                  >
+                    <History className="size-4" />
+                    History
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </DataGridCellAction>
+          ),
+        }),
+      ]),
+    [countMode, drafts, lineErrors],
+  );
+
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data: sortedRows,
+    getRowId: (row) => row.id,
+  });
 
   const errorMessage =
     physicalCount.isError && Object.keys(lineErrors).length === 0
@@ -234,239 +488,16 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
           No equipment stock yet. Add stock to start tracking what you own.
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Equipment</TableHead>
-                <TableHead className="text-right">Owned</TableHead>
-                <TableHead className="text-right">In field</TableHead>
-                <TableHead className="text-right">
-                  {countMode ? "Counted" : "Available"}
-                </TableHead>
-                <TableHead className="text-right">Needed</TableHead>
-                <TableHead className="text-right">Damaged</TableHead>
-                <TableHead className="text-right">Retired</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {groups.map((group) => (
-                <React.Fragment key={group.category}>
-                  <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableCell
-                      colSpan={9}
-                      className="py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                    >
-                      {CATEGORY_LABELS[group.category]}
-                    </TableCell>
-                  </TableRow>
-                  {group.items.map((row) => {
-                    const draft = drafts[row.id] ?? "";
-                    const draftValue = parseNum(draft);
-                    const changed =
-                      countMode &&
-                      draftValue != null &&
-                      draftValue !== row.available;
-                    const lineError = lineErrors[row.id];
-                    return (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-medium">
-                          {row.typeName}
-                          {row.frameCondition && (
-                            <Badge
-                              variant="secondary"
-                              className="ml-2 capitalize"
-                            >
-                              {row.frameCondition}
-                            </Badge>
-                          )}
-                          {row.framesPerBox != null && (
-                            <span className="ml-2 text-xs text-muted-foreground">
-                              {row.framesPerBox} frames/box
-                            </span>
-                          )}
-                          {row.combAgeYears != null && (
-                            <span
-                              className={cn(
-                                "ml-2 text-xs",
-                                row.pullRecommended
-                                  ? "font-semibold text-destructive"
-                                  : "text-muted-foreground",
-                              )}
-                            >
-                              {row.pullRecommended
-                                ? `This ${row.typeName.toLowerCase()} is ${row.combAgeYears} years old — pull it`
-                                : `${row.combAgeYears} years in service`}
-                            </span>
-                          )}
-                          {lineError && (
-                            <p className="text-xs text-destructive">
-                              {lineError}
-                            </p>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row.totalOwned}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row.deployed}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {countMode ? (
-                            <Input
-                              type="number"
-                              inputMode="numeric"
-                              step={1}
-                              min={0}
-                              aria-label={`${row.typeName} counted in storage`}
-                              className={cn(
-                                "ml-auto h-8 w-20 bg-background text-right",
-                                changed && "border-primary ring-1 ring-primary",
-                                lineError &&
-                                  "border-destructive ring-1 ring-destructive",
-                              )}
-                              value={draft}
-                              onChange={(e) =>
-                                setDrafts((prev) => ({
-                                  ...prev,
-                                  [row.id]: e.target.value,
-                                }))
-                              }
-                            />
-                          ) : (
-                            <span
-                              className={cn(
-                                "font-semibold tabular-nums",
-                                row.available < 0 && "text-destructive",
-                              )}
-                            >
-                              {row.available}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row.needed === 0 ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : row.shortfall > 0 ? (
-                            <Badge variant="destructive">
-                              {row.needed} · {row.shortfall} short
-                            </Badge>
-                          ) : (
-                            row.needed
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row.damaged === 0 ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <Badge variant="secondary">{row.damaged}</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {row.retired === 0 ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <Badge variant="secondary">{row.retired}</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="max-w-40 truncate text-muted-foreground">
-                          {row.storageLocation ?? "—"}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                aria-label={`${row.typeName} actions`}
-                              >
-                                <MoreHorizontal className="size-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "receive" })
-                                }
-                              >
-                                <PackagePlus className="size-4" />
-                                Receive
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                disabled={row.available < 1}
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "deploy" })
-                                }
-                              >
-                                <Truck className="size-4" />
-                                Deploy to hive
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                disabled={row.available < 1}
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "damage" })
-                                }
-                              >
-                                <Wrench className="size-4" />
-                                Mark damaged
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                disabled={row.damaged < 1}
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "repair" })
-                                }
-                              >
-                                <Wrench className="size-4" />
-                                Back in service
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                disabled={row.available < 1 && row.damaged < 1}
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "retire" })
-                                }
-                              >
-                                <SquarePen className="size-4" />
-                                Retire
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "adjust" })
-                                }
-                              >
-                                <SlidersHorizontal className="size-4" />
-                                Adjust count
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "details" })
-                                }
-                              >
-                                <SquarePen className="size-4" />
-                                Location, needed &amp; cost
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onSelect={() =>
-                                  setActive({ stock: row, dialog: "history" })
-                                }
-                              >
-                                <History className="size-4" />
-                                History
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </React.Fragment>
-              ))}
-            </TableBody>
-          </Table>
+        <div className="rounded-lg border">
+          <DataGrid
+            table={table}
+            aria-label="Equipment stock"
+            getRowGroup={(row) => row.typeCategory}
+            renderGroupHeader={(category) =>
+              CATEGORY_LABELS[category as EquipmentCategory]
+            }
+            onRowActivate={(row) => setActive({ stock: row, dialog: "details" })}
+          />
         </div>
       )}
 

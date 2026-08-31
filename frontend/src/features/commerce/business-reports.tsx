@@ -11,6 +11,11 @@
  */
 
 import * as React from "react";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { Bell, DollarSign, Plus, Trash2, Users } from "lucide-react";
 
 import {
@@ -46,13 +51,10 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import { Textarea } from "@/components/ui/textarea";
 import { useApiaryOptions, useHiveOptions, useJarInventory } from "@/features/honey/hooks";
 import { formatDate, formatLbs, formatMoney, todayISO } from "@/features/honey/format";
@@ -70,7 +72,261 @@ import {
   useWholesalePriceLists,
   type Customer,
   type Expense,
+  type ProductionPlan,
+  type Profitability,
 } from "./api";
+
+// --- grid plumbing ---------------------------------------------------------
+
+const gridFeatures = tableFeatures({});
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
+type BreakEvenRow = Profitability["breakEvenByJarSize"][number];
+type ChannelRow = Profitability["byChannel"][number];
+type KindRow = NonNullable<Profitability["byKind"]>[number];
+type SeasonRow = Profitability["bySeason"][number];
+type HarvestLotRow = Profitability["byHarvestLot"][number];
+type JarPerformanceRow = Profitability["byJarSize"][number];
+type PlanRow = ProductionPlan["recommendations"][number];
+
+const breakEvenHelper = createColumnHelper<typeof gridFeatures, BreakEvenRow>();
+const breakEvenColumns = breakEvenHelper.columns([
+  breakEvenHelper.display({
+    id: "label",
+    header: "Size",
+    cell: ({ row }) => row.original.label,
+  }),
+  breakEvenHelper.display({
+    id: "breakEven",
+    header: "Break even",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.breakEvenPrice),
+  }),
+  breakEvenHelper.display({
+    id: "price",
+    header: "Price",
+    meta: rightAligned,
+    cell: ({ row }) =>
+      row.original.defaultPrice == null
+        ? "—"
+        : formatMoney(row.original.defaultPrice),
+  }),
+]);
+
+function BreakEvenTable({ rows }: { rows: BreakEvenRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: breakEvenColumns,
+    data,
+    getRowId: (row) => row.jarSizeId,
+  });
+  return (
+    <DataGrid table={table} aria-label="Break-even prices" listenOnWindow={false} />
+  );
+}
+
+const channelHelper = createColumnHelper<typeof gridFeatures, ChannelRow>();
+const channelColumns = channelHelper.columns([
+  channelHelper.display({
+    id: "channel",
+    header: "Channel",
+    meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.channel.replaceAll("_", " "),
+  }),
+  channelHelper.display({
+    id: "orders",
+    header: "Orders",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.orderCount,
+  }),
+  channelHelper.display({
+    id: "revenue",
+    header: "Revenue (invoiced)",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.revenue),
+  }),
+]);
+
+function ChannelTable({ rows }: { rows: ChannelRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: channelColumns,
+    data,
+    getRowId: (row) => row.channel,
+  });
+  return (
+    <DataGrid table={table} aria-label="Revenue by channel" listenOnWindow={false} />
+  );
+}
+
+const kindHelper = createColumnHelper<typeof gridFeatures, KindRow>();
+const kindColumns = kindHelper.columns([
+  kindHelper.display({
+    id: "kind",
+    header: "Kind",
+    cell: ({ row }) => (
+      <>
+        <span className="capitalize">{row.original.kind}</span>
+        {row.original.costedLines < row.original.totalLines && (
+          <p className="text-xs text-muted-foreground">
+            Cost known for {row.original.costedLines} of {row.original.totalLines} lines
+          </p>
+        )}
+      </>
+    ),
+  }),
+  kindHelper.display({
+    id: "revenue",
+    header: "Revenue",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.revenue),
+  }),
+  kindHelper.display({
+    id: "cost",
+    header: "Cost",
+    meta: rightAligned,
+    cell: ({ row }) =>
+      row.original.cost == null ? "—" : formatMoney(row.original.cost),
+  }),
+  kindHelper.display({
+    id: "margin",
+    header: "Margin",
+    meta: rightAligned,
+    cell: ({ row }) =>
+      row.original.margin == null ? "—" : formatMoney(row.original.margin),
+  }),
+]);
+
+function KindTable({ rows }: { rows: KindRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: kindColumns,
+    data,
+    getRowId: (row) => row.kind,
+  });
+  return (
+    <DataGrid table={table} aria-label="Revenue by kind" listenOnWindow={false} />
+  );
+}
+
+const seasonHelper = createColumnHelper<typeof gridFeatures, SeasonRow>();
+const seasonColumns = seasonHelper.columns([
+  seasonHelper.display({
+    id: "season",
+    header: "Season",
+    cell: ({ row }) => row.original.season,
+  }),
+  seasonHelper.display({
+    id: "revenue",
+    header: "Revenue",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.revenue),
+  }),
+  seasonHelper.display({
+    id: "margin",
+    header: "Margin",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.margin),
+  }),
+]);
+
+function SeasonTable({ rows }: { rows: SeasonRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: seasonColumns,
+    data,
+    getRowId: (row) => row.season,
+  });
+  return (
+    <DataGrid table={table} aria-label="Season economics" listenOnWindow={false} />
+  );
+}
+
+const harvestLotHelper = createColumnHelper<typeof gridFeatures, HarvestLotRow>();
+const harvestLotColumns = harvestLotHelper.columns([
+  harvestLotHelper.display({
+    id: "lot",
+    header: "Lot",
+    cell: ({ row }) => (
+      <>
+        <p className="font-medium">{row.original.lotCode}</p>
+        <p className="text-xs text-muted-foreground">
+          {row.original.season ?? "No season"}
+        </p>
+      </>
+    ),
+  }),
+  harvestLotHelper.display({
+    id: "revenue",
+    header: "Revenue",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.revenue),
+  }),
+  harvestLotHelper.display({
+    id: "margin",
+    header: "Margin",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.margin),
+  }),
+]);
+
+function HarvestLotTable({ rows }: { rows: HarvestLotRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: harvestLotColumns,
+    data,
+    getRowId: (row) => row.harvestLotId,
+  });
+  return (
+    <DataGrid table={table} aria-label="Harvest lots" listenOnWindow={false} />
+  );
+}
+
+const jarPerformanceHelper = createColumnHelper<
+  typeof gridFeatures,
+  JarPerformanceRow
+>();
+const jarPerformanceColumns = jarPerformanceHelper.columns([
+  jarPerformanceHelper.display({
+    id: "label",
+    header: "Size",
+    cell: ({ row }) => row.original.label,
+  }),
+  jarPerformanceHelper.display({
+    id: "sold",
+    header: "Sold",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.jarsSold,
+  }),
+  jarPerformanceHelper.display({
+    id: "margin",
+    header: "Margin",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.estimatedMargin),
+  }),
+]);
+
+function JarPerformanceTable({ rows }: { rows: JarPerformanceRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: jarPerformanceColumns,
+    data,
+    getRowId: (row) => row.jarSizeId,
+  });
+  return (
+    <DataGrid table={table} aria-label="Jar-size performance" listenOnWindow={false} />
+  );
+}
 
 export function ProfitabilityPanel({ year }: { year: number }) {
   const report = useProfitability(year);
@@ -90,38 +346,29 @@ export function ProfitabilityPanel({ year }: { year: number }) {
         <Metric label="Jars sold" value={String(data.jarsSold)} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card><CardHeader><CardTitle className="text-base">Break-even prices</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Size</TableHead><TableHead className="text-right">Break even</TableHead><TableHead className="text-right">Price</TableHead></TableRow></TableHeader><TableBody>{data.breakEvenByJarSize.map((row) => <TableRow key={row.jarSizeId}><TableCell>{row.label}</TableCell><TableCell className="text-right">{formatMoney(row.breakEvenPrice)}</TableCell><TableCell className="text-right">{row.defaultPrice == null ? "—" : formatMoney(row.defaultPrice)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
-        <Card><CardHeader><CardTitle className="text-base">Revenue by channel</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Channel</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Revenue (invoiced)</TableHead></TableRow></TableHeader><TableBody>{data.byChannel.map((row) => <TableRow key={row.channel}><TableCell className="capitalize">{row.channel.replaceAll("_", " ")}</TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.revenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+        <Card><CardHeader><CardTitle className="text-base">Break-even prices</CardTitle></CardHeader><CardContent className="p-0"><BreakEvenTable rows={data.breakEvenByJarSize} /></CardContent></Card>
+        <Card><CardHeader><CardTitle className="text-base">Revenue by channel</CardTitle></CardHeader><CardContent className="p-0"><ChannelTable rows={data.byChannel} /></CardContent></Card>
         {(data.byKind?.length ?? 0) > 0 && (
-          <Card><CardHeader><CardTitle className="text-base">Revenue by kind</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Kind</TableHead><TableHead className="text-right">Revenue</TableHead><TableHead className="text-right">Cost</TableHead><TableHead className="text-right">Margin</TableHead></TableRow></TableHeader><TableBody>{data.byKind!.map((row) => <TableRow key={row.kind}><TableCell><span className="capitalize">{row.kind}</span>{row.costedLines < row.totalLines && <p className="text-xs text-muted-foreground">Cost known for {row.costedLines} of {row.totalLines} lines</p>}</TableCell><TableCell className="text-right">{formatMoney(row.revenue)}</TableCell><TableCell className="text-right">{row.cost == null ? "—" : formatMoney(row.cost)}</TableCell><TableCell className="text-right">{row.margin == null ? "—" : formatMoney(row.margin)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+          <Card><CardHeader><CardTitle className="text-base">Revenue by kind</CardTitle></CardHeader><CardContent className="p-0"><KindTable rows={data.byKind!} /></CardContent></Card>
         )}
       </div>
       <div className="grid gap-4 xl:grid-cols-3">
         <Card>
           <CardHeader><CardTitle className="text-base">Season economics</CardTitle></CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader><TableRow><TableHead>Season</TableHead><TableHead className="text-right">Revenue</TableHead><TableHead className="text-right">Margin</TableHead></TableRow></TableHeader>
-              <TableBody>{data.bySeason.map((row) => <TableRow key={row.season}><TableCell>{row.season}</TableCell><TableCell className="text-right">{formatMoney(row.revenue)}</TableCell><TableCell className="text-right">{formatMoney(row.margin)}</TableCell></TableRow>)}</TableBody>
-            </Table>
+            <SeasonTable rows={data.bySeason} />
           </CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle className="text-base">Harvest lots</CardTitle></CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader><TableRow><TableHead>Lot</TableHead><TableHead className="text-right">Revenue</TableHead><TableHead className="text-right">Margin</TableHead></TableRow></TableHeader>
-              <TableBody>{data.byHarvestLot.map((row) => <TableRow key={row.harvestLotId}><TableCell><p className="font-medium">{row.lotCode}</p><p className="text-xs text-muted-foreground">{row.season ?? "No season"}</p></TableCell><TableCell className="text-right">{formatMoney(row.revenue)}</TableCell><TableCell className="text-right">{formatMoney(row.margin)}</TableCell></TableRow>)}</TableBody>
-            </Table>
+            <HarvestLotTable rows={data.byHarvestLot} />
           </CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle className="text-base">Jar-size performance</CardTitle></CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader><TableRow><TableHead>Size</TableHead><TableHead className="text-right">Sold</TableHead><TableHead className="text-right">Margin</TableHead></TableRow></TableHeader>
-              <TableBody>{data.byJarSize.map((row) => <TableRow key={row.jarSizeId}><TableCell>{row.label}</TableCell><TableCell className="text-right">{row.jarsSold}</TableCell><TableCell className="text-right">{formatMoney(row.estimatedMargin)}</TableCell></TableRow>)}</TableBody>
-            </Table>
+            <JarPerformanceTable rows={data.byJarSize} />
           </CardContent>
         </Card>
       </div>
@@ -142,7 +389,7 @@ export function ExpensesPanel({ year }: { year: number }) {
         <p className="text-sm text-muted-foreground">{formatMoney(expenses.data.reduce((sum, row) => sum + row.amount, 0))} recorded in {year}</p>
         <Button size="sm" onClick={() => setOpen(true)}><Plus /> Add expense</Button>
       </div>
-      <Card><CardContent className="overflow-x-auto p-0"><Table><TableHeader><TableRow><TableHead>Date</TableHead><TableHead>Category</TableHead><TableHead>Description</TableHead><TableHead>Assigned to</TableHead><TableHead className="text-right">Amount</TableHead><TableHead /></TableRow></TableHeader><TableBody>{expenses.data.map((expense) => <TableRow key={expense.id}><TableCell>{formatDate(expense.expenseDate)}</TableCell><TableCell className="capitalize">{expense.category.replaceAll("_", " ")}</TableCell><TableCell>{expense.description}</TableCell><TableCell>{expense.lotCode ?? expense.hiveName ?? expense.apiaryName ?? expense.season ?? "General"}</TableCell><TableCell className="text-right font-medium">{formatMoney(expense.amount)}</TableCell><TableCell><Button variant="ghost" size="icon-sm" aria-label="Delete expense" onClick={() => setConfirmDelete(expense)}><Trash2 /></Button></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+      <Card><CardContent className="overflow-x-auto p-0"><ExpensesTable rows={expenses.data} onDelete={setConfirmDelete} /></CardContent></Card>
       <ExpenseDialog open={open} onOpenChange={setOpen} />
       <AlertDialog open={confirmDelete !== null} onOpenChange={(next) => { if (!next) setConfirmDelete(null); }}>
         <AlertDialogContent>
@@ -170,6 +417,89 @@ export function ExpensesPanel({ year }: { year: number }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+const expenseHelper = createColumnHelper<typeof gridFeatures, Expense>();
+
+function ExpensesTable({
+  rows,
+  onDelete,
+}: {
+  rows: Expense[];
+  onDelete: (expense: Expense) => void;
+}) {
+  const data = React.useMemo(() => rows, [rows]);
+  const columns = React.useMemo(
+    () =>
+      expenseHelper.columns([
+        expenseHelper.display({
+          id: "date",
+          header: "Date",
+          cell: ({ row }) => formatDate(row.original.expenseDate),
+        }),
+        expenseHelper.display({
+          id: "category",
+          header: "Category",
+          meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.category.replaceAll("_", " "),
+        }),
+        expenseHelper.display({
+          id: "description",
+          header: "Description",
+          cell: ({ row }) => row.original.description,
+        }),
+        expenseHelper.display({
+          id: "assignedTo",
+          header: "Assigned to",
+          cell: ({ row }) =>
+            row.original.lotCode ??
+            row.original.hiveName ??
+            row.original.apiaryName ??
+            row.original.season ??
+            "General",
+        }),
+        expenseHelper.display({
+          id: "amount",
+          header: "Amount",
+          meta: {
+            align: "right",
+            cellClassName: "font-medium tabular-nums",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row }) => formatMoney(row.original.amount),
+        }),
+        expenseHelper.display({
+          id: "actions",
+          header: "",
+          meta: { cellClassName: "p-1 text-right" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => (
+            <DataGridCellAction className="flex justify-end">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Delete expense"
+                onClick={() => onDelete(row.original)}
+              >
+                <Trash2 />
+              </Button>
+            </DataGridCellAction>
+          ),
+        }),
+      ]),
+    [onDelete],
+  );
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data,
+    getRowId: (row) => row.id,
+  });
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Expenses"
+      onRowDelete={(row) => onDelete(row)}
+    />
   );
 }
 
@@ -240,9 +570,77 @@ export function PlanningPanel() {
         <Metric label="Release subscribers" value={String(plan.data.releaseAlertSubscribers)} detail="Opted-in customers" />
       </div>
       {plan.data.bulkAvailableAfterPlanLbs < 0 && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">This plan needs {formatLbs(Math.abs(plan.data.bulkAvailableAfterPlanLbs))} more bulk honey than is available.</div>}
-      <Card><CardContent className="p-0"><Table pinFirstColumn><TableHeader><TableRow><TableHead>Jar size</TableHead><TableHead className="text-right">On hand</TableHead><TableHead className="text-right">90-day sales</TableHead><TableHead className="text-right">Bottle next</TableHead><TableHead className="text-right">Packaging</TableHead><TableHead className="text-right">Honey</TableHead><TableHead className="text-right">Revenue</TableHead></TableRow></TableHeader><TableBody>{plan.data.recommendations.map((row) => <TableRow key={row.jarSizeId}><TableCell className="font-medium">{row.label}</TableCell><TableCell className="text-right">{row.onHand}</TableCell><TableCell className="text-right">{row.soldInLookback}</TableCell><TableCell className="text-right font-semibold">{row.recommendedToBottle}</TableCell><TableCell className="text-right">{row.packagingRequired}</TableCell><TableCell className="text-right">{formatLbs(row.honeyRequiredLbs)}</TableCell><TableCell className="text-right">{formatMoney(row.projectedRevenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+      <Card><CardContent className="p-0"><PlanTable rows={plan.data.recommendations} /></CardContent></Card>
     </div>
   );
+}
+
+// The old table pinned its first column via `Table pinFirstColumn`; the same
+// sticky treatment is applied per-column here so a sideways scroll never
+// leaves a row without its jar size.
+const planPinned = "sticky left-0 z-[1] bg-card";
+
+const planHelper = createColumnHelper<typeof gridFeatures, PlanRow>();
+const planColumns = planHelper.columns([
+  planHelper.display({
+    id: "label",
+    header: "Jar size",
+    meta: {
+      headClassName: planPinned,
+      cellClassName: `${planPinned} font-medium`,
+    } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.label,
+  }),
+  planHelper.display({
+    id: "onHand",
+    header: "On hand",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.onHand,
+  }),
+  planHelper.display({
+    id: "soldInLookback",
+    header: "90-day sales",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.soldInLookback,
+  }),
+  planHelper.display({
+    id: "bottleNext",
+    header: "Bottle next",
+    meta: {
+      align: "right",
+      cellClassName: "font-semibold tabular-nums",
+    } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.recommendedToBottle,
+  }),
+  planHelper.display({
+    id: "packaging",
+    header: "Packaging",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.packagingRequired,
+  }),
+  planHelper.display({
+    id: "honey",
+    header: "Honey",
+    meta: rightAligned,
+    cell: ({ row }) => formatLbs(row.original.honeyRequiredLbs),
+  }),
+  planHelper.display({
+    id: "revenue",
+    header: "Revenue",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.projectedRevenue),
+  }),
+]);
+
+function PlanTable({ rows }: { rows: PlanRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: planColumns,
+    data,
+    getRowId: (row) => row.jarSizeId,
+  });
+  return <DataGrid table={table} aria-label="Bottling recommendations" />;
 }
 
 export function CustomersPanel() {
@@ -257,7 +655,7 @@ export function CustomersPanel() {
     <div className="grid gap-5">
       <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setPriceOpen(true)}><DollarSign /> New wholesale list</Button><Button size="sm" onClick={() => setCustomerOpen(true)}><Plus /> Add customer</Button></div>
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="size-4" /> Customers</CardTitle></CardHeader><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Contact</TableHead><TableHead className="text-right">Orders</TableHead><TableHead className="text-right">Revenue</TableHead></TableRow></TableHeader><TableBody>{customers.data.map((row) => <TableRow key={row.id} className="cursor-pointer" onClick={() => setEditCustomer(row)}><TableCell><p className="font-medium">{row.name}</p><p className="text-xs text-muted-foreground">{row.referralCode}</p></TableCell><TableCell><p>{row.email ?? row.phone ?? "—"}</p><div className="mt-1 flex flex-wrap gap-1">{row.emailOptIn && <Badge variant="accent" className="gap-1"><Bell className="size-3" /> Release alerts</Badge>}{row.reorderReminderDue && <Badge variant="secondary">Reorder reminder due</Badge>}</div></TableCell><TableCell className="text-right">{row.orderCount}</TableCell><TableCell className="text-right">{formatMoney(row.lifetimeRevenue)}</TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+        <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="size-4" /> Customers</CardTitle></CardHeader><CardContent className="p-0"><CustomersTable rows={customers.data} onEdit={setEditCustomer} /></CardContent></Card>
         <Card><CardHeader><CardTitle className="text-base">Wholesale price lists</CardTitle></CardHeader><CardContent className="grid gap-3">{priceLists.data.length === 0 ? <p className="text-sm text-muted-foreground">No wholesale pricing yet.</p> : priceLists.data.map((list) => <div key={list.id} className="rounded-md border p-3 text-sm"><div className="flex justify-between gap-2"><p className="font-medium">{list.name}</p><span>{formatMoney(list.minimumOrderAmount)} minimum</span></div><p className="mt-1 text-xs text-muted-foreground">{list.items.map((item) => `${item.label} ${formatMoney(item.unitPrice)}`).join(" · ")}</p></div>)}</CardContent></Card>
       </div>
       <CustomerDialog open={customerOpen} onOpenChange={setCustomerOpen} />
@@ -270,6 +668,74 @@ export function CustomersPanel() {
       )}
       <PriceListDialog open={priceOpen} onOpenChange={setPriceOpen} />
     </div>
+  );
+}
+
+const customerHelper = createColumnHelper<typeof gridFeatures, Customer>();
+const customerColumns = customerHelper.columns([
+  customerHelper.display({
+    id: "name",
+    header: "Name",
+    cell: ({ row }) => (
+      <>
+        <p className="font-medium">{row.original.name}</p>
+        <p className="text-xs text-muted-foreground">{row.original.referralCode}</p>
+      </>
+    ),
+  }),
+  customerHelper.display({
+    id: "contact",
+    header: "Contact",
+    cell: ({ row }) => (
+      <>
+        <p>{row.original.email ?? row.original.phone ?? "—"}</p>
+        <div className="mt-1 flex flex-wrap gap-1">
+          {row.original.emailOptIn && (
+            <Badge variant="accent" className="gap-1">
+              <Bell className="size-3" /> Release alerts
+            </Badge>
+          )}
+          {row.original.reorderReminderDue && (
+            <Badge variant="secondary">Reorder reminder due</Badge>
+          )}
+        </div>
+      </>
+    ),
+  }),
+  customerHelper.display({
+    id: "orders",
+    header: "Orders",
+    meta: rightAligned,
+    cell: ({ row }) => row.original.orderCount,
+  }),
+  customerHelper.display({
+    id: "revenue",
+    header: "Revenue",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.lifetimeRevenue),
+  }),
+]);
+
+function CustomersTable({
+  rows,
+  onEdit,
+}: {
+  rows: Customer[];
+  onEdit: (customer: Customer) => void;
+}) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: customerColumns,
+    data,
+    getRowId: (row) => row.id,
+  });
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Customers"
+      onRowActivate={(row) => onEdit(row)}
+    />
   );
 }
 

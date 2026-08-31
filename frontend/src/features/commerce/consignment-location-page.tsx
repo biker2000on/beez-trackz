@@ -14,6 +14,12 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import {
   ArrowLeft,
   ClipboardCheck,
@@ -46,13 +52,10 @@ import {
 import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatMoney, todayISO } from "@/features/honey/format";
 import { ApiError } from "@/lib/api";
@@ -85,6 +88,123 @@ function skuBody(row: {
   return row.jarSizeId
     ? { jarSizeId: row.jarSizeId }
     : { productId: row.productId ?? undefined };
+}
+
+// --- grid plumbing ---------------------------------------------------------
+
+const gridFeatures = tableFeatures({});
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
+type UnsettledRow = StockLocationDetail["unsettled"][number];
+type SettlementRow = StockLocationDetail["settlements"][number];
+type MovementRow = StockLocationDetail["movements"][number];
+
+const shelfHelper = createColumnHelper<typeof gridFeatures, StockShelfRow>();
+const unsettledHelper = createColumnHelper<typeof gridFeatures, UnsettledRow>();
+const settlementHelper = createColumnHelper<typeof gridFeatures, SettlementRow>();
+const movementHelper = createColumnHelper<typeof gridFeatures, MovementRow>();
+
+const shelfColumns = shelfHelper.columns([
+  shelfHelper.display({
+    id: "item",
+    header: "Item",
+    meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.label,
+  }),
+  shelfHelper.display({
+    id: "onShelf",
+    header: "On shelf",
+    meta: {
+      align: "right",
+      cellClassName: "font-semibold tabular-nums",
+    } satisfies DataGridColumnMeta,
+    cell: ({ row }) => row.original.onHand,
+  }),
+  shelfHelper.display({
+    id: "price",
+    header: "Shelf price",
+    meta: rightAligned,
+    cell: ({ row }) =>
+      row.original.unitPrice != null ? formatMoney(row.original.unitPrice) : "—",
+  }),
+]);
+
+function ShelfTable({ rows }: { rows: StockShelfRow[] }) {
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: shelfColumns,
+    data,
+    getRowId: (row) => skuKey(row),
+  });
+  return <DataGrid table={table} aria-label="Stock on shelf" />;
+}
+
+const unsettledColumns = unsettledHelper.columns([
+  unsettledHelper.display({
+    id: "date",
+    header: "Date",
+    cell: ({ row }) => formatDate(row.original.date),
+  }),
+  unsettledHelper.display({
+    id: "order",
+    header: "Order",
+    cell: ({ row }) => (
+      <DataGridCellAction className="inline-block">
+        <Link
+          className="underline underline-offset-2"
+          href={`/sales/${row.original.id}`}
+        >
+          {row.original.orderNumber ?? "View"}
+        </Link>
+      </DataGridCellAction>
+    ),
+  }),
+  unsettledHelper.display({
+    id: "invoiced",
+    header: "Invoiced",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.totalAmount),
+  }),
+  unsettledHelper.display({
+    id: "collected",
+    header: "Collected",
+    meta: rightAligned,
+    cell: ({ row }) => formatMoney(row.original.amountPaid),
+  }),
+  unsettledHelper.display({
+    id: "balance",
+    header: "Balance",
+    meta: {
+      align: "right",
+      cellClassName:
+        "font-semibold tabular-nums text-amber-700 dark:text-amber-400",
+    } satisfies DataGridColumnMeta,
+    cell: ({ row }) => formatMoney(row.original.balanceDue),
+  }),
+]);
+
+function UnsettledTable({ rows }: { rows: UnsettledRow[] }) {
+  const router = useRouter();
+  const data = React.useMemo(() => rows, [rows]);
+  const table = useTable({
+    features: gridFeatures,
+    columns: unsettledColumns,
+    data,
+    getRowId: (row) => row.id,
+  });
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Reported sold, not yet paid"
+      listenOnWindow={false}
+      onRowActivate={(row) => router.push(`/sales/${row.id}`)}
+    />
+  );
 }
 
 export function ConsignmentLocationPage({ locationId }: { locationId: string }) {
@@ -181,30 +301,7 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
               Nothing here right now. Send stock to put jars on their shelf.
             </p>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Item</TableHead>
-                    <TableHead className="text-right">On shelf</TableHead>
-                    <TableHead className="text-right">Shelf price</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.shelf.map((row) => (
-                    <TableRow key={skuKey(row)}>
-                      <TableCell className="font-medium">{row.label}</TableCell>
-                      <TableCell className="text-right font-semibold tabular-nums">
-                        {row.onHand}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.unitPrice != null ? formatMoney(row.unitPrice) : "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <ShelfTable rows={data.shelf} />
           )}
         </CardContent>
       </Card>
@@ -215,41 +312,7 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
             <CardTitle className="text-base">Reported sold, not yet paid</CardTitle>
           </CardHeader>
           <CardContent className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Order</TableHead>
-                  <TableHead className="text-right">Invoiced</TableHead>
-                  <TableHead className="text-right">Collected</TableHead>
-                  <TableHead className="text-right">Balance</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.unsettled.map((sale) => (
-                  <TableRow key={sale.id}>
-                    <TableCell>{formatDate(sale.date)}</TableCell>
-                    <TableCell>
-                      <Link
-                        className="underline underline-offset-2"
-                        href={`/sales/${sale.id}`}
-                      >
-                        {sale.orderNumber ?? "View"}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatMoney(sale.totalAmount)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatMoney(sale.amountPaid)}
-                    </TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums text-amber-700 dark:text-amber-400">
-                      {formatMoney(sale.balanceDue)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <UnsettledTable rows={data.unsettled} />
           </CardContent>
         </Card>
       )}
@@ -516,6 +579,153 @@ function RecordReportDialog({
   const error = settle.error instanceof Error ? settle.error.message : null;
   const valid = lines.length > 0 && !overCount && !overpaid;
 
+  const reportColumns = React.useMemo(
+    () =>
+      shelfHelper.columns([
+        shelfHelper.display({
+          id: "item",
+          header: "Item",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.label,
+        }),
+        shelfHelper.display({
+          id: "shelf",
+          header: "Shelf",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.onHand,
+        }),
+        shelfHelper.display({
+          id: "sold",
+          header: "Sold",
+          meta: { headClassName: "w-20" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => {
+            const key = skuKey(row);
+            const entry = rows[key] ?? emptyReportRow;
+            return (
+              <DataGridCellAction>
+                <Input
+                  aria-label={`${row.label} sold`}
+                  type="number"
+                  min="0"
+                  max={row.onHand}
+                  value={entry.sold}
+                  placeholder="0"
+                  onChange={(event) =>
+                    setRows((current) => ({
+                      ...current,
+                      [key]: {
+                        ...(current[key] ?? emptyReportRow),
+                        sold: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </DataGridCellAction>
+            );
+          },
+        }),
+        shelfHelper.display({
+          id: "returned",
+          header: "Back",
+          meta: { headClassName: "w-20" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => {
+            const key = skuKey(row);
+            const entry = rows[key] ?? emptyReportRow;
+            return (
+              <DataGridCellAction>
+                <Input
+                  aria-label={`${row.label} returned`}
+                  type="number"
+                  min="0"
+                  max={row.onHand}
+                  value={entry.returned}
+                  placeholder="0"
+                  onChange={(event) =>
+                    setRows((current) => ({
+                      ...current,
+                      [key]: {
+                        ...(current[key] ?? emptyReportRow),
+                        returned: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </DataGridCellAction>
+            );
+          },
+        }),
+        shelfHelper.display({
+          id: "price",
+          header: "Price",
+          meta: { headClassName: "w-24" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => {
+            const key = skuKey(row);
+            const entry = rows[key] ?? emptyReportRow;
+            return (
+              <DataGridCellAction>
+                <Input
+                  aria-label={`${row.label} shelf price`}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={entry.price}
+                  placeholder={
+                    row.unitPrice != null ? String(row.unitPrice) : "0.00"
+                  }
+                  onChange={(event) =>
+                    setRows((current) => ({
+                      ...current,
+                      [key]: {
+                        ...(current[key] ?? emptyReportRow),
+                        price: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </DataGridCellAction>
+            );
+          },
+        }),
+        shelfHelper.display({
+          id: "count",
+          header: "Their count",
+          meta: { headClassName: "w-24" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => {
+            const key = skuKey(row);
+            const entry = rows[key] ?? emptyReportRow;
+            return (
+              <DataGridCellAction>
+                <Input
+                  aria-label={`${row.label} counted on shelf`}
+                  type="number"
+                  min="0"
+                  value={entry.count}
+                  placeholder="—"
+                  onChange={(event) =>
+                    setRows((current) => ({
+                      ...current,
+                      [key]: {
+                        ...(current[key] ?? emptyReportRow),
+                        count: event.target.value,
+                      },
+                    }))
+                  }
+                />
+              </DataGridCellAction>
+            );
+          },
+        }),
+      ]),
+    [rows],
+  );
+  const reportData = React.useMemo(() => shelf, [shelf]);
+  const reportTable = useTable({
+    features: gridFeatures,
+    columns: reportColumns,
+    data: reportData,
+    getRowId: (row) => skuKey(row),
+  });
+
   function submit() {
     if (!valid) return;
     settle.mutate(
@@ -593,84 +803,11 @@ function RecordReportDialog({
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="text-right">Shelf</TableHead>
-                  <TableHead className="w-20">Sold</TableHead>
-                  <TableHead className="w-20">Back</TableHead>
-                  <TableHead className="w-24">Price</TableHead>
-                  <TableHead className="w-24">Their count</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {shelf.map((row) => {
-                  const key = skuKey(row);
-                  const entry = rows[key] ?? emptyReportRow;
-                  const update = (field: keyof ReportRow, value: string) =>
-                    setRows((current) => ({
-                      ...current,
-                      [key]: { ...(current[key] ?? emptyReportRow), [field]: value },
-                    }));
-                  return (
-                    <TableRow key={key}>
-                      <TableCell className="font-medium">{row.label}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.onHand}
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          aria-label={`${row.label} sold`}
-                          type="number"
-                          min="0"
-                          max={row.onHand}
-                          value={entry.sold}
-                          placeholder="0"
-                          onChange={(event) => update("sold", event.target.value)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          aria-label={`${row.label} returned`}
-                          type="number"
-                          min="0"
-                          max={row.onHand}
-                          value={entry.returned}
-                          placeholder="0"
-                          onChange={(event) => update("returned", event.target.value)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          aria-label={`${row.label} shelf price`}
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={entry.price}
-                          placeholder={
-                            row.unitPrice != null ? String(row.unitPrice) : "0.00"
-                          }
-                          onChange={(event) => update("price", event.target.value)}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          aria-label={`${row.label} counted on shelf`}
-                          type="number"
-                          min="0"
-                          value={entry.count}
-                          placeholder="—"
-                          onChange={(event) => update("count", event.target.value)}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
+          <DataGrid
+            table={reportTable}
+            aria-label={`${location.name} report lines`}
+            listenOnWindow={false}
+          />
 
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1">
@@ -740,12 +877,109 @@ function RecordReportDialog({
 
 // --- history ---------------------------------------------------------------
 
+/** Dims a voided/reversed row's content the way the old row-level class did. */
+function Dimmed({
+  dim,
+  className,
+  children,
+}: {
+  dim: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className={cnDim(dim, className)}>{children}</span>
+  );
+}
+
+function cnDim(dim: boolean, className?: string) {
+  if (!dim) return className;
+  return className ? `${className} opacity-60` : "opacity-60";
+}
+
 function SettlementHistory({
   settlements,
 }: {
   settlements: StockLocationDetail["settlements"];
 }) {
   const voidSettlement = useVoidStockSettlement();
+  const data = React.useMemo(() => settlements, [settlements]);
+  const columns = React.useMemo(
+    () =>
+      settlementHelper.columns([
+        settlementHelper.display({
+          id: "period",
+          header: "Period",
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={row.voidedAt != null}>
+              {formatDate(row.periodStart)} – {formatDate(row.periodEnd)}
+              {row.voidedAt && (
+                <Badge variant="outline" className="ml-2">
+                  voided
+                </Badge>
+              )}
+            </Dimmed>
+          ),
+        }),
+        settlementHelper.display({
+          id: "owed",
+          header: "Owed",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={row.voidedAt != null}>
+              {formatMoney(row.amountOwed)}
+            </Dimmed>
+          ),
+        }),
+        settlementHelper.display({
+          id: "paid",
+          header: "Paid",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={row.voidedAt != null}>
+              {formatMoney(row.amountPaid)}
+            </Dimmed>
+          ),
+        }),
+        settlementHelper.display({
+          id: "commission",
+          header: "Their cut",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={row.voidedAt != null}>
+              {formatMoney(row.commission)}
+            </Dimmed>
+          ),
+        }),
+        settlementHelper.display({
+          id: "actions",
+          header: "",
+          meta: { cellClassName: "p-1 text-right" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) =>
+            row.voidedAt ? null : (
+              <DataGridCellAction className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={voidSettlement.isPending}
+                  onClick={() => voidSettlement.mutate({ id: row.id })}
+                >
+                  <RotateCcw />
+                  Void
+                </Button>
+              </DataGridCellAction>
+            ),
+        }),
+      ]),
+    [voidSettlement],
+  );
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data,
+    getRowId: (row) => row.id,
+  });
   if (settlements.length === 0) return null;
   return (
     <Card>
@@ -753,57 +987,14 @@ function SettlementHistory({
         <CardTitle className="text-base">Reports</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Period</TableHead>
-              <TableHead className="text-right">Owed</TableHead>
-              <TableHead className="text-right">Paid</TableHead>
-              <TableHead className="text-right">Their cut</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {settlements.map((row) => (
-              <TableRow key={row.id} className={row.voidedAt ? "opacity-60" : undefined}>
-                <TableCell>
-                  {formatDate(row.periodStart)} – {formatDate(row.periodEnd)}
-                  {row.voidedAt && (
-                    <Badge variant="outline" className="ml-2">
-                      voided
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatMoney(row.amountOwed)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatMoney(row.amountPaid)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatMoney(row.commission)}
-                </TableCell>
-                <TableCell className="text-right">
-                  {!row.voidedAt && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={voidSettlement.isPending}
-                      onClick={() => voidSettlement.mutate({ id: row.id })}
-                    >
-                      <RotateCcw />
-                      Void
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <DataGrid table={table} aria-label="Reports" listenOnWindow={false} />
       </CardContent>
     </Card>
   );
+}
+
+function movementDim(row: MovementRow) {
+  return row.isReversal || row.reversedByMovementId != null;
 }
 
 function MovementHistory({
@@ -812,6 +1003,86 @@ function MovementHistory({
   movements: StockLocationDetail["movements"];
 }) {
   const reverse = useReverseStockMovement();
+  const data = React.useMemo(() => movements, [movements]);
+  const columns = React.useMemo(
+    () =>
+      movementHelper.columns([
+        movementHelper.display({
+          id: "date",
+          header: "Date",
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={movementDim(row)}>{formatDate(row.date)}</Dimmed>
+          ),
+        }),
+        movementHelper.display({
+          id: "what",
+          header: "What",
+          meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={movementDim(row)}>
+              {row.kind}
+              {row.isReversal && " (reversal)"}
+              {row.counterpartyName && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {row.quantity > 0 ? "from" : "to"} {row.counterpartyName}
+                </span>
+              )}
+            </Dimmed>
+          ),
+        }),
+        movementHelper.display({
+          id: "item",
+          header: "Item",
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={movementDim(row)}>
+              {row.label}
+              {row.lotCode && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  lot {row.lotCode}
+                </span>
+              )}
+            </Dimmed>
+          ),
+        }),
+        movementHelper.display({
+          id: "quantity",
+          header: "Qty",
+          meta: rightAligned,
+          cell: ({ row: { original: row } }) => (
+            <Dimmed dim={movementDim(row)}>
+              {row.quantity > 0 ? `+${row.quantity}` : row.quantity}
+            </Dimmed>
+          ),
+        }),
+        movementHelper.display({
+          id: "actions",
+          header: "",
+          meta: { cellClassName: "p-1 text-right" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) =>
+            !row.isReversal && !row.reversedByMovementId && !row.settlementId ? (
+              <DataGridCellAction className="flex justify-end">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={reverse.isPending}
+                  onClick={() => reverse.mutate({ id: row.id })}
+                >
+                  <RotateCcw />
+                  Reverse
+                </Button>
+              </DataGridCellAction>
+            ) : null,
+        }),
+      ]),
+    [reverse],
+  );
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data,
+    getRowId: (row) => row.id,
+  });
   if (movements.length === 0) return null;
   return (
     <Card>
@@ -819,63 +1090,7 @@ function MovementHistory({
         <CardTitle className="text-base">Movements</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>What</TableHead>
-              <TableHead>Item</TableHead>
-              <TableHead className="text-right">Qty</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {movements.map((row) => (
-              <TableRow
-                key={row.id}
-                className={
-                  row.isReversal || row.reversedByMovementId ? "opacity-60" : undefined
-                }
-              >
-                <TableCell>{formatDate(row.date)}</TableCell>
-                <TableCell className="capitalize">
-                  {row.kind}
-                  {row.isReversal && " (reversal)"}
-                  {row.counterpartyName && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      {row.quantity > 0 ? "from" : "to"} {row.counterpartyName}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell>
-                  {row.label}
-                  {row.lotCode && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      lot {row.lotCode}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {row.quantity > 0 ? `+${row.quantity}` : row.quantity}
-                </TableCell>
-                <TableCell className="text-right">
-                  {!row.isReversal && !row.reversedByMovementId && !row.settlementId && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      disabled={reverse.isPending}
-                      onClick={() => reverse.mutate({ id: row.id })}
-                    >
-                      <RotateCcw />
-                      Reverse
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <DataGrid table={table} aria-label="Movements" listenOnWindow={false} />
       </CardContent>
     </Card>
   );

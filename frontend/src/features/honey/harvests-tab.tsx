@@ -8,13 +8,24 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  createColumnHelper,
+  tableFeatures,
+  useTable,
+} from "@tanstack/react-table";
 import { ChevronRight, Plus } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+} from "@/components/ui/data-grid";
 import {
   Dialog,
   DialogContent,
@@ -57,6 +68,18 @@ import {
   useHiveOptions,
 } from "./hooks";
 import { sessionFinalized } from "./session-detail";
+import type { HarvestSessionRow } from "./types";
+
+const gridFeatures = tableFeatures({});
+const columnHelper = createColumnHelper<
+  typeof gridFeatures,
+  HarvestSessionRow
+>();
+
+const rightAligned: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -86,6 +109,7 @@ function HarvestLoadError({
 }
 
 export function HarvestsTab() {
+  const router = useRouter();
   const { formatHoney } = useUnits();
   const sessions = useHarvestSessions();
   const harvests = useHarvests();
@@ -97,6 +121,88 @@ export function HarvestsTab() {
   const standalone = (harvests.data ?? []).filter(
     (harvest) => !harvest.sessionId,
   );
+
+  const sessionRows = React.useMemo(
+    () => sessions.data ?? [],
+    [sessions.data],
+  );
+
+  const sessionColumns = React.useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.display({
+          id: "date",
+          header: "Date",
+          cell: ({ row }) => formatDate(row.original.date),
+        }),
+        columnHelper.display({
+          id: "apiary",
+          header: "Apiary",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.apiaryName,
+        }),
+        columnHelper.display({
+          id: "status",
+          header: "Status",
+          cell: ({ row }) => {
+            const finalized = sessionFinalized(
+              row.original.totalExtractedWeight,
+            );
+            return (
+              <Badge variant={finalized ? "secondary" : "accent"}>
+                {finalized ? "Finalized" : "In progress"}
+              </Badge>
+            );
+          },
+        }),
+        columnHelper.display({
+          id: "hives",
+          header: "Hives",
+          meta: rightAligned,
+          cell: ({ row }) => row.original.entryCount,
+        }),
+        columnHelper.display({
+          id: "calculated",
+          header: "Calculated",
+          meta: rightAligned,
+          cell: ({ row }) => formatHoney(row.original.calculatedTotal),
+        }),
+        columnHelper.display({
+          id: "extracted",
+          header: "Extracted",
+          meta: rightAligned,
+          cell: ({ row }) =>
+            row.original.totalExtractedWeight != null
+              ? formatHoney(row.original.totalExtractedWeight)
+              : "—",
+        }),
+        columnHelper.display({
+          id: "actions",
+          header: "",
+          meta: {
+            cellClassName: "p-1 text-right",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: session } }) => (
+            <DataGridCellAction className="flex justify-end">
+              <Button asChild variant="ghost" size="sm">
+                <Link href={`/honey/sessions/${session.id}`}>
+                  View
+                  <ChevronRight />
+                </Link>
+              </Button>
+            </DataGridCellAction>
+          ),
+        }),
+      ]),
+    [formatHoney],
+  );
+
+  const sessionTable = useTable({
+    features: gridFeatures,
+    columns: sessionColumns,
+    data: sessionRows,
+    getRowId: (session) => session.id,
+  });
 
   return (
     <div className="grid gap-6">
@@ -130,58 +236,13 @@ export function HarvestsTab() {
           </p>
         ) : (
           <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Apiary</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Hives</TableHead>
-                  <TableHead className="text-right">Calculated</TableHead>
-                  <TableHead className="text-right">Extracted</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sessions.data.map((session) => {
-                  const finalized = sessionFinalized(
-                    session.totalExtractedWeight,
-                  );
-                  return (
-                    <TableRow key={session.id}>
-                      <TableCell>{formatDate(session.date)}</TableCell>
-                      <TableCell className="font-medium">
-                        {session.apiaryName}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={finalized ? "secondary" : "accent"}>
-                          {finalized ? "Finalized" : "In progress"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {session.entryCount}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatHoney(session.calculatedTotal)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {session.totalExtractedWeight != null
-                          ? formatHoney(session.totalExtractedWeight)
-                          : "—"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button asChild variant="ghost" size="sm">
-                          <Link href={`/honey/sessions/${session.id}`}>
-                            View
-                            <ChevronRight />
-                          </Link>
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <DataGrid
+              table={sessionTable}
+              aria-label="Harvest sessions"
+              onRowActivate={(session) =>
+                router.push(`/honey/sessions/${session.id}`)
+              }
+            />
           </div>
         )}
       </section>
