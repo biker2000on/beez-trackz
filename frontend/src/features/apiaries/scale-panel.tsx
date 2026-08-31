@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/features/hives/lib";
 import { useUnits } from "@/lib/use-units";
@@ -211,7 +212,7 @@ function AddScaleForm({ apiaryId }: { apiaryId: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-3">
+    <ShortcutForm onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-3">
       <div className="grid gap-2">
         <Label htmlFor="scale-name">Scale name</Label>
         <Input
@@ -257,7 +258,7 @@ function AddScaleForm({ apiaryId }: { apiaryId: string }) {
       >
         {createScale.isPending ? "Adding…" : "Add scale"}
       </Button>
-    </form>
+    </ShortcutForm>
   );
 }
 

@@ -77,6 +77,8 @@ export const REASON_LABELS: Record<string, string> = {
   gifted: "Gifted",
   other: "Other",
   physical_count: "Physical count",
+  assembled: "Assembled",
+  disassembled: "Disassembled",
   worn_out: "Worn out",
   pest_damage: "Pest damage",
   weather: "Weather",
@@ -109,8 +111,20 @@ export interface EquipmentType {
   category: EquipmentCategory;
   framesPerBox: number | null;
   isDefault: boolean;
+  /** Set when this type is a variety of a base type (e.g. migratory cover). */
+  variantOfTypeId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One bill-of-materials line: parent is built from N of the component type. */
+export interface EquipmentComponentLine {
+  id: string;
+  parentTypeId: string;
+  parentTypeName: string;
+  componentTypeId: string;
+  componentTypeName: string;
+  quantity: number;
 }
 
 export interface EquipmentStockRow {

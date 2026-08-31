@@ -152,6 +152,13 @@ export const NAV_ITEMS: NavItem[] = [
     shortcutKey: "i",
     adminOnly: true,
     keywords: ["equipment gear stock inventory"],
+    children: [
+      {
+        label: "Types & BOMs",
+        href: "/inventory/types",
+        keywords: ["equipment types catalog bill of materials assemble variants"],
+      },
+    ],
   },
   {
     label: "Reports",

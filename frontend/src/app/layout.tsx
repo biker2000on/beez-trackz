@@ -69,7 +69,7 @@ export default function RootLayout({
         >
           <QueryProvider>
             {children}
-            <Toaster position="top-right" />
+            <Toaster />
             <PwaRegister />
             <InstallPrompt />
           </QueryProvider>

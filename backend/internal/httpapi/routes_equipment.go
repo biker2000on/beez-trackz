@@ -37,6 +37,13 @@ func (s *Server) mountEquipment(r chi.Router) {
 	admin := r.With(s.requireAdmin)
 	admin.Get("/equipment/types", s.equipListTypes)
 	admin.Post("/equipment/types", s.equipCreateType)
+	admin.Patch("/equipment/types/{id}", s.equipUpdateType)
+	admin.Delete("/equipment/types/{id}", s.equipDeleteType)
+
+	// Bill of materials + assembly (see routes_equipment_bom.go).
+	admin.Get("/equipment/components", s.equipListComponents)
+	admin.Put("/equipment/types/{id}/components", s.equipSetComponents)
+	admin.Post("/equipment/assemblies", s.equipAssemble)
 
 	admin.Get("/equipment/stock", s.equipListStock)
 	admin.Post("/equipment/stock", s.equipCreateStock)
@@ -327,19 +334,21 @@ func equipLookupIdempotent(
 // --- types ---
 
 type equipTypeRow struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	Category     string    `json:"category"`
-	FramesPerBox *int      `json:"framesPerBox"`
-	IsDefault    bool      `json:"isDefault"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	ID              uuid.UUID  `json:"id"`
+	Name            string     `json:"name"`
+	Category        string     `json:"category"`
+	FramesPerBox    *int       `json:"framesPerBox"`
+	IsDefault       bool       `json:"isDefault"`
+	VariantOfTypeID *uuid.UUID `json:"variantOfTypeId"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
 // GET /equipment/types
 func (s *Server) equipListTypes(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT id, name, category, frames_per_box, is_default, created_at, updated_at
+		SELECT id, name, category, frames_per_box, is_default, variant_of_type_id,
+		       created_at, updated_at
 		FROM equipment_types
 		ORDER BY category, name`)
 	if err != nil {
@@ -351,7 +360,7 @@ func (s *Server) equipListTypes(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row equipTypeRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.Category, &row.FramesPerBox,
-			&row.IsDefault, &row.CreatedAt, &row.UpdatedAt); err != nil {
+			&row.IsDefault, &row.VariantOfTypeID, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -364,12 +373,13 @@ func (s *Server) equipListTypes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// POST /equipment/types {name, category, framesPerBox?}
+// POST /equipment/types {name, category, framesPerBox?, variantOfTypeId?}
 func (s *Server) equipCreateType(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name         string `json:"name"`
-		Category     string `json:"category"`
-		FramesPerBox *int   `json:"framesPerBox"`
+		Name            string  `json:"name"`
+		Category        string  `json:"category"`
+		FramesPerBox    *int    `json:"framesPerBox"`
+		VariantOfTypeID *string `json:"variantOfTypeId"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -388,13 +398,27 @@ func (s *Server) equipCreateType(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
+	var variantOf *uuid.UUID
+	if v := equipTrimPtr(req.VariantOfTypeID); v != nil {
+		parsed, err := uuid.Parse(*v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid variantOfTypeId")
+			return
+		}
+		if err := s.equipCheckVariantBase(r.Context(), parsed); err != nil {
+			equipWriteError(w, err)
+			return
+		}
+		variantOf = &parsed
+	}
 
 	var id uuid.UUID
 	err := s.pool.QueryRow(r.Context(), `
-		INSERT INTO equipment_types (name, category, frames_per_box, created_by)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO equipment_types
+			(name, category, frames_per_box, variant_of_type_id, created_by)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id`,
-		name, req.Category, req.FramesPerBox, equipActor(r)).Scan(&id)
+		name, req.Category, req.FramesPerBox, variantOf, equipActor(r)).Scan(&id)
 	if err != nil {
 		if equipPgErrCode(err, "23505") {
 			writeError(w, http.StatusConflict, fmt.Sprintf("%q already exists", name))

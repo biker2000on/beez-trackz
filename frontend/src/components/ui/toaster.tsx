@@ -10,6 +10,14 @@ function Toaster(props: ToasterProps) {
     <Sonner
       theme={(resolvedTheme as ToasterProps["theme"]) ?? "system"}
       className="toaster group"
+      position="bottom-right"
+      visibleToasts={3}
+      offset={{ bottom: "1rem", right: "1rem" }}
+      mobileOffset={{
+        bottom: "calc(var(--bottom-nav-h) + 1rem)",
+        left: "1rem",
+        right: "1rem",
+      }}
       toastOptions={{
         style: {
           background: "var(--popover)",

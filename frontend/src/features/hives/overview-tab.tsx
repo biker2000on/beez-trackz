@@ -26,6 +26,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useHiveFeedings } from "@/features/feedings/hooks";
 import { useHiveInspections } from "@/features/inspections/hooks";
@@ -85,7 +86,7 @@ function EndTreatmentButton({
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64">
-        <form onSubmit={submit} className="grid gap-3">
+        <ShortcutForm onSubmit={submit} className="grid gap-3">
           <div className="grid gap-1.5">
             <Label htmlFor="treatment-removed-date">Removed on</Label>
             <Input
@@ -99,7 +100,7 @@ function EndTreatmentButton({
           <Button type="submit" size="sm" disabled={endTreatment.isPending}>
             {endTreatment.isPending ? "Saving…" : "End treatment"}
           </Button>
-        </form>
+        </ShortcutForm>
       </PopoverContent>
     </Popover>
   );

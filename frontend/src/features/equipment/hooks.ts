@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import type {
   ActiveDeployment,
+  EquipmentComponentLine,
   EquipmentStockRow,
   EquipmentType,
   FrameSummary,
@@ -314,12 +315,82 @@ export interface CreateTypeBody {
   name: string;
   category: string;
   framesPerBox?: number;
+  variantOfTypeId?: string;
 }
 
 export function useCreateType() {
   return useEquipmentMutation({
     mutationFn: (body: CreateTypeBody) => api.post("/equipment/types", body),
     successMessage: "Equipment type added",
+  });
+}
+
+export interface UpdateTypeBody {
+  typeId: string;
+  name?: string;
+  category?: string;
+  framesPerBox?: number;
+  clearFramesPerBox?: boolean;
+  variantOfTypeId?: string;
+  clearVariantOf?: boolean;
+}
+
+export function useUpdateType() {
+  return useEquipmentMutation({
+    mutationFn: ({ typeId, ...body }: UpdateTypeBody) =>
+      api.patch(`/equipment/types/${typeId}`, body),
+    successMessage: "Type updated",
+  });
+}
+
+export function useDeleteType() {
+  return useEquipmentMutation({
+    mutationFn: (typeId: string) => api.delete(`/equipment/types/${typeId}`),
+    successMessage: "Type deleted",
+  });
+}
+
+// --- bill of materials ---
+
+export function useEquipmentComponents() {
+  return useQuery({
+    queryKey: ["equipment", "components"],
+    queryFn: () => api.get<EquipmentComponentLine[]>("/equipment/components"),
+  });
+}
+
+export interface SetComponentsBody {
+  typeId: string;
+  components: { componentTypeId: string; quantity: number }[];
+}
+
+export function useSetComponents() {
+  return useEquipmentMutation({
+    mutationFn: ({ typeId, components }: SetComponentsBody) =>
+      api.put(`/equipment/types/${typeId}/components`, { components }),
+    successMessage: "Bill of materials saved",
+  });
+}
+
+export interface AssembleBody {
+  typeId: string;
+  quantity: number;
+  action: "assemble" | "disassemble";
+  date?: string;
+  notes?: string;
+}
+
+export function useAssemble() {
+  return useEquipmentMutation({
+    mutationFn: (body: AssembleBody) =>
+      api.post<{ typeName: string; action: string; quantity: number }>(
+        "/equipment/assemblies",
+        body,
+      ),
+    successMessage: (data) =>
+      data.action === "assemble"
+        ? `Assembled ${data.quantity} × ${data.typeName}`
+        : `Disassembled ${data.quantity} × ${data.typeName}`,
   });
 }
 
