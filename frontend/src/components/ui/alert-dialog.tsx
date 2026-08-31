@@ -47,6 +47,7 @@ function AlertDialogOverlay({
 
 function AlertDialogContent({
   className,
+  onOpenAutoFocus,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content>) {
   return (
@@ -54,6 +55,23 @@ function AlertDialogContent({
       <AlertDialogOverlay />
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
+        // Radix focuses Cancel on open. These dialogs confirm an action the
+        // person just asked for, so the confirm button takes focus instead and
+        // Enter finishes the flow. Escape and the Cancel button still back out.
+        onOpenAutoFocus={(event) => {
+          onOpenAutoFocus?.(event);
+          if (event.defaultPrevented) return;
+          const content =
+            event.currentTarget instanceof HTMLElement
+              ? event.currentTarget
+              : document.querySelector('[data-slot="alert-dialog-content"]');
+          const action = content?.querySelector<HTMLElement>(
+            '[data-slot="alert-dialog-action"]',
+          );
+          if (!action) return;
+          event.preventDefault();
+          action.focus();
+        }}
         className={cn(
           "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4",
           "rounded-xl border bg-card p-6 shadow-lg max-sm:max-w-[calc(100%-2rem)]",
@@ -127,6 +145,7 @@ function AlertDialogAction({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Action>) {
   return (
     <AlertDialogPrimitive.Action
+      data-slot="alert-dialog-action"
       className={cn(buttonVariants(), className)}
       {...props}
     />
@@ -139,6 +158,7 @@ function AlertDialogCancel({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Cancel>) {
   return (
     <AlertDialogPrimitive.Cancel
+      data-slot="alert-dialog-cancel"
       className={cn(buttonVariants({ variant: "outline" }), className)}
       {...props}
     />

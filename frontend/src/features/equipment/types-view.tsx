@@ -419,12 +419,25 @@ function TypeDialog({
 
   if (!state) return null;
 
-  // Only base types (and not the type being edited) can host variants.
+  // A variant is the same kind of thing as its base, so only base types in the
+  // chosen category are offered (and never the type being edited itself).
   const baseOptions = allTypes.filter(
-    (t) => !t.variantOfTypeId && t.id !== editing?.id,
+    (t) =>
+      !t.variantOfTypeId && t.id !== editing?.id && t.category === category,
   );
   const pending = create.isPending || update.isPending;
   const isBox = category === "box";
+
+  // Changing category invalidates a base from the old category.
+  function changeCategory(next: string) {
+    setCategory(next);
+    if (
+      variantOf !== "none" &&
+      !allTypes.some((t) => t.id === variantOf && t.category === next)
+    ) {
+      setVariantOf("none");
+    }
+  }
 
   const submit = (event?: React.FormEvent) => {
     event?.preventDefault();
@@ -503,7 +516,7 @@ function TypeDialog({
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
               <Label>Category</Label>
-              <Select value={category} onValueChange={setCategory}>
+              <Select value={category} onValueChange={changeCategory}>
                 <SelectTrigger>
                   <SelectValue placeholder="Choose a category" />
                 </SelectTrigger>
@@ -534,7 +547,11 @@ function TypeDialog({
           </div>
           <div className="grid gap-1.5">
             <Label>Variant of</Label>
-            <Select value={variantOf} onValueChange={setVariantOf}>
+            <Select
+              value={variantOf}
+              onValueChange={setVariantOf}
+              disabled={category === ""}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -547,6 +564,17 @@ function TypeDialog({
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              {category === ""
+                ? "Choose a category first."
+                : baseOptions.length === 0
+                  ? `No other ${CATEGORY_LABELS[
+                      category as EquipmentCategory
+                    ].toLowerCase()} to vary yet.`
+                  : `Base types in ${CATEGORY_LABELS[
+                      category as EquipmentCategory
+                    ].toLowerCase()}.`}
+            </p>
           </div>
           <FieldError message={error} />
           <DialogFooter>
