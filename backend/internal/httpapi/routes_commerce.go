@@ -106,6 +106,7 @@ type harvestLotPayload struct {
 	// ("derived") or pin the typed number ("manual"). Omitted = infer.
 	HoneyWeightSource   *string        `json:"honeyWeightSource"`
 	HoneyVariety        *string        `json:"honeyVariety"`
+	VarietalID          *uuid.UUID     `json:"varietalId"`
 	Season              *string        `json:"season"`
 	ApiaryRegion        *string        `json:"apiaryRegion"`
 	BloomNotes          *string        `json:"bloomNotes"`
@@ -138,6 +139,8 @@ type harvestLotRow struct {
 	DerivedWeightLbs    float64        `json:"derivedWeightLbs"`
 	LinkedHarvestCount  int            `json:"linkedHarvestCount"`
 	HoneyVariety        *string        `json:"honeyVariety"`
+	VarietalID          *uuid.UUID     `json:"varietalId"`
+	VarietalName        *string        `json:"varietalName"`
 	Season              *string        `json:"season"`
 	ApiaryRegion        *string        `json:"apiaryRegion"`
 	BloomNotes          *string        `json:"bloomNotes"`
@@ -167,14 +170,16 @@ type harvestLotRow struct {
 
 const harvestLotSelect = `
 	SELECT lot.id, lot.lot_code, lot.public_slug, lot.extraction_date, lot.honey_weight_lbs,
-		lot.honey_weight_entered, lot.honey_weight_source, lot.honey_variety, lot.season, lot.apiary_region, lot.bloom_notes,
+		lot.honey_weight_entered, lot.honey_weight_source, lot.honey_variety,
+		lot.varietal_id, varietal.name, lot.season, lot.apiary_region, lot.bloom_notes,
 		lot.beekeeper_story, COALESCE(lot.testing_data, '{}'::jsonb), lot.reorder_url, lot.is_public,
 		lot.moisture_pct, lot.bottling_moisture_pct,
 		lot.moisture_override_reason, lot.moisture_override_at,
 		lot.claim_species, lot.claim_year, lot.claim_apiary_id, claim_apiary.name, lot.claim_elevation_m,
 		lot.created_at, lot.updated_at
 	FROM harvest_lots lot
-	LEFT JOIN apiaries claim_apiary ON claim_apiary.id = lot.claim_apiary_id`
+	LEFT JOIN apiaries claim_apiary ON claim_apiary.id = lot.claim_apiary_id
+	LEFT JOIN honey_varietals varietal ON varietal.id = lot.varietal_id`
 
 const metersPerFoot = 0.3048
 
@@ -573,7 +578,7 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 		var item harvestLotRow
 		if err := rows.Scan(&item.ID, &item.LotCode, &item.PublicSlug, &item.ExtractionDate,
 			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyWeightSource,
-			&item.HoneyVariety, &item.Season,
+			&item.HoneyVariety, &item.VarietalID, &item.VarietalName, &item.Season,
 			&item.ApiaryRegion, &item.BloomNotes, &item.BeekeeperStory, &item.TestingData,
 			&item.ReorderURL, &item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
 			&item.MoistureOverrideReason, &item.MoistureOverrideAt,
@@ -839,15 +844,17 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 			 honey_weight_source,
 			 honey_variety, season, apiary_region, bloom_notes, beekeeper_story, testing_data,
 			 reorder_url, is_public, moisture_pct, bottling_moisture_pct,
-			 claim_species, claim_year, claim_apiary_id, claim_elevation_m, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
+			 claim_species, claim_year, claim_apiary_id, claim_elevation_m, varietal_id,
+			 created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
 		strings.TrimSpace(req.LotCode), slug, date, weightLbs,
 		weightEntered, weightSource,
 		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
 		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-		claimSpecies, claimYear, claimApiaryID, claimElevation, actorID(r)).Scan(&id)
+		claimSpecies, claimYear, claimApiaryID, claimElevation, req.VarietalID,
+		actorID(r)).Scan(&id)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -1027,7 +1034,7 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 			apiary_region=$8, bloom_notes=$9, beekeeper_story=$10, testing_data=$11,
 			reorder_url=$12, is_public=$13, moisture_pct=$14, bottling_moisture_pct=$15,
 			claim_species=$16, claim_year=$17, claim_apiary_id=$18, claim_elevation_m=$19,
-			honey_weight_source=$21
+			honey_weight_source=$21, varietal_id=$22
 		WHERE id=$20`,
 		strings.TrimSpace(req.LotCode), slug, date, weightLbs,
 		weightEntered,
@@ -1035,7 +1042,8 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
 		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
 		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-		claimSpecies, claimYear, claimApiaryID, claimElevation, id, weightSource)
+		claimSpecies, claimYear, claimApiaryID, claimElevation, id, weightSource,
+		req.VarietalID)
 	if err != nil {
 		writeDBError(w, err, "lot code or public slug already exists",
 			"invalid reference")
@@ -1223,10 +1231,11 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	// reason "bottling run LOT-CODE", which nothing enforced.
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO honey_movements
-			(date, kind, jar_size_id, quantity, amount_lbs, reason, notes, bottling_run_id, created_by)
-		VALUES ($1, 'jarring', $2, $3, $4, $5, $6, $7, $8)`,
+			(date, kind, jar_size_id, quantity, amount_lbs, reason, notes,
+			 bottling_run_id, lot_id, created_by)
+		VALUES ($1, 'jarring', $2, $3, $4, $5, $6, $7, $8, $9)`,
 		date, req.JarSizeID, req.Quantity, runLbs,
-		"bottling run "+lotCode, honeyTrimPtr(req.Notes), runID, actor); err != nil {
+		"bottling run "+lotCode, honeyTrimPtr(req.Notes), runID, lotID, actor); err != nil {
 		writeDBError(w, err, "duplicate movement", "invalid jar size")
 		return
 	}
@@ -1325,7 +1334,8 @@ func (s *Server) bottlingRunVoid(w http.ResponseWriter, r *http.Request) {
 	// Only the run's own entries, never a reversal of one, and never one that
 	// somehow already carries a reversal.
 	rows, err := tx.Query(ctx, `
-		SELECT m.id, m.kind, m.amount_lbs, m.quantity, m.jar_size_id, m.reason, m.notes
+		SELECT m.id, m.kind, m.amount_lbs, m.quantity, m.jar_size_id, m.reason,
+		       m.notes, m.lot_id
 		FROM honey_movements m
 		WHERE m.bottling_run_id=$1 AND m.reverses_movement_id IS NULL
 			AND NOT EXISTS (
@@ -1344,12 +1354,13 @@ func (s *Server) bottlingRunVoid(w http.ResponseWriter, r *http.Request) {
 		jarSizeID *uuid.UUID
 		reason    *string
 		notes     *string
+		lotID     *uuid.UUID
 	}
 	movements := make([]runMovement, 0, 1)
 	for rows.Next() {
 		var m runMovement
 		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.quantity,
-			&m.jarSizeID, &m.reason, &m.notes); err != nil {
+			&m.jarSizeID, &m.reason, &m.notes, &m.lotID); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -1413,10 +1424,10 @@ func (s *Server) bottlingRunVoid(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO honey_movements
 				(date, kind, amount_lbs, jar_size_id, quantity, reason, notes,
-				 reverses_movement_id, bottling_run_id, created_by)
-			VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				 reverses_movement_id, bottling_run_id, lot_id, created_by)
+			VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			m.kind, negatedLbs, m.jarSizeID, negatedQuantity, reversalReason,
-			m.notes, m.id, runID, actor); err != nil {
+			m.notes, m.id, runID, m.lotID, actor); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}

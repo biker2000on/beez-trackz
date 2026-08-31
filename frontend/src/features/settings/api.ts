@@ -296,6 +296,9 @@ export interface JarSize {
   sortOrder: number;
   isActive: boolean;
   lowStockThreshold: number;
+  /** Equipment type (category `packaging`) one jar of this size consumes. */
+  packagingTypeId: string | null;
+  packagingTypeName: string | null;
 }
 
 export interface JarSizeUpdate {
@@ -304,6 +307,8 @@ export interface JarSizeUpdate {
   defaultPrice?: number | null;
   isActive?: boolean;
   lowStockThreshold?: number;
+  /** null unlinks the empty container this size draws down when jarred. */
+  packagingTypeId?: string | null;
   /** Required to deactivate a size with jars still on hand (API 409s otherwise). */
   writeOffRemaining?: boolean;
   writeOffReason?: string;

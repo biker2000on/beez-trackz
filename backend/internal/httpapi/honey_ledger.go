@@ -190,6 +190,37 @@ func honeyBulkShortfall(requestedLbs, availableLbs float64) string {
 		requestedLbs, availableLbs)
 }
 
+// honeyLockLot takes the lot row lock (lock class 2, always before the bulk
+// advisory lock) and reports what that lot still holds: its weight minus every
+// jarring, bulk use, and loss attributed to it. Bulk honey is one pool split
+// into labelled buckets, so a draw has to clear both this and the global pool.
+func honeyLockLot(
+	ctx context.Context,
+	tx inspectionQuerier,
+	lotID uuid.UUID,
+) (lotCode string, onHandLbs float64, err error) {
+	if err = tx.QueryRow(ctx,
+		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
+		Scan(&lotCode); err != nil {
+		return "", 0, err
+	}
+	if err = tx.QueryRow(ctx,
+		`SELECT on_hand_lbs FROM honey_lot_balances WHERE lot_id=$1`, lotID).
+		Scan(&onHandLbs); err != nil {
+		return "", 0, err
+	}
+	return lotCode, onHandLbs, nil
+}
+
+// honeyLotShortfall is honeyBulkShortfall for one lot's bucket.
+func honeyLotShortfall(requestedLbs, availableLbs float64, lotCode string) string {
+	if requestedLbs <= availableLbs+honeyPoundTolerance {
+		return ""
+	}
+	return fmt.Sprintf("Lot %s has %.2f lbs left; this needs %.2f lbs",
+		lotCode, availableLbs, requestedLbs)
+}
+
 // --- stock locations -------------------------------------------------------
 //
 // Finished goods (jar sizes and product_catalog SKUs) can stand somewhere

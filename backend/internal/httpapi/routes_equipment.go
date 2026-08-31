@@ -118,7 +118,10 @@ func decodeOptionalJSON(r *http.Request, v any) error {
 }
 
 var equipCategories = map[string]bool{
-	"box": true, "cover": true, "bottom": true, "accessory": true, "frame": true, "other": true,
+	"box": true, "cover": true, "bottom": true, "accessory": true, "frame": true,
+	// Empty jars, lids, and labels. They ride the equipment ledger so filling
+	// a jar size can draw them down (migration 00048).
+	"packaging": true, "other": true,
 }
 
 // Reasons a person may pick. 'physical_count' is deliberately absent: only the

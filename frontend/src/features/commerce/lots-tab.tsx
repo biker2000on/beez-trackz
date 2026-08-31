@@ -39,6 +39,7 @@ import { formatDate, formatLbs } from "@/features/honey/format";
 import {
   useApiaryOptions,
   useHarvests,
+  useHoneyVarietals,
   useJarInventory,
 } from "@/features/honey/hooks";
 import {
@@ -215,6 +216,10 @@ function LotFormDialog({
     () => lot?.honeyWeightSource ?? "derived",
   );
   const [variety, setVariety] = React.useState(lot?.honeyVariety ?? "");
+  // The canonical varietal drives the balance rollups; the free-text variety
+  // beside it stays the label copy for this one lot.
+  const [varietalId, setVarietalId] = React.useState(lot?.varietalId ?? "");
+  const varietals = useHoneyVarietals();
   const [claimSpecies, setClaimSpecies] = React.useState(
     lot?.claimSpecies ?? "",
   );
@@ -280,6 +285,7 @@ function LotFormDialog({
     setWeight("");
     setWeightSource("derived");
     setVariety("");
+    setVarietalId("");
     setClaimSpecies("");
     setClaimYear("");
     setClaimApiaryId("");
@@ -326,6 +332,7 @@ function LotFormDialog({
       claimApiaryId: claimApiaryId || undefined,
       claimElevationM: elevation?.meters,
       honeyVariety: variety.trim() || undefined,
+      varietalId: varietalId || null,
       season: season.trim() || undefined,
       apiaryRegion: region.trim() || undefined,
       bloomNotes: bloom.trim() || undefined,
@@ -475,7 +482,23 @@ function LotFormDialog({
                 : ""}
             </p>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-1.5">
+              <Label>Varietal</Label>
+              <Select
+                value={varietalId || "none"}
+                onValueChange={(value) => setVarietalId(value === "none" ? "" : value)}
+              >
+                <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {(varietals.data ?? []).map((varietal) => (
+                    <SelectItem key={varietal.id} value={varietal.id}>{varietal.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Rolls this lot&rsquo;s balances up on the varietals page.</p>
+            </div>
             <div className="grid gap-1.5"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} placeholder="Wildflower" /></div>
             <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
             <div className="grid gap-1.5"><Label>Approximate region</Label><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Western New York" /></div>

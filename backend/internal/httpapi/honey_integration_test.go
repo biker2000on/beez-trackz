@@ -174,11 +174,34 @@ func seedHarvest(t *testing.T, server *Server, pounds float64) {
 	}
 }
 
+// seedLot creates a harvest lot big enough to jar against. Bulk honey is
+// tracked per lot, so every draw names one.
+func seedLot(t *testing.T, server *Server, weightLbs float64) uuid.UUID {
+	t.Helper()
+	var lotID uuid.UUID
+	code := "LOT-" + uuid.NewString()[:8]
+	if err := server.pool.QueryRow(context.Background(), `
+		INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs)
+		VALUES ($1, $2, CURRENT_DATE, $3) RETURNING id`,
+		code, "slug-"+code, weightLbs).Scan(&lotID); err != nil {
+		t.Fatalf("seed lot: %v", err)
+	}
+	return lotID
+}
+
 func jarStock(t *testing.T, server *Server, jarSizeID uuid.UUID, quantity int) {
+	t.Helper()
+	jarStockFromLot(t, server, seedLot(t, server, 10000), jarSizeID, quantity)
+}
+
+func jarStockFromLot(
+	t *testing.T, server *Server, lotID, jarSizeID uuid.UUID, quantity int,
+) {
 	t.Helper()
 	response, body := call(t, server.honeyRecordJarring, adminRequest(
 		http.MethodPost, "/api/v1/honey/jarring", map[string]any{
 			"date":  time.Now().Format("2006-01-02"),
+			"lotId": lotID.String(),
 			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": quantity}},
 		}))
 	if response.Code != http.StatusOK {
@@ -291,13 +314,25 @@ func TestDeleteMovementWritesReversingEntry(t *testing.T) {
 	seedHarvest(t, server, 100)
 	jarStock(t, server, jarSizeID, 12)
 
+	// Jarring is always part of a bottling run now and is undone by voiding
+	// that run, so the standalone reversal path is exercised with a jar
+	// adjustment — the same negation rules apply to both.
+	response, body := call(t, server.honeyAdjustJarCounts, adminRequest(
+		http.MethodPost, "/api/v1/honey/jar-adjustments", map[string]any{
+			"date":   time.Now().Format("2006-01-02"),
+			"reason": "recount",
+			"lines":  []map[string]any{{"jarSizeId": jarSizeID.String(), "delta": 3}},
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("seed adjustment = %d %v", response.Code, body)
+	}
 	var movementID uuid.UUID
 	if err := server.pool.QueryRow(context.Background(),
-		`SELECT id FROM honey_movements WHERE kind='jarring'`).Scan(&movementID); err != nil {
+		`SELECT id FROM honey_movements WHERE kind='jar_adjustment'`).Scan(&movementID); err != nil {
 		t.Fatalf("read movement: %v", err)
 	}
 
-	response, body := call(t, server.honeyReverseMovement, adminRequest(
+	response, body = call(t, server.honeyReverseMovement, adminRequest(
 		http.MethodDelete, "/api/v1/honey/movements/"+movementID.String(),
 		map[string]any{"reason": "miscount"}, "id", movementID.String()))
 	if response.Code != http.StatusOK {
@@ -320,20 +355,21 @@ func TestDeleteMovementWritesReversingEntry(t *testing.T) {
 	if originalCount != 1 {
 		t.Error("the original movement was destroyed")
 	}
-	if reversalQuantity != -12 {
-		t.Errorf("reversal quantity = %d, want -12", reversalQuantity)
+	if reversalQuantity != -3 {
+		t.Errorf("reversal quantity = %d, want -3", reversalQuantity)
 	}
 	if reversalActor == nil || *reversalActor != testUserID {
 		t.Errorf("reversal actor = %v, want %v", reversalActor, testUserID)
 	}
 
+	// The reversed adjustment leaves the 12 jarred units untouched.
 	inventory, err := server.honeyJarInventory(context.Background())
 	if err != nil {
 		t.Fatalf("inventory: %v", err)
 	}
 	for _, row := range inventory {
-		if row.JarSizeID == jarSizeID && row.OnHand != 0 {
-			t.Errorf("on hand after reversal = %d, want 0", row.OnHand)
+		if row.JarSizeID == jarSizeID && row.OnHand != 12 {
+			t.Errorf("on hand after reversal = %d, want 12", row.OnHand)
 		}
 	}
 
@@ -872,16 +908,26 @@ func TestReverseJarringBlockedWhenJarsAreSold(t *testing.T) {
 		t.Fatalf("record sale = %d %v", response.Code, body)
 	}
 
-	var movementID uuid.UUID
+	var movementID, runID uuid.UUID
 	if err := server.pool.QueryRow(context.Background(),
-		`SELECT id FROM honey_movements WHERE kind='jarring'`).Scan(&movementID); err != nil {
+		`SELECT id, bottling_run_id FROM honey_movements WHERE kind='jarring'`).
+		Scan(&movementID, &runID); err != nil {
 		t.Fatalf("read movement: %v", err)
 	}
+	// A run-linked jarring is never reversed on its own.
 	response, body = call(t, server.honeyReverseMovement, adminRequest(
 		http.MethodDelete, "/api/v1/honey/movements/"+movementID.String(), nil,
 		"id", movementID.String()))
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("reversing a sold-out jarring = %d %v, want 400", response.Code, body)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("reversing a run-linked jarring = %d %v, want 409", response.Code, body)
+	}
+	// Voiding the run is the supported undo, and it still refuses to pull
+	// jars that have already been sold off the shelf.
+	response, body = call(t, server.bottlingRunVoid, adminRequest(
+		http.MethodPost, "/api/v1/bottling-runs/"+runID.String()+"/void",
+		map[string]any{"reason": "miscount"}, "id", runID.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("voiding a sold-out run = %d %v, want 409", response.Code, body)
 	}
 
 	var reversals int
@@ -1968,4 +2014,172 @@ func TestEquipmentSaleLeavesKeptHiveDeployments(t *testing.T) {
 	if hiveStatus != "active" {
 		t.Errorf("hive status = %s, want active", hiveStatus)
 	}
+}
+
+// Jarring with a lot chosen has to produce the same traceability the lot page
+// produces: a bottling run per jar line, the movement linked to it, and the
+// lot's remaining weight enforced.
+func TestJarringWithLotCreatesBottlingRunsAndRespectsLotWeight(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
+	seedHarvest(t, server, 100)
+
+	ctx := context.Background()
+	var lotID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs, honey_variety)
+		VALUES ('LOT-BASSWOOD','lot-basswood',CURRENT_DATE, 40, 'Basswood') RETURNING id`).
+		Scan(&lotID); err != nil {
+		t.Fatalf("seed lot: %v", err)
+	}
+	today := time.Now().Format("2006-01-02")
+
+	response, body := call(t, server.honeyRecordJarring, adminRequest(
+		http.MethodPost, "/api/v1/honey/jarring", map[string]any{
+			"date":  today,
+			"lotId": lotID.String(),
+			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 10}},
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("lot-linked jarring = %d %v", response.Code, body)
+	}
+
+	var runs, linkedMovements int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM bottling_runs WHERE lot_id=$1`, lotID).Scan(&runs); err != nil {
+		t.Fatalf("count runs: %v", err)
+	}
+	if runs != 1 {
+		t.Errorf("bottling runs for the lot = %d, want 1", runs)
+	}
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM honey_movements m
+		JOIN bottling_runs run ON run.id = m.bottling_run_id
+		WHERE run.lot_id = $1`, lotID).Scan(&linkedMovements); err != nil {
+		t.Fatalf("count linked movements: %v", err)
+	}
+	if linkedMovements != 1 {
+		t.Errorf("movements linked to the lot = %d, want 1", linkedMovements)
+	}
+
+	// 10 lbs are bottled and 90 lbs of bulk remain, so 50 more jars clear the
+	// bulk pool but exceed what the 40 lb lot can yield.
+	response, body = call(t, server.honeyRecordJarring, adminRequest(
+		http.MethodPost, "/api/v1/honey/jarring", map[string]any{
+			"date":  today,
+			"lotId": lotID.String(),
+			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 50}},
+		}))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("over-bottling the lot = %d %v, want %d", response.Code, body, http.StatusBadRequest)
+	}
+
+	// Bulk honey is per lot now, so a draw that names no lot is refused
+	// rather than silently taken from everything at once.
+	response, body = call(t, server.honeyRecordJarring, adminRequest(
+		http.MethodPost, "/api/v1/honey/jarring", map[string]any{
+			"date":  today,
+			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 5}},
+		}))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("lot-less jarring = %d %v, want %d", response.Code, body, http.StatusBadRequest)
+	}
+	var untraced int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM honey_movements
+		WHERE kind='jarring' AND lot_id IS NULL`).Scan(&untraced); err != nil {
+		t.Fatalf("count untraced: %v", err)
+	}
+	if untraced != 0 {
+		t.Errorf("unattributed jarring movements = %d, want 0", untraced)
+	}
+}
+
+// Filling jars draws down the empties the jar size is linked to. Short stock
+// is reported but never refuses the jarring — the jars were really filled.
+func TestJarringConsumesLinkedPackaging(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
+	seedHarvest(t, server, 100)
+	lotID := seedLot(t, server, 100)
+
+	ctx := context.Background()
+	var packagingTypeID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO equipment_types (name, category)
+		VALUES ($1, 'packaging') RETURNING id`, "1 lb glass jar "+uuid.NewString()).
+		Scan(&packagingTypeID); err != nil {
+		t.Fatalf("seed packaging type: %v", err)
+	}
+	stockID := equipSeedStockForTest(t, server, packagingTypeID, 12)
+	if _, err := server.pool.Exec(ctx,
+		`UPDATE jar_sizes SET packaging_type_id=$2 WHERE id=$1`,
+		jarSizeID, packagingTypeID); err != nil {
+		t.Fatalf("link packaging: %v", err)
+	}
+
+	// 10 of 12 empties: covered, so no warning.
+	response, body := call(t, server.honeyRecordJarring, adminRequest(
+		http.MethodPost, "/api/v1/honey/jarring", map[string]any{
+			"date":  time.Now().Format("2006-01-02"),
+			"lotId": lotID.String(),
+			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 10}},
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("jarring = %d %v", response.Code, body)
+	}
+	if warnings, _ := body["packagingWarnings"].([]any); len(warnings) != 0 {
+		t.Errorf("warnings with stock on hand = %v, want none", warnings)
+	}
+	var owned int
+	if err := server.pool.QueryRow(ctx,
+		`SELECT total_owned FROM equipment_stock WHERE id=$1`, stockID).Scan(&owned); err != nil {
+		t.Fatalf("read packaging stock: %v", err)
+	}
+	if owned != 2 {
+		t.Errorf("empties left = %d, want 2", owned)
+	}
+
+	// 5 more against 2 on hand: recorded anyway, with a warning.
+	response, body = call(t, server.honeyRecordJarring, adminRequest(
+		http.MethodPost, "/api/v1/honey/jarring", map[string]any{
+			"date":  time.Now().Format("2006-01-02"),
+			"lotId": lotID.String(),
+			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 5}},
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("jarring short of empties = %d %v, want it recorded", response.Code, body)
+	}
+	warnings, _ := body["packagingWarnings"].([]any)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings when short = %v, want 1", warnings)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`SELECT total_owned FROM equipment_stock WHERE id=$1`, stockID).Scan(&owned); err != nil {
+		t.Fatalf("read packaging stock: %v", err)
+	}
+	if owned != -3 {
+		t.Errorf("empties after overdraw = %d, want -3", owned)
+	}
+}
+
+// equipSeedStockForTest creates a stock row and books an opening count through
+// the ledger, which is the only way quantities are allowed in.
+func equipSeedStockForTest(
+	t *testing.T, server *Server, typeID uuid.UUID, opening int,
+) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	var stockID uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO equipment_stock (type_id, total_owned) VALUES ($1, 0) RETURNING id`,
+		typeID).Scan(&stockID); err != nil {
+		t.Fatalf("seed equipment stock: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO equipment_stock_adjustments (stock_id, quantity, reason, date)
+		VALUES ($1, $2, 'purchased', now())`, stockID, opening); err != nil {
+		t.Fatalf("book opening count: %v", err)
+	}
+	return stockID
 }

@@ -18,8 +18,10 @@ import type {
   HarvestSessionRow,
   HiveOption,
   HoneyInventoryRow,
+  HoneyLotBalances,
   HoneyOverview,
   HoneySale,
+  HoneyVarietal,
   ProductAdjustment,
   ProductBatch,
   ProductCatalogResponse,
@@ -134,6 +136,27 @@ export function useProductAdjustments() {
   });
 }
 
+/**
+ * Per-lot bulk balances. Bulk honey is one pool split into labelled buckets:
+ * each lot holds what it yielded minus what has been jarred, used, or lost
+ * from it, and `unassigned` is the residual history left behind.
+ */
+export function useHoneyLotBalances(enabled = true) {
+  return useQuery({
+    queryKey: ["honey", "lot-balances"],
+    queryFn: () => api.get<HoneyLotBalances>("/honey/lot-balances"),
+    enabled,
+  });
+}
+
+export function useHoneyVarietals(enabled = true) {
+  return useQuery({
+    queryKey: ["honey", "varietals"],
+    queryFn: () => api.get<HoneyVarietal[]>("/honey/varietals"),
+    enabled,
+  });
+}
+
 // --- mutation helper ---
 
 interface HoneyMutationOptions<TVars, TData> {
@@ -182,22 +205,36 @@ export interface JarLineBody {
 
 export interface JarringBody {
   date: string;
+  /**
+   * Harvest lot the honey came from. Required: every draw names the lot it
+   * came out of, and the jars keep that provenance through serials and sales.
+   */
+  lotId: string;
   lines: JarLineBody[];
   lossLbs?: number;
   lossReason?: string;
   notes?: string;
 }
 
+export interface JarringResult {
+  success: boolean;
+  /** Empty containers that ran short — reported, never a refusal. */
+  packagingWarnings: string[];
+}
+
 export function useRecordJarring() {
-  return useHoneyMutation({
-    mutationFn: (body: JarringBody) => api.post("/honey/jarring", body),
+  return useHoneyMutation<JarringBody, JarringResult>({
+    mutationFn: (body) => api.post<JarringResult>("/honey/jarring", body),
     successMessage: "Jarring recorded",
+    invalidate: [["equipment"]],
   });
 }
 
 export interface BulkMovementBody {
   date: string;
   kind: "bulk_use" | "loss";
+  /** Required: the lot this honey came out of. */
+  lotId: string;
   amountLbs: number;
   reason?: string;
   notes?: string;
@@ -208,6 +245,31 @@ export function useRecordBulkMovement() {
     mutationFn: (body: BulkMovementBody) =>
       api.post("/honey/bulk-movements", body),
     successMessage: "Movement recorded",
+  });
+}
+
+// --- varietal mutations ---
+
+export function useCreateVarietal() {
+  return useHoneyMutation<
+    { name: string; notes?: string },
+    { success: boolean; id: string }
+  >({
+    mutationFn: (body) =>
+      api.post<{ success: boolean; id: string }>("/honey/varietals", body),
+    successMessage: "Varietal added",
+    silentError: true,
+    invalidate: [["commerce"]],
+  });
+}
+
+export function useUpdateVarietal() {
+  return useHoneyMutation({
+    mutationFn: ({ id, ...body }: { id: string; name?: string; notes?: string }) =>
+      api.patch(`/honey/varietals/${id}`, body),
+    successMessage: "Varietal updated",
+    silentError: true,
+    invalidate: [["commerce"]],
   });
 }
 

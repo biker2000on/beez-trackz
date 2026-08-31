@@ -18,7 +18,15 @@ import {
   type DataGridColumnMeta,
 } from "@/components/ui/data-grid";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useEquipmentTypes } from "@/features/equipment/hooks";
 import { cn } from "@/lib/utils";
 
 import {
@@ -78,6 +86,7 @@ export function JarSizesSection() {
   const createJar = useCreateJarSize();
   const updateJar = useUpdateJarSize();
   const { mutateAsync: updateJarAsync } = updateJar;
+  const equipmentTypes = useEquipmentTypes();
 
   const [drafts, setDrafts] = React.useState<Record<string, JarDraft>>({});
   /** Which row's mutation is in flight, so other rows stay enabled. */
@@ -118,6 +127,29 @@ export function JarSizesSection() {
       } catch (error) {
         toast.error(
           error instanceof ApiError ? error.message : "Could not save jar size",
+        );
+      } finally {
+        setPendingId(null);
+      }
+    },
+    [updateJarAsync],
+  );
+
+  /**
+   * Linking an empty container makes jarring draw one packaging unit per jar
+   * off the equipment ledger. Saved on pick, like the active checkbox — there
+   * is no half-typed state to hold back.
+   */
+  const setPackaging = React.useCallback(
+    async (jar: JarSize, packagingTypeId: string | null) => {
+      setPendingId(jar.id);
+      try {
+        await updateJarAsync({ id: jar.id, packagingTypeId });
+      } catch (error) {
+        toast.error(
+          error instanceof ApiError
+            ? error.message
+            : "Could not link the empty container",
         );
       } finally {
         setPendingId(null);
@@ -172,6 +204,10 @@ export function JarSizesSection() {
   );
 
   const jars = React.useMemo(() => jarSizes.data ?? [], [jarSizes.data]);
+  const packagingTypes = React.useMemo(
+    () => (equipmentTypes.data ?? []).filter((t) => t.category === "packaging"),
+    [equipmentTypes.data],
+  );
 
   const columns = React.useMemo(
     () =>
@@ -254,6 +290,38 @@ export function JarSizesSection() {
           ),
         }),
         columnHelper.display({
+          id: "packaging",
+          header: "Empty containers",
+          cell: ({ row: { original: jar } }) => (
+            <DataGridCellAction
+              className={cn(!jar.isActive && "opacity-60")}
+            >
+              <Select
+                value={jar.packagingTypeId ?? "none"}
+                disabled={pendingId === jar.id || packagingTypes.length === 0}
+                onValueChange={(value) =>
+                  setPackaging(jar, value === "none" ? null : value)
+                }
+              >
+                <SelectTrigger
+                  className="w-48"
+                  aria-label={`Empty container for ${jar.label}`}
+                >
+                  <SelectValue placeholder="Not linked" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not linked</SelectItem>
+                  {packagingTypes.map((type) => (
+                    <SelectItem key={type.id} value={type.id}>
+                      {type.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </DataGridCellAction>
+          ),
+        }),
+        columnHelper.display({
           id: "active",
           header: "Active",
           meta: {
@@ -313,7 +381,7 @@ export function JarSizesSection() {
           },
         }),
       ]),
-    [drafts, pendingId, saveJar, setDraft, toggleActive],
+    [drafts, packagingTypes, pendingId, saveJar, setDraft, setPackaging, toggleActive],
   );
 
   const table = useTable({
@@ -435,6 +503,7 @@ export function JarSizesSection() {
               />
             </td>
             <td className="whitespace-nowrap p-3 align-middle" />
+            <td className="whitespace-nowrap p-3 align-middle" />
             <td className="whitespace-nowrap p-1 text-right align-middle">
               <Button
                 size="icon-sm"
@@ -448,6 +517,13 @@ export function JarSizesSection() {
           </tr>
         }
       />
+      {packagingTypes.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          To draw empty jars, lids, and labels down as you bottle, add an
+          equipment type in the <strong>Packaging</strong> category first, then
+          link it here.
+        </p>
+      ) : null}
     </div>
   );
 }

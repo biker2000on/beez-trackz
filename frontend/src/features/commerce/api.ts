@@ -22,6 +22,9 @@ export interface HarvestLot {
   derivedWeightLbs: number;
   linkedHarvestCount: number;
   honeyVariety: string | null;
+  /** The canonical varietal the balance rollups group this lot under. */
+  varietalId: string | null;
+  varietalName: string | null;
   claimSpecies: string | null;
   claimYear: number | null;
   claimApiaryId: string | null;
@@ -76,6 +79,8 @@ export interface HarvestLotInput {
   honeyWeightSource?: "manual" | "derived";
   honeyWeightEntered?: string;
   honeyVariety?: string;
+  /** null clears the varietal; the PATCH writes this field absolutely. */
+  varietalId?: string | null;
   claimSpecies?: string;
   claimYear?: number;
   claimApiaryId?: string;

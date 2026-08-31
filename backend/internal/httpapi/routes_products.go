@@ -1088,11 +1088,14 @@ func (s *Server) productBatchCreate(w http.ResponseWriter, r *http.Request) {
 
 	if honeyConsuming {
 		reason := productBatchHoneyReason(kind, productName, lotCode)
+		// A batch made from a named lot draws that lot's bucket, not the
+		// unassigned pool.
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO honey_movements
-				(date, kind, amount_lbs, reason, notes, product_batch_id, created_by)
-			VALUES ($1, 'bulk_use', $2, $3, $4, $5, $6)`,
-			startedAt, *req.HoneyLbs, reason, honeyTrimPtr(req.Notes), batchID, actor); err != nil {
+				(date, kind, amount_lbs, reason, notes, product_batch_id, lot_id, created_by)
+			VALUES ($1, 'bulk_use', $2, $3, $4, $5, $6, $7)`,
+			startedAt, *req.HoneyLbs, reason, honeyTrimPtr(req.Notes), batchID,
+			req.HarvestLotID, actor); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -1529,7 +1532,7 @@ func (s *Server) productBatchVoid(w http.ResponseWriter, r *http.Request) {
 	// one that somehow already carries a reversal. Propolis needs no reversing
 	// row: consumption is a sum over live batches, so voiding releases it.
 	rows, err := tx.Query(ctx, `
-		SELECT m.id, m.kind, m.amount_lbs, m.reason, m.notes
+		SELECT m.id, m.kind, m.amount_lbs, m.reason, m.notes, m.lot_id
 		FROM honey_movements m
 		WHERE m.product_batch_id=$1 AND m.reverses_movement_id IS NULL
 			AND NOT EXISTS (
@@ -1546,11 +1549,13 @@ func (s *Server) productBatchVoid(w http.ResponseWriter, r *http.Request) {
 		amountLbs *float64
 		reason    *string
 		notes     *string
+		lotID     *uuid.UUID
 	}
 	movements := make([]batchMovement, 0, 1)
 	for rows.Next() {
 		var m batchMovement
-		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.reason, &m.notes); err != nil {
+		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.reason, &m.notes,
+			&m.lotID); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -1581,9 +1586,10 @@ func (s *Server) productBatchVoid(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO honey_movements
 				(date, kind, amount_lbs, reason, notes, reverses_movement_id,
-				 product_batch_id, created_by)
-			VALUES (now(), $1, $2, $3, $4, $5, $6, $7)`,
-			m.kind, negatedLbs, reversalReason, m.notes, m.id, batchID, actor); err != nil {
+				 product_batch_id, lot_id, created_by)
+			VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8)`,
+			m.kind, negatedLbs, reversalReason, m.notes, m.id, batchID, m.lotID,
+			actor); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}

@@ -6,6 +6,7 @@ export type EquipmentCategory =
   | "cover"
   | "bottom"
   | "accessory"
+  | "packaging"
   | "other";
 
 export const CATEGORY_ORDER: EquipmentCategory[] = [
@@ -14,6 +15,7 @@ export const CATEGORY_ORDER: EquipmentCategory[] = [
   "cover",
   "bottom",
   "accessory",
+  "packaging",
   "other",
 ];
 
@@ -23,6 +25,7 @@ export const CATEGORY_LABELS: Record<EquipmentCategory, string> = {
   cover: "Covers",
   bottom: "Bottom boards",
   accessory: "Accessories",
+  packaging: "Packaging",
   other: "Other",
 };
 

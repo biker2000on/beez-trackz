@@ -277,3 +277,44 @@ export interface ApiaryOption {
   id: string;
   name: string;
 }
+
+/** One harvest lot's slice of the bulk pool (GET /honey/lot-balances). */
+export interface HoneyLotBalance {
+  lotId: string;
+  lotCode: string;
+  honeyVariety: string | null;
+  varietalId: string | null;
+  varietalName: string | null;
+  extractionDate: string;
+  lotLbs: number;
+  jarredLbs: number;
+  bulkUsedLbs: number;
+  lossLbs: number;
+  onHandLbs: number;
+}
+
+export interface HoneyLotBalances {
+  lots: HoneyLotBalance[];
+  /** The residual bulk honey no lot claims — only history lands here now. */
+  unassigned: { lbs: number; drawnLbs: number; inLotsLbs: number };
+  totals: {
+    totalHarvestedLbs: number;
+    jarredLbs: number;
+    bulkUsedLbs: number;
+    lossLbs: number;
+    bulkOnHandLbs: number;
+  };
+}
+
+/** A canonical varietal with its rollup over the lots that carry it. */
+export interface HoneyVarietal {
+  id: string;
+  name: string;
+  notes: string | null;
+  lotCount: number;
+  lotLbs: number;
+  jarredLbs: number;
+  bulkUsedLbs: number;
+  lossLbs: number;
+  onHandLbs: number;
+}

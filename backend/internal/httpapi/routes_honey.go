@@ -25,6 +25,12 @@ func (s *Server) mountHoney(r chi.Router) {
 	admin.Get("/harvests", s.honeyListHarvests)
 	admin.Post("/harvests", s.honeyCreateHarvest)
 
+	// Per-lot bulk balances and the varietal rollup over them.
+	admin.Get("/honey/lot-balances", s.honeyLotBalances)
+	admin.Get("/honey/varietals", s.honeyListVarietals)
+	admin.Post("/honey/varietals", s.honeyCreateVarietal)
+	admin.Patch("/honey/varietals/{id}", s.honeyUpdateVarietal)
+
 	admin.Post("/honey/jarring", s.honeyRecordJarring)
 	admin.Post("/honey/bulk-movements", s.honeyRecordBulkMovement)
 	admin.Post("/honey/give-away", s.honeyRecordGiveAway)
@@ -235,7 +241,11 @@ func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 // POST /honey/jarring {date, lines, lossLbs?, lossReason?, notes?}
 func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date       string            `json:"date"`
+		Date string `json:"date"`
+		// Optional: which harvest lot the honey came from. Supplying it turns
+		// each jar line into a real bottling run, so provenance survives the
+		// everyday jarring flow instead of only the lot page.
+		LotID      *string           `json:"lotId"`
 		Lines      []honeyJarLineReq `json:"lines"`
 		LossLbs    *float64          `json:"lossLbs"`
 		LossReason *string           `json:"lossReason"`
@@ -243,6 +253,19 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Bulk honey is tracked per lot, so a draw has to say which honey it took.
+	// Only history is unattributed; nothing new may be.
+	v := honeyTrimPtr(req.LotID)
+	if v == nil {
+		writeError(w, http.StatusBadRequest,
+			"Choose the honey lot these jars were filled from")
+		return
+	}
+	lotID, err := uuid.Parse(*v)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid lotId")
 		return
 	}
 	lines, err := honeyValidJarLines(req.Lines)
@@ -264,6 +287,12 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid date")
 		return
 	}
+	// The withdrawal window is evaluated at this date, so a forward-dated run
+	// would step past the window and bottle tainted honey.
+	if msg := refuseFutureDate(date, "date"); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
 	notes := honeyTrimPtr(req.Notes)
 
 	ctx := r.Context()
@@ -280,12 +309,14 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 	// jar-size edit the transaction then wouldn't, deriving amount_lbs from
 	// stale ounces.
 	ozBySize := make(map[uuid.UUID]*float64)
+	packagingBySize := make(map[uuid.UUID]uuid.UUID)
 	if len(lines) > 0 {
 		ids := make([]uuid.UUID, 0, len(lines))
 		for _, l := range lines {
 			ids = append(ids, l.JarSizeID)
 		}
-		rows, err := tx.Query(ctx, `SELECT id, honey_oz FROM jar_sizes WHERE id = ANY($1)`, ids)
+		rows, err := tx.Query(ctx,
+			`SELECT id, honey_oz, packaging_type_id FROM jar_sizes WHERE id = ANY($1)`, ids)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -293,18 +324,42 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var id uuid.UUID
 			var oz *float64
-			if err := rows.Scan(&id, &oz); err != nil {
+			var packagingTypeID *uuid.UUID
+			if err := rows.Scan(&id, &oz, &packagingTypeID); err != nil {
 				rows.Close()
 				writeError(w, http.StatusInternalServerError, "database error")
 				return
 			}
 			ozBySize[id] = oz
+			if packagingTypeID != nil {
+				packagingBySize[id] = *packagingTypeID
+			}
 		}
 		rows.Close()
 		if rows.Err() != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
+	}
+
+	// The lot row (lock class 2) is taken before the bulk advisory lock (class
+	// 3), the same order bottlingRunCreate uses, so the two paths cannot
+	// deadlock against each other.
+	lotCode, lotOnHandLbs, err := honeyLockLot(ctx, tx, lotID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "invalid harvest lot")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if msg, err := refuseLotBottling(ctx, tx, lotID, lotCode, date); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusConflict, msg)
+		return
 	}
 
 	// Jarring and its loss line both draw down bulk honey. Lock the bulk pool
@@ -333,12 +388,38 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The lot's own bucket has to cover the draw as well as the global pool.
+	// Both the jars and the jarring loss come out of this lot.
+	if message := honeyLotShortfall(requestedLbs, lotOnHandLbs, lotCode); message != "" {
+		writeError(w, http.StatusBadRequest, message)
+		return
+	}
+	runReason := "bottling run " + lotCode
+	reason := &runReason
+
 	actor := actorID(r)
 	for i, line := range lines {
+		// Each jar line becomes its own bottling run, which is what carries the
+		// lot forward to serials and sale traceability.
+		var runID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO bottling_runs
+				(lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes, created_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id`,
+			lotID, date, line.JarSizeID, line.Quantity, amountByLine[i], notes, actor).
+			Scan(&runID); err != nil {
+			writeDBError(w, err, "duplicate bottling run",
+				"invalid harvest lot or jar size")
+			return
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO honey_movements (date, kind, jar_size_id, quantity, amount_lbs, notes, created_by)
-			VALUES ($1, 'jarring', $2, $3, $4, $5, $6)`,
-			date, line.JarSizeID, line.Quantity, amountByLine[i], notes, actor); err != nil {
+			INSERT INTO honey_movements
+				(date, kind, jar_size_id, quantity, amount_lbs, reason, notes,
+				 bottling_run_id, lot_id, created_by)
+			VALUES ($1, 'jarring', $2, $3, $4, $5, $6, $7, $8, $9)`,
+			date, line.JarSizeID, line.Quantity, amountByLine[i], reason, notes,
+			runID, lotID, actor); err != nil {
 			if honeyIsFKViolation(err) {
 				writeError(w, http.StatusBadRequest, "invalid jarSizeId")
 				return
@@ -347,15 +428,26 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Filling jars uses up the empties. Packaging rides on the equipment
+	// ledger, so this is an ordinary 'consumed' adjustment per linked type.
+	// Short stock is reported, never refused: the jars were really filled, and
+	// bookkeeping must not block work that already happened.
+	packagingWarnings, err := honeyConsumePackaging(ctx, tx, lines, packagingBySize, date, actor)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
 	if hasLoss {
 		reason := "jarring loss"
 		if v := honeyTrimPtr(req.LossReason); v != nil {
 			reason = *v
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO honey_movements (date, kind, amount_lbs, reason, notes, created_by)
-			VALUES ($1, 'loss', $2, $3, $4, $5)`,
-			date, *req.LossLbs, reason, notes, actor); err != nil {
+			INSERT INTO honey_movements
+				(date, kind, amount_lbs, reason, notes, lot_id, created_by)
+			VALUES ($1, 'loss', $2, $3, $4, $5, $6)`,
+			date, *req.LossLbs, reason, notes, lotID, actor); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -364,7 +456,12 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		// Non-blocking: the jars were filled either way, but the operator is
+		// told which empties are now short.
+		"packagingWarnings": packagingWarnings,
+	})
 }
 
 // POST /honey/bulk-movements {date, kind, amountLbs, reason?, notes?}
@@ -372,6 +469,7 @@ func (s *Server) honeyRecordBulkMovement(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		Date      string   `json:"date"`
 		Kind      string   `json:"kind"`
+		LotID     *string  `json:"lotId"`
 		AmountLbs *float64 `json:"amountLbs"`
 		Reason    *string  `json:"reason"`
 		Notes     *string  `json:"notes"`
@@ -382,6 +480,18 @@ func (s *Server) honeyRecordBulkMovement(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Kind != "bulk_use" && req.Kind != "loss" {
 		writeError(w, http.StatusBadRequest, "Kind must be bulk_use or loss")
+		return
+	}
+	// Bulk honey is tracked per lot; a draw has to say which honey it took.
+	rawLot := honeyTrimPtr(req.LotID)
+	if rawLot == nil {
+		writeError(w, http.StatusBadRequest,
+			"Choose the honey lot this came out of")
+		return
+	}
+	lotID, err := uuid.Parse(*rawLot)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid lotId")
 		return
 	}
 	if req.AmountLbs == nil || *req.AmountLbs <= 0 {
@@ -405,6 +515,16 @@ func (s *Server) honeyRecordBulkMovement(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer tx.Rollback(ctx)
+	// Lot row first (class 2), then the bulk advisory lock (class 3).
+	lotCode, lotOnHandLbs, err := honeyLockLot(ctx, tx, lotID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusBadRequest, "invalid harvest lot")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	bulk, err := honeyLockBulk(ctx, tx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -414,11 +534,16 @@ func (s *Server) honeyRecordBulkMovement(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, message)
 		return
 	}
+	if message := honeyLotShortfall(*req.AmountLbs, lotOnHandLbs, lotCode); message != "" {
+		writeError(w, http.StatusBadRequest, message)
+		return
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO honey_movements (date, kind, amount_lbs, reason, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
+		INSERT INTO honey_movements
+			(date, kind, amount_lbs, reason, notes, lot_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		date, req.Kind, *req.AmountLbs, honeyTrimPtr(req.Reason),
-		honeyTrimPtr(req.Notes), actorID(r)); err != nil {
+		honeyTrimPtr(req.Notes), lotID, actorID(r)); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -626,13 +751,14 @@ func (s *Server) honeyReverseMovement(w http.ResponseWriter, r *http.Request) {
 		originReason   *string
 		notes          *string
 		reversesID     *uuid.UUID
+		originLotID    *uuid.UUID
 	)
 	err = tx.QueryRow(ctx, `
 		SELECT kind, amount_lbs, quantity, jar_size_id, bottling_run_id, product_batch_id,
-			reason, notes, reverses_movement_id
+			reason, notes, reverses_movement_id, lot_id
 		FROM honey_movements WHERE id = $1 FOR UPDATE`, id).
 		Scan(&kind, &amountLbs, &quantity, &jarSizeID, &bottlingRunID, &productBatchID,
-			&originReason, &notes, &reversesID)
+			&originReason, &notes, &reversesID, &originLotID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "movement not found")
 		return
@@ -663,7 +789,7 @@ func (s *Server) honeyReverseMovement(w http.ResponseWriter, r *http.Request) {
 	// and permanently disagree with the ledger.
 	if bottlingRunID != nil {
 		writeError(w, http.StatusConflict,
-			"this movement belongs to a bottling run and cannot be reversed on its own")
+			"this movement belongs to a bottling run; void the bottling run instead")
 		return
 	}
 	if productBatchID != nil {
@@ -714,11 +840,11 @@ func (s *Server) honeyReverseMovement(w http.ResponseWriter, r *http.Request) {
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO honey_movements
 			(date, kind, amount_lbs, jar_size_id, quantity, reason, notes,
-			 reverses_movement_id, bottling_run_id, created_by)
-		VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 reverses_movement_id, bottling_run_id, lot_id, created_by)
+		VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id`,
 		kind, negatedLbs, jarSizeID, negatedQuantity, reversalReason, notes,
-		id, bottlingRunID, actorID(r)).Scan(&reversalID); err != nil {
+		id, bottlingRunID, originLotID, actorID(r)).Scan(&reversalID); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}

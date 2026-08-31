@@ -6,8 +6,10 @@
  */
 
 import * as React from "react";
+import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
+import { toast } from "sonner";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
@@ -21,14 +23,23 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Textarea } from "@/components/ui/textarea";
 
+import { useHarvestLots } from "@/features/commerce/api";
 import { useUnits } from "@/lib/use-units";
 
 import { parseHoneyWeight, parseNum, todayISO } from "./format";
 import {
   useAdjustJars,
+  useHoneyLotBalances,
   useRecordBulkMovement,
   useRecordGiveAway,
   useRecordJarring,
@@ -51,6 +62,95 @@ function FieldError({ message }: { message?: string }) {
   return <p className="text-xs text-destructive">{message}</p>;
 }
 
+// --- lot picker ---
+//
+// Bulk honey is tracked per harvest lot, so every draw — jarring, bulk use, a
+// loss — has to name the lot it came out of. There is no untraced escape
+// hatch: without a lot the API refuses the movement.
+
+/** The lots to choose from and how much bulk each still holds. */
+function useLotChoices(open: boolean) {
+  const lots = useHarvestLots(open);
+  const balances = useHoneyLotBalances(open);
+  const remainingByLot = React.useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of balances.data?.lots ?? []) map.set(row.lotId, row.onHandLbs);
+    return map;
+  }, [balances.data]);
+  return {
+    list: lots.data ?? [],
+    remainingByLot,
+    isPending: lots.isPending,
+  };
+}
+
+function LotField({
+  id,
+  value,
+  onChange,
+  lots,
+  loading,
+  remaining,
+  error,
+  onNavigate,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  lots: ReturnType<typeof useLotChoices>["list"];
+  loading: boolean;
+  remaining: number | undefined;
+  error?: string;
+  /** Closes the dialog when the operator leaves to create a lot. */
+  onNavigate: () => void;
+}) {
+  const { formatHoney } = useUnits();
+  if (lots.length === 0 && !loading) {
+    return (
+      <div className="grid gap-1.5">
+        <Label>Honey lot</Label>
+        <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          Bulk honey is tracked per harvest lot, so there is nothing to draw
+          from yet.{" "}
+          <Link
+            href="/honey/lots"
+            onClick={onNavigate}
+            className="font-medium text-primary hover:underline"
+          >
+            Create a harvest lot
+          </Link>{" "}
+          first.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-1.5">
+      <Label htmlFor={id}>Honey lot</Label>
+      <Select value={value} onValueChange={onChange} disabled={loading}>
+        <SelectTrigger id={id}>
+          <SelectValue placeholder={loading ? "Loading…" : "Choose a lot"} />
+        </SelectTrigger>
+        <SelectContent>
+          {lots.map((lot) => (
+            <SelectItem key={lot.id} value={lot.id}>
+              {lot.lotCode}
+              {lot.honeyVariety ? ` · ${lot.honeyVariety}` : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {remaining != null && (
+        <p className="text-xs text-muted-foreground">
+          {formatHoney(remaining)} left in{" "}
+          {lots.find((lot) => lot.id === value)?.lotCode}
+        </p>
+      )}
+      <FieldError message={error} />
+    </div>
+  );
+}
+
 // --- Jar Honey (j) ---
 
 const jarringSchema = z.object({
@@ -68,12 +168,15 @@ export function JarHoneyDialog({
 }: QuickDialogProps) {
   const { formatHoney, units, honeySuffix } = useUnits();
   const mutation = useRecordJarring();
+  const lots = useLotChoices(open);
   const form = useForm<JarringValues>({
     resolver: zodResolver(jarringSchema),
     defaultValues: { date: todayISO(), lossLbs: "", lossReason: "", notes: "" },
   });
   const [lines, setLines] = React.useState<JarLineValue[]>([]);
   const [lineError, setLineError] = React.useState<string | null>(null);
+  const [lotId, setLotId] = React.useState("");
+  const [lotError, setLotError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -82,16 +185,30 @@ export function JarHoneyDialog({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLines(makeJarLines(inventory));
     setLineError(null);
+    setLotId("");
+    setLotError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
+
+  const selectedLot = lots.list.find((lot) => lot.id === lotId);
+  const remaining = lotId ? lots.remainingByLot.get(lotId) : undefined;
 
   const estimatedLbs = lines.reduce((sum, line) => {
     const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
     const qty = parseNum(line.quantity) ?? 0;
     return sum + (row?.honeyOz && qty > 0 ? (row.honeyOz * qty) / 16 : 0);
   }, 0);
+  // A warning, never a block: the jars are already filled, so the honest
+  // record is the entry plus a nudge to check the lot's numbers.
+  const overdrawn =
+    remaining != null && estimatedLbs > remaining ? remaining : null;
 
   const submitJarring = (resetAfter: boolean) => form.handleSubmit((values) => {
+    if (lotId === "") {
+      setLotError("Choose the honey lot these jars were filled from");
+      return;
+    }
+    setLotError(null);
     const jarLines = lines
       .map((line) => ({
         jarSizeId: line.jarSizeId,
@@ -108,6 +225,7 @@ export function JarHoneyDialog({
     mutation.mutate(
       {
         date: values.date,
+        lotId,
         lines: jarLines,
         ...(hasLoss
           ? {
@@ -118,7 +236,13 @@ export function JarHoneyDialog({
         notes: values.notes.trim() || undefined,
       },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
+          const warnings = result?.packagingWarnings ?? [];
+          if (warnings.length > 0) {
+            toast.warning("Empty containers ran short", {
+              description: warnings.join(" · "),
+            });
+          }
           if (resetAfter) {
             form.reset({ date: todayISO(), lossLbs: "", lossReason: "", notes: "" });
             setLines(makeJarLines(inventory));
@@ -145,16 +269,45 @@ export function JarHoneyDialog({
           onEscape={() => onOpenChange(false)}
           className="grid gap-4"
         >
-          <div className="grid gap-1.5">
-            <Label htmlFor="jarring-date">Date</Label>
-            <Input id="jarring-date" type="date" {...form.register("date")} />
-            <FieldError message={errors.date?.message} />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="jarring-date">Date</Label>
+              <Input id="jarring-date" type="date" {...form.register("date")} />
+              <FieldError message={errors.date?.message} />
+            </div>
+            <LotField
+              id="jarring-lot"
+              value={lotId}
+              onChange={(value) => {
+                setLotId(value);
+                setLotError(null);
+              }}
+              lots={lots.list}
+              loading={lots.isPending}
+              remaining={remaining}
+              error={lotError ?? undefined}
+              onNavigate={() => onOpenChange(false)}
+            />
           </div>
+          {selectedLot && (
+            <p className="text-xs text-muted-foreground">
+              These jars are recorded as a bottling run of {selectedLot.lotCode}
+              {selectedLot.honeyVariety ? ` (${selectedLot.honeyVariety})` : ""},
+              so the lot follows them to serials and sales.
+            </p>
+          )}
           <div className="grid gap-1.5">
             <JarLinesEditor rows={inventory} value={lines} onChange={setLines} />
             {estimatedLbs > 0 && (
               <p className="text-xs text-muted-foreground">
                 ≈ {formatHoney(estimatedLbs)} of bulk honey
+              </p>
+            )}
+            {overdrawn != null && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                That is more than the {formatHoney(overdrawn)} left in{" "}
+                {selectedLot?.lotCode}. Saved anyway — check the lot&rsquo;s
+                extracted weight if this looks wrong.
               </p>
             )}
             <FieldError message={lineError ?? undefined} />
@@ -195,7 +348,12 @@ export function JarHoneyDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button
+              type="submit"
+              disabled={
+                mutation.isPending || (!lots.isPending && lots.list.length === 0)
+              }
+            >
               {mutation.isPending ? "Saving…" : "Record jarring"}
             </Button>
           </DialogFooter>
@@ -224,21 +382,40 @@ export function BulkMovementDialog({
   onOpenChange: (open: boolean) => void;
   kind: "bulk_use" | "loss";
 }) {
-  const { units, honeySuffix } = useUnits();
+  const { formatHoney, units, honeySuffix } = useUnits();
   const mutation = useRecordBulkMovement();
+  const lots = useLotChoices(open);
   const form = useForm<BulkValues>({
     resolver: zodResolver(bulkSchema),
     defaultValues: { date: todayISO(), amountLbs: "", reason: "", notes: "" },
   });
+  const [lotId, setLotId] = React.useState("");
+  const [lotError, setLotError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
     form.reset({ date: todayISO(), amountLbs: "", reason: "", notes: "" });
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLotId("");
+    setLotError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const remaining = lotId ? lots.remainingByLot.get(lotId) : undefined;
+  const enteredAmount = useWatch({ control: form.control, name: "amountLbs" });
+  const enteredLbs = parseHoneyWeight(enteredAmount ?? "", units);
+  const overdrawn =
+    remaining != null && enteredLbs != null && enteredLbs > remaining
+      ? remaining
+      : null;
+
   const isLoss = kind === "loss";
   const submitMovement = (resetAfter: boolean) => form.handleSubmit((values) => {
+    if (lotId === "") {
+      setLotError("Choose the honey lot this came out of");
+      return;
+    }
+    setLotError(null);
     const amountLbs = parseHoneyWeight(values.amountLbs, units);
     if (amountLbs == null || amountLbs <= 0) {
       form.setError("amountLbs", { message: "Enter an amount greater than zero" });
@@ -248,6 +425,7 @@ export function BulkMovementDialog({
       {
         date: values.date,
         kind,
+        lotId,
         amountLbs,
         reason: values.reason.trim() || undefined,
         notes: values.notes.trim() || undefined,
@@ -302,6 +480,26 @@ export function BulkMovementDialog({
               <FieldError message={errors.amountLbs?.message} />
             </div>
           </div>
+          <LotField
+            id={`${idPrefix}-lot`}
+            value={lotId}
+            onChange={(value) => {
+              setLotId(value);
+              setLotError(null);
+            }}
+            lots={lots.list}
+            loading={lots.isPending}
+            remaining={remaining}
+            error={lotError ?? undefined}
+            onNavigate={() => onOpenChange(false)}
+          />
+          {overdrawn != null && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              That is more than the {formatHoney(overdrawn)} that lot still
+              holds. Saved anyway — check the lot&rsquo;s numbers if this looks
+              wrong.
+            </p>
+          )}
           <div className="grid gap-1.5">
             <Label htmlFor={`${idPrefix}-reason`}>Reason</Label>
             <Input
@@ -327,7 +525,12 @@ export function BulkMovementDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button
+              type="submit"
+              disabled={
+                mutation.isPending || (!lots.isPending && lots.list.length === 0)
+              }
+            >
               {mutation.isPending
                 ? "Saving…"
                 : isLoss

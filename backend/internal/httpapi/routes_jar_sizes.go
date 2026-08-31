@@ -30,6 +30,9 @@ type jarSizeRow struct {
 	SortOrder         int       `json:"sortOrder"`
 	IsActive          bool      `json:"isActive"`
 	LowStockThreshold int       `json:"lowStockThreshold"`
+	// Empty containers this size is filled into, if the operator linked one.
+	PackagingTypeID   *uuid.UUID `json:"packagingTypeId"`
+	PackagingTypeName *string    `json:"packagingTypeName"`
 }
 
 func jarIsUniqueViolation(err error) bool {
@@ -63,12 +66,15 @@ func (s *Server) jarList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	query := `SELECT id, label, honey_oz, default_price_cents, sort_order, is_active, low_stock_threshold
-		FROM jar_sizes`
+	query := `SELECT js.id, js.label, js.honey_oz, js.default_price_cents,
+			js.sort_order, js.is_active, js.low_stock_threshold,
+			js.packaging_type_id, et.name
+		FROM jar_sizes js
+		LEFT JOIN equipment_types et ON et.id = js.packaging_type_id`
 	if !includeInactive {
-		query += ` WHERE is_active`
+		query += ` WHERE js.is_active`
 	}
-	query += ` ORDER BY sort_order, label`
+	query += ` ORDER BY js.sort_order, js.label`
 	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -79,7 +85,8 @@ func (s *Server) jarList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var row jarSizeRow
 		if err := rows.Scan(&row.ID, &row.Label, &row.HoneyOz, &row.DefaultPrice,
-			&row.SortOrder, &row.IsActive, &row.LowStockThreshold); err != nil {
+			&row.SortOrder, &row.IsActive, &row.LowStockThreshold,
+			&row.PackagingTypeID, &row.PackagingTypeName); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -154,6 +161,8 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 		DefaultPrice      json.RawMessage `json:"defaultPrice"`
 		IsActive          json.RawMessage `json:"isActive"`
 		LowStockThreshold json.RawMessage `json:"lowStockThreshold"`
+		// Equipment type holding this size's empty containers. null unlinks.
+		PackagingTypeID   json.RawMessage `json:"packagingTypeId"`
 		WriteOffRemaining bool            `json:"writeOffRemaining"`
 		WriteOffReason    *string         `json:"writeOffReason"`
 	}
@@ -167,6 +176,14 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 	addSet := func(column string, value any) {
 		args = append(args, value)
 		sets = append(sets, fmt.Sprintf("%s = $%d", column, len(args)))
+	}
+	if req.PackagingTypeID != nil {
+		var packagingTypeID *uuid.UUID
+		if err := json.Unmarshal(req.PackagingTypeID, &packagingTypeID); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid packagingTypeId")
+			return
+		}
+		addSet("packaging_type_id", packagingTypeID)
 	}
 	if req.Label != nil {
 		var label *string

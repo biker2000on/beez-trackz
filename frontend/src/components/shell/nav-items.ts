@@ -102,6 +102,7 @@ export const NAV_ITEMS: NavItem[] = [
           "/honey/serials",
           "/honey/sessions",
           "/honey/products",
+          "/honey/varietals",
         ],
         children: [
           { label: "Harvests", href: "/honey/harvests", keywords: ["extraction sessions"] },
@@ -110,6 +111,11 @@ export const NAV_ITEMS: NavItem[] = [
             label: "Hive products",
             href: "/honey/products",
             keywords: ["creamed honey hot honey mead propolis tincture catalog"],
+          },
+          {
+            label: "Varietals",
+            href: "/honey/varietals",
+            keywords: ["varietal lot balances bulk on hand rollup"],
           },
           {
             label: "Lots & QR",
