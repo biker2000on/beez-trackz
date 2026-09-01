@@ -160,4 +160,42 @@ Before a destructive reset:
 6. Keep GnuCash sync disabled. After guarded credential/book identity restoration, entity re-keying, and content-hash rebaseline, require pull-first reconciliation and a no-write push plan before enabling sync.
 7. Retain the validated artifact and gate report outside the database being replaced. If source data changes, take a fresh snapshot and repeat the gate.
 
-The importer and executable round-trip driver are Wave 2 and are intentionally outside this implementation.
+## Import CLI and reader semantics
+
+The format-v1 importer is invoked as:
+
+```text
+import-snapshot -input <snapshot-dir> -database <postgres-url> [-dry-run] [-conflict-policy fail|skip|overwrite] [-report <path>]
+```
+
+The conflict policy defaults to `fail`. The report defaults to
+`./restore-report.json`; it is always written, including after validation or
+restore failure, and it must be outside the snapshot directory. Exit status 0
+means the complete restore succeeded, or that a dry run completed validation
+without errors. Every manifest, file, record, reference, digest, or database
+restore failure is nonzero.
+
+The reader treats the artifact as untrusted until all checks complete. It
+requires the exact supported `formatVersion`, canonicalization and digest
+declarations, UTF-8/LF declarations, and one manifest entry for every
+registered domain. Manifest paths must be relative and contained by the
+artifact. Each file's byte count and SHA-256 are recomputed before decoding.
+JSONL files require one complete envelope per LF-terminated line; envelope
+domain/version declarations must match the manifest, preserved IDs must be
+unique within the domain, and each digest is recomputed from canonical
+`data`. `verification.json` must use the same versions and contain exactly one
+matching digest for every record, matching counts for every domain, and no
+dangling declared reference. `media-manifest.json` must use the declared
+supported media version.
+
+On a write restore the importer first applies pending goose migrations. A
+database containing rows beyond known migration seeds is refused under the
+default `fail` policy; `skip` or `overwrite` is required to proceed. Migration
+seeds for the home stock location and treatment product catalog yield inside
+the restore transaction so artifact IDs and audit history win. Dry run opens
+no migration path, marks its target transaction read-only, performs no record
+writes, and always rolls it back. Restoration uses deterministic dependency
+ordering, per-record savepoints, and one outer transaction, so a failed run
+does not commit a partial artifact. GnuCash settings are installed only under
+the system-restore actor, never restore `api_token`, and always leave
+`sync_enabled=false`.
