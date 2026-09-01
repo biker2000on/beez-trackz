@@ -50,6 +50,16 @@ Sources for the open items below:
   discarding the imported data, define a portable versioned export/import format,
   export and validate the current dataset, and use that artifact to restore the
   useful data after the reset.
+- Reviewed 2026-09-01 — three-vendor Polyagent review of the three sections
+  below at `241f7ea` (`polyagent-review-2026-09-01.md`; worker reports under
+  run `20260901-roadmap-review-bz01`). Verdict: diagnosis and ordering
+  confirmed against the codebase; three blocker-level amendments and several
+  scope corrections are folded into the sections below. Operator decision the
+  same day: **no QR labels have ever been printed**, so no authenticated
+  internal URL (including `/hives/{id}`) needs to be frozen for printed
+  labels — internal routes may be renamed freely. The public Honey Story
+  `/honey/[slug]` contract is still preserved because stories are live on
+  gentlebeeapiary.com.
 
 ## Order of work
 
@@ -80,17 +90,34 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    versioned export/import contract; export the current imported data; validate
    and round-trip it into an empty database. No destructive schema reset starts
    until this recovery artifact passes the acceptance criteria below.
+   *Amended 2026-09-01:* this item includes building the minimal application
+   foundation (`backend/internal/app/` restore services, unit-of-work, system
+   actor) the importer requires — see the importer contract — and the folio
+   reconciliation API work runs in parallel with it. Neither existed at review
+   time, and P0's acceptance criteria cannot pass without them.
 9. **P1 — Inventory ledger rearchitecture.** Establish one canonical signed
    quantity ledger on a clean baseline, with domain provenance and importer-backed
    recovery. The detailed design is below. Do not add further inventory features
-   or label flows until its invariants hold.
+   or label flows until its invariants hold. *Amended 2026-09-01:* the open
+   design decisions listed in that section (hives as locations, draft-sale
+   operations, unit representation, condition vocabularies, derived lot
+   weight, serial identity, guard relocation) must be answered in the spec
+   before schema work starts.
 10. **P1 — Workflow and application architecture reset.** Replace the
     module-first information architecture, add a use-case/application layer and
     stable workbench read models, and rewrite internal routes directly across the
     app. This is a pre-launch replacement, not a compatibility migration.
+    *Amended 2026-09-01:* the WorkItem projection lands in two slices — field
+    Today/Yard after the shared command/policy seam (may start during the
+    ledger work), Production/Sales workbenches only after ledger-backed
+    commands exist.
 11. **P1 — Zebra label printing and physical traceability.** Starts after the
     inventory-ledger and workflow/application resets, so printed stock and
     serialized jars consume a single quantity authority through stable workflows.
+    *Amended 2026-09-01:* additionally gated on jar serials gaining
+    location/movement identity in the new ledger (see the inventory section) —
+    without it a consigned serialized jar is not locatable and the first
+    milestone's premise fails.
 12. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
    Polyagent waves (migrations 00025–00029): field objects, health
    objects, units preference + display sweep, ntfy, labor, compliance
@@ -355,19 +382,58 @@ required relationship. Aggregate definitions declare included statuses,
 dimensions, units, currencies, rounding, sign conventions, and query/exporter
 version so a matching number cannot hide a different calculation.
 
+*Amended 2026-09-01.* The pre-reset inventory balances can only be computed by
+the legacy formulas this reset exists to retire, so `verification.json` carries
+two labelled families of aggregate definitions: **legacy definitions** (the
+~15 current derivations, versioned exactly as implemented at export time) used
+to verify the round trip against the old database, and **new-ledger
+definitions** used after the inventory rearchitecture. A restored database is
+verified against the family that matches its schema; the mapping between the
+two (including the residual-to-opening-balance splits defined in the inventory
+section) is itself part of the artifact. jsonb columns are the specific digest
+hazard: Postgres does not preserve key order and normalizes numeric literals,
+so the canonicalization spec must define sorted-key, fixed-number-format
+serialization for every jsonb field (`inspections.pests/treatments/
+source_media/weather_snapshot`, `apiaries.canvas_layout`, `photos.tags`,
+`queens.testing_data`, `apiary_weather_cache.forecast`, the `external_sync`
+and `gnucash_sync_settings` mapping columns, and
+`user_settings.ai_provider_config` — the last mixes configuration with
+credentials, so secret exclusion for it is per-key, not per-column). Note
+"treatments" is three stores — `treatment_events`, `inspections.treatments`
+jsonb, and `treatment_products` — and the export must carry all three plus the
+00034 reconciliation rule, or withdrawal provenance is lost.
+
 **Portable domain records.** Export stable application concepts, not raw tables.
 Use deterministic JSONL records with preserved UUIDs/IDs and explicit references
 for apiaries, hives, queens, inspections, treatments, harvests, lots, bottling and
-product batches, serials, customers, sales, payments, stock locations,
+product batches, serials, customers, sales, stock locations,
 consignment, equipment, expenses, sync metadata that is safe to retain, and other
-owned operational history. Normalize timestamps to ISO 8601 UTC while retaining a
+owned operational history. (*Corrected 2026-09-01:* there is no `payments`
+table and 00024 deliberately declined one — money is
+collected-vs-invoiced columns on `sales` and `consignment_settlements`;
+export those columns, not a phantom domain.) The acceptance criteria require
+every exported domain to be documented, so the enumeration is the work: the
+list above additionally includes feedings and feeding-status backfills,
+mite counts, queen events and hive splits, hive location history, the 00025
+field objects (catch boxes, colony intakes, incidents, deadout autopsies,
+strength scores), the 00027–00028 place/flow objects (bloom observations,
+yard scales and readings, weather cache, Immich timeline candidates/scans),
+media (`photos`, `media_files`, transcript versions), `honey_varietals`,
+labor sessions, recommendations, wholesale price lists, apiary memberships,
+and the catalogs every quantity record points at (`jar_sizes`,
+`product_catalog`, `equipment_types` and their BOM components,
+`treatment_products`). Normalize timestamps to ISO 8601 UTC while retaining a
 named local timezone where the business meaning requires it. Use declared
 canonical units for measured quantities and integer cents plus currency code for
 money; do not export locale-formatted numbers or ambiguous free-text quantities.
 
 **Media and security boundary.** Every photo, transcript source, document, logo,
 and label asset is represented in the media manifest with its owner, media type,
-original filename, byte size, and content hash. The artifact may embed original
+original filename, byte size, and content hash. The manifest distinguishes
+**originals** (the restoration boundary — `original_key`, `audio_key`, Immich
+external references) from **derived renditions** (thumbnail/medium keys, which
+are regenerable and excluded from the hash gate, or the gate fails on any
+re-render). The artifact may embed original
 bytes or carry a resolvable external reference (for example Immich), but the
 manifest must make missing external content detectable before reset. A missing
 required original fails the destructive-reset gate unless that specific omission
@@ -383,17 +449,85 @@ copies.
 
 **GnuCash replay boundary.** Preserve every non-secret value needed to recognize
 already-synchronized work after restore: external record IDs, entity/account/
-category/tax mappings, deletion tombstones, conflict and reconciliation state,
-idempotency/external-operation keys, last successful sync metadata, and the
-bounded-overlap change-feed cursor or position. Credentials themselves remain
-excluded. Restore with GnuCash sync disabled. Before re-enabling it, run a
-pull-first reconciliation and no-write push dry run that proves the restored
-mappings resolve to the existing remote records and would produce no unexpected
-creates, duplicate postings, overwrites, or tombstone resurrection. Any mismatch
-stays quarantined for operator resolution.
+category/tax mappings, conflict and reconciliation state, last-attempt sync
+metadata, and the bounded-overlap change-feed cursor or position. Credentials
+themselves remain excluded. Restore with GnuCash sync disabled. Before
+re-enabling it, run a pull-first reconciliation and no-write push dry run that
+proves the restored mappings resolve to the existing remote records and would
+produce no unexpected creates, duplicate postings, overwrites, or tombstone
+resurrection. Any mismatch stays quarantined for operator resolution.
+
+*Amended 2026-09-01 — the review found this boundary unimplementable as
+written; the following are now part of this item:*
+
+- **Export what actually exists.** Deletion tombstones are not durable Beez
+  records — an incoming `Deleted` feed entry is collapsed into
+  `conflict_state = remote_newer` (and skipped entirely for external IDs Beez
+  does not own, while the cursor advances). External write idempotency keys
+  are derived at send time from `externalID + contentHash`, not stored. The
+  artifact preserves the conflict projection, the derivation algorithm and
+  its version, `content_hash`, `remote_transaction_guid`, and
+  `remote_enter_date` — and does not claim to export tombstones or stored
+  keys. If durable tombstone/sync-run records are acceptance-critical, add
+  them to the sync engine first. Singleton `last_synced_at` is last-*attempt*
+  (it is written even when the pull fails); export it under that name and use
+  per-row `external_sync.last_synced_at` for per-record success.
+- **Entity re-key step.** Nine of the seventeen `external_sync.entity_type`
+  values (00041) — `jar_size`, `honey_movement`, `bottling_run`,
+  `stock_location`, `stock_movement`, `equipment_stock`,
+  `equipment_stock_adjustment`, `product_batch`, `product_adjustment` — name
+  rows the inventory rearchitecture dissolves. The restore into the new
+  schema therefore includes an explicit, versioned mapping re-key transform
+  (old entity type + UUID → new item/operation identity), verified by the
+  same gate. Without it the mappings dangle and the reconciliation cannot
+  pass.
+- **Content-hash rebaseline step.** `content_hash` is the hash of the
+  last-sent transaction body (00045); the ledger rewrite changes how bodies
+  are composed, so the first post-restore rescan would mark every row
+  `diverged`. After the re-key and before re-enabling sync, recompute and
+  rebaseline `content_hash` from the new body composition against unchanged
+  remote state, and only treat as diverged the rows whose *remote* content no
+  longer matches `remote_transaction_guid`/`remote_enter_date`.
+- **Folio API dependency (cross-repo, runs in parallel with P0).** The
+  current folio client exposes only status/accounts/changes plus
+  write-capable transaction operations; a pull from the restored cursor
+  cannot prove that older unchanged external IDs still resolve remotely.
+  gnucash-web needs a read/verify-by-external-ID endpoint (or a server-side
+  no-write batch plan) for the dry run to mean what this section promises.
+- **Guarded restore of book identity and cursor.** Today,
+  `handleGnuCashSettingsPut` clears `BookGUID`/`ChangesCursor` on any token
+  change (correct for normal operation, fatal for restore: entering the
+  re-excluded token wipes the restored cursor), and `handleGnuCashSyncNow`
+  never checks `SyncEnabled` — "sync disabled" is display-only. Add a
+  restore-specific flow: keep the expected book GUID/currency separately,
+  enter and test new credentials, require an exact identity match, then
+  install the preserved cursor/mappings under an explicit restore command;
+  and make `SyncEnabled = false` (or reconciliation-pending) a server-side
+  refusal on every write-capable sync and force-push endpoint.
 
 **Importer contract.** Import into an empty database through domain-aware APIs or
-services, not direct table replay. It must support:
+services, not direct table replay.
+
+*Amended 2026-09-01 — resolving a circular dependency the review found:* no
+current endpoint accepts a client-supplied ID, `created_at`, `created_by`,
+`deleted_at`, or `voided_at` (every create is `gen_random_uuid()` +
+`RETURNING id`), and soft-deleted/voided/reversed history cannot be recreated
+through user commands with matching audit timestamps. The importer is
+therefore the **first slice of the application layer, built inside P0**: a
+restore service layer under `backend/internal/app/` with its own
+unit-of-work, transaction-bound repositories, and a privileged system-restore
+actor distinct from end-user authorization — not the later user-command API,
+and not the `cmd/migrate-legacy` table copier. "Domain-aware" means it
+enforces domain validation and reference resolution while being allowed to
+write preserved IDs and audit fields directly. Ordering constraints the
+contract must own explicitly: no-FK pointers
+(`media_files.current_transcript_version_id`, both `reverses_movement_id`
+self-references) are set in a post-pass or by intra-file original-before-
+reversal ordering; trigger guards (`equipment_stock_reconcile_guard`,
+`honey_movement_lot_matches_run`, settlement amount checks) mean equipment
+stock is inserted at zero and adjustments replayed, bottling runs precede
+their movements, and dependency ordering is finer-grained than one
+topological sort over files. It must support:
 
 - a no-write dry run that validates the manifest, hashes, supported
   `formatVersion`, `verification.json`, units, required fields, IDs, and all
@@ -401,7 +535,9 @@ services, not direct table replay. It must support:
 - deterministic dependency ordering with useful per-file/per-record errors rather
   than a partial silent restore;
 - idempotent re-execution: an identical record is a no-op, while a conflicting
-  preserved ID is reported and requires an explicit resolution policy;
+  preserved ID is reported and requires an explicit resolution policy — this
+  is a restore-specific semantic, defined here, not inherited from the
+  existing (and mutually inconsistent) domain idempotency behaviors;
 - a final restore report listing created, unchanged, skipped, conflicted, and
   failed records, plus missing media and configuration that was intentionally
   excluded.
@@ -418,8 +554,12 @@ and media content hashes or resolvable external references using the versioned
 calculation definitions in that file. Only normalization differences explicitly
 defined by the applicable `formatVersion` transform may pass; every absent,
 additional, or digest-mismatched record and every unexplained aggregate difference
-fails the gate. Keep the validated artifact and verification report outside the
-database being replaced.
+fails the gate. Aggregate comparison uses the definition family matching the
+target schema (legacy formulas against the legacy schema, new-ledger
+definitions plus the declared residual-split transforms against the clean
+baseline); a residual-to-opening-balance difference that matches its declared
+split is explained, everything else fails. Keep the validated artifact and
+verification report outside the database being replaced.
 
 **Reset policy after the gate.** Once the round trip passes, it is acceptable to
 replace the development database, rewrite or squash the migration history into a
@@ -439,7 +579,9 @@ writes; two imports of the same artifact are safe; corrupt, dangling,
 incompatible, and conflicting records produce actionable errors; the disposable
 round trip proves semantic equality for every preserved-ID record as well as the
 count, reference, inventory, financial, production, and media checks; restored
-GnuCash mappings and cursors pass a no-create/no-overwrite reconciliation before
+GnuCash mappings and cursors — after the entity re-key and content-hash
+rebaseline defined above, through the guarded restore flow, against the folio
+verification API — pass a no-create/no-overwrite reconciliation before
 sync is enabled; and the validated artifact plus report can restore the useful
 current data without any dependency on the old tables or migration chain.
 
@@ -447,9 +589,18 @@ current data without any dependency on the old tables or migration chain.
 
 **Requested 2026-08-31; execute after the portable-snapshot gate.** The current
 inventory model has useful domain detail but too many competing quantity
-authorities: product and equipment ledgers, stored equipment totals,
-honey/lot-balance formulas, sales effects, stock-location residuals, and
-batch/bottling paths. That makes a physical count or a new inventory feature
+authorities. The 2026-09-01 review counted **~15 distinct derivations across 5
+storage patterns**, not the six originally listed: global bulk honey (event
+sum + true-up override), per-lot bulk (`honey_lot_balances` view), varietal
+rollup, the *unassigned bulk residual* (defined only in 00047's header
+comment), the mutable derived lot ceiling (00039), jar finished goods,
+catalog SKUs (three sources, two soft-delete filters), propolis grams (a
+parallel unit), per-location SKU sums, the *home-stock residual*, trigger-
+guarded equipment totals, equipment condition columns, the availability view,
+packaging riding the equipment ledger (00048), and equipment BOM assembly
+(00046). The two residuals and the mutable lot ceiling are the genuinely
+dangerous ones — the trigger-guarded equipment totals cannot drift and are
+the least of it. That makes a physical count or a new inventory feature
 depend on knowing which formula wins. The target is a single signed movement
 ledger, not a removal of bee or honey provenance. Because the app is pre-launch,
 prefer a clean schema baseline and importer-backed restoration when that is
@@ -463,21 +614,150 @@ corrections reverse the operation rather than mutating a balance. Bee and
 honey records continue to own their facts and link to inventory operations;
 they do not independently change quantities.
 
-**Seven-table core.** Add `inventory_items`, `inventory_locations`,
-`inventory_lots`, `inventory_operations`, `inventory_movements`,
-`inventory_boms`, and `inventory_bom_lines`. A balance is a query or
-materialized projection of movement sums, never a second writable total.
-Items unify jar sizes, catalog products, equipment types, packaging, and
-future sellable/process inputs; lots preserve stable provenance and expiry
-attributes; condition is a movement dimension, with a condition change
-recorded as paired negative and positive lines; BOMs express bottling,
-assembly, and transformation.
+**Generalized core (revised 2026-09-01 from the original seven-table
+sketch).** The schema is designed once, around dimensions and registries, so
+that every feature already on this roadmap — and the ones like it that will
+follow — lands as *rows and producers*, not as another rearchitecture. The
+core tables:
+
+- `inventory_items` — one ledger identity per stockable thing. `item_kind`
+  is a **reference-table value, not a CHECK-constraint allowlist** (00041
+  already had to drop-and-rebuild exactly such a constraint once; do not
+  repeat it). Each item declares its canonical unit, numeric policy
+  (integer count vs fractional mass with a stated tolerance), and tracking
+  policy flags (`lot_tracked`, `serial_tracked`, `condition_tracked`).
+  Domain catalogs (`jar_sizes`, `product_catalog`, `equipment_types`,
+  packaging, future creamed/hot/mead/tincture/wax SKUs) stay first-class
+  and point at their item via a polymorphic `source_type`/`source_id`; the
+  ledger never grows a domain-specific column for a new product family.
+- `inventory_locations` — hierarchical (`parent_id`), with a
+  reference-table `location_kind` (site, room/store area, consignee/party,
+  hive, container, in-transit/virtual) and an optional polymorphic domain
+  ref (customer for the bike shop, hive for deployments, future extractor
+  or bucket containers). `home` is a seeded real location. A new kind of
+  place — a second consignment shop, a rented honey house, a market tote —
+  is an INSERT, never a migration.
+- `inventory_lots` — a generic provenance container, not honey-specific:
+  harvest lots first, but propolis harvests, mead batches, and wax belong
+  here too. Stable ID, item-family scope, domain links for provenance, and
+  an `attributes` jsonb for kind-specific facts (declared and canonicalized
+  per the P0 digest rules). Lockout stays a computed domain walk, never a
+  lot column.
+- `inventory_operations` — the only write path. Reference-table
+  `operation_kind` (receive, transfer, sale-consume, shrink, deploy,
+  return, condition-change, transform, count-adjust, opening-balance, …);
+  mandatory payload-bound idempotency key; polymorphic
+  `source_type`/`source_id` provenance to the commanding domain record
+  (sale, bottling run, feeding, deployment, settlement, future extractor
+  run); reversal self-reference; a `details` jsonb for kind-specific facts.
+  **A new stock behavior is a new operation kind plus a producer in the
+  application layer — never a new ledger, table, or balance formula.**
+- `inventory_movements` — immutable signed lines under an operation, one
+  row per (item × location × lot? × condition? × quantity). The dimension
+  tuple is the only part of the core whose change requires a schema
+  migration, and adding a dimension is a design-review event, not a
+  feature chore; everything else extends by rows.
+- `inventory_units` + `inventory_movement_units` — per-unit identity for
+  anything serialized: jar serials now, equipment asset tags and bin labels
+  later (Zebra items 3 and 7 both land on this table instead of inventing
+  two more). A unit belongs to an item (and optionally a lot); its current
+  location/state is derived from its movement links, replacing
+  `jar_serials.sale_id` as a second sold-ness authority.
+- `inventory_boms` and `inventory_bom_lines` — templates with input/output
+  **roles** and expected yields; operations record actuals against them.
+  One mechanism covers bottling, equipment assembly, packaging consumption,
+  and transformation into any future product. This absorbs the three
+  existing BOM-ish mechanisms — `equipment_type_components` (00046, cycle
+  guard included), `equipment_types.variant_of_type_id`, and
+  `jar_sizes.packaging_type_id` (00048) — rather than ignoring them.
+- Small insert-only registries back the `*_kind` and condition vocabularies
+  (`inventory_item_kinds`, `inventory_location_kinds`,
+  `inventory_operation_kinds`, `inventory_conditions`), unifying today's two
+  equipment condition vocabularies into one extensible set.
+
+A balance is a query or materialized projection of movement sums, never a
+second writable total; condition changes are paired negative and positive
+lines.
+
+**Extensibility rules — the test every future feature must pass without
+touching this schema:**
+
+1. New product family (creamed honey, mead, tincture, wax) → new item-kind
+   row + catalog rows + BOM templates. No DDL.
+2. New place (second consignment shop, rented storage, market tote,
+   extractor container) → new location row, at most a new location-kind
+   row. No DDL.
+3. New stock behavior (catch-box bait stock, comb rotation retirement,
+   future rental/loan of equipment) → new operation kind + application-layer
+   producer. No DDL.
+4. New serialized object (asset-tagged equipment, labeled bins) → unit rows
+   on existing tables. No DDL.
+5. New condition state → condition row. No DDL.
+6. New report or workbench number → new projection over movements. No DDL,
+   no stored total.
+7. Kind-specific facts ride the declared jsonb payloads (canonicalized for
+   P0 digests); the ledger gains no domain columns. Anything that cannot be
+   expressed as items/locations/lots/conditions/operations/units is a
+   *domain* record that links to operations — like pollination contracts
+   (service revenue, no stock effect: explicitly outside the ledger) or
+   extractor telemetry (a machine log attached to a session, not a
+   movement).
+
+If a proposed feature fails all seven rules, that is the signal a real new
+dimension has arrived; amend the movement tuple deliberately, once, with the
+same review rigor as this reset — not by bolting on a parallel ledger.
+
+**Design decisions to answer in the spec before schema work (added
+2026-09-01):**
+
+- **Do hives become `inventory_locations`?** Three location vocabularies
+  exist today (`stock_locations` for finished goods, free-text
+  `equipment_stock.storage_location`, and deployments keyed to `hives`).
+  "Deployments become movement producers" is only true if a deployment is a
+  movement to a hive-location; that makes every hive a location and apiaries
+  location groups. The generalized core's answer is **yes** — hive is a
+  location kind with a polymorphic ref to the `hives` row, apiaries are
+  parent locations — but the spec must still confirm the consequences
+  (location rows tracking hive lifecycle, `hive_location_history` becoming
+  location metadata) before schema work.
+- **Does a draft sale create an operation?** Jar and product lines decrement
+  on-hand at any non-cancelled status including draft; colony/equipment lines
+  apply physically only at `physical_applied_at`. One rule must win, and it
+  changes reported on-hand either way.
+- **Unit representation.** Honey lbs and propolis grams are `double
+  precision` with a tolerance rule (`honeyPoundTolerance`); jars, SKUs, and
+  equipment are integers. The generalized core puts the canonical unit and
+  numeric policy on `inventory_items`; the spec still owes the concrete
+  choice — `numeric` scale per unit kind, the tolerance value, and how the
+  negative-lot invariant applies it so float noise cannot trip it.
+- **Condition vocabularies.** `frame_condition` sits on a UNIQUE-per-type
+  stock row; `equipment_state_changes` covers serviceable/damaged/retired.
+  The generalized core unifies both into the `inventory_conditions`
+  registry; the spec owes the merged vocabulary and the mapping from both
+  legacy columns before paired ±condition lines can be generated.
+- **Derived lot weight vs immutable movements.** A `derived` lot (00039)
+  recomputes its weight when harvest links change; under immutable movements
+  a re-link must emit compensating operations and re-verify downstream
+  draws. The 00039 lock order and refuse-delete-under-live-runs rules are
+  the current safety net and must have equivalents.
+- **Where do the lockout and moisture refusals live?** Lot lockout is a
+  recomputed walk (harvests → hives → treatment events), not an attribute,
+  and changes retroactively when inspection jsonb is edited. Routing all
+  stock-changing commands through the inventory service moves the
+  chokepoint; the guards move with it or bottling/sales stop being refused.
 
 **Responsibility migration.** The current product-adjustment ledger,
 equipment ledger and totals, honey/lot balance views, stock-location
 calculation, sale stock effects, transfers, shrink, deployments, and
 bottling/batch consumption/output become operation-specific producers of
-the one movement ledger. Locations become explicit movement dimensions;
+the one movement ledger — as do (added 2026-09-01) the harvest/true-up
+supply side (harvest sessions, `harvest_session_true_ups`, sessionless
+harvests), propolis harvests and tincture draws, packaging consumption
+(00048), equipment BOM assemble/disassemble (00046), the varietal rollup,
+and the `give_away`/`jar_adjustment` movement kinds. Historical
+`honey_movements` carry no actor (`created_by` does not exist on that
+table), so imported honey history uses an explicit `legacy-unattributed`
+provenance marker alongside the `legacy-unassigned` lots. Locations become explicit movement dimensions;
 `home` is a real location, never "global minus elsewhere." Sales remain
 commercial records and reference the physical operation that consumes
 stock; they no longer serve as a competing balance formula.
@@ -485,8 +765,14 @@ stock; they no longer serve as a competing balance formula.
 **Keep these domain records.** Harvest sessions and allocations, hives,
 treatments and withdrawal rules, varietals and floral claims, Honey Story,
 bottling runs and jar serials, mead/hot-honey/propolis process facts,
-customers and consignment statements, payments and commissions, and
-GnuCash sync/conflict state stay first-class. They reference items, lots,
+customers and consignment statements, collected-vs-invoiced money fields and
+commissions, and GnuCash sync/conflict state stay first-class — and so do
+(added 2026-09-01, all load-bearing and previously unlisted): **feedings**
+(the workflow section's own WorkItem example), inspections and their jsonb,
+mite counts with their soft-delete/audit trail, the queen lifecycle
+(`queen_events`, `hive_splits`, location history), the 00025 field objects,
+the 00027–00028 place/flow objects, media and transcript versions,
+`honey_varietals`, and expenses. They reference items, lots,
 and operations as needed; the core ledger must not flatten them into generic
 notes.
 
@@ -496,7 +782,7 @@ notes.
    of the export contract around domain facts and provenance rather than the old
    balance formulas; use explicit `legacy-unassigned` lots only where the source
    records genuinely cannot prove ancestry.
-2. Design the clean baseline around the seven-table core and the domain records
+2. Design the clean baseline around the generalized core and the domain records
    that reference it. Route every stock-changing command through one inventory
    application service and remove writable legacy ledgers, stored totals, and
    competing balance formulas from the target schema and code paths.
@@ -525,6 +811,20 @@ allowed, but each has a source/reference. Sales consume only their source
 location; no revenue is recognized on transfers; a lot cannot go negative
 where traceability is required; and new sums reconcile to the old reported
 balances until the approved physical-count adjustment.
+
+*Qualified 2026-09-01 — these are designs to build, not properties the
+current machinery provides:* idempotency keys become mandatory and
+payload-bound (today equipment replays on key match without comparing
+payloads, product/stock duplicates 409, and transfer subkeys depend on
+request line order — three different semantics); reversal is aggregate-aware
+(a bottling-run void reverses movements, removes unsold serials, and marks
+the run atomically — a generic rule must specify descendant consumption,
+sold/serialized outputs, and refusal-vs-compensation); the nonnegative-lot
+rule is a cross-row aggregate needing a lock anchor and deterministic lock
+order over item/location/lot/condition; and "reconcile to old balances"
+applies per legacy formula except where a residual was split into declared
+opening-balance operations — those reconcile to the declared split, and each
+ambiguity is classified rather than forced into simultaneous equality.
 GnuCash remains authoritative for posted accounting, while this ledger is
 authoritative for physical quantity.
 
@@ -542,11 +842,18 @@ exist.
 **Requested 2026-08-31; execute after the inventory baseline, with the
 application seam beginning during inventory work.** The UI problem is structural,
 not a request for another styling pass. The present navigation exposes eleven
-module-first top-level destinations. Dashboard, Yard Queue, and Recommendations
-compete as separate work centers; Honey, Sales, and Inventory leak overlapping
-stock and production actions into one another; Settings is a catch-all for user
-preferences, operational catalogs, infrastructure, integrations, and
-administration; and large HTTP handlers orchestrate transactions that cross
+module-first top-level destinations (verified 2026-09-01: an admin sees all
+eleven; Honey, Sales, and Equipment are admin-gated so a viewer sees eight,
+and mobile is four role-dependent pins plus More — the reset must keep that
+role filtering). Dashboard, Yard Queue, and Recommendations
+compete as separate work centers; Honey and Sales leak overlapping
+stock and production actions into one another (corrected 2026-09-01: the nav
+item labelled Equipment at `/inventory` holds hive gear, not finished goods —
+finished stock leaks between Honey and Sales, and packaging straddles
+Settings jar sizes and equipment types); Settings is a catch-all page of
+mixed concerns (one route, accordion sections — there is no
+`/settings/[section]` tree to rewrite, so splitting it means new routes); and
+large HTTP handlers orchestrate transactions that cross
 domain boundaries. Users are being asked to understand the package and table
 layout before they can complete a job.
 
@@ -567,7 +874,16 @@ The mobile primary navigation prototype is **Today / Yard / Production / Sales /
 More**, with Equipment, Insights, and Admin under More. These labels are a
 testable proposal, not permission to reproduce the existing pages under new menu
 names. Run concrete journeys through the prototype and move each action to the
-place where the operator begins that job.
+place where the operator begins that job. Mobile caveats (2026-09-01):
+Production and Sales are admin surfaces — the bar must keep role filtering —
+and Saturday field work starts at yards and hives, so the field-day prototype
+should not demote Yard off the phone bar in favor of honey-house areas. The
+review catalogued ~15 flows that straddle two proposed areas (harvest-ready
+pull-honey, treatment lockout, record-sale, labor start/stop, compliance
+packet, GnuCash reconciliation status, hive-side equipment deploy, feeding
+surfaces, hive products, voice walkthroughs, and others — see
+`polyagent-review-2026-09-01.md`); each needs an owner decision during the
+prototype, not a menu label.
 
 **One work system.** Introduce `WorkItem` as a query/read projection over source
 domain facts, never a second task or inventory source of truth. A projected item
@@ -585,6 +901,28 @@ cached evidence from current server evidence, and declare which source commands
 may be safely queued offline. Permission filtering applies to the commands and
 the facts used to explain the work item.
 
+*Scope honesty (2026-09-01):* this is a new backend projection plus the
+deletion of three existing assemblers, not a filter flag. Today the Dashboard
+work list is a client-side assembler (`useFieldWork`: recs + feeding status,
+with inline refill/close/snooze/dismiss), Yard Queue is a server-side
+assembler (`yard_queue.go`: lockouts + recs + feeding + harvest-ready, no
+stable item IDs, `asOf` returned but never rendered, links only — no inline
+commands), and Recommendations is a third inbox with its own triage
+semantics; both work lists independently special-case `feeder_check`, and
+that dedup moves into the projection once. The current frontend also cannot
+consume the contract yet: nothing reads the service worker's
+`X-Beez-Cache: stale` header, access is page-level
+(`adminOnly`/`requiresEdit`) rather than per-command, and offline
+queueability is a global API-prefix allowlist in which harvest-session
+*create* is deliberately excluded — a field-day "start extraction" work item
+cannot satisfy the offline-disposition criterion without revisiting
+`offline_routes.go`. Dashboard additionally mixes the work list with
+status/history/reporting widgets that must be relocated before Today is a
+work view. Build the field Today/Yard slice first (it does not depend on the
+new ledger); Production and Sales workbenches wait for ledger-backed
+commands or their quantity and command fields would encode the legacy
+authorities.
+
 **Application/use-case boundary.** Add command and query services under an
 application layer such as:
 
@@ -597,13 +935,31 @@ backend/internal/app/
   sales/
 ```
 
-Start this boundary with the inventory-ledger rewrite so HTTP handlers translate
+Start this boundary with the P0 restore services and continue it through the
+inventory-ledger rewrite so HTTP handlers translate
 transport concerns while application commands own authorization, validation,
 transactions, idempotency, lifecycle changes, and domain-event emission. Queries
 own stable use-case projections. Domain packages retain domain rules and facts;
 the application layer coordinates them. Do not move current long handlers into
 equally long “service” methods without defining command inputs, transaction
 boundaries, results, and failure semantics.
+
+*Prerequisite conventions (2026-09-01), defined before any package
+extraction:* a unit-of-work/transaction runner owned by the **outer use-case
+command** — `sales.RecordSale` or `production.CompleteBatch` owns the atomic
+transaction and the inventory service participates in the same `pgx.Tx`
+(the "one inventory service for every stock-changing command" rule is about
+authorship of movements, not about inventory owning the outer transaction;
+an independently transactional inventory command would nest or split
+atomicity); transaction-bound repositories; deterministic lock ordering;
+typed errors independent of HTTP; explicit authorization inputs (actor,
+memberships, admin/system-restore scope); and a decision on idempotency —
+whether the offline mutation ID/request hash becomes command identity with
+result and writes stored atomically (today the receipt middleware inserts
+the receipt, lets the handler commit separately, and a crash between the two
+opens a five-minute re-execution window), or receipts remain a transport
+layer backed by mandatory payload-bound domain keys. Domain-event emission
+needs a post-commit/outbox design; none exists today.
 
 **Stable workbench contracts.** Prefer a small set of cohesive read models such
 as `/work/today`, `/work/yard`, `/production/workbench`, and
@@ -615,15 +971,40 @@ commands rather than generic “update workbench” requests.
 
 **Direct canonical route rewrite.** The app is not live, so update routes across
 the codebase in one bounded change and delete obsolete internal aliases. Do not
-add compatibility redirects or preserve the current redirect chain. Rewrite the
-desktop and mobile navigation, in-app links, breadcrumbs, command palette/search
-targets, notifications, QR/internal scan targets, offline mutation route
+add compatibility redirects or preserve the current redirect chain. No QR
+label has ever been printed (operator decision 2026-09-01), so no
+authenticated internal URL — `/hives/{id}` included — needs to survive the
+rename; the only external contract is the live public Honey Story
+`/honey/[slug]` namespace. Rewrite the
+desktop and mobile navigation, in-app links, command palette/search
+targets, QR/internal scan target generators, offline mutation route
 manifest, service-worker/cache rules, documentation, and route/e2e tests together.
+Corrections from the 2026-09-01 review: there is no breadcrumb component
+(the command palette synthesizes crumbs from `NAV_ITEMS`; that plus any
+hardcoded "Honey › …" copy is the real surface), and ntfy notifications
+carry no click/deep-link URL today — do not invent rewrite work for either,
+but if click URLs are added later they land on Today/Yard, not retired
+paths. Concrete consumer inventory: the `/harvest/*` shims have **zero**
+in-app link consumers (cheap delete); `/honey/market-day` has seven,
+including the service-worker SHELL precache and three e2e specs
+(`offline`, `design-promises`, `honey-gaps`) that fail CI if the alias is
+deleted without coordinated updates; `install-prompt.tsx` CALM_ROUTES is
+already stale (`/genealogy`, missing `/queens`/`/sales`); PWA manifest
+shortcuts and `start_url` name current paths; the offline mutation manifest
+is generated from `offline_routes.go` (API prefixes, not UI paths) and only
+changes if application commands change endpoint URLs.
 Remove the internal `/harvest` tree and Honey-owned Sales/Market Day aliases
 (including `/honey/sales`-style destinations) after their canonical Production or
-Sales routes exist. Preserve the intentional public Honey Story contract, but do
+Sales routes exist, plus the `/genealogy` redirect. Preserve the intentional
+public Honey Story contract, but do
 not let that public `/honey/[slug]` namespace dictate the authenticated
-information architecture. A repository search for every retired internal path
+information architecture — the collision-free option is to move all
+authenticated honey routes off `/honey/*` entirely, retiring the
+reserved-slug guard. Resolve the naming collision this creates: the nav item
+"Equipment" lives at `/inventory`, the target IA has no Inventory area, and
+the ledger work adds `inventory_*` tables and `internal/app/inventory` —
+pick route names so "/inventory" and "inventory" do not mean different
+things in the same codebase. A repository search for every retired internal path
 must be empty except explicit negative tests or historical documentation.
 
 **Split configuration by owner and frequency.** Replace the Settings catch-all
@@ -637,7 +1018,14 @@ with:
   GnuCash, ntfy, printer/network infrastructure, and system health.
 
 Contextual “manage” links may enter the appropriate setup view, but operational
-objects must not have two independently owned editors.
+objects must not have two independently owned editors. Known offenders to
+resolve during the split (2026-09-01): Preferences are admin-gated today, so
+"My Preferences" as a per-user surface is an access change, not a rename;
+labor is dual-homed (Settings section + Yard Queue widget); record-sale is a
+Honey quick action, a Sales-layout action, and the Market Day POS; equipment
+deploy runs from both the hive page and Equipment inventory; the compliance
+packet is stored in Settings but Insights-shaped; and jar sizes / treatment
+withdrawals have no contextual manage links at all yet.
 
 **Execution sequence.**
 
@@ -645,10 +1033,14 @@ objects must not have two independently owned editors.
    and the application commands they should invoke. Prototype the target IA and
    WorkItem contract against one field day, one production run, one sale/
    consignment settlement, one equipment task, and one admin setup flow.
-2. During the inventory reset, establish the `internal/app/inventory` command/
-   query pattern and transaction conventions. Then implement the WorkItem
+2. The `internal/app` package and its unit-of-work/transaction conventions
+   start earlier, as the P0 restore services (see the importer contract).
+   During the inventory reset, extend that foundation into the
+   `internal/app/inventory` command/
+   query pattern. Then implement the WorkItem
    projection and Today/Yard filters without copying source state into a writable
-   generic queue.
+   generic queue — the field slice may start as soon as the shared
+   command/policy seam exists; it does not wait for the ledger.
 3. Add Production and Sales workbench projections and move cross-domain
    orchestration out of HTTP handlers into explicit application commands. Prove
    permissions, idempotency, rollback, and offline behavior at this seam.
@@ -727,7 +1119,9 @@ labels and historical reprints retain their original look.
 6. **Apiary and stand identifiers.** Once naming is final, durable internal
    wayfinding that works with the existing scan flow.
 7. **Equipment and bin labels.** After stable asset IDs exist, with label history
-   tied to IDs rather than free-form names.
+   tied to IDs rather than free-form names. The asset IDs are
+   `inventory_units` rows from the generalized ledger core — do not invent a
+   separate asset-tag scheme.
 
 Shared prerequisites are validated media/hardware, centralized templates and
 DPI/media settings, and a shared print service before any one-click ZPL phase.
