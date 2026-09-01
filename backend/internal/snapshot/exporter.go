@@ -477,27 +477,11 @@ func semanticReferenceChecks(ctx context.Context, tx pgx.Tx) ([]ReferenceCheck, 
 func quoteLiteral(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
 func collectMedia(ctx context.Context, tx pgx.Tx, options ExportOptions) (MediaManifest, []MediaVerification, error) {
+	// apiaries.satellite_image_key was dropped by migration 00032 (Leaflet
+	// tiles replaced the stored satellite overlay); apiary map imagery is
+	// deliberately not part of the restoration boundary.
 	objects := make([]MediaObject, 0)
-	rows, err := tx.Query(ctx, `SELECT id::text,satellite_image_key FROM apiaries WHERE satellite_image_key IS NOT NULL ORDER BY id`)
-	if err != nil {
-		return MediaManifest{}, nil, fmt.Errorf("media apiary maps: %w", err)
-	}
-	for rows.Next() {
-		var id, ref string
-		if err := rows.Scan(&id, &ref); err != nil {
-			rows.Close()
-			return MediaManifest{}, nil, err
-		}
-		object := MediaObject{RecordDomain: "apiaries", RecordID: id, OwnerDomain: "apiary", OwnerID: id, MediaType: "image", OriginalFilename: filepath.Base(ref), Role: "original", StorageBackend: "minio", Disposition: "external-reference", Reference: ref, Required: true, HashState: "unhashed"}
-		hashMediaObject(ctx, options, &object)
-		objects = append(objects, object)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return MediaManifest{}, nil, err
-	}
-	rows.Close()
-	rows, err = tx.Query(ctx, `SELECT id::text,owner_type::text,owner_id::text,storage_backend::text,original_ref,original_external,thumbnail_key,medium_key FROM photos ORDER BY id`)
+	rows, err := tx.Query(ctx, `SELECT id::text,owner_type::text,owner_id::text,storage_backend::text,original_ref,original_external,thumbnail_key,medium_key FROM photos ORDER BY id`)
 	if err != nil {
 		return MediaManifest{}, nil, fmt.Errorf("media photos: %w", err)
 	}
