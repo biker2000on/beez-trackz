@@ -13,8 +13,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/gnucashsync"
 )
 
@@ -47,6 +47,7 @@ func (s *Server) mountGnuCashSync(r chi.Router) {
 	admin.Get("/settings/gnucash/accounts", s.handleGnuCashAccounts)
 	admin.Get("/settings/gnucash/rows", s.handleGnuCashRows)
 	admin.Post("/settings/gnucash/sync", s.handleGnuCashSyncNow)
+	admin.Post("/settings/gnucash/restore", s.handleGnuCashRestore)
 	admin.Post("/settings/gnucash/rows/{id}/push", s.handleGnuCashRowPush)
 	admin.Post("/settings/gnucash/rows/{id}/ignore", s.handleGnuCashRowIgnore)
 }
@@ -63,23 +64,60 @@ type gnucashSettings struct {
 	ChangesCursor string
 	SyncEnabled   bool
 	Mapping       gnucashsync.AccountMapping
-	LastSyncedAt  *time.Time
+	// LastSyncAttemptAt is the singleton gnucash_sync_settings.last_synced_at
+	// column, named for what it actually holds: handleGnuCashSyncNow stamps
+	// it at the end of every run, including runs whose pull failed and which
+	// therefore pushed nothing. Per-record success lives in
+	// external_sync.last_synced_at. The snapshot artifact and the restore
+	// report both carry it under the attempt name so a restored book is not
+	// reconciled against a time nothing was ever synced at.
+	LastSyncAttemptAt *time.Time
+}
+
+// restorePending reports that a guarded restore has installed a book identity
+// and a preserved cursor which no reconciliation has cleared yet. Sync is
+// disabled for the whole restore window by contract, so the three conditions
+// together are the window.
+//
+// It is derived rather than stored because gnucash_sync_settings has no
+// restore-state column and this wave does not own the migration chain; see
+// the note in handleGnuCashRestore. The cost of deriving it is that an
+// operator who merely paused sync after a successful run also has to say
+// discardRestore before rotating credentials, which is a refusal with a
+// remedy rather than a silent wipe.
+func (settings gnucashSettings) restorePending() bool {
+	return !settings.SyncEnabled && settings.BookGUID != "" && settings.ChangesCursor != ""
 }
 
 // loadGnuCashSettings reads the singleton. A missing row is the unconfigured
 // zero value, not an error: the settings page must render before setup.
-func loadGnuCashSettings(ctx context.Context, pool *pgxpool.Pool) (gnucashSettings, error) {
+func loadGnuCashSettings(ctx context.Context, q app.Querier) (gnucashSettings, error) {
+	return scanGnuCashSettings(ctx, q, "")
+}
+
+// loadGnuCashSettingsForUpdate takes a row lock on the singleton. Both the
+// settings PUT and the guarded restore use it, which is what serialises them:
+// a credential rotation racing a restore either happens first (and the
+// restore's identity re-check fails) or second (and legitimately invalidates
+// the book it no longer opens). Neither can interleave halfway.
+func loadGnuCashSettingsForUpdate(ctx context.Context, q app.Querier) (gnucashSettings, error) {
+	return scanGnuCashSettings(ctx, q, " FOR UPDATE")
+}
+
+func scanGnuCashSettings(
+	ctx context.Context, q app.Querier, lock string,
+) (gnucashSettings, error) {
 	var (
 		out                                         gnucashSettings
 		token, bookGUID, bookName, currency, cursor *string
 		mappingJSON                                 []byte
 	)
-	err := pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT base_url, api_token, book_guid, book_name, root_currency,
 			changes_cursor, sync_enabled, account_mapping, last_synced_at
-		FROM gnucash_sync_settings WHERE id = true`).
+		FROM gnucash_sync_settings WHERE id = true`+lock).
 		Scan(&out.BaseURL, &token, &bookGUID, &bookName, &currency,
-			&cursor, &out.SyncEnabled, &mappingJSON, &out.LastSyncedAt)
+			&cursor, &out.SyncEnabled, &mappingJSON, &out.LastSyncAttemptAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return gnucashSettings{}, nil
 	}
@@ -119,30 +157,87 @@ func nullIfBlank(v string) *string {
 // gnucashClient builds a client from stored settings.
 func (settings gnucashSettings) client() (*gnucashsync.Client, error) {
 	if !gnucashsync.ValidBaseURL(settings.BaseURL) {
-		return nil, errors.New("GnuCash base URL is not configured")
+		return nil, app.Precondition("gnucash sync", "GnuCash base URL is not configured")
 	}
 	if strings.TrimSpace(settings.Token) == "" {
-		return nil, errors.New("GnuCash API token is not configured")
+		return nil, app.Precondition("gnucash sync", "GnuCash API token is not configured")
 	}
 	return gnucashsync.NewClient(settings.BaseURL, settings.Token, nil), nil
 }
 
 // writeClient is what every handler that can PUT, POST, or DELETE against
-// folio must build its client with. On top of the configuration check it
-// requires the cached book identity: an empty BookGUID means the credentials
-// have never been proven against a book, or were rotated since, and writing
-// now could land entries in whatever book the new token happens to open.
-// handleGnuCashSettingsPut clears the identity on exactly those changes.
+// folio must build its client with — it is the one chokepoint where the
+// prerequisites for writing into someone's books are stated.
+//
+// On top of the configuration check it requires two things:
+//
+//   - SyncEnabled. Until now the flag was display-only: handleGnuCashSyncNow
+//     never looked at it and the browser gated the button on nothing but a
+//     pending request, so "sync disabled" stopped exactly nobody. The restore
+//     flow depends on it meaning something — a snapshot is restored with sync
+//     disabled and stays that way until the reconciliation dry run passes —
+//     so the refusal is now server-side, on every write-capable endpoint.
+//   - The cached book identity. An empty BookGUID means the credentials have
+//     never been proven against a book, or were rotated since, and writing now
+//     could land entries in whatever book the new token happens to open.
+//     handleGnuCashSettingsPut clears the identity on exactly those changes.
 func (settings gnucashSettings) writeClient() (*gnucashsync.Client, error) {
 	client, err := settings.client()
 	if err != nil {
 		return nil, err
 	}
+	if !settings.SyncEnabled {
+		return nil, app.Conflict("gnucash sync",
+			"GnuCash sync is disabled. Enable it in settings before pushing to the book.")
+	}
 	if settings.BookGUID == "" {
-		return nil, errors.New(
+		return nil, app.Precondition("gnucash sync",
 			"Test the connection before syncing so beez knows which book these credentials open")
 	}
 	return client, nil
+}
+
+// gnucashHTTPStatus maps an application error kind onto a status code. The
+// application layer is deliberately transport-free, so the translation lives
+// at the edge that speaks HTTP. A precondition is a 400 because that is what
+// this endpoint has always returned for "you have not tested the connection
+// yet", and the existing clients read it.
+func gnucashHTTPStatus(err error) int {
+	switch app.KindOf(err) {
+	case app.KindInvalid, app.KindPrecondition:
+		return http.StatusBadRequest
+	case app.KindNotFound:
+		return http.StatusNotFound
+	case app.KindConflict:
+		return http.StatusConflict
+	case app.KindForbidden:
+		return http.StatusForbidden
+	case app.KindUnsupported:
+		return http.StatusUnprocessableEntity
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// writeAppError renders a typed error, hiding the cause of an internal one.
+// The operator-facing message is used bare: the Op prefix is for logs and for
+// a report line, not for a toast.
+func writeAppError(w http.ResponseWriter, err error) {
+	status := gnucashHTTPStatus(err)
+	if status == http.StatusInternalServerError {
+		writeError(w, status, "database error")
+		return
+	}
+	writeError(w, status, appMessage(err))
+}
+
+// appMessage is the operator-facing half of a typed error.
+func appMessage(err error) string {
+	var typed *app.Error
+	if errors.As(err, &typed) && typed.Message != "" {
+		return typed.Message
+	}
+	return err.Error()
 }
 
 // GET /settings/gnucash — configuration with the token masked to a boolean.
@@ -153,15 +248,23 @@ func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"baseUrl":           settings.BaseURL,
-		"hasToken":          settings.Token != "",
-		"bookGuid":          settings.BookGUID,
-		"bookName":          settings.BookName,
-		"rootCurrency":      settings.RootCurrency,
-		"syncEnabled":       settings.SyncEnabled,
-		"accountMapping":    settings.Mapping,
-		"lastSyncedAt":      settings.LastSyncedAt,
+		"baseUrl":        settings.BaseURL,
+		"hasToken":       settings.Token != "",
+		"bookGuid":       settings.BookGUID,
+		"bookName":       settings.BookName,
+		"rootCurrency":   settings.RootCurrency,
+		"syncEnabled":    settings.SyncEnabled,
+		"accountMapping": settings.Mapping,
+		// Two names for one column. lastSyncedAt is what the existing client
+		// reads; lastSyncAttemptAt is what the value actually means — the run
+		// is stamped even when its pull failed and nothing was pushed. New
+		// surfaces should read the attempt name.
+		"lastSyncedAt":      settings.LastSyncAttemptAt,
+		"lastSyncAttemptAt": settings.LastSyncAttemptAt,
 		"hasCursor":         settings.ChangesCursor != "",
+		// restorePending: a preserved cursor is installed and sync is still
+		// disabled, so the reconciliation dry run has not been signed off.
+		"restorePending":    settings.restorePending(),
 		"saleLineKinds":     gnucashsync.SaleLineKinds,
 		"expenseCategories": gnucashsync.ExpenseCategories,
 	})
@@ -170,73 +273,115 @@ func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 // PUT /settings/gnucash — base URL, token, enable flag, account mapping.
 // An omitted apiToken keeps the stored one; "" clears it (same masked-secret
 // contract as ntfy and the AI provider keys).
+//
+// It runs inside one unit of work that locks the singleton, so it cannot
+// interleave with a guarded restore installing a cursor on the same row.
 func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		BaseURL        *string                     `json:"baseUrl"`
 		APIToken       *string                     `json:"apiToken"`
 		SyncEnabled    *bool                       `json:"syncEnabled"`
 		AccountMapping *gnucashsync.AccountMapping `json:"accountMapping"`
+		// DiscardRestore is the operator saying, in as many words, that the
+		// restored book identity and cursor on this row are no longer wanted.
+		// Without it a credential change that would wipe a pending restore is
+		// refused instead of performed.
+		DiscardRestore bool `json:"discardRestore"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	ctx := r.Context()
-	settings, err := loadGnuCashSettings(ctx, s.pool)
+
+	err := app.NewRunner(s.pool).Run(r.Context(), s.gnucashActor(r),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			settings, err := loadGnuCashSettingsForUpdate(ctx, uow)
+			if err != nil {
+				return app.Internal("load gnucash settings", err)
+			}
+
+			// Either half of the credential identifies the book we are talking
+			// to: a folio token is bound to one book, so rotating it can land
+			// us on a different book at the same host. Whenever either changes,
+			// the cached book identity and the changes cursor belong to someone
+			// else and are dropped, which also forces a fresh connection test
+			// before the next sync.
+			identityChanged := false
+			if req.BaseURL != nil {
+				baseURL := strings.TrimSpace(*req.BaseURL)
+				if baseURL != "" && !gnucashsync.ValidBaseURL(baseURL) {
+					return app.Invalid("gnucash settings",
+						"Base URL must be an absolute http(s) URL with no userinfo, query, or fragment").
+						WithField("baseUrl")
+				}
+				if baseURL != settings.BaseURL {
+					identityChanged = true
+				}
+				settings.BaseURL = baseURL
+			}
+			if req.APIToken != nil {
+				token := strings.TrimSpace(*req.APIToken)
+				if token != settings.Token {
+					identityChanged = true
+				}
+				settings.Token = token
+			}
+
+			// The restore guard. Dropping the identity is right for ordinary
+			// operation and fatal during a restore: the cursor and per-row sync
+			// state were installed against a book that was proven to match, and
+			// re-entering the (deliberately un-exported) token would silently
+			// wipe them. While a restore is pending the credential change is
+			// refused with a remedy rather than performed. Ordinary saves —
+			// including a token rotation on a normally-running integration —
+			// are untouched, which is why
+			// TestGnuCashSettingsPutClearsTheBookOnATokenChange still passes.
+			if identityChanged && settings.restorePending() && !req.DiscardRestore {
+				return app.Conflict("gnucash settings",
+					"A restored GnuCash cursor is installed and sync is still disabled. "+
+						"Changing the server or token now would discard it. Finish the restore "+
+						"reconciliation and enable sync, or send discardRestore to drop the "+
+						"restored state on purpose.")
+			}
+			if identityChanged || req.DiscardRestore {
+				settings.BookGUID, settings.BookName, settings.RootCurrency = "", "", ""
+				settings.ChangesCursor = ""
+			}
+
+			if req.SyncEnabled != nil {
+				settings.SyncEnabled = *req.SyncEnabled
+			}
+			if req.AccountMapping != nil {
+				settings.Mapping = req.AccountMapping.Normalize()
+			}
+			return app.Internal("save gnucash settings", saveGnuCashSettings(ctx, uow, settings))
+		})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	// Either half of the credential identifies the book we are talking to: a
-	// folio token is bound to one book, so rotating it can land us on a
-	// different book at the same host. Whenever either changes, the cached
-	// book identity and the changes cursor belong to someone else and are
-	// dropped, which also forces a fresh connection test before the next sync.
-	identityChanged := false
-	if req.BaseURL != nil {
-		baseURL := strings.TrimSpace(*req.BaseURL)
-		if baseURL != "" && !gnucashsync.ValidBaseURL(baseURL) {
-			writeError(w, http.StatusBadRequest,
-				"Base URL must be an absolute http(s) URL with no userinfo, query, or fragment")
-			return
-		}
-		if baseURL != settings.BaseURL {
-			identityChanged = true
-		}
-		settings.BaseURL = baseURL
-	}
-	if req.APIToken != nil {
-		token := strings.TrimSpace(*req.APIToken)
-		if token != settings.Token {
-			identityChanged = true
-		}
-		settings.Token = token
-	}
-	if identityChanged {
-		settings.BookGUID, settings.BookName, settings.RootCurrency = "", "", ""
-		settings.ChangesCursor = ""
-	}
-	if req.SyncEnabled != nil {
-		settings.SyncEnabled = *req.SyncEnabled
-	}
-	if req.AccountMapping != nil {
-		settings.Mapping = req.AccountMapping.Normalize()
-	}
-
-	if err := saveGnuCashSettings(ctx, s.pool, settings); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeAppError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
-func saveGnuCashSettings(ctx context.Context, pool *pgxpool.Pool, settings gnucashSettings) error {
+// gnucashActor is the application-layer identity for a settings command. It
+// is an ordinary user actor: these handlers change configuration, and none of
+// them may write preserved audit fields. Only handleGnuCashRestore escalates,
+// and only after the identity checks below.
+func (s *Server) gnucashActor(r *http.Request) app.Actor {
+	if user := principalFrom(r); user != nil && user.ID != uuid.Nil {
+		return app.UserActor(user.ID, user.DisplayName)
+	}
+	// Unreachable behind requireAdmin, but a nil principal must not turn into
+	// an invalid actor that fails as a 403 with no explanation.
+	return app.SystemJobActor("gnucash-settings")
+}
+
+func saveGnuCashSettings(ctx context.Context, q app.Querier, settings gnucashSettings) error {
 	mappingJSON, err := json.Marshal(settings.Mapping.Normalize())
 	if err != nil {
 		return err
 	}
-	_, err = pool.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO gnucash_sync_settings
 			(id, base_url, api_token, book_guid, book_name, root_currency,
 			 changes_cursor, sync_enabled, account_mapping, last_synced_at)
@@ -254,15 +399,15 @@ func saveGnuCashSettings(ctx context.Context, pool *pgxpool.Pool, settings gnuca
 		settings.BaseURL, nullIfBlank(settings.Token), nullIfBlank(settings.BookGUID),
 		nullIfBlank(settings.BookName), nullIfBlank(settings.RootCurrency),
 		nullIfBlank(settings.ChangesCursor), settings.SyncEnabled, mappingJSON,
-		settings.LastSyncedAt)
+		settings.LastSyncAttemptAt)
 	return err
 }
 
 // saveGnuCashCursor persists the pull cursor on its own, after a page has
 // been fully processed. A page that fails mid-way leaves the old cursor in
 // place so the next run re-reads it.
-func saveGnuCashCursor(ctx context.Context, pool *pgxpool.Pool, cursor string) error {
-	_, err := pool.Exec(ctx, `
+func saveGnuCashCursor(ctx context.Context, q app.Querier, cursor string) error {
+	_, err := q.Exec(ctx, `
 		UPDATE gnucash_sync_settings SET changes_cursor = $1 WHERE id = true`,
 		nullIfBlank(cursor))
 	return err
@@ -279,7 +424,7 @@ func (s *Server) handleGnuCashTest(w http.ResponseWriter, r *http.Request) {
 	}
 	client, err := settings.client()
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"error": appMessage(err)})
 		return
 	}
 	status, err := client.Status(ctx)
@@ -313,7 +458,7 @@ func (s *Server) handleGnuCashAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	client, err := settings.client()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAppError(w, err)
 		return
 	}
 	accounts, err := client.Accounts(ctx)
@@ -473,6 +618,10 @@ type gnucashSyncReport struct {
 	PulledItems int      `json:"pulledItems"`
 	Conflicts   int      `json:"conflicts"`
 	Errors      []string `json:"errors"`
+	// LastSyncAttemptAt is when this run finished, successful or not. It is
+	// the value that lands in the singleton column, reported under the name
+	// that says what it is.
+	LastSyncAttemptAt *time.Time `json:"lastSyncAttemptAt,omitempty"`
 }
 
 // POST /settings/gnucash/sync — scan, pull, then push. Manual by design: the
@@ -494,7 +643,7 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 	}
 	client, err := settings.writeClient()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAppError(w, err)
 		return
 	}
 	if !settings.Mapping.Complete() {
@@ -525,8 +674,12 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	settings.ChangesCursor = cursor
+	// Stamped on every run, including one whose pull failed: this is the last
+	// ATTEMPT, not the last success. Per-record success is
+	// external_sync.last_synced_at.
 	now := time.Now()
-	settings.LastSyncedAt = &now
+	settings.LastSyncAttemptAt = &now
+	report.LastSyncAttemptAt = &now
 	if err := saveGnuCashSettings(ctx, s.pool, settings); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -1164,7 +1317,7 @@ func (s *Server) handleGnuCashRowPush(w http.ResponseWriter, r *http.Request) {
 	// state is touched.
 	client, err := settings.writeClient()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeAppError(w, err)
 		return
 	}
 
@@ -1227,4 +1380,390 @@ func (s *Server) handleGnuCashRowIgnore(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// --- guarded restore --------------------------------------------------------
+
+// The GnuCash half of the P0 snapshot restore.
+//
+// A snapshot carries every non-secret value needed to recognise already
+// synchronised work: the per-row external_sync projection (external IDs,
+// sync and conflict state, content_hash, remote_transaction_guid,
+// remote_enter_date, per-row last_synced_at) and the singleton's bounded
+// change-feed cursor and book identity. It does NOT carry the folio token —
+// credentials are excluded from the artifact by contract — which is exactly
+// why installing the cursor is dangerous: the operator has to type the token
+// back in, and an ordinary settings save treats a token change as "this is a
+// different book" and clears the cursor.
+//
+// So the restore is one guarded command with the steps in the only safe
+// order:
+//
+//  1. the operator configures the base URL and token normally, and tests;
+//  2. this endpoint is called with the book identity the artifact expects;
+//  3. it re-tests the live connection itself and requires an EXACT match on
+//     both bookGuid and rootCurrency — the expectation from the artifact is
+//     held separately from the stored identity, so a token that opens a
+//     different book is caught here rather than after the first push;
+//  4. only then does it install the cursor, the book identity, and the
+//     per-row sync state, atomically, with sync still disabled.
+//
+// Sync stays disabled afterwards on purpose. The pull-first reconciliation
+// and the no-write push dry run come before re-enabling it, and writeClient
+// now refuses every write-capable endpoint while the flag is off.
+//
+// Known gap, deliberately not papered over: gnucash_sync_settings has no
+// restore-state column, and this wave does not own the migration chain. The
+// "a restore is pending" signal is therefore derived (see restorePending) —
+// book identity present, cursor present, sync disabled. A durable
+// restore_state column, set here and cleared by the reconciliation sign-off,
+// is the right Wave 2 follow-up; it would also let the reconciliation gate be
+// enforced rather than implied by the sync flag.
+
+// gnucashRestoreRow is one preserved external_sync row from the artifact.
+type gnucashRestoreRow struct {
+	// ID is the preserved external_sync primary key. Optional: the row is
+	// identified by (system, entityType, entityId), but preserving it keeps
+	// the restored database digest-identical to the exported one.
+	ID                    *uuid.UUID `json:"id"`
+	EntityType            string     `json:"entityType"`
+	EntityID              uuid.UUID  `json:"entityId"`
+	ExternalID            string     `json:"externalId"`
+	SyncState             string     `json:"syncState"`
+	ConflictState         string     `json:"conflictState"`
+	LastError             string     `json:"lastError"`
+	ContentHash           string     `json:"contentHash"`
+	RemoteTransactionGUID string     `json:"remoteTransactionGuid"`
+	RemoteEnterDate       *time.Time `json:"remoteEnterDate"`
+	// LastSyncedAt is per-row and IS a success time: it is written only by
+	// gnucashMarkSynced. That is the opposite of the singleton column.
+	LastSyncedAt *time.Time `json:"lastSyncedAt"`
+	CreatedAt    *time.Time `json:"createdAt"`
+}
+
+type gnucashRestoreRequest struct {
+	// ExpectedBookGUID and ExpectedRootCurrency come from the artifact and
+	// are compared against a live connection test. They are held separately
+	// from the stored identity on purpose: comparing the stored value against
+	// itself would prove nothing.
+	ExpectedBookGUID     string `json:"expectedBookGuid"`
+	ExpectedRootCurrency string `json:"expectedRootCurrency"`
+	ChangesCursor        string `json:"changesCursor"`
+	// LastSyncAttemptAt is the singleton column under its true name.
+	LastSyncAttemptAt *time.Time          `json:"lastSyncAttemptAt"`
+	Rows              []gnucashRestoreRow `json:"rows"`
+	// ReplaceExisting is the explicit conflict policy. A restore expects an
+	// empty sync state; finding rows is reported, not silently merged.
+	ReplaceExisting bool `json:"replaceExisting"`
+	// DryRun validates everything, including the live identity match and the
+	// database constraints, and keeps nothing.
+	DryRun bool `json:"dryRun"`
+}
+
+// gnucashSyncStates and gnucashConflictStates mirror the 00005 CHECKs so a
+// bad artifact fails with a message instead of a SQLSTATE.
+var (
+	gnucashSyncStates = map[string]bool{
+		"pending": true, "synced": true, "failed": true, "ignored": true}
+	gnucashConflictStates = map[string]bool{
+		"": true, "none": true, "local_newer": true, "remote_newer": true, "diverged": true}
+)
+
+// validateGnuCashRestore checks the payload without touching folio or the
+// database, so a malformed artifact is rejected before anything is contacted.
+func validateGnuCashRestore(req gnucashRestoreRequest) error {
+	const op = "gnucash restore"
+	if strings.TrimSpace(req.ExpectedBookGUID) == "" {
+		return app.Invalid(op,
+			"expectedBookGuid is required: the restore has to know which book the artifact came from").
+			WithField("expectedBookGuid")
+	}
+	if strings.TrimSpace(req.ExpectedRootCurrency) == "" {
+		return app.Invalid(op, "expectedRootCurrency is required").WithField("expectedRootCurrency")
+	}
+	entityTypes := map[string]bool{}
+	for _, entityType := range syncEntityTypes {
+		entityTypes[entityType] = true
+	}
+	seenEntity := map[string]bool{}
+	seenExternal := map[string]bool{}
+	for i, row := range req.Rows {
+		where := fmt.Sprintf("rows[%d]", i)
+		if !entityTypes[row.EntityType] {
+			return app.Invalid(op, "%s: entity type %q is not a known external_sync entity type",
+				where, row.EntityType).WithField("entityType")
+		}
+		if row.EntityID == uuid.Nil {
+			return app.Invalid(op, "%s: entityId is required", where).WithField("entityId")
+		}
+		if !gnucashSyncStates[row.SyncState] {
+			return app.Invalid(op, "%s: sync state %q is not one of pending, synced, failed, ignored",
+				where, row.SyncState).WithField("syncState")
+		}
+		if !gnucashConflictStates[row.ConflictState] {
+			return app.Invalid(op,
+				"%s: conflict state %q is not one of none, local_newer, remote_newer, diverged",
+				where, row.ConflictState).WithField("conflictState")
+		}
+		// The external ID is derived from the entity, not stored freely
+		// (gnucashsync.SaleExternalID / ExpenseExternalID). A mismatch means
+		// the artifact was re-keyed incorrectly, which would push a beez
+		// entity onto some other folio transaction.
+		if row.ExternalID != "" {
+			var want string
+			switch row.EntityType {
+			case SyncEntitySale:
+				want = gnucashsync.SaleExternalID(row.EntityID.String())
+			case SyncEntityExpense:
+				want = gnucashsync.ExpenseExternalID(row.EntityID.String())
+			}
+			if want != "" && row.ExternalID != want {
+				return app.Invalid(op, "%s: external id %q does not match %q for this entity",
+					where, row.ExternalID, want).WithField("externalId")
+			}
+			if seenExternal[row.ExternalID] {
+				return app.Invalid(op, "%s: external id %q appears twice", where, row.ExternalID).
+					WithField("externalId")
+			}
+			seenExternal[row.ExternalID] = true
+		}
+		key := row.EntityType + ":" + row.EntityID.String()
+		if seenEntity[key] {
+			return app.Invalid(op, "%s: %s appears twice", where, key).WithField("entityId")
+		}
+		seenEntity[key] = true
+		if row.SyncState == "synced" && row.ExternalID == "" {
+			return app.Invalid(op, "%s: a synced row must carry the external id it is synced to",
+				where).WithField("externalId")
+		}
+	}
+	return nil
+}
+
+// gnucashRestoreResult is the restore report for this domain.
+type gnucashRestoreResult struct {
+	Success           bool       `json:"success"`
+	DryRun            bool       `json:"dryRun"`
+	BookGUID          string     `json:"bookGuid"`
+	BookName          string     `json:"bookName"`
+	RootCurrency      string     `json:"rootCurrency"`
+	CursorInstalled   bool       `json:"cursorInstalled"`
+	RowsRestored      int        `json:"rowsRestored"`
+	RowsReplaced      int        `json:"rowsReplaced"`
+	SyncEnabled       bool       `json:"syncEnabled"`
+	RestorePending    bool       `json:"restorePending"`
+	LastSyncAttemptAt *time.Time `json:"lastSyncAttemptAt"`
+	ExcludedConfig    []string   `json:"excludedConfig"`
+	NextSteps         []string   `json:"nextSteps"`
+}
+
+// POST /settings/gnucash/restore — install a preserved cursor, book identity,
+// and per-row sync state after proving the credentials open the same book.
+func (s *Server) handleGnuCashRestore(w http.ResponseWriter, r *http.Request) {
+	var req gnucashRestoreRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := validateGnuCashRestore(req); err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	ctx := r.Context()
+	settings, err := loadGnuCashSettings(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	// Credentials first. The artifact never carried them, so the operator has
+	// already had to enter them; a restore that ran before that would install
+	// a cursor for a connection nobody can test.
+	client, err := settings.client()
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	if settings.SyncEnabled {
+		writeAppError(w, app.Conflict("gnucash restore",
+			"Disable GnuCash sync before restoring. The restored mappings have to pass a "+
+				"pull-first reconciliation before anything is pushed."))
+		return
+	}
+
+	// The identity proof: a live status call, compared against what the
+	// artifact says, not against what is already stored.
+	status, err := client.Status(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, gnucashUserMessage(err))
+		return
+	}
+	if status.BookGUID != req.ExpectedBookGUID || status.RootCurrency != req.ExpectedRootCurrency {
+		writeAppError(w, app.Conflict("gnucash restore",
+			"These credentials open book %q (%s), but the snapshot was taken from book %q (%s). "+
+				"Point beez at the original book before restoring its sync state.",
+			status.BookGUID, status.RootCurrency, req.ExpectedBookGUID, req.ExpectedRootCurrency))
+		return
+	}
+
+	result := gnucashRestoreResult{
+		DryRun:            req.DryRun,
+		BookGUID:          status.BookGUID,
+		BookName:          status.BookName,
+		RootCurrency:      status.RootCurrency,
+		LastSyncAttemptAt: req.LastSyncAttemptAt,
+	}
+	// The privileged actor: this command writes preserved external_sync ids
+	// and created_at values, which no user command may do. It is escalated
+	// only here, only after the identity proof above, and the id of the
+	// operator rides along as the fallback attribution.
+	actor := app.SystemRestoreActor(s.gnucashOperatorID(r))
+	runner := app.NewRunner(s.pool)
+	install := func(ctx context.Context, uow *app.UnitOfWork) error {
+		return s.gnucashInstallRestore(ctx, uow, req, status, settings, &result)
+	}
+	// A dry run runs the same statements inside a transaction that is always
+	// rolled back, which is what makes the CHECK constraints and the unique
+	// indexes actually evaluate. Nothing survives it.
+	if req.DryRun {
+		err = runner.DryRun(ctx, actor, install)
+	} else {
+		err = runner.Run(ctx, actor, install)
+	}
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
+	result.Success = true
+	result.SyncEnabled = false
+	result.RestorePending = true
+	result.ExcludedConfig = []string{
+		"gnucash_sync_settings.api_token — never exported; entered by the operator before this restore",
+	}
+	result.NextSteps = []string{
+		"Run the pull-first reconciliation and the no-write push dry run against the restored mappings.",
+		"Resolve anything quarantined as a conflict.",
+		"Only then enable GnuCash sync; every write-capable endpoint refuses until you do.",
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// gnucashOperatorID is the human who launched the restore. It is recorded as
+// the fallback attribution of the restore actor, not as authorization: being
+// an admin does not grant the preserved-audit privilege, the command does.
+func (s *Server) gnucashOperatorID(r *http.Request) uuid.UUID {
+	if user := principalFrom(r); user != nil {
+		return user.ID
+	}
+	return uuid.Nil
+}
+
+// gnucashInstallRestore is the whole transactional half: lock, re-verify,
+// clear if allowed, install.
+func (s *Server) gnucashInstallRestore(
+	ctx context.Context,
+	uow *app.UnitOfWork,
+	req gnucashRestoreRequest,
+	status gnucashsync.Status,
+	tested gnucashSettings,
+	result *gnucashRestoreResult,
+) error {
+	const op = "gnucash restore"
+	settings, err := loadGnuCashSettingsForUpdate(ctx, uow)
+	if err != nil {
+		return app.Internal(op, err)
+	}
+	// The row lock is held from here to commit, so a settings PUT cannot slip
+	// between the identity proof and the install. If one got in first, its
+	// credential change invalidated the connection just tested and the restore
+	// has to start over rather than install a cursor for a book it no longer
+	// opens.
+	if settings.BaseURL != tested.BaseURL || settings.Token != tested.Token {
+		return app.Conflict(op,
+			"The GnuCash credentials changed while this restore was being verified. "+
+				"Test the connection again and re-run the restore.")
+	}
+	if settings.SyncEnabled {
+		return app.Conflict(op, "GnuCash sync was enabled while this restore was being verified.")
+	}
+
+	var existing int
+	if err := uow.QueryRow(ctx,
+		`SELECT count(*) FROM external_sync WHERE system = $1`, SyncSystemGnuCashWeb).
+		Scan(&existing); err != nil {
+		return app.Internal(op, err)
+	}
+	if existing > 0 && !req.ReplaceExisting {
+		return app.Conflict(op,
+			"%d GnuCash sync rows already exist. A restore installs the sync state of the artifact "+
+				"into an empty one; send replaceExisting to discard what is there on purpose.",
+			existing)
+	}
+	if existing > 0 {
+		if _, err := uow.Exec(ctx,
+			`DELETE FROM external_sync WHERE system = $1`, SyncSystemGnuCashWeb); err != nil {
+			return app.Internal(op, err)
+		}
+		result.RowsReplaced = existing
+	}
+
+	for i, row := range req.Rows {
+		if err := gnucashInsertRestoredRow(ctx, uow, row); err != nil {
+			return fmt.Errorf("rows[%d] %s %s: %w", i, row.EntityType, row.EntityID, err)
+		}
+		result.RowsRestored++
+	}
+
+	settings.BookGUID = status.BookGUID
+	settings.BookName = status.BookName
+	settings.RootCurrency = status.RootCurrency
+	settings.ChangesCursor = req.ChangesCursor
+	settings.LastSyncAttemptAt = req.LastSyncAttemptAt
+	settings.SyncEnabled = false
+	if err := saveGnuCashSettings(ctx, uow, settings); err != nil {
+		return app.Internal(op, err)
+	}
+	result.CursorInstalled = strings.TrimSpace(req.ChangesCursor) != ""
+	return nil
+}
+
+// gnucashInsertRestoredRow writes one preserved external_sync row, including
+// its id and created_at. This is the restore-repository convention applied to
+// a sync-state table: preserved identity written directly, everything the
+// database would have generated supplied instead.
+func gnucashInsertRestoredRow(
+	ctx context.Context, uow *app.UnitOfWork, row gnucashRestoreRow,
+) error {
+	const op = "gnucash restore row"
+	if !uow.Actor().MayWritePreservedAudit() {
+		return app.Forbidden(op, "only the system restore actor may write preserved sync rows")
+	}
+	id := uuid.New()
+	if row.ID != nil && *row.ID != uuid.Nil {
+		id = *row.ID
+	}
+	createdAt := time.Now()
+	if row.CreatedAt != nil {
+		createdAt = *row.CreatedAt
+	}
+	tag, err := uow.Exec(ctx, `
+		INSERT INTO external_sync
+			(id, system, entity_type, entity_id, external_id, sync_state,
+			 conflict_state, last_error, content_hash, remote_transaction_guid,
+			 remote_enter_date, last_synced_at, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
+		ON CONFLICT DO NOTHING`,
+		id, SyncSystemGnuCashWeb, row.EntityType, row.EntityID,
+		nullIfBlank(row.ExternalID), row.SyncState, nullIfBlank(row.ConflictState),
+		nullIfBlank(row.LastError), nullIfBlank(row.ContentHash),
+		nullIfBlank(row.RemoteTransactionGUID), row.RemoteEnterDate,
+		row.LastSyncedAt, createdAt)
+	if err != nil {
+		return app.Internal(op, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return app.Conflict(op, "a sync row for this entity or external id already exists")
+	}
+	return nil
 }

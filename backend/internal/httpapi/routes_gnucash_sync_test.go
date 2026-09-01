@@ -1146,6 +1146,13 @@ func TestGnuCashPullRejectsANonAdvancingCursor(t *testing.T) {
 
 // A new token can open a different book on the same host, so it invalidates
 // the cached identity and the cursor exactly like a new base URL does.
+// Kept as it was, deliberately: clearing the book and the cursor on a
+// credential change is right for ordinary operation. The restore path does
+// not weaken it — handleGnuCashRestore installs the cursor only AFTER the
+// token is in place and proven against the expected book, and while that
+// restore is pending the PUT refuses a credential change instead of
+// performing this clear (TestGnuCashSettingsPutCannotWipeAPendingRestore).
+// Here sync is enabled, so no restore is pending and the clear stands.
 func TestGnuCashSettingsPutClearsTheBookOnATokenChange(t *testing.T) {
 	fake := newFolioFake(t)
 	server := gnucashTestServer(t, fake, fullMapping())
@@ -1372,5 +1379,442 @@ func TestGnuCashRetirementReportsRetryableDeleteFailures(t *testing.T) {
 	fake.mu.Unlock()
 	if stillLinked {
 		t.Fatal("the cancelled sale is still in the books")
+	}
+}
+
+// --- server-enforced sync gate and guarded restore --------------------------
+
+// disableGnuCashSync turns the flag off without going through the PUT, which
+// is what the operator does before a restore.
+func disableGnuCashSync(t *testing.T, server *Server) {
+	t.Helper()
+	if _, err := server.pool.Exec(context.Background(),
+		`UPDATE gnucash_sync_settings SET sync_enabled = false WHERE id = true`); err != nil {
+		t.Fatalf("disable sync: %v", err)
+	}
+}
+
+func gnucashSettingsOf(t *testing.T, server *Server) gnucashSettings {
+	t.Helper()
+	settings, err := loadGnuCashSettings(context.Background(), server.pool)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	return settings
+}
+
+// restoreRowPayload builds one artifact row for a sale that beez had already
+// pushed before the reset.
+func restoreRowPayload(rowID, saleID uuid.UUID) map[string]any {
+	return map[string]any{
+		"id":                    rowID.String(),
+		"entityType":            SyncEntitySale,
+		"entityId":              saleID.String(),
+		"externalId":            "sale:" + saleID.String(),
+		"syncState":             "synced",
+		"conflictState":         "none",
+		"contentHash":           "hash-abc",
+		"remoteTransactionGuid": "gc-77",
+		"remoteEnterDate":       "2026-08-20T12:05:00Z",
+		"lastSyncedAt":          "2026-08-20T12:05:01Z",
+		"createdAt":             "2026-07-01T09:00:00Z",
+	}
+}
+
+func restorePayload(rows ...map[string]any) map[string]any {
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+	return map[string]any{
+		"expectedBookGuid":     "book-1",
+		"expectedRootCurrency": "USD",
+		"changesCursor":        "cursor-42",
+		"lastSyncAttemptAt":    "2026-08-31T23:59:00Z",
+		"rows":                 rows,
+	}
+}
+
+func postRestore(t *testing.T, server *Server, payload map[string]any) (int, map[string]any) {
+	t.Helper()
+	response, body := call(t, server.handleGnuCashRestore,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/restore", payload))
+	return response.Code, body
+}
+
+// Until now sync_enabled was decoration: handleGnuCashSyncNow never read it
+// and the browser gated the button on nothing but a pending request. The
+// restore flow depends on it meaning something, so the refusal is server-side
+// on every write-capable endpoint.
+func TestGnuCashSyncRefusesWhileSyncIsDisabled(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	saleID := seedAppliedSale(t, server, jarSizeID, 1, 1200)
+	runSync(t, server) // create the row while sync is still enabled
+	row := syncRowFor(t, server, SyncEntitySale, saleID)
+	postsBefore, putsBefore, deletesBefore := fake.counts()
+
+	disableGnuCashSync(t, server)
+
+	response, body := call(t, server.handleGnuCashSyncNow,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/sync", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("sync ran with sync disabled: %d %v", response.Code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "disabled") {
+		t.Fatalf("error %v does not say the integration is disabled", body)
+	}
+
+	// The manual per-row override is a write into the book too.
+	response, body = call(t, server.handleGnuCashRowPush,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/rows/x/push", nil,
+			"id", row.ID.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("force push ran with sync disabled: %d %v", response.Code, body)
+	}
+
+	if posts, puts, deletes := fake.counts(); posts != postsBefore || puts != putsBefore ||
+		deletes != deletesBefore {
+		t.Fatalf("folio was written to while sync was disabled: %d/%d/%d, want %d/%d/%d",
+			posts, puts, deletes, postsBefore, putsBefore, deletesBefore)
+	}
+
+	// Re-enabling through the ordinary settings PUT unblocks it again.
+	response, body = call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"syncEnabled": true,
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("re-enable: %d %v", response.Code, body)
+	}
+	runSync(t, server)
+}
+
+// The happy path: credentials configured, the live book matches what the
+// artifact expects, and the cursor plus per-row state land atomically with
+// their preserved ids and created_at values.
+func TestGnuCashRestoreInstallsCursorAndRowsAfterAnIdentityMatch(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	disableGnuCashSync(t, server)
+
+	rowID, saleID := uuid.New(), uuid.New()
+	code, body := postRestore(t, server, restorePayload(restoreRowPayload(rowID, saleID)))
+	if code != http.StatusOK {
+		t.Fatalf("restore: %d %v", code, body)
+	}
+	if body["rowsRestored"] != float64(1) || body["cursorInstalled"] != true {
+		t.Fatalf("restore report %v", body)
+	}
+	if body["syncEnabled"] != false || body["restorePending"] != true {
+		t.Fatalf("restore left sync enabled: %v", body)
+	}
+	// The report has to tell the operator what was deliberately not restored.
+	if excluded, _ := body["excludedConfig"].([]any); len(excluded) == 0 {
+		t.Fatalf("the report does not name the excluded configuration: %v", body)
+	}
+
+	settings := gnucashSettingsOf(t, server)
+	if settings.ChangesCursor != "cursor-42" {
+		t.Fatalf("cursor %q", settings.ChangesCursor)
+	}
+	if settings.BookGUID != "book-1" || settings.RootCurrency != "USD" {
+		t.Fatalf("book identity %+v", settings)
+	}
+	if settings.SyncEnabled {
+		t.Fatal("the restore enabled sync")
+	}
+	if settings.LastSyncAttemptAt == nil ||
+		!settings.LastSyncAttemptAt.Equal(time.Date(2026, 8, 31, 23, 59, 0, 0, time.UTC)) {
+		t.Fatalf("last sync attempt %v", settings.LastSyncAttemptAt)
+	}
+
+	var (
+		storedID                    uuid.UUID
+		externalID, hash, guid      *string
+		syncState                   string
+		createdAt, remote, syncedAt time.Time
+	)
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT id, external_id, sync_state, content_hash, remote_transaction_guid,
+			created_at, remote_enter_date, last_synced_at
+		FROM external_sync WHERE system = $1 AND entity_type = $2 AND entity_id = $3`,
+		SyncSystemGnuCashWeb, SyncEntitySale, saleID).
+		Scan(&storedID, &externalID, &syncState, &hash, &guid, &createdAt, &remote,
+			&syncedAt); err != nil {
+		t.Fatalf("load restored row: %v", err)
+	}
+	if storedID != rowID {
+		t.Fatalf("row id %s was not preserved (want %s)", storedID, rowID)
+	}
+	if !createdAt.Equal(time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("created_at %s was not preserved", createdAt)
+	}
+	if derefString(externalID) != "sale:"+saleID.String() || syncState != "synced" {
+		t.Fatalf("row %s / %s", derefString(externalID), syncState)
+	}
+	if derefString(hash) != "hash-abc" || derefString(guid) != "gc-77" {
+		t.Fatalf("replay state hash=%q guid=%q", derefString(hash), derefString(guid))
+	}
+	if !remote.Equal(time.Date(2026, 8, 20, 12, 5, 0, 0, time.UTC)) {
+		t.Fatalf("remote_enter_date %s", remote)
+	}
+
+	// Restored, and still refusing to write anything until the operator has
+	// reconciled and enabled sync.
+	response, syncBody := call(t, server.handleGnuCashSyncNow,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/sync", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("sync ran straight after a restore: %d %v", response.Code, syncBody)
+	}
+
+	// The settings page shows the pending restore.
+	response, settingsBody := call(t, server.handleGnuCashSettings,
+		adminRequest(http.MethodGet, "/api/v1/settings/gnucash", nil))
+	if response.Code != http.StatusOK || settingsBody["restorePending"] != true ||
+		settingsBody["hasCursor"] != true {
+		t.Fatalf("settings do not show the pending restore: %v", settingsBody)
+	}
+	if settingsBody["lastSyncAttemptAt"] != settingsBody["lastSyncedAt"] {
+		t.Fatalf("the attempt time is reported inconsistently: %v", settingsBody)
+	}
+}
+
+// The point of holding the expected identity separately: a token that opens
+// some other book must be caught before the cursor is installed, not after
+// the first push lands in the wrong ledger.
+func TestGnuCashRestoreRefusesAMismatchedBook(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	disableGnuCashSync(t, server)
+
+	payload := restorePayload(restoreRowPayload(uuid.New(), uuid.New()))
+	payload["expectedBookGuid"] = "book-from-the-old-server"
+	code, body := postRestore(t, server, payload)
+	if code != http.StatusConflict {
+		t.Fatalf("restore against the wrong book: %d %v", code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "book-from-the-old-server") {
+		t.Fatalf("error %v does not name both books", body)
+	}
+	if settings := gnucashSettingsOf(t, server); settings.ChangesCursor != "" {
+		t.Fatalf("a cursor was installed anyway: %q", settings.ChangesCursor)
+	}
+
+	// A currency mismatch is the same class of failure.
+	payload = restorePayload()
+	payload["expectedRootCurrency"] = "CAD"
+	if code, body = postRestore(t, server, payload); code != http.StatusConflict {
+		t.Fatalf("restore against the wrong currency: %d %v", code, body)
+	}
+	if count := externalSyncCount(t, server); count != 0 {
+		t.Fatalf("%d sync rows were installed by a refused restore", count)
+	}
+}
+
+func externalSyncCount(t *testing.T, server *Server) int {
+	t.Helper()
+	var count int
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM external_sync WHERE system = $1`, SyncSystemGnuCashWeb).
+		Scan(&count); err != nil {
+		t.Fatalf("count sync rows: %v", err)
+	}
+	return count
+}
+
+// Credentials before identity before install: a restore cannot run against a
+// connection that has not been configured, and cannot run while sync is live.
+func TestGnuCashRestoreRequiresConfiguredCredentialsAndDisabledSync(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+
+	// Sync is still enabled from the fixture.
+	code, body := postRestore(t, server, restorePayload())
+	if code != http.StatusConflict {
+		t.Fatalf("restore ran with sync enabled: %d %v", code, body)
+	}
+
+	disableGnuCashSync(t, server)
+	if _, err := server.pool.Exec(context.Background(),
+		`UPDATE gnucash_sync_settings SET api_token = NULL WHERE id = true`); err != nil {
+		t.Fatalf("clear token: %v", err)
+	}
+	code, body = postRestore(t, server, restorePayload())
+	if code != http.StatusBadRequest {
+		t.Fatalf("restore ran without a token: %d %v", code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "token") {
+		t.Fatalf("error %v does not name the missing credential", body)
+	}
+	if fake.changeCallCount() != 0 {
+		t.Fatal("folio was contacted before the credentials were checked")
+	}
+}
+
+// The dry run proves the artifact would install — identity match, CHECK
+// constraints, unique indexes — and keeps nothing.
+func TestGnuCashRestoreDryRunKeepsNothing(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	disableGnuCashSync(t, server)
+
+	payload := restorePayload(restoreRowPayload(uuid.New(), uuid.New()))
+	payload["dryRun"] = true
+	code, body := postRestore(t, server, payload)
+	if code != http.StatusOK {
+		t.Fatalf("dry run: %d %v", code, body)
+	}
+	if body["dryRun"] != true || body["rowsRestored"] != float64(1) {
+		t.Fatalf("dry run report %v", body)
+	}
+	if count := externalSyncCount(t, server); count != 0 {
+		t.Fatalf("the dry run committed %d rows", count)
+	}
+	if settings := gnucashSettingsOf(t, server); settings.ChangesCursor != "" {
+		t.Fatalf("the dry run installed cursor %q", settings.ChangesCursor)
+	}
+}
+
+// The hazard the roadmap names: entering the re-excluded token after a
+// restore would clear the cursor the restore just installed. While a restore
+// is pending the credential change is refused, with a deliberate way out.
+func TestGnuCashSettingsPutCannotWipeAPendingRestore(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	disableGnuCashSync(t, server)
+	if code, body := postRestore(t, server, restorePayload()); code != http.StatusOK {
+		t.Fatalf("restore: %d %v", code, body)
+	}
+
+	response, body := call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"apiToken": "gcw_typed_again",
+		}))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("a token change wiped a pending restore: %d %v", response.Code, body)
+	}
+	if cursor := storedCursor(t, server); cursor != "cursor-42" {
+		t.Fatalf("cursor %q did not survive the refused change", cursor)
+	}
+
+	// Changes that are not credential changes still work.
+	response, body = call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"accountMapping": fullMapping(),
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("mapping save during a restore: %d %v", response.Code, body)
+	}
+	if cursor := storedCursor(t, server); cursor != "cursor-42" {
+		t.Fatalf("a mapping save cleared the cursor: %q", cursor)
+	}
+
+	// And the operator can still walk away from the restore on purpose.
+	response, body = call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"apiToken": "gcw_typed_again", "discardRestore": true,
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("explicit discard: %d %v", response.Code, body)
+	}
+	if cursor := storedCursor(t, server); cursor != "" {
+		t.Fatalf("cursor %q survived an explicit discard", cursor)
+	}
+	if settings := gnucashSettingsOf(t, server); settings.BookGUID != "" {
+		t.Fatalf("book identity %q survived an explicit discard", settings.BookGUID)
+	}
+}
+
+// A malformed artifact fails with a message naming the row and the field,
+// before folio is contacted and before anything is written.
+func TestGnuCashRestoreRejectsAMalformedArtifact(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	disableGnuCashSync(t, server)
+	saleID := uuid.New()
+
+	cases := []struct {
+		name   string
+		mutate func(row map[string]any, payload map[string]any)
+		want   string
+	}{
+		{"unknown entity type", func(row, _ map[string]any) {
+			row["entityType"] = "unicorn"
+		}, "entity type"},
+		{"unknown sync state", func(row, _ map[string]any) {
+			row["syncState"] = "half_done"
+		}, "sync state"},
+		{"external id does not match the entity", func(row, _ map[string]any) {
+			row["externalId"] = "sale:" + uuid.NewString()
+		}, "does not match"},
+		{"synced row with no external id", func(row, _ map[string]any) {
+			row["externalId"] = ""
+		}, "external id"},
+		{"missing expected book", func(_, payload map[string]any) {
+			payload["expectedBookGuid"] = ""
+		}, "expectedBookGuid"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			row := restoreRowPayload(uuid.New(), saleID)
+			payload := restorePayload(row)
+			testCase.mutate(row, payload)
+			code, body := postRestore(t, server, payload)
+			if code != http.StatusBadRequest {
+				t.Fatalf("malformed artifact accepted: %d %v", code, body)
+			}
+			message, _ := body["error"].(string)
+			if !strings.Contains(message, testCase.want) {
+				t.Fatalf("error %q does not mention %q", message, testCase.want)
+			}
+			if count := externalSyncCount(t, server); count != 0 {
+				t.Fatalf("%d rows written by a rejected restore", count)
+			}
+		})
+	}
+
+	// The same entity twice in one artifact is a re-key bug, not a merge.
+	row := restoreRowPayload(uuid.New(), saleID)
+	twin := restoreRowPayload(uuid.New(), saleID)
+	code, body := postRestore(t, server, restorePayload(row, twin))
+	if code != http.StatusBadRequest {
+		t.Fatalf("duplicate entity accepted: %d %v", code, body)
+	}
+}
+
+// Existing sync rows are reported, not silently merged: the restore expects
+// an empty sync state and says so.
+func TestGnuCashRestoreRefusesToMergeIntoExistingSyncRows(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedAppliedSale(t, server, jarSizeID, 1, 1200)
+	runSync(t, server)
+	if externalSyncCount(t, server) == 0 {
+		t.Fatal("the fixture produced no sync rows")
+	}
+	disableGnuCashSync(t, server)
+
+	rowID, saleID := uuid.New(), uuid.New()
+	code, body := postRestore(t, server, restorePayload(restoreRowPayload(rowID, saleID)))
+	if code != http.StatusConflict {
+		t.Fatalf("restore merged into a populated sync state: %d %v", code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "replaceExisting") {
+		t.Fatalf("error %v does not name the resolution", body)
+	}
+
+	payload := restorePayload(restoreRowPayload(rowID, saleID))
+	payload["replaceExisting"] = true
+	code, body = postRestore(t, server, payload)
+	if code != http.StatusOK {
+		t.Fatalf("explicit replace: %d %v", code, body)
+	}
+	if body["rowsReplaced"] == float64(0) {
+		t.Fatalf("the report does not say what was discarded: %v", body)
+	}
+	if count := externalSyncCount(t, server); count != 1 {
+		t.Fatalf("%d rows after the replace, want exactly the artifact's 1", count)
 	}
 }

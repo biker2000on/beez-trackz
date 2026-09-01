@@ -30,6 +30,30 @@ import {
 /** Sentinel for "not mapped" in the account selects. */
 const UNMAPPED = "__unmapped__";
 
+/**
+ * Fields the P0 guarded-restore work added to GET/PUT /settings/gnucash that
+ * the shared GnuCashSettings type in ./api does not declare yet. They are
+ * read through a local widening rather than by editing the shared type, which
+ * belongs to the wave that lands the restore client. Both are optional, so an
+ * older server simply reads as "no restore pending".
+ *
+ * - restorePending: a preserved change cursor and book identity are installed
+ *   and sync is still disabled, i.e. the post-restore reconciliation has not
+ *   been signed off.
+ * - lastSyncAttemptAt: the same value as lastSyncedAt, under the name that
+ *   says what it is. The server stamps it at the end of every run, including
+ *   a run whose pull failed and which therefore pushed nothing.
+ */
+type GnuCashRestoreState = {
+  restorePending?: boolean;
+  lastSyncAttemptAt?: string | null;
+};
+
+/** discardRestore is the explicit "drop the restored cursor" acknowledgement. */
+type GnuCashSettingsPatch = Parameters<
+  ReturnType<typeof useUpdateGnuCashSettings>["mutate"]
+>[0] & { discardRestore?: boolean };
+
 /** Human labels for the slots that are not a sale kind or expense category. */
 const LEDGER_SLOTS: { key: LedgerSlot; label: string; hint: string }[] = [
   { key: "cash", label: "Cash / bank", hint: "Required. Funds every entry." },
@@ -139,11 +163,14 @@ function ConflictRow({
   onPush,
   onIgnore,
   busy,
+  canPush,
 }: {
   row: GnuCashRow;
   onPush: (id: string) => void;
   onIgnore: (id: string) => void;
   busy: boolean;
+  /** False while sync is disabled: the server refuses this write too. */
+  canPush: boolean;
 }) {
   return (
     <li className="grid gap-2 rounded-md border p-3 text-sm">
@@ -165,7 +192,10 @@ function ConflictRow({
           type="button"
           size="sm"
           variant="outline"
-          disabled={busy}
+          disabled={busy || !canPush}
+          title={
+            canPush ? undefined : "Enable GnuCash sync before writing to the book"
+          }
           onClick={() => onPush(row.id)}
         >
           Push local again
@@ -211,11 +241,16 @@ export function GnuCashSection() {
   }
 
   const data: GnuCashSettings = settings.data;
+  const restoreState = data as GnuCashSettings & GnuCashRestoreState;
+  const restorePending = restoreState.restorePending === true;
+  // Both names carry the same column; prefer the honest one when the server
+  // sends it.
+  const lastAttemptAt = restoreState.lastSyncAttemptAt ?? data.lastSyncedAt;
   const mapping = data.accountMapping ?? {};
   const accountList = accounts.data?.accounts ?? [];
   const busy = update.isPending || push.isPending || ignore.isPending;
 
-  function save(payload: Parameters<typeof update.mutate>[0], done?: string) {
+  function save(payload: GnuCashSettingsPatch, done?: string) {
     update.mutate(payload, {
       onSuccess: () => {
         if (done) toast.success(done);
@@ -367,9 +402,43 @@ export function GnuCashSection() {
           />
           <span>
             Sync enabled. Runs are still started by hand below; this flag marks
-            the integration as live.
+            the integration as live. While it is off the server refuses every
+            push, not just the button.
           </span>
         </label>
+
+        {restorePending ? (
+          <div className="grid gap-2 rounded-md border border-warning/40 bg-warning/5 p-3">
+            <p className="flex items-center gap-1 text-sm font-medium">
+              <AlertTriangle className="size-4 shrink-0 text-warning" />
+              Restored sync state, reconciliation pending
+            </p>
+            <p className="text-xs text-muted-foreground">
+              A snapshot restore installed this book identity, the change
+              cursor, and the per-entry sync state after proving these
+              credentials open the same book. Nothing is pushed until you run
+              the pull-first reconciliation and the no-write push dry run, then
+              enable sync. Changing the server or token is refused while this
+              is pending, so re-entering the token cannot wipe the restore.
+            </p>
+            <div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  save(
+                    { discardRestore: true },
+                    "Discarded the restored book and cursor",
+                  )
+                }
+              >
+                Discard restored sync state
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <Separator />
@@ -466,7 +535,12 @@ export function GnuCashSection() {
           <Button
             type="button"
             size="sm"
-            disabled={sync.isPending}
+            disabled={sync.isPending || !data.syncEnabled}
+            title={
+              data.syncEnabled
+                ? undefined
+                : "Sync is disabled. The server refuses every push until you enable it."
+            }
             onClick={() =>
               sync.mutate(undefined, {
                 onSuccess: (report) => {
@@ -495,8 +569,15 @@ export function GnuCashSection() {
             Sync now
           </Button>
           <span className="text-xs text-muted-foreground">
-            Last run {formatTimestamp(data.lastSyncedAt)}
+            {/* The column is stamped on every run, including one whose pull
+                failed and which pushed nothing, so it is an attempt time. */}
+            Last attempt {formatTimestamp(lastAttemptAt)}
           </span>
+          {data.syncEnabled ? null : (
+            <span className="text-xs text-muted-foreground">
+              Sync is disabled — pushes are refused by the server.
+            </span>
+          )}
         </div>
 
         <dl className="flex flex-wrap gap-4 text-sm">
@@ -527,6 +608,7 @@ export function GnuCashSection() {
                   key={row.id}
                   row={row}
                   busy={busy}
+                  canPush={data.syncEnabled}
                   onPush={(id) =>
                     push.mutate(id, {
                       onSuccess: () => {
