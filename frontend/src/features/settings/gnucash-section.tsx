@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import {
+  useAcknowledgeGnuCashRestore,
   useGnuCashAccounts,
   useGnuCashRows,
   useGnuCashSettings,
@@ -25,34 +26,11 @@ import {
   type GnuCashAccountMapping,
   type GnuCashRow,
   type GnuCashSettings,
+  type GnuCashSettingsPayload,
 } from "./api";
 
 /** Sentinel for "not mapped" in the account selects. */
 const UNMAPPED = "__unmapped__";
-
-/**
- * Fields the P0 guarded-restore work added to GET/PUT /settings/gnucash that
- * the shared GnuCashSettings type in ./api does not declare yet. They are
- * read through a local widening rather than by editing the shared type, which
- * belongs to the wave that lands the restore client. Both are optional, so an
- * older server simply reads as "no restore pending".
- *
- * - restorePending: a preserved change cursor and book identity are installed
- *   and sync is still disabled, i.e. the post-restore reconciliation has not
- *   been signed off.
- * - lastSyncAttemptAt: the same value as lastSyncedAt, under the name that
- *   says what it is. The server stamps it at the end of every run, including
- *   a run whose pull failed and which therefore pushed nothing.
- */
-type GnuCashRestoreState = {
-  restorePending?: boolean;
-  lastSyncAttemptAt?: string | null;
-};
-
-/** discardRestore is the explicit "drop the restored cursor" acknowledgement. */
-type GnuCashSettingsPatch = Parameters<
-  ReturnType<typeof useUpdateGnuCashSettings>["mutate"]
->[0] & { discardRestore?: boolean };
 
 /** Human labels for the slots that are not a sale kind or expense category. */
 const LEDGER_SLOTS: { key: LedgerSlot; label: string; hint: string }[] = [
@@ -228,6 +206,7 @@ export function GnuCashSection() {
   const [baseUrlDraft, setBaseUrlDraft] = React.useState<string | null>(null);
   const [loadAccounts, setLoadAccounts] = React.useState(false);
   const accounts = useGnuCashAccounts(loadAccounts);
+  const acknowledge = useAcknowledgeGnuCashRestore();
 
   if (settings.isError) {
     return (
@@ -241,16 +220,17 @@ export function GnuCashSection() {
   }
 
   const data: GnuCashSettings = settings.data;
-  const restoreState = data as GnuCashSettings & GnuCashRestoreState;
-  const restorePending = restoreState.restorePending === true;
-  // Both names carry the same column; prefer the honest one when the server
-  // sends it.
-  const lastAttemptAt = restoreState.lastSyncAttemptAt ?? data.lastSyncedAt;
+  // restore_state (00049) is the durable window, not a guess from "cursor
+  // present and sync off": pausing a healthy integration is not a restore.
+  const restorePending = data.restorePending;
+  const reconciled = data.restoreState === "reconciled";
+  // Both names carry the same column; prefer the honest one.
+  const lastAttemptAt = data.lastSyncAttemptAt ?? data.lastSyncedAt;
   const mapping = data.accountMapping ?? {};
   const accountList = accounts.data?.accounts ?? [];
   const busy = update.isPending || push.isPending || ignore.isPending;
 
-  function save(payload: GnuCashSettingsPatch, done?: string) {
+  function save(payload: GnuCashSettingsPayload, done?: string) {
     update.mutate(payload, {
       onSuccess: () => {
         if (done) toast.success(done);
@@ -398,12 +378,20 @@ export function GnuCashSection() {
             type="checkbox"
             className="mt-1 size-4 accent-primary"
             checked={data.syncEnabled}
+            disabled={busy || restorePending}
             onChange={(event) => save({ syncEnabled: event.target.checked })}
           />
           <span>
             Sync enabled. Runs are still started by hand below; this flag marks
             the integration as live. While it is off the server refuses every
             push, not just the button.
+            {restorePending ? (
+              <span className="block text-xs text-muted-foreground">
+                Locked until the restored sync state below is reconciled. The
+                server refuses to enable it, so this is not only a disabled
+                checkbox.
+              </span>
+            ) : null}
           </span>
         </label>
 
@@ -421,12 +409,34 @@ export function GnuCashSection() {
               enable sync. Changing the server or token is refused while this
               is pending, so re-entering the token cannot wipe the restore.
             </p>
-            <div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || acknowledge.isPending}
+                onClick={() =>
+                  acknowledge.mutate(undefined, {
+                    onSuccess: () =>
+                      toast.success(
+                        "Reconciliation acknowledged. You can enable sync when you are ready.",
+                      ),
+                    onError: (error) =>
+                      toast.error(
+                        errorMessage(
+                          error,
+                          "Could not acknowledge the reconciliation",
+                        ),
+                      ),
+                  })
+                }
+              >
+                I have reconciled this restore
+              </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={busy}
+                disabled={busy || acknowledge.isPending}
                 onClick={() =>
                   save(
                     { discardRestore: true },
@@ -437,6 +447,19 @@ export function GnuCashSection() {
                 Discard restored sync state
               </Button>
             </div>
+          </div>
+        ) : null}
+
+        {reconciled ? (
+          <div className="grid gap-1 rounded-md border p-3">
+            <p className="flex items-center gap-1 text-sm font-medium">
+              <CheckCircle2 className="size-4 shrink-0 text-success" />
+              Restore reconciled
+            </p>
+            <p className="text-xs text-muted-foreground">
+              The reconciliation is signed off. Enable sync above when you are
+              ready for beez to push into this book again.
+            </p>
           </div>
         ) : null}
       </div>

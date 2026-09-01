@@ -419,7 +419,25 @@ export interface GnuCashSettings {
   syncEnabled: boolean;
   accountMapping: GnuCashAccountMapping;
   lastSyncedAt: string | null;
+  /**
+   * The same column as lastSyncedAt, under the name that says what it is: the
+   * server stamps it at the end of every run, including a run whose pull
+   * failed and which therefore pushed nothing.
+   */
+  lastSyncAttemptAt: string | null;
   hasCursor: boolean;
+  /**
+   * gnucash_sync_settings.restore_state (migration 00049).
+   *
+   * - "none": ordinary operation.
+   * - "installed": a guarded snapshot restore installed this book identity,
+   *   change cursor, and per-entry sync state. Sync stays disabled and the
+   *   server refuses to enable it until the reconciliation is acknowledged.
+   * - "reconciled": acknowledged. Sync may be enabled again.
+   */
+  restoreState: "none" | "installed" | "reconciled";
+  /** True exactly when restoreState is "installed". */
+  restorePending: boolean;
   /** Kinds and categories come from the server so the editor cannot drift
    * from the database CHECK lists. */
   saleLineKinds: string[];
@@ -432,6 +450,21 @@ export interface GnuCashSettingsPayload {
   apiToken?: string;
   syncEnabled?: boolean;
   accountMapping?: GnuCashAccountMapping;
+  /**
+   * The explicit "drop the restored book identity and cursor" acknowledgement.
+   * Without it, a credential change that would wipe a pending restore is
+   * refused rather than performed.
+   */
+  discardRestore?: boolean;
+}
+
+/** POST /settings/gnucash/restore with markReconciled. */
+export interface GnuCashReconcileResult {
+  success: boolean;
+  restoreState: "none" | "installed" | "reconciled";
+  restorePending: boolean;
+  syncEnabled: boolean;
+  nextSteps: string[];
 }
 
 export interface GnuCashTestResult {
@@ -485,6 +518,24 @@ export function useUpdateGnuCashSettings() {
   return useMutation({
     mutationFn: (payload: GnuCashSettingsPayload) =>
       api.put<{ success: boolean }>("/settings/gnucash", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+/**
+ * Acknowledges the post-restore reconciliation. It does not enable sync: it
+ * moves restore_state from "installed" to "reconciled", which is the only
+ * state the server will accept syncEnabled: true from after a restore.
+ */
+export function useAcknowledgeGnuCashRestore() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<GnuCashReconcileResult>("/settings/gnucash/restore", {
+        markReconciled: true,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
     },

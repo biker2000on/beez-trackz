@@ -72,21 +72,48 @@ type gnucashSettings struct {
 	// report both carry it under the attempt name so a restored book is not
 	// reconciled against a time nothing was ever synced at.
 	LastSyncAttemptAt *time.Time
+	// RestoreState is gnucash_sync_settings.restore_state (00049). See the
+	// constants below: it is the durable replacement for what used to be
+	// guessed from "cursor present and sync off".
+	RestoreState string
 }
 
-// restorePending reports that a guarded restore has installed a book identity
-// and a preserved cursor which no reconciliation has cleared yet. Sync is
-// disabled for the whole restore window by contract, so the three conditions
-// together are the window.
+// The three values of gnucash_sync_settings.restore_state (00049).
+const (
+	// restoreStateNone is ordinary operation: nothing restored, or the
+	// restore was finished or deliberately discarded.
+	restoreStateNone = "none"
+	// restoreStateInstalled is the restore window. The guarded restore proved
+	// the credentials open the artifact's book and installed the preserved
+	// cursor, book identity, and per-row sync state. Sync stays disabled.
+	restoreStateInstalled = "installed"
+	// restoreStateReconciled is the admin acknowledgement that the pull-first
+	// reconciliation and the no-write push dry run passed. It is the only
+	// state from which sync may be re-enabled after a restore.
+	restoreStateReconciled = "reconciled"
+)
+
+// restorePending reports that a guarded restore installed a book identity and
+// a preserved cursor which no reconciliation has signed off yet.
 //
-// It is derived rather than stored because gnucash_sync_settings has no
-// restore-state column and this wave does not own the migration chain; see
-// the note in handleGnuCashRestore. The cost of deriving it is that an
-// operator who merely paused sync after a successful run also has to say
-// discardRestore before rotating credentials, which is a refusal with a
-// remedy rather than a silent wipe.
+// Before 00049 this was derived — book identity present, cursor present, sync
+// disabled — which was both a false positive for an operator who had merely
+// paused a healthy integration and unclearable except by changing one of its
+// three inputs. It is now the stored column, so pausing sync is not a restore
+// and the sign-off has somewhere to be recorded.
 func (settings gnucashSettings) restorePending() bool {
-	return !settings.SyncEnabled && settings.BookGUID != "" && settings.ChangesCursor != ""
+	return settings.RestoreState == restoreStateInstalled
+}
+
+// normalizedRestoreState keeps a zero-valued struct (test fixtures, the
+// unconfigured singleton) writable against the 00049 CHECK.
+func (settings gnucashSettings) normalizedRestoreState() string {
+	switch settings.RestoreState {
+	case restoreStateInstalled, restoreStateReconciled:
+		return settings.RestoreState
+	default:
+		return restoreStateNone
+	}
 }
 
 // loadGnuCashSettings reads the singleton. A missing row is the unconfigured
@@ -114,12 +141,15 @@ func scanGnuCashSettings(
 	)
 	err := q.QueryRow(ctx, `
 		SELECT base_url, api_token, book_guid, book_name, root_currency,
-			changes_cursor, sync_enabled, account_mapping, last_synced_at
+			changes_cursor, sync_enabled, account_mapping, last_synced_at,
+			restore_state
 		FROM gnucash_sync_settings WHERE id = true`+lock).
 		Scan(&out.BaseURL, &token, &bookGUID, &bookName, &currency,
-			&cursor, &out.SyncEnabled, &mappingJSON, &out.LastSyncAttemptAt)
+			&cursor, &out.SyncEnabled, &mappingJSON, &out.LastSyncAttemptAt,
+			&out.RestoreState)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return gnucashSettings{}, nil
+		// The unconfigured singleton is restore_state 'none', not "".
+		return gnucashSettings{RestoreState: restoreStateNone}, nil
 	}
 	if err != nil {
 		return gnucashSettings{}, err
@@ -189,6 +219,15 @@ func (settings gnucashSettings) writeClient() (*gnucashsync.Client, error) {
 	if !settings.SyncEnabled {
 		return nil, app.Conflict("gnucash sync",
 			"GnuCash sync is disabled. Enable it in settings before pushing to the book.")
+	}
+	// Belt and braces on top of the flag. Since 00049 the settings PUT will
+	// not turn sync on while restore_state is 'installed', so this can only
+	// fire if the row was edited outside the API — which is exactly when a
+	// restored, unreconciled mapping set must not push.
+	if settings.restorePending() {
+		return nil, app.Conflict("gnucash sync",
+			"A restored GnuCash sync state is still awaiting reconciliation. "+
+				"Acknowledge the reconciliation before pushing to the book.")
 	}
 	if settings.BookGUID == "" {
 		return nil, app.Precondition("gnucash sync",
@@ -262,9 +301,12 @@ func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 		"lastSyncedAt":      settings.LastSyncAttemptAt,
 		"lastSyncAttemptAt": settings.LastSyncAttemptAt,
 		"hasCursor":         settings.ChangesCursor != "",
-		// restorePending: a preserved cursor is installed and sync is still
-		// disabled, so the reconciliation dry run has not been signed off.
+		// restorePending: the guarded restore installed a preserved cursor and
+		// book identity and the reconciliation has not been signed off.
+		// restoreState is the durable column behind it (00049): none,
+		// installed, or reconciled.
 		"restorePending":    settings.restorePending(),
+		"restoreState":      settings.normalizedRestoreState(),
 		"saleLineKinds":     gnucashsync.SaleLineKinds,
 		"expenseCategories": gnucashsync.ExpenseCategories,
 	})
@@ -346,9 +388,32 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 			if identityChanged || req.DiscardRestore {
 				settings.BookGUID, settings.BookName, settings.RootCurrency = "", "", ""
 				settings.ChangesCursor = ""
+				// The restored state went with the identity it belonged to.
+				settings.RestoreState = restoreStateNone
 			}
 
+			// The reconciliation gate (00049). Enabling sync is the act the
+			// whole restore window exists to hold back: the restored mappings
+			// and cursor have not been checked against the live book yet, so
+			// pushing now could create duplicate transactions or overwrite
+			// entries a human edited. Only the acknowledgement endpoint moves
+			// the row to 'reconciled', and only from there may sync come back
+			// on. Turning sync OFF is always allowed.
 			if req.SyncEnabled != nil {
+				if *req.SyncEnabled && !settings.SyncEnabled &&
+					settings.RestoreState == restoreStateInstalled {
+					return app.Conflict("gnucash settings",
+						"A restored GnuCash sync state is still awaiting reconciliation. "+
+							"Run the pull-first reconciliation and the no-write push dry run, "+
+							"then acknowledge it, before enabling sync. Sending discardRestore "+
+							"drops the restored state instead.")
+				}
+				if *req.SyncEnabled && settings.RestoreState == restoreStateReconciled {
+					// The restore window closes when sync comes back on: the
+					// acknowledgement has been spent and the integration is
+					// ordinary again.
+					settings.RestoreState = restoreStateNone
+				}
 				settings.SyncEnabled = *req.SyncEnabled
 			}
 			if req.AccountMapping != nil {
@@ -384,8 +449,9 @@ func saveGnuCashSettings(ctx context.Context, q app.Querier, settings gnucashSet
 	_, err = q.Exec(ctx, `
 		INSERT INTO gnucash_sync_settings
 			(id, base_url, api_token, book_guid, book_name, root_currency,
-			 changes_cursor, sync_enabled, account_mapping, last_synced_at)
-		VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9)
+			 changes_cursor, sync_enabled, account_mapping, last_synced_at,
+			 restore_state)
+		VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
 			base_url = EXCLUDED.base_url,
 			api_token = EXCLUDED.api_token,
@@ -395,11 +461,12 @@ func saveGnuCashSettings(ctx context.Context, q app.Querier, settings gnucashSet
 			changes_cursor = EXCLUDED.changes_cursor,
 			sync_enabled = EXCLUDED.sync_enabled,
 			account_mapping = EXCLUDED.account_mapping,
-			last_synced_at = EXCLUDED.last_synced_at`,
+			last_synced_at = EXCLUDED.last_synced_at,
+			restore_state = EXCLUDED.restore_state`,
 		settings.BaseURL, nullIfBlank(settings.Token), nullIfBlank(settings.BookGUID),
 		nullIfBlank(settings.BookName), nullIfBlank(settings.RootCurrency),
 		nullIfBlank(settings.ChangesCursor), settings.SyncEnabled, mappingJSON,
-		settings.LastSyncAttemptAt)
+		settings.LastSyncAttemptAt, settings.normalizedRestoreState())
 	return err
 }
 
@@ -1412,13 +1479,14 @@ func (s *Server) handleGnuCashRowIgnore(w http.ResponseWriter, r *http.Request) 
 // and the no-write push dry run come before re-enabling it, and writeClient
 // now refuses every write-capable endpoint while the flag is off.
 //
-// Known gap, deliberately not papered over: gnucash_sync_settings has no
-// restore-state column, and this wave does not own the migration chain. The
-// "a restore is pending" signal is therefore derived (see restorePending) —
-// book identity present, cursor present, sync disabled. A durable
-// restore_state column, set here and cleared by the reconciliation sign-off,
-// is the right Wave 2 follow-up; it would also let the reconciliation gate be
-// enforced rather than implied by the sync flag.
+// The pending signal is durable, not derived. This endpoint sets
+// gnucash_sync_settings.restore_state to 'installed' (00049); the
+// acknowledgement below — the same endpoint with {"markReconciled": true} -
+// moves it to 'reconciled', and that is the only route by which the settings
+// PUT will let sync be enabled again. Before 00049 the signal was guessed
+// from "book identity present, cursor present, sync disabled", which called a
+// merely-paused integration a pending restore and had nowhere to record the
+// sign-off.
 
 // gnucashRestoreRow is one preserved external_sync row from the artifact.
 type gnucashRestoreRow struct {
@@ -1458,6 +1526,12 @@ type gnucashRestoreRequest struct {
 	// DryRun validates everything, including the live identity match and the
 	// database constraints, and keeps nothing.
 	DryRun bool `json:"dryRun"`
+	// MarkReconciled is the admin acknowledgement, not a restore: it carries
+	// no artifact and takes this same endpoint because it is the other half
+	// of one operator flow. It closes the restore window opened by an earlier
+	// call, and it is the only thing that lets sync be enabled afterwards.
+	// Every other field is ignored when it is set.
+	MarkReconciled bool `json:"markReconciled"`
 }
 
 // gnucashSyncStates and gnucashConflictStates mirror the 00005 CHECKs so a
@@ -1552,6 +1626,7 @@ type gnucashRestoreResult struct {
 	RowsReplaced      int        `json:"rowsReplaced"`
 	SyncEnabled       bool       `json:"syncEnabled"`
 	RestorePending    bool       `json:"restorePending"`
+	RestoreState      string     `json:"restoreState"`
 	LastSyncAttemptAt *time.Time `json:"lastSyncAttemptAt"`
 	ExcludedConfig    []string   `json:"excludedConfig"`
 	NextSteps         []string   `json:"nextSteps"`
@@ -1563,6 +1638,10 @@ func (s *Server) handleGnuCashRestore(w http.ResponseWriter, r *http.Request) {
 	var req gnucashRestoreRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.MarkReconciled {
+		s.gnucashAcknowledgeReconciliation(w, r)
 		return
 	}
 	if err := validateGnuCashRestore(req); err != nil {
@@ -1638,13 +1717,86 @@ func (s *Server) handleGnuCashRestore(w http.ResponseWriter, r *http.Request) {
 	result.Success = true
 	result.SyncEnabled = false
 	result.RestorePending = true
+	// A dry run rolled the install back, so the row is still whatever it was.
+	if req.DryRun {
+		result.RestoreState = settings.normalizedRestoreState()
+		result.RestorePending = settings.restorePending()
+	}
 	result.ExcludedConfig = []string{
 		"gnucash_sync_settings.api_token — never exported; entered by the operator before this restore",
 	}
 	result.NextSteps = []string{
 		"Run the pull-first reconciliation and the no-write push dry run against the restored mappings.",
 		"Resolve anything quarantined as a conflict.",
-		"Only then enable GnuCash sync; every write-capable endpoint refuses until you do.",
+		"Acknowledge the reconciliation: POST /settings/gnucash/restore with markReconciled.",
+		"Only then enable GnuCash sync; the settings PUT refuses to enable it until you do.",
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// gnucashReconcileResult is the acknowledgement report.
+type gnucashReconcileResult struct {
+	Success        bool     `json:"success"`
+	RestoreState   string   `json:"restoreState"`
+	RestorePending bool     `json:"restorePending"`
+	SyncEnabled    bool     `json:"syncEnabled"`
+	NextSteps      []string `json:"nextSteps"`
+}
+
+// gnucashAcknowledgeReconciliation is POST /settings/gnucash/restore with
+// {"markReconciled": true}: the admin states that the pull-first
+// reconciliation and the no-write push dry run passed against the restored
+// mappings. It moves restore_state from 'installed' to 'reconciled' (00049)
+// and does nothing else — in particular it does NOT enable sync. Enabling is
+// a separate, deliberate act through the settings PUT, which this state is
+// the precondition for.
+//
+// It refuses from any other state so an acknowledgement cannot be banked
+// ahead of a restore: 'none' has nothing to acknowledge, and 'reconciled' is
+// already signed off.
+func (s *Server) gnucashAcknowledgeReconciliation(w http.ResponseWriter, r *http.Request) {
+	const op = "gnucash restore reconciliation"
+	var result gnucashReconcileResult
+	err := app.NewRunner(s.pool).Run(r.Context(), s.gnucashActor(r),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			settings, err := loadGnuCashSettingsForUpdate(ctx, uow)
+			if err != nil {
+				return app.Internal(op, err)
+			}
+			switch settings.normalizedRestoreState() {
+			case restoreStateInstalled:
+			case restoreStateReconciled:
+				return app.Conflict(op,
+					"The restored GnuCash sync state has already been acknowledged. "+
+						"Enable sync when you are ready.")
+			default:
+				return app.Conflict(op,
+					"There is no restored GnuCash sync state awaiting reconciliation.")
+			}
+			if settings.SyncEnabled {
+				// Unreachable through the API — the PUT will not enable sync
+				// from 'installed' — but a hand-edited row must not have its
+				// restore acknowledged while it is already pushing.
+				return app.Conflict(op,
+					"GnuCash sync is already enabled; the reconciliation is acknowledged "+
+						"before sync is turned on, not after.")
+			}
+			settings.RestoreState = restoreStateReconciled
+			if err := saveGnuCashSettings(ctx, uow, settings); err != nil {
+				return app.Internal(op, err)
+			}
+			result.RestoreState = restoreStateReconciled
+			result.SyncEnabled = settings.SyncEnabled
+			return nil
+		})
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	result.Success = true
+	result.RestorePending = false
+	result.NextSteps = []string{
+		"Enable GnuCash sync in settings when you are ready for beez to push again.",
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -1721,6 +1873,10 @@ func (s *Server) gnucashInstallRestore(
 	settings.ChangesCursor = req.ChangesCursor
 	settings.LastSyncAttemptAt = req.LastSyncAttemptAt
 	settings.SyncEnabled = false
+	// The restore window opens here and is closed only by the acknowledgement
+	// or by an explicit discardRestore (00049).
+	settings.RestoreState = restoreStateInstalled
+	result.RestoreState = restoreStateInstalled
 	if err := saveGnuCashSettings(ctx, uow, settings); err != nil {
 		return app.Internal(op, err)
 	}

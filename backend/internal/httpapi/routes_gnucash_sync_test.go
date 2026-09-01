@@ -1479,7 +1479,14 @@ func TestGnuCashSyncRefusesWhileSyncIsDisabled(t *testing.T) {
 			posts, puts, deletes, postsBefore, putsBefore, deletesBefore)
 	}
 
-	// Re-enabling through the ordinary settings PUT unblocks it again.
+	// Re-enabling through the ordinary settings PUT unblocks it again. Since
+	// 00049 this is only true because restore_state is 'none': pausing a
+	// healthy integration is not a restore. The old derived heuristic
+	// (identity + cursor + sync off) called this row "restore pending", which
+	// is exactly the false positive the column removes.
+	if settings := gnucashSettingsOf(t, server); settings.restorePending() {
+		t.Fatalf("pausing sync was read as a pending restore: %q", settings.RestoreState)
+	}
 	response, body = call(t, server.handleGnuCashSettingsPut,
 		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
 			"syncEnabled": true,
@@ -1674,6 +1681,14 @@ func TestGnuCashRestoreDryRunKeepsNothing(t *testing.T) {
 	if settings := gnucashSettingsOf(t, server); settings.ChangesCursor != "" {
 		t.Fatalf("the dry run installed cursor %q", settings.ChangesCursor)
 	}
+	// It must not open the 00049 restore window either, or a dry run would
+	// lock sync off until somebody acknowledged a restore that never ran.
+	if settings := gnucashSettingsOf(t, server); settings.RestoreState != restoreStateNone {
+		t.Fatalf("the dry run left restore_state %q", settings.RestoreState)
+	}
+	if body["restoreState"] != restoreStateNone || body["restorePending"] != false {
+		t.Fatalf("the dry run reported a pending restore: %v", body)
+	}
 }
 
 // The hazard the roadmap names: entering the re-excluded token after a
@@ -1724,6 +1739,154 @@ func TestGnuCashSettingsPutCannotWipeAPendingRestore(t *testing.T) {
 	if settings := gnucashSettingsOf(t, server); settings.BookGUID != "" {
 		t.Fatalf("book identity %q survived an explicit discard", settings.BookGUID)
 	}
+	// The restored state went with the identity it belonged to (00049).
+	if settings := gnucashSettingsOf(t, server); settings.RestoreState != restoreStateNone {
+		t.Fatalf("restore_state %q survived an explicit discard", settings.RestoreState)
+	}
+}
+
+// markReconciled is the acknowledgement half of the restore endpoint. The
+// whole point of the 00049 column is that this is the ONLY door from a
+// restored book back to a pushing one: the settings PUT refuses to enable
+// sync while the state is 'installed', however the operator asks.
+func TestGnuCashRestoreRequiresAnAcknowledgementBeforeSyncCanBeEnabled(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	disableGnuCashSync(t, server)
+
+	// Nothing to acknowledge yet.
+	code, body := postRestore(t, server, map[string]any{"markReconciled": true})
+	if code != http.StatusConflict {
+		t.Fatalf("acknowledged a restore that never happened: %d %v", code, body)
+	}
+	if settings := gnucashSettingsOf(t, server); settings.RestoreState != restoreStateNone {
+		t.Fatalf("restore_state %q after a refused acknowledgement", settings.RestoreState)
+	}
+
+	saleID := uuid.New()
+	if code, body := postRestore(t, server,
+		restorePayload(restoreRowPayload(uuid.New(), saleID))); code != http.StatusOK {
+		t.Fatalf("restore: %d %v", code, body)
+	}
+	settings := gnucashSettingsOf(t, server)
+	if settings.RestoreState != restoreStateInstalled || !settings.restorePending() {
+		t.Fatalf("restore did not open the window: %q", settings.RestoreState)
+	}
+
+	// The gate: enabling sync is refused while the reconciliation is pending.
+	response, body := call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"syncEnabled": true,
+		}))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("sync was enabled with a restore pending: %d %v", response.Code, body)
+	}
+	if settings := gnucashSettingsOf(t, server); settings.SyncEnabled {
+		t.Fatal("sync_enabled is true with a restore pending")
+	}
+	// A mapping save alongside the refused flag must not have landed either:
+	// the whole unit of work is rejected.
+	response, body = call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"syncEnabled": true, "baseUrl": fake.server.URL,
+		}))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("sync was enabled alongside another field: %d %v", response.Code, body)
+	}
+	if cursor := storedCursor(t, server); cursor != "cursor-42" {
+		t.Fatalf("the refused save disturbed the restored cursor: %q", cursor)
+	}
+
+	// The acknowledgement itself does not enable sync; it only unlocks it.
+	code, body = postRestore(t, server, map[string]any{"markReconciled": true})
+	if code != http.StatusOK {
+		t.Fatalf("acknowledge: %d %v", code, body)
+	}
+	if body["restoreState"] != restoreStateReconciled || body["restorePending"] != false {
+		t.Fatalf("acknowledgement report %v", body)
+	}
+	settings = gnucashSettingsOf(t, server)
+	if settings.RestoreState != restoreStateReconciled {
+		t.Fatalf("restore_state %q after the acknowledgement", settings.RestoreState)
+	}
+	if settings.SyncEnabled {
+		t.Fatal("the acknowledgement enabled sync by itself")
+	}
+	if settings.ChangesCursor != "cursor-42" || settings.BookGUID != "book-1" {
+		t.Fatalf("the acknowledgement disturbed the restored state: %+v", settings)
+	}
+
+	// Acknowledging twice is a conflict, not a no-op that hides a second
+	// restore nobody signed off.
+	if code, body := postRestore(t, server,
+		map[string]any{"markReconciled": true}); code != http.StatusConflict {
+		t.Fatalf("double acknowledgement: %d %v", code, body)
+	}
+
+	// And now sync may be enabled. Doing so closes the restore window.
+	response, body = call(t, server.handleGnuCashSettingsPut,
+		adminRequest(http.MethodPut, "/api/v1/settings/gnucash", map[string]any{
+			"syncEnabled": true,
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("enable after acknowledgement: %d %v", response.Code, body)
+	}
+	settings = gnucashSettingsOf(t, server)
+	if !settings.SyncEnabled || settings.RestoreState != restoreStateNone {
+		t.Fatalf("after enabling: enabled=%v state=%q", settings.SyncEnabled, settings.RestoreState)
+	}
+	if settings.ChangesCursor != "cursor-42" {
+		t.Fatalf("enabling sync dropped the restored cursor: %q", settings.ChangesCursor)
+	}
+}
+
+// The write endpoints refuse for a second reason now: a row whose
+// sync_enabled was forced on outside the API while a restore is pending must
+// still not push. The flag is the operator-facing switch; restore_state is
+// the contract.
+func TestGnuCashWritesRefuseAPendingRestoreEvenWithSyncForcedOn(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, fullMapping())
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	saleID := seedAppliedSale(t, server, jarSizeID, 1, 1200)
+	runSync(t, server)
+	row := syncRowFor(t, server, SyncEntitySale, saleID)
+	disableGnuCashSync(t, server)
+	if code, body := postRestore(t, server,
+		mergeRestorePayload(restorePayload(), map[string]any{"replaceExisting": true})); code != http.StatusOK {
+		t.Fatalf("restore: %d %v", code, body)
+	}
+	// Straight to the column, the way a hand-edited database would.
+	if _, err := server.pool.Exec(context.Background(),
+		`UPDATE gnucash_sync_settings SET sync_enabled = true WHERE id = true`); err != nil {
+		t.Fatalf("force sync on: %v", err)
+	}
+	postsBefore, putsBefore, deletesBefore := fake.counts()
+
+	response, body := call(t, server.handleGnuCashSyncNow,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/sync", nil))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("sync ran during a pending restore: %d %v", response.Code, body)
+	}
+	response, body = call(t, server.handleGnuCashRowPush,
+		adminRequest(http.MethodPost, "/api/v1/settings/gnucash/rows/x/push", nil,
+			"id", row.ID.String()))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("force push ran during a pending restore: %d %v", response.Code, body)
+	}
+	if posts, puts, deletes := fake.counts(); posts != postsBefore || puts != putsBefore ||
+		deletes != deletesBefore {
+		t.Fatalf("folio was written to during a pending restore: %d/%d/%d, want %d/%d/%d",
+			posts, puts, deletes, postsBefore, putsBefore, deletesBefore)
+	}
+}
+
+// mergeRestorePayload overlays fields on a restore payload.
+func mergeRestorePayload(base, extra map[string]any) map[string]any {
+	for key, value := range extra {
+		base[key] = value
+	}
+	return base
 }
 
 // A malformed artifact fails with a message naming the row and the field,
