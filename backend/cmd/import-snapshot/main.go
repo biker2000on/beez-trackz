@@ -335,6 +335,16 @@ func domainOrder(artifact *snapshot.Artifact) []string {
 		if check.FromDomain == check.ToDomain || check.Name == "media_files_current_transcript_version" || !present[check.FromDomain] || !present[check.ToDomain] {
 			continue
 		}
+		// An unpopulated reference cannot be violated by this artifact, so it
+		// must not constrain the order. Without this, the inspections ↔
+		// media_files reference pair forms a cycle even when zero media rows
+		// exist, stalls every transitive dependent (feedings, and through it
+		// feeding_status_backfills), and the alphabetical fallback then
+		// inserts backfills before feedings — 81 FK failures on the first
+		// real-data rehearsal.
+		if check.PopulatedCount == 0 {
+			continue
+		}
 		if edges[check.ToDomain] == nil {
 			edges[check.ToDomain] = map[string]bool{}
 		}

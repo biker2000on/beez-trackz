@@ -86,7 +86,26 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    Beez stays authoritative for physical quantities. Next: preserve the
    current data in a portable snapshot before rebuilding inventory and the
    application workflows.
-8. **P0 — Portable snapshot and verified restore.** Define the canonical,
+8. ~~**P0 — Portable snapshot and verified restore.**~~ — **shipped 2026-09-01**
+   (Polyagent runs `20260901-p0-wave1-bz01` / `20260901-p0-wave2-bz01` /
+   `20260901-folio-verify-bz01`; migration 00049). Format spec
+   (`docs/snapshot-format.md`), exporter/importer/roundtrip-gate CLIs,
+   `backend/internal/app` restore foundation, GnuCash guarded restore with
+   durable `restore_state`, folio verify-by-external-ID API, and the operator
+   runbook (`docs/restore-runbook.md`). **The rehearsal ran against a copy of
+   prod the same day and passed**: 1,024 records across 65 domains,
+   record-digest equality, proven no-write dry run, idempotent second import
+   (gate wrapping checksum `53e00e25…`). The rehearsal surfaced and fixed
+   three real defects: unpopulated reference cycles stalling the import order
+   (81 FK failures), raw double-precision aggregate sums breaking comparison,
+   and the comparator failing importer-migrates-to-head. Current prod has no
+   media, no transcripts, and no GnuCash sync state, so the media hash gate
+   and sync replay boundary are vacuously satisfied for this dataset — a
+   fresh snapshot + gate run remains mandatory immediately before the actual
+   reset (see the runbook's reset procedure and STOP table). Deferred by
+   design to the ledger rewrite: entity re-key + content-hash rebaseline, and
+   the beez-side reconciliation sweep that consumes folio's verify endpoint.
+   Original item follows for reference: define the canonical,
    versioned export/import contract; export the current imported data; validate
    and round-trip it into an empty database. No destructive schema reset starts
    until this recovery artifact passes the acceptance criteria below.

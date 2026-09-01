@@ -49,9 +49,21 @@ func compareManifests(source, restored *artifact) []finding {
 			source.Manifest.ExporterVersion, restored.Manifest.ExporterVersion))
 	}
 	if source.Manifest.SchemaMigration != restored.Manifest.SchemaMigration {
-		findings = append(findings, fail(stepCompare, "schema-migration-drift",
-			"source schema migration %d, disposable target %d — the rehearsal restores into the same chain",
-			source.Manifest.SchemaMigration, restored.Manifest.SchemaMigration))
+		// The importer always migrates the disposable target to the head of
+		// the chain, so a target that is AHEAD of the source is the normal
+		// rehearsal shape (e.g. a 48-schema prod export restored into 49).
+		// Record-digest equality is what proves the newer schema changed
+		// nothing exported. A target BEHIND the source is impossible without
+		// a broken migration step and stays a failure.
+		if restored.Manifest.SchemaMigration > source.Manifest.SchemaMigration {
+			findings = append(findings, explained(stepCompare, "schema-migration-ahead",
+				"source schema migration %d, disposable target %d (importer migrates to head; record digests prove equivalence)",
+				source.Manifest.SchemaMigration, restored.Manifest.SchemaMigration))
+		} else {
+			findings = append(findings, fail(stepCompare, "schema-migration-drift",
+				"source schema migration %d, disposable target %d — the rehearsal restores into the same chain",
+				source.Manifest.SchemaMigration, restored.Manifest.SchemaMigration))
+		}
 	}
 	if !equalJSON(source.Manifest.Canonical, restored.Manifest.Canonical) {
 		findings = append(findings, fail(stepCompare, "canonical-declaration-drift",

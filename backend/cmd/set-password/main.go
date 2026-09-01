@@ -60,26 +60,27 @@ func main() {
 	var (
 		id      string
 		subject *string
+		hasHash bool
 	)
 	if email != "" {
 		err = pool.QueryRow(ctx, `
-			SELECT id::text, auth_subject FROM app_users
+			SELECT id::text, auth_subject, password_hash IS NOT NULL FROM app_users
 			WHERE is_active AND email IS NOT NULL AND lower(email)=lower($1)`,
-			email).Scan(&id, &subject)
+			email).Scan(&id, &subject, &hasHash)
 	} else {
 		err = pool.QueryRow(ctx, `
-			SELECT id::text, auth_subject FROM app_users
+			SELECT id::text, auth_subject, password_hash IS NOT NULL FROM app_users
 			WHERE is_active AND (
 				(username IS NOT NULL AND lower(username)=lower($1))
 				OR lower(coalesce(display_name,''))=lower($1)
-			)`, username).Scan(&id, &subject)
+			)`, username).Scan(&id, &subject, &hasHash)
 	}
 	if err != nil && username != "" {
 		// Local/dev often has a single SSO owner with no email yet.
 		err = pool.QueryRow(ctx, `
-			SELECT id::text, auth_subject FROM app_users
+			SELECT id::text, auth_subject, password_hash IS NOT NULL FROM app_users
 			WHERE is_active AND auth_subject IS NOT NULL AND auth_subject <> ''
-			ORDER BY created_at ASC LIMIT 2`).Scan(&id, &subject)
+			ORDER BY created_at ASC LIMIT 2`).Scan(&id, &subject, &hasHash)
 		var extra string
 		if err == nil {
 			_ = pool.QueryRow(ctx, `
@@ -95,9 +96,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "no active SSO user matched")
 		os.Exit(1)
 	}
-	if subject == nil || *subject == "" {
+	if !passwordSetAllowed(subject, hasHash) {
 		fmt.Fprintln(os.Stderr, "that user has never signed in with SSO")
 		os.Exit(1)
+	}
+	if (subject == nil || *subject == "") && !hasHash {
+		fmt.Fprintln(os.Stderr, "note: account has no credentials (post-restore recovery); setting initial password")
 	}
 
 	password := os.Getenv("PASSWORD")

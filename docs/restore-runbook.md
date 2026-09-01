@@ -475,11 +475,14 @@ session; an anonymous setup is refused (`Sign in with SSO first to add a
 password`).
 
 **Password-only instance (OIDC not configured):** `POST /api/v1/auth/login`
-has no hash to check. `backend/cmd/set-password` refuses a user who has never
-signed in with SSO (`that user has never signed in with SSO`). That is a
-**STOP** for sign-in until OIDC is available or a later change documents a
-bootstrap that does not forge `auth_subject`. Do not use one-off SQL as the
-restore path.
+has no hash to check after a restore. The recovery path is
+`backend/cmd/set-password --email you@example.com` (or `--username`), run
+locally with `DATABASE_URL` pointed at the restored database: it now accepts
+an account that has **neither** an SSO subject **nor** a password hash — the
+post-restore state — and prints a recovery note when it does
+(`cmd/set-password/eligibility.go`). An account that still holds a password
+hash but no SSO subject remains refused, so the recovery path cannot be used
+to overwrite a live credential. Do not use one-off SQL as the restore path.
 
 ### 5.2 API tokens
 

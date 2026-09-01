@@ -1,9 +1,13 @@
 package snapshot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -32,7 +36,7 @@ WITH global_honey AS (
 func legacySpecs(currency string) []legacySpec {
 	def := func(name, version, description, unit string, dimensions, statuses []string, sign string) AggregateDefinition {
 		return AggregateDefinition{Name: name, Version: version, Description: description,
-			Statuses: statuses, Dimensions: dimensions, Unit: unit, Rounding: "no aggregate rounding; canonical fixed-decimal JSON; UI-only displays may round",
+			Statuses: statuses, Dimensions: dimensions, Unit: unit, Rounding: "fractional aggregate values rounded half-away-from-zero to 6 decimal places before canonicalization (double-precision SUM is order-sensitive at ~1e-13 and restore changes physical row order); integers unrounded",
 			SignConvention: sign, QueryVersion: LegacyAggregateFamily}
 	}
 	return []legacySpec{
@@ -66,7 +70,11 @@ func computeLegacyAggregates(ctx context.Context, tx pgx.Tx, currency string) ([
 		if err := tx.QueryRow(ctx, spec.query).Scan(&raw); err != nil {
 			return nil, fmt.Errorf("aggregate %s: %w", spec.definition.Name, err)
 		}
-		canonical, err := CanonicalJSON(raw)
+		rounded, err := roundAggregateValue(raw)
+		if err != nil {
+			return nil, fmt.Errorf("aggregate %s round: %w", spec.definition.Name, err)
+		}
+		canonical, err := CanonicalJSON(rounded)
 		if err != nil {
 			return nil, fmt.Errorf("aggregate %s canonicalize: %w", spec.definition.Name, err)
 		}
@@ -74,6 +82,50 @@ func computeLegacyAggregates(ctx context.Context, tx pgx.Tx, currency string) ([
 		out = append(out, spec.definition)
 	}
 	return out, nil
+}
+
+// roundAggregateValue applies the declared aggregate rounding rule: every
+// fractional JSON number is rounded half-away-from-zero to 6 decimal places.
+// Double-precision SUM() is order-sensitive in its last bits, and a restore
+// legitimately changes physical row order, so raw sums differ at ~1e-13
+// between an export and its re-export. Integers pass through untouched.
+func roundAggregateValue(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	rounded := roundFractions(value)
+	return json.Marshal(rounded)
+}
+
+func roundFractions(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			typed[key] = roundFractions(item)
+		}
+		return typed
+	case []any:
+		for i, item := range typed {
+			typed[i] = roundFractions(item)
+		}
+		return typed
+	case json.Number:
+		text := typed.String()
+		if !strings.ContainsAny(text, ".eE") {
+			return typed
+		}
+		parsed, err := typed.Float64()
+		if err != nil {
+			return typed
+		}
+		scaled := math.Round(parsed*1e6) / 1e6
+		return json.Number(strconv.FormatFloat(scaled, 'f', -1, 64))
+	default:
+		return value
+	}
 }
 
 func newLedgerFamily() AggregateFamily {
