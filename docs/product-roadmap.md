@@ -44,6 +44,12 @@ Sources for the open items below:
 - Requested 2026-08-31 — rearchitect inventory after comparing the current
   schema with gnucash-web's inventory spine: one quantity authority, while
   retaining Beez's bee, honey, batch, and traceability records.
+- Requested 2026-08-31 — pre-launch workflow/application architecture reset.
+  The app is not live, so replace routes directly instead of maintaining
+  compatibility redirects, and permit a clean schema/migration baseline. Before
+  discarding the imported data, define a portable versioned export/import format,
+  export and validate the current dataset, and use that artifact to restore the
+  useful data after the reset.
 
 ## Order of work
 
@@ -67,18 +73,25 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    writes, bounded-overlap change feed), and Beez gained the sync engine
    (Settings > GnuCash sync: token, account mappings per line kind and
    expense category, pull-first Sync now, conflict/reconciliation list).
-   Beez stays authoritative for physical quantities. Next: **inventory
-   ledger rearchitecture**, before further inventory expansion or Zebra
-   labels.
-8. **P1 — Inventory ledger rearchitecture.** Establish one canonical
-   quantity ledger, reconcile it against the existing ledgers, then make it
-   the only stock-changing path. The detailed design is below. Do not add
-   further inventory features or label flows until its cutover invariants
-   hold.
-9. **P1 — Zebra label printing and physical traceability.** Starts after the
-   inventory-ledger cutover, so printed stock and serialized jars consume a
-   single quantity authority.
-10. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
+   Beez stays authoritative for physical quantities. Next: preserve the
+   current data in a portable snapshot before rebuilding inventory and the
+   application workflows.
+8. **P0 — Portable snapshot and verified restore.** Define the canonical,
+   versioned export/import contract; export the current imported data; validate
+   and round-trip it into an empty database. No destructive schema reset starts
+   until this recovery artifact passes the acceptance criteria below.
+9. **P1 — Inventory ledger rearchitecture.** Establish one canonical signed
+   quantity ledger on a clean baseline, with domain provenance and importer-backed
+   recovery. The detailed design is below. Do not add further inventory features
+   or label flows until its invariants hold.
+10. **P1 — Workflow and application architecture reset.** Replace the
+    module-first information architecture, add a use-case/application layer and
+    stable workbench read models, and rewrite internal routes directly across the
+    app. This is a pre-launch replacement, not a compatibility migration.
+11. **P1 — Zebra label printing and physical traceability.** Starts after the
+    inventory-ledger and workflow/application resets, so printed stock and
+    serialized jars consume a single quantity authority through stable workflows.
+12. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
    Polyagent waves (migrations 00025–00029): field objects, health
    objects, units preference + display sweep, ntfy, labor, compliance
    packet, place/flow (elevation-banded flora, forage radius, Immich
@@ -86,10 +99,10 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    mating-yard field, floral claim. Deliberately still open per their
    sections: pollination contracts (skip until signed), grafting cycle
    (skip until recorded), MQTT scale ingest (CSV only for now).
-11. **Extractor controller** — long-term; hardware plus an ingest
+13. **Extractor controller** — long-term; hardware plus an ingest
    contract onto harvest sessions. Design the session payload when
    extraction IDs stabilize; do not wait to start the controller.
-12. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
+14. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
     2026-08-19 (see history); the ASI lows were already closed 2026-08-11.
 
 ## Shipped 2026-08-17 — review P0/P1 fixes
@@ -303,15 +316,145 @@ kinds that do not map to honey's revenue-with-COGS shape, and selling equipment 
 itself an equipment mutation — so the entity mappings and mutation idempotency
 should be built once to cover both rather than twice.
 
+## P0 — Portable snapshot and verified restore
+
+**Requested 2026-08-31; execute before either architecture reset.** This app is
+not live and its current rows came from an import. It is acceptable to discard the
+working database and replace the accumulated migration chain with a clean baseline
+when that materially simplifies the architecture. A database dump is not an
+adequate recovery boundary: first create an application-level snapshot that is
+portable across schema designs, export the current data, and prove that it can be
+restored.
+
+**Canonical artifact.** Use a documented archive/directory format with a
+`manifest.json` and one JSON Lines file per domain record type. The manifest owns
+at least:
+
+- `formatVersion`, export timestamp, Beez Trackz application commit, source schema
+  commit or migration version, and exporter version;
+- the included domain files, record counts, byte sizes, and cryptographic content
+  hashes;
+- canonical unit and encoding declarations, timezone/timestamp rules, and any
+  explicitly omitted optional domains;
+- a media manifest version and whether each original is embedded or externally
+  referenced;
+- a versioned `verification.json` file, linked by hash from the manifest, that
+  contains the expected per-record canonical digests, record counts, reference
+  checks, pre-reset inventory balances, financial and production totals, media
+  hashes, and the exact calculation definitions used to produce every aggregate.
+
+The format is versioned independently from database migrations. Future importers
+may upgrade older snapshot versions through explicit transforms; they must never
+guess a table layout from the source commit.
+
+`verification.json` is part of the canonical artifact, not an informal report
+generated after deletion. Each record entry identifies its domain type and
+preserved stable ID, the canonicalization/digest algorithm version, and a digest
+of all normalized semantic fields. Reference checks name both ends of every
+required relationship. Aggregate definitions declare included statuses,
+dimensions, units, currencies, rounding, sign conventions, and query/exporter
+version so a matching number cannot hide a different calculation.
+
+**Portable domain records.** Export stable application concepts, not raw tables.
+Use deterministic JSONL records with preserved UUIDs/IDs and explicit references
+for apiaries, hives, queens, inspections, treatments, harvests, lots, bottling and
+product batches, serials, customers, sales, payments, stock locations,
+consignment, equipment, expenses, sync metadata that is safe to retain, and other
+owned operational history. Normalize timestamps to ISO 8601 UTC while retaining a
+named local timezone where the business meaning requires it. Use declared
+canonical units for measured quantities and integer cents plus currency code for
+money; do not export locale-formatted numbers or ambiguous free-text quantities.
+
+**Media and security boundary.** Every photo, transcript source, document, logo,
+and label asset is represented in the media manifest with its owner, media type,
+original filename, byte size, and content hash. The artifact may embed original
+bytes or carry a resolvable external reference (for example Immich), but the
+manifest must make missing external content detectable before reset. A missing
+required original fails the destructive-reset gate unless that specific omission
+is classified, explicitly accepted, and recorded in the manifest and verification
+report with its owner and reason. Exclude passwords and password hashes,
+API/personal tokens, integration credentials, encryption keys, session state, and
+other secrets. Mark excluded configuration so the restore report tells the
+operator what must be configured again. The artifact still contains sensitive
+customer, sales, transcript, and media data: encrypt it at rest and in transit,
+restrict access to the operator/restore process, keep checksums separate from
+decryption credentials, and define retention and secure disposal for superseded
+copies.
+
+**GnuCash replay boundary.** Preserve every non-secret value needed to recognize
+already-synchronized work after restore: external record IDs, entity/account/
+category/tax mappings, deletion tombstones, conflict and reconciliation state,
+idempotency/external-operation keys, last successful sync metadata, and the
+bounded-overlap change-feed cursor or position. Credentials themselves remain
+excluded. Restore with GnuCash sync disabled. Before re-enabling it, run a
+pull-first reconciliation and no-write push dry run that proves the restored
+mappings resolve to the existing remote records and would produce no unexpected
+creates, duplicate postings, overwrites, or tombstone resurrection. Any mismatch
+stays quarantined for operator resolution.
+
+**Importer contract.** Import into an empty database through domain-aware APIs or
+services, not direct table replay. It must support:
+
+- a no-write dry run that validates the manifest, hashes, supported
+  `formatVersion`, `verification.json`, units, required fields, IDs, and all
+  references;
+- deterministic dependency ordering with useful per-file/per-record errors rather
+  than a partial silent restore;
+- idempotent re-execution: an identical record is a no-op, while a conflicting
+  preserved ID is reported and requires an explicit resolution policy;
+- a final restore report listing created, unchanged, skipped, conflicted, and
+  failed records, plus missing media and configuration that was intentionally
+  excluded.
+
+**Round-trip gate.** Before any destructive reset, create and checksum a snapshot
+from the current database, run the importer dry run, restore it into a disposable
+empty database, then export that database again. Verification must compare record
+counts by domain and every required reference, then compare **every normalized
+domain record** by preserved stable ID and canonical semantic-field digest from
+`verification.json`; matching aggregate totals do not substitute for record-level
+equality. It must also compare inventory quantities by item/location/lot/
+condition, financial totals by currency and status, honey and production totals,
+and media content hashes or resolvable external references using the versioned
+calculation definitions in that file. Only normalization differences explicitly
+defined by the applicable `formatVersion` transform may pass; every absent,
+additional, or digest-mismatched record and every unexplained aggregate difference
+fails the gate. Keep the validated artifact and verification report outside the
+database being replaced.
+
+**Reset policy after the gate.** Once the round trip passes, it is acceptable to
+replace the development database, rewrite or squash the migration history into a
+clean initial schema, and import the retained data into the new model. Restoration
+must use the canonical importer, not one-off SQL written for this reset. Take a
+fresh snapshot immediately before the actual reset if the source data changed
+after the rehearsal, and repeat the verification gate for that artifact. Keep
+external sync disabled through restore and its post-restore reconciliation.
+
+**Acceptance criteria.** The format and every exported domain are documented;
+`verification.json` carries versioned per-record digests, reference checks,
+baseline aggregates, hashes, and their calculation definitions; the artifact
+contains no secrets and is encrypted/access-controlled as sensitive data; all
+embedded content hashes verify and all required external media originals resolve,
+with any accepted omission individually classified and recorded; dry run makes no
+writes; two imports of the same artifact are safe; corrupt, dangling,
+incompatible, and conflicting records produce actionable errors; the disposable
+round trip proves semantic equality for every preserved-ID record as well as the
+count, reference, inventory, financial, production, and media checks; restored
+GnuCash mappings and cursors pass a no-create/no-overwrite reconciliation before
+sync is enabled; and the validated artifact plus report can restore the useful
+current data without any dependency on the old tables or migration chain.
+
 ## P1 — Inventory ledger rearchitecture
 
-**Requested 2026-08-31; next P1.** The current inventory model has useful
-domain detail but too many competing quantity authorities: product and
-equipment ledgers, stored equipment totals, honey/lot-balance formulas,
-sales effects, stock-location residuals, and batch/bottling paths. That
-makes a physical count or a new inventory feature depend on knowing which
-formula wins. The target is a single signed movement ledger, not a removal
-of bee or honey provenance.
+**Requested 2026-08-31; execute after the portable-snapshot gate.** The current
+inventory model has useful domain detail but too many competing quantity
+authorities: product and equipment ledgers, stored equipment totals,
+honey/lot-balance formulas, sales effects, stock-location residuals, and
+batch/bottling paths. That makes a physical count or a new inventory feature
+depend on knowing which formula wins. The target is a single signed movement
+ledger, not a removal of bee or honey provenance. Because the app is pre-launch,
+prefer a clean schema baseline and importer-backed restoration when that is
+simpler and more trustworthy than maintaining legacy tables through a live
+cutover.
 
 **Strict boundary.** `inventory_movements` is the sole authority for
 on-hand quantity, by item × location × lot × condition. All stock-changing
@@ -347,22 +490,31 @@ GnuCash sync/conflict state stay first-class. They reference items, lots,
 and operations as needed; the core ledger must not flatten them into generic
 notes.
 
-**Additive strangler phases.**
+**Pre-launch replacement phases.**
 
-1. Add the core tables and stable mappings for every current item, location,
-   and known lot; use explicit `legacy-unassigned` lots where history cannot
-   prove provenance. Enable shadow writes of the legacy path and one inventory
-   operation in the same transaction before importing history, so no live
-   mutation can fall into a backfill gap.
-2. Idempotently backfill legacy history in causal order, excluding records
-   already captured by shadow writes, then calculate old-versus-new balances
-   by item, location, lot, varietal, and equipment condition.
-3. Move balance reads behind a feature flag to the canonical projection,
-   complete a physical count and consignment-settlement reconciliation, then
-   route every stock-changing command through one inventory service.
-4. Retire writable legacy ledgers and derived stock formulas only after the
-   invariants hold in production; retain read-only history and mappings for
-   audit and sync traceability.
+1. Complete the portable-snapshot round-trip gate. Freeze the inventory portion
+   of the export contract around domain facts and provenance rather than the old
+   balance formulas; use explicit `legacy-unassigned` lots only where the source
+   records genuinely cannot prove ancestry.
+2. Design the clean baseline around the seven-table core and the domain records
+   that reference it. Route every stock-changing command through one inventory
+   application service and remove writable legacy ledgers, stored totals, and
+   competing balance formulas from the target schema and code paths.
+3. Import the validated snapshot into a disposable target database, translating
+   domain events/history into idempotent inventory operations in causal order.
+   Compare imported ledger sums with the snapshot's inventory verification data
+   by item, location, lot, varietal, and equipment condition; investigate rather
+   than conceal differences.
+4. Reset the working database to the clean baseline and restore the final validated
+   pre-reset snapshot through the same importer, with GnuCash sync disabled. Run
+   the full record-level and aggregate verification against `verification.json`
+   before accepting the restored database.
+5. Only after that actual clean-baseline restore, complete the physical count and
+   consignment-settlement reconciliation and record approved differences as
+   explicit adjustment operations in the new ledger. Export and round-trip verify
+   a post-adjustment snapshot so those adjustments become the new rollback
+   boundary; do not rely only on the pre-reset artifact. Re-enable GnuCash sync
+   only after its pull-first reconciliation and no-write push dry run pass.
 
 **Cutover invariants.** Every operation is idempotent and supports reversal.
 A reversal operation references its original, and the original records that
@@ -376,10 +528,153 @@ balances until the approved physical-count adjustment.
 GnuCash remains authoritative for posted accounting, while this ledger is
 authoritative for physical quantity.
 
-**Rejected approaches.** Do not copy gnucash-web literally: borrow its
-movement-ledger spine, not its thinner domain model. Do not do a big-bang
-replacement: it would risk honey provenance, consignment settlement, and
-live accounting sync without a reconciled rollback path.
+**Boundary on a clean reset.** Do not copy gnucash-web literally: borrow its
+movement-ledger spine, not its thinner domain model. A pre-launch replacement of
+the schema, routes, and working database is explicitly allowed; an unverified
+destructive rewrite is not. The validated portable snapshot, importer rehearsal,
+ledger reconciliation, and preserved domain provenance are the rollback and
+recovery path. Do not carry shadow-write machinery, compatibility tables, or an
+indefinite dual-read feature flag solely for a production cutover that does not
+exist.
+
+## P1 — Workflow and application architecture reset
+
+**Requested 2026-08-31; execute after the inventory baseline, with the
+application seam beginning during inventory work.** The UI problem is structural,
+not a request for another styling pass. The present navigation exposes eleven
+module-first top-level destinations. Dashboard, Yard Queue, and Recommendations
+compete as separate work centers; Honey, Sales, and Inventory leak overlapping
+stock and production actions into one another; Settings is a catch-all for user
+preferences, operational catalogs, infrastructure, integrations, and
+administration; and large HTTP handlers orchestrate transactions that cross
+domain boundaries. Users are being asked to understand the package and table
+layout before they can complete a job.
+
+**Prototype the information architecture around work.** Validate this first-pass
+desktop taxonomy against representative field, honey-house, market, and admin
+tasks:
+
+- **Today** — attention, due work, recent changes, and resumable tasks;
+- **Yard** — apiaries, hives, queens, inspections, treatments, and field work;
+- **Production** — harvest, extraction, lots, bottling, transformations, finished
+  stock, and production traceability;
+- **Sales** — market day, orders, consignment, customers, settlement, and payment;
+- **Equipment** — owned assets, stock, deployment, condition, and maintenance;
+- **Insights** — reports, trends, compliance, and reconciliation;
+- **Admin** — operation setup, integrations, access, and infrastructure.
+
+The mobile primary navigation prototype is **Today / Yard / Production / Sales /
+More**, with Equipment, Insights, and Admin under More. These labels are a
+testable proposal, not permission to reproduce the existing pages under new menu
+names. Run concrete journeys through the prototype and move each action to the
+place where the operator begins that job.
+
+**One work system.** Introduce `WorkItem` as a query/read projection over source
+domain facts, never a second task or inventory source of truth. A projected item
+has a stable projection ID, source type and source ID, location/context, title and
+evidence, priority/status, `asOf` and freshness metadata, permission-aware
+available commands, and an offline/sync disposition. Completing “refill feeder,”
+for example, invokes the source feeding command; it does not mutate a generic
+work-item row and hope the source catches up.
+
+Today is the default work view. Yard Queue is a location/grouping filter over the
+same projection, not a separately owned queue. Recommendations is a reason/status
+filter and review history over the same projection, not another inbox. Projection
+responses must state what time their facts are true as of, distinguish stale
+cached evidence from current server evidence, and declare which source commands
+may be safely queued offline. Permission filtering applies to the commands and
+the facts used to explain the work item.
+
+**Application/use-case boundary.** Add command and query services under an
+application layer such as:
+
+```text
+backend/internal/app/
+  inventory/
+  work/
+  field/
+  production/
+  sales/
+```
+
+Start this boundary with the inventory-ledger rewrite so HTTP handlers translate
+transport concerns while application commands own authorization, validation,
+transactions, idempotency, lifecycle changes, and domain-event emission. Queries
+own stable use-case projections. Domain packages retain domain rules and facts;
+the application layer coordinates them. Do not move current long handlers into
+equally long “service” methods without defining command inputs, transaction
+boundaries, results, and failure semantics.
+
+**Stable workbench contracts.** Prefer a small set of cohesive read models such
+as `/work/today`, `/work/yard`, `/production/workbench`, and
+`/sales/workbench`. Their contracts represent use cases and can compose several
+domains; they are not exact component trees. Avoid endpoint-per-card or
+endpoint-per-widget BFF sprawl, and avoid making the frontend reconstruct one
+workflow from a pile of unrelated list calls. Mutations remain explicit source
+commands rather than generic “update workbench” requests.
+
+**Direct canonical route rewrite.** The app is not live, so update routes across
+the codebase in one bounded change and delete obsolete internal aliases. Do not
+add compatibility redirects or preserve the current redirect chain. Rewrite the
+desktop and mobile navigation, in-app links, breadcrumbs, command palette/search
+targets, notifications, QR/internal scan targets, offline mutation route
+manifest, service-worker/cache rules, documentation, and route/e2e tests together.
+Remove the internal `/harvest` tree and Honey-owned Sales/Market Day aliases
+(including `/honey/sales`-style destinations) after their canonical Production or
+Sales routes exist. Preserve the intentional public Honey Story contract, but do
+not let that public `/honey/[slug]` namespace dictate the authenticated
+information architecture. A repository search for every retired internal path
+must be empty except explicit negative tests or historical documentation.
+
+**Split configuration by owner and frequency.** Replace the Settings catch-all
+with:
+
+- **My Preferences** — per-user units, appearance, notification, and interaction
+  preferences;
+- **Operation Setup** — operational catalogs and policies used by Yard,
+  Production, Sales, and Equipment, linked contextually from those workspaces;
+- **Admin & Integrations** — access, storage/media providers, AI, API tokens,
+  GnuCash, ntfy, printer/network infrastructure, and system health.
+
+Contextual “manage” links may enter the appropriate setup view, but operational
+objects must not have two independently owned editors.
+
+**Execution sequence.**
+
+1. Inventory all current routes, entry points, offline mutations, top journeys,
+   and the application commands they should invoke. Prototype the target IA and
+   WorkItem contract against one field day, one production run, one sale/
+   consignment settlement, one equipment task, and one admin setup flow.
+2. During the inventory reset, establish the `internal/app/inventory` command/
+   query pattern and transaction conventions. Then implement the WorkItem
+   projection and Today/Yard filters without copying source state into a writable
+   generic queue.
+3. Add Production and Sales workbench projections and move cross-domain
+   orchestration out of HTTP handlers into explicit application commands. Prove
+   permissions, idempotency, rollback, and offline behavior at this seam.
+4. Replace navigation and all internal routes in one coordinated rewrite, update
+   every route consumer/cache/test, and delete aliases instead of redirecting
+   them. Then split Settings and add contextual setup links.
+5. Remove orphan pages, duplicate query assemblers, old handler orchestration,
+   and retired route vocabulary only after end-to-end journeys pass against the
+   canonical paths.
+
+**Acceptance criteria.** Desktop exposes only the seven proposed work areas (or a
+documented user-tested refinement) and mobile only the five primary entries;
+Today, Yard Queue, and Recommendations are views over one permission-aware,
+freshness-aware WorkItem projection; every work-item action executes its source
+command; production can be followed from hive harvest through extraction, lot,
+bottling, finished stock, and sale/transfer without crossing arbitrary modules;
+the representative field, production, sale/settlement, equipment, and admin
+journeys each have one clear starting point and canonical route; inventory and
+other migrated cross-domain transactions are owned by tested application
+commands rather than HTTP handlers; workbench pages use cohesive use-case read
+models rather than per-widget endpoints; route, command-palette, notification,
+offline/cache, scan, and e2e consumers contain no retired internal paths; no
+compatibility redirects remain; configuration has one owning surface in My
+Preferences, Operation Setup, or Admin & Integrations; and desktop/mobile online,
+offline, stale-data, forbidden-command, error, undo/reversal, and interrupted-
+workflow states are verified before the old pages are removed.
 
 ## P1 — Zebra label printing and physical traceability
 
