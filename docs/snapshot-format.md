@@ -47,9 +47,9 @@ Domain names are portable concepts. The format-v1 exporter reads the similarly n
 Version 1 exports every domain below:
 
 - Identity/configuration: `app_users` (without login subject or password hash), `user_settings` (safe display/unit/threshold/AI task and non-secret endpoint configuration), `apiary_memberships`, and `offline_mutation_receipts` (owned retry/idempotency audit history).
-- Apiary and colony: `apiaries` (including canonicalized `canvas_layout`), `hives`, `hive_location_history`, `hive_splits`, `queens` (including canonicalized `testing_data`), and `queen_events`.
+- Apiary and colony: `apiaries` (including canonicalized `canvas_layout`), `hives`, `hive_location_history`, `hive_splits`, `queens`, and `queen_events`.
 - Inspection and health: `inspections` (including strength-score fields and canonicalized `pests`, `treatments`, `source_media`, and `weather_snapshot`), `feedings`, `feeding_status_backfills`, `mite_counts`, `treatment_events`, and `treatment_products`.
-- Harvest and honey provenance: `harvest_sessions`, `harvest_session_true_ups`, `honey_harvests`, `harvest_lots`, `harvest_lot_harvests`, `harvest_lot_photos`, `honey_varietals`, and `honey_movements`.
+- Harvest and honey provenance: `harvest_sessions`, `harvest_session_true_ups`, `honey_harvests`, `harvest_lots` (including canonicalized `testing_data`), `harvest_lot_harvests`, `harvest_lot_photos`, `honey_varietals`, and `honey_movements`.
 - Bottling and product production: `jar_sizes`, `bottling_runs`, `jar_serials`, `product_catalog`, `propolis_harvests`, `product_batches`, `product_batch_expenses`, and `product_adjustments`.
 - Commerce and location stock: `customers`, `wholesale_price_lists`, `wholesale_price_list_items`, `sales` (including invoiced/paid/collected status columns), `sale_items`, `stock_locations`, `stock_movements`, and `consignment_settlements` (including amount owed/paid and commission columns). There is deliberately no payments domain.
 - Equipment and packaging: `equipment_types`, `equipment_type_components`, `equipment_stock`, `equipment_stock_adjustments`, `equipment_deployments`, `equipment_deployment_returns`, and `equipment_state_changes`. Packaging added by 00048 is catalogued as equipment category `packaging` and therefore travels through the same records.

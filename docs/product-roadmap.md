@@ -395,7 +395,7 @@ hazard: Postgres does not preserve key order and normalizes numeric literals,
 so the canonicalization spec must define sorted-key, fixed-number-format
 serialization for every jsonb field (`inspections.pests/treatments/
 source_media/weather_snapshot`, `apiaries.canvas_layout`, `photos.tags`,
-`queens.testing_data`, `apiary_weather_cache.forecast`, the `external_sync`
+`harvest_lots.testing_data`, `apiary_weather_cache.forecast`, the `external_sync`
 and `gnucash_sync_settings` mapping columns, and
 `user_settings.ai_provider_config` — the last mixes configuration with
 credentials, so secret exclusion for it is per-key, not per-column). Note
