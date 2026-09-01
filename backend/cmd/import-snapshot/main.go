@@ -42,7 +42,14 @@ type restoreReport struct {
 }
 
 func newReport(dryRun bool) *restoreReport {
-	return &restoreReport{DryRun: dryRun, Counts: map[app.Outcome]int{}, Records: []reportRecord{}, MissingMedia: []string{}, ExcludedConfig: []string{}, ValidationErrors: []string{}}
+	// Every outcome key is always present so report consumers (the
+	// roundtrip-gate counter extraction in particular) never have to guess
+	// whether an absent key means zero.
+	counts := map[app.Outcome]int{
+		app.OutcomeCreated: 0, app.OutcomeUnchanged: 0, app.OutcomeUpdated: 0,
+		app.OutcomeSkipped: 0, app.OutcomeConflicted: 0, app.OutcomeFailed: 0,
+	}
+	return &restoreReport{DryRun: dryRun, Counts: counts, Records: []reportRecord{}, MissingMedia: []string{}, ExcludedConfig: []string{}, ValidationErrors: []string{}}
 }
 
 func (r *restoreReport) add(domain string, id json.RawMessage, outcome app.Outcome, err error) {

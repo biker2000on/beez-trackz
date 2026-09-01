@@ -50,7 +50,7 @@ var Domains = []Domain{
 	domain("media_files"), domain("transcript_versions"),
 	domain("yard_labor_sessions"), domain("ai_recommendations"),
 	domain("offline_mutation_receipts"), domain("external_sync"),
-	{Name: "gnucash_sync_settings", Table: "gnucash_sync_settings", ExcludedColumns: []string{"api_token"}, RenameColumns: map[string]string{"last_synced_at": "last_attempt_at"}},
+	{Name: "gnucash_sync_settings", Table: "gnucash_sync_settings", ExcludedColumns: []string{"api_token", "restore_state"}, RenameColumns: map[string]string{"last_synced_at": "last_attempt_at"}},
 }
 
 var omittedDomains = []OmittedDomain{

@@ -202,9 +202,13 @@ func (r *PortableRepository) validate(record PortableRecord) (map[string]any, ma
 			return nil, nil, Invalid(op, "preserved id disagrees with data field %q", column).WithField(column)
 		}
 	}
-	// Credentials never become active as an import side effect.
+	// Credentials never become active as an import side effect, and an
+	// installed cursor/book identity requires the 00049 reconciliation
+	// acknowledgement before sync can be re-enabled. restore_state is local
+	// operational state: excluded from export, forced here on restore.
 	if r.domain == "gnucash_sync_settings" {
 		data["sync_enabled"] = false
+		data["restore_state"] = "installed"
 		delete(data, "api_token")
 	}
 	return data, id, nil
@@ -248,6 +252,16 @@ func (r *PortableRepository) equal(stored []byte, incoming map[string]any) (bool
 		return false, Internal("restore "+r.domain, err)
 	}
 	r.normalizeStored(object)
+	if r.domain == "gnucash_sync_settings" {
+		// restore_state is forced by validate() for the write path; it is
+		// local operational state and must not affect record equality.
+		trimmed := make(map[string]any, len(incoming))
+		for key, value := range incoming {
+			trimmed[key] = value
+		}
+		delete(trimmed, "restore_state")
+		incoming = trimmed
+	}
 	incomingRaw, _ := json.Marshal(incoming)
 	storedRaw, _ := json.Marshal(object)
 	left, err := canonicalJSON(storedRaw)
@@ -293,6 +307,9 @@ func (r *PortableRepository) normalizeStored(data map[string]any) {
 	}
 	if r.domain == "gnucash_sync_settings" {
 		data["sync_enabled"] = false
+		// The forced-on-restore restore_state must not make an otherwise
+		// identical record read as changed.
+		delete(data, "restore_state")
 	}
 }
 
