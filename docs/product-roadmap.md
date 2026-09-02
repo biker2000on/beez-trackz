@@ -133,10 +133,11 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
 11. **P1 — Zebra label printing and physical traceability.** Starts after the
     inventory-ledger and workflow/application resets, so printed stock and
     serialized jars consume a single quantity authority through stable workflows.
-    *Amended 2026-09-01:* additionally gated on jar serials gaining
-    location/movement identity in the new ledger (see the inventory section) —
-    without it a consigned serialized jar is not locatable and the first
-    milestone's premise fails.
+    *Amended 2026-09-01, revised the same day:* serialized jars are fungible
+    within their lot (decision 3 in the ledger spec), so the first milestone
+    works from `jar_serials` + lot + the bottling run's operation; a consigned
+    serialized jar is located by its lot's balance at the consignee, not by
+    serial. Gated only on the ledger and workflow resets.
 12. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
    Polyagent waves (migrations 00025–00029): field objects, health
    objects, units preference + display sweep, ntfy, labor, compliance
@@ -676,12 +677,12 @@ core tables:
   tuple is the only part of the core whose change requires a schema
   migration, and adding a dimension is a design-review event, not a
   feature chore; everything else extends by rows.
-- `inventory_units` + `inventory_movement_units` — per-unit identity for
-  anything serialized: jar serials now, equipment asset tags and bin labels
-  later (Zebra items 3 and 7 both land on this table instead of inventing
-  two more). A unit belongs to an item (and optionally a lot); its current
-  location/state is derived from its movement links, replacing
-  `jar_serials.sale_id` as a second sold-ness authority.
+- ~~`inventory_units` + `inventory_movement_units`~~ — **withdrawn
+  2026-09-01 (decision 3):** serialized jars are fungible within their lot,
+  so serials stay a label on the `jar_serials` domain record (lot + bottling
+  run + optional sale link) and the ledger tracks quantity by lot. If
+  asset-tagged equipment ever needs per-unit movement, a units table joins
+  movements by `(operation, line)` as an additive change.
 - `inventory_boms` and `inventory_bom_lines` — templates with input/output
   **roles** and expected yields; operations record actuals against them.
   One mechanism covers bottling, equipment assembly, packaging consumption,
@@ -726,8 +727,18 @@ If a proposed feature fails all seven rules, that is the signal a real new
 dimension has arrived; amend the movement tuple deliberately, once, with the
 same review rigor as this reset — not by bolting on a parallel ledger.
 
-**Design decisions to answer in the spec before schema work (added
-2026-09-01):**
+**Design decisions — answered 2026-09-01; the ratified spec is
+[`plans/2026-09-01-inventory-ledger-design.md`](./plans/2026-09-01-inventory-ledger-design.md),
+which supersedes the sketch above where they differ.** Headline answers:
+hives are *not* locations (they are mobile identities; the hive is a
+**container** dimension on movements and a hive relocation transfers its
+contents); draft sales create no operation (physical movement happens at
+bottling and at sale apply / consignment shipment); serialized jars are
+fungible within their lot, so `inventory_units` is withdrawn; mass is
+`numeric(14,4)` with 0.0001 tolerance; conditions are generated and coerced
+on import; a lot's ceiling is a receipt movement; beekeeping refusals stay in
+domain commands; the migration chain is squashed; every legacy quantity table
+is dropped after translation. The original questions follow for the record:
 
 - **Do hives become `inventory_locations`?** Three location vocabularies
   exist today (`stock_locations` for finished goods, free-text
@@ -1138,9 +1149,9 @@ labels and historical reprints retain their original look.
 6. **Apiary and stand identifiers.** Once naming is final, durable internal
    wayfinding that works with the existing scan flow.
 7. **Equipment and bin labels.** After stable asset IDs exist, with label history
-   tied to IDs rather than free-form names. The asset IDs are
-   `inventory_units` rows from the generalized ledger core — do not invent a
-   separate asset-tag scheme.
+   tied to IDs rather than free-form names. Per-unit identity is deferred
+   (ledger spec decision 3); when this item starts, add an additive units
+   table joined to movements rather than a separate asset-tag scheme.
 
 Shared prerequisites are validated media/hardware, centralized templates and
 DPI/media settings, and a shared print service before any one-click ZPL phase.
