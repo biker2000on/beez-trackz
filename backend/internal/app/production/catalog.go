@@ -59,10 +59,67 @@ func DeployedLocationID(ctx context.Context, q app.Querier) (uuid.UUID, error) {
 // Phase A stock-location id and returns the inventory location. New Phase B
 // consignees are inventory_locations rows in their own right and therefore do
 // not carry a legacy source pair.
+//
+// On a legacy-chain database (stock_locations still exists — Phase A, the
+// pre-ledger rollback of runbook 6.5, and the test fixtures) a stock_locations
+// row created after migration 00050 seeded the consignees has no twin yet, so
+// the twin is created here from the legacy row, exactly as Phase A did.
 func EnsureLocationForStockLocation(
 	ctx context.Context, uow *app.UnitOfWork, stockLocationID uuid.UUID,
 ) (uuid.UUID, error) {
-	return ResolveLocationID(ctx, uow, stockLocationID)
+	const op = "resolve stock location"
+	id, err := ResolveLocationID(ctx, uow, stockLocationID)
+	if err == nil || !app.IsKind(err, app.KindNotFound) {
+		return id, err
+	}
+	var legacyPresent bool
+	if err := uow.QueryRow(ctx,
+		`SELECT to_regclass('public.stock_locations') IS NOT NULL`).Scan(&legacyPresent); err != nil {
+		return uuid.Nil, wrapDB(op, err)
+	}
+	if !legacyPresent {
+		return uuid.Nil, app.NotFound(op, "stock location %s does not exist", stockLocationID)
+	}
+	var (
+		name        string
+		isHome      bool
+		isConsign   bool
+		priceBasis  string
+		commission  *int
+		priceListID *uuid.UUID
+		cadence     string
+		isActive    bool
+	)
+	err = uow.QueryRow(ctx,
+		// legacy-chain-only
+		`SELECT name, is_home, is_consignment, price_basis, commission_bps,
+		       wholesale_price_list_id, settlement_cadence, is_active
+		FROM stock_locations WHERE id=$1`, stockLocationID).
+		Scan(&name, &isHome, &isConsign, &priceBasis, &commission, &priceListID,
+			&cadence, &isActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, app.NotFound(op, "stock location %s does not exist", stockLocationID)
+	}
+	if err != nil {
+		return uuid.Nil, wrapDB(op, err)
+	}
+	if isHome {
+		return HomeLocationID(ctx, uow)
+	}
+	kind := "storage_area"
+	if isConsign {
+		kind = "consignee"
+	}
+	err = uow.QueryRow(ctx, `
+		INSERT INTO inventory_locations
+			(kind, name, source_type, source_id, is_consignment, price_basis,
+			 commission_bps, wholesale_price_list_id, settlement_cadence, is_active, created_by)
+		VALUES ($1,$2,'stock_location',$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (source_type, source_id) DO UPDATE SET name=EXCLUDED.name
+		RETURNING id`,
+		kind, name, stockLocationID, isConsign, priceBasis, commission, priceListID,
+		cadence, isActive, actorOrNil(uow)).Scan(&id)
+	return id, wrapDB(op, err)
 }
 
 // ResolveLocationID is the read-side form of EnsureLocationForStockLocation.
