@@ -1,1 +1,5 @@
 *.sh text eol=lf
+# gofmt and goose both want LF; Windows-side tooling kept committing CRLF
+# copies that then showed up as whole-file churn.
+*.go text eol=lf
+*.sql text eol=lf
