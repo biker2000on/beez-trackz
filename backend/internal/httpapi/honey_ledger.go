@@ -131,11 +131,12 @@ func actorID(r *http.Request) *uuid.UUID {
 // middleware being the only enforcement. MayWritePreservedAudit stays
 // independent of admin.
 //
-// Memberships come from the request context and are loaded once at the edge;
-// a handler that has not loaded them gets an actor with none, which is the
-// safe direction (it can only under-report access). Wave 1 loads them in
-// routes_work.go; wave 3 moves the load into the auth middleware so every
-// handler gets a complete actor.
+// Memberships are loaded once at the edge: requireSession attaches the
+// user's complete apiary-membership snapshot to the principal (a non-nil,
+// possibly empty map for every authenticated request), so every handler
+// gets a complete actor. A caller that bypassed requireSession (internal
+// jobs, direct-handler tests) gets an actor with none, which is the safe
+// direction (it can only under-report access).
 func appActor(r *http.Request) app.Actor {
 	if user := principalFrom(r); user != nil && user.ID != uuid.Nil {
 		return app.UserActor(user.ID, user.DisplayName).
