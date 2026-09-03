@@ -28,13 +28,9 @@ import (
 // — so this boots the real handlers against a database migrated with the
 // baseline profile and walks the surface: create, stock status, adjust,
 // deploy, return, damage, loss report, reconciliation, the two history
-// listings, and delete type.
-//
-// NOT yet covered, because they are not yet fixed: the bill-of-materials
-// endpoints (GET /equipment/components, PUT /equipment/types/{id}/components,
-// POST /equipment/assemblies). All three still name equipment_type_components
-// unconditionally, and Phase B drops that table — see equipComponentParentSQL
-// in routes_equipment_bom.go.
+// listings, delete type, and — since spec 12.1 open item 8 closed — the whole
+// bill-of-materials surface: list, set, the cycle refusal, assemble, and
+// disassemble, all against inventory_boms / inventory_bom_lines.
 //
 // It also pins the two profile-aware id resolvers (equipItemSelect /
 // equipTypeSelect): with BEEZ_SCHEMA_BASELINE set they must not emit the
@@ -257,6 +253,141 @@ func TestEquipmentEndpointsServeABaselineDatabase(t *testing.T) {
 		t.Errorf("state changes = %d, want the one damage", len(entries))
 	}
 
+	// --- bill of materials and assembly (spec 12.1 open item 8) ---
+	//
+	// equipment_type_components is dropped here, so every one of these used to
+	// fail outright. The editor writes inventory_boms / inventory_bom_lines,
+	// the listing reads them back in catalog terms, and assembly consumes the
+	// components the recipe names.
+	response, body = call(t, server.equipCreateType,
+		baselineRequest(userID, http.MethodPost, "/equipment/types",
+			map[string]any{"name": "Baseline super", "category": "box"}))
+	ok(t, "create super type", response)
+	superTypeID := body["id"].(string)
+	response, body = call(t, server.equipCreateStock,
+		baselineRequest(userID, http.MethodPost, "/equipment/stock",
+			map[string]any{"typeId": superTypeID, "initialQuantity": 0}))
+	ok(t, "create super stock", response)
+	superItemID := body["id"].(string)
+
+	response, body = call(t, server.equipCreateType,
+		baselineRequest(userID, http.MethodPost, "/equipment/types",
+			map[string]any{"name": "Baseline body", "category": "box"}))
+	ok(t, "create body type", response)
+	bodyTypeID := body["id"].(string)
+	response, body = call(t, server.equipCreateStock,
+		baselineRequest(userID, http.MethodPost, "/equipment/stock",
+			map[string]any{"typeId": bodyTypeID, "initialQuantity": 5, "unitCostCents": 2000}))
+	ok(t, "create body stock", response)
+	bodyItemID := body["id"].(string)
+
+	response, body = call(t, server.equipCreateType,
+		baselineRequest(userID, http.MethodPost, "/equipment/types",
+			map[string]any{"name": "Baseline foundation", "category": "accessory"}))
+	ok(t, "create foundation type", response)
+	foundationTypeID := body["id"].(string)
+	response, body = call(t, server.equipCreateStock,
+		baselineRequest(userID, http.MethodPost, "/equipment/stock",
+			map[string]any{"typeId": foundationTypeID, "initialQuantity": 50, "unitCostCents": 300}))
+	ok(t, "create foundation stock", response)
+	foundationItemID := body["id"].(string)
+
+	response, body = call(t, server.equipSetComponents,
+		baselineRequest(userID, http.MethodPut, "/equipment/types/"+superTypeID+"/components",
+			map[string]any{"components": []map[string]any{
+				{"componentTypeId": bodyTypeID, "quantity": 1},
+				{"componentTypeId": foundationTypeID, "quantity": 9},
+			}}, "id", superTypeID))
+	ok(t, "set components", response)
+	if count, _ := body["count"].(float64); count != 2 {
+		t.Fatalf("set components count = %v, want 2", body["count"])
+	}
+
+	response, _ = call(t, server.equipListComponents,
+		baselineRequest(userID, http.MethodGet, "/equipment/components", nil))
+	ok(t, "list components", response)
+	var listed []equipComponentRow
+	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode component listing %q: %v", response.Body.String(), err)
+	}
+	recipe := map[string]int{}
+	for _, line := range listed {
+		if line.ParentTypeID.String() == superTypeID {
+			if line.ParentTypeName != "Baseline super" {
+				t.Errorf("listed parent name = %q", line.ParentTypeName)
+			}
+			recipe[line.ComponentTypeID.String()] = line.Quantity
+		}
+	}
+	if recipe[bodyTypeID] != 1 || recipe[foundationTypeID] != 9 || len(recipe) != 2 {
+		t.Fatalf("listed recipe = %v, want 1 body and 9 foundations", recipe)
+	}
+
+	// The cycle refusal, with equipment_type_components and its 00046 trigger
+	// both gone: the Go walk over the ledger graph and the trigger on
+	// inventory_bom_lines are what refuse it here.
+	response, _ = call(t, server.equipSetComponents,
+		baselineRequest(userID, http.MethodPut, "/equipment/types/"+bodyTypeID+"/components",
+			map[string]any{"components": []map[string]any{
+				{"componentTypeId": superTypeID, "quantity": 1},
+			}}, "id", bodyTypeID))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("a cycle in the bill of materials = %d %s, want 409",
+			response.Code, response.Body.String())
+	}
+	var cycleLines int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM inventory_bom_lines l
+		JOIN inventory_boms b ON b.id = l.bom_id
+		WHERE b.output_item_id = $1`, bodyItemID).Scan(&cycleLines); err != nil {
+		t.Fatalf("probe the refused cycle: %v", err)
+	}
+	if cycleLines != 0 {
+		t.Fatalf("the refused cycle left %d BOM lines behind", cycleLines)
+	}
+
+	// Assemble two supers: 2 bodies and 18 foundations consumed, 2 supers made.
+	response, body = call(t, server.equipAssemble,
+		baselineRequest(userID, http.MethodPost, "/equipment/assemblies",
+			map[string]any{"typeId": superTypeID, "quantity": 2, "action": "assemble"}))
+	ok(t, "assemble", response)
+	if components, _ := body["components"].([]any); len(components) != 2 {
+		t.Fatalf("assembly reported %v components, want 2", body["components"])
+	}
+	if stock = baselineStockRow(t, server, userID, superItemID); stock.TotalOwned != 2 {
+		t.Fatalf("supers after assembling 2 = %d, want 2", stock.TotalOwned)
+	}
+	if stock = baselineStockRow(t, server, userID, bodyItemID); stock.TotalOwned != 3 {
+		t.Fatalf("bodies after assembling 2 = %d, want 3", stock.TotalOwned)
+	}
+	if stock = baselineStockRow(t, server, userID, foundationItemID); stock.TotalOwned != 32 {
+		t.Fatalf("foundations after assembling 2 = %d, want 32", stock.TotalOwned)
+	}
+
+	// Disassembling one is the exact inverse.
+	response, _ = call(t, server.equipAssemble,
+		baselineRequest(userID, http.MethodPost, "/equipment/assemblies",
+			map[string]any{"typeId": superTypeID, "quantity": 1, "action": "disassemble"}))
+	ok(t, "disassemble", response)
+	if stock = baselineStockRow(t, server, userID, superItemID); stock.TotalOwned != 1 {
+		t.Fatalf("supers after disassembling 1 = %d, want 1", stock.TotalOwned)
+	}
+	if stock = baselineStockRow(t, server, userID, bodyItemID); stock.TotalOwned != 4 {
+		t.Fatalf("bodies after disassembling 1 = %d, want 4", stock.TotalOwned)
+	}
+	if stock = baselineStockRow(t, server, userID, foundationItemID); stock.TotalOwned != 41 {
+		t.Fatalf("foundations after disassembling 1 = %d, want 41", stock.TotalOwned)
+	}
+
+	// More than there are: the ledger's own availability refusal, unchanged.
+	response, _ = call(t, server.equipAssemble,
+		baselineRequest(userID, http.MethodPost, "/equipment/assemblies",
+			map[string]any{"typeId": superTypeID, "quantity": 99, "action": "assemble"}))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("assembling more than the components allow = %d %s, want 409",
+			response.Code, response.Body.String())
+	}
+
 	// --- delete type ---
 	//
 	// It used to select equipment_stock, probe the three history tables, and
@@ -275,12 +406,8 @@ func TestEquipmentEndpointsServeABaselineDatabase(t *testing.T) {
 	}
 
 	// A parent with a bill of materials, and a component that may not leave it.
-	//
-	// The BOM is written straight into inventory_boms / inventory_bom_lines
-	// rather than through PUT /equipment/types/{id}/components, because on a
-	// baseline database equipment_type_components is gone and that endpoint
-	// still names it (see equipComponentParentSQL's note). This is the shape
-	// app/backfill mirrors into, so it is what a real baseline database holds.
+	// The recipe goes in through the editor, which writes the same
+	// inventory_boms / inventory_bom_lines shape app/backfill mirrors into.
 	response, body = call(t, server.equipCreateType,
 		baselineRequest(userID, http.MethodPost, "/equipment/types",
 			map[string]any{"name": "Baseline spare", "category": "box"}))
@@ -301,18 +428,17 @@ func TestEquipmentEndpointsServeABaselineDatabase(t *testing.T) {
 		baselineRequest(userID, http.MethodPost, "/equipment/stock",
 			map[string]any{"typeId": componentTypeID, "initialQuantity": 0}))
 	ok(t, "create component stock", response)
-	componentItemID := body["id"].(string)
 
+	response, _ = call(t, server.equipSetComponents,
+		baselineRequest(userID, http.MethodPut, "/equipment/types/"+spareTypeID+"/components",
+			map[string]any{"components": []map[string]any{
+				{"componentTypeId": componentTypeID, "quantity": 2},
+			}}, "id", spareTypeID))
+	ok(t, "set the spare type's components", response)
 	var bomID uuid.UUID
-	if err := server.pool.QueryRow(ctx, `
-		INSERT INTO inventory_boms (name, output_item_id) VALUES ($1, $2) RETURNING id`,
-		"Baseline spare", spareItemID).Scan(&bomID); err != nil {
-		t.Fatalf("insert ledger BOM: %v", err)
-	}
-	if _, err := server.pool.Exec(ctx, `
-		INSERT INTO inventory_bom_lines (bom_id, role, item_id, quantity)
-		VALUES ($1, 'input', $2, 2)`, bomID, componentItemID); err != nil {
-		t.Fatalf("insert ledger BOM line: %v", err)
+	if err := server.pool.QueryRow(ctx,
+		`SELECT id FROM inventory_boms WHERE output_item_id = $1`, spareItemID).Scan(&bomID); err != nil {
+		t.Fatalf("read the ledger BOM the editor wrote: %v", err)
 	}
 
 	response, _ = call(t, server.equipDeleteType,

@@ -3,9 +3,9 @@
 -- ledger-v1-baseline — the squashed initial schema (spec section 9, Phase B
 -- step 6; decisions 9 and 10 of docs/plans/2026-09-01-inventory-ledger-design.md).
 --
--- This one file replaces the 00001–00053 chain, which now lives unembedded
+-- This one file replaces the 00001–00054 chain, which now lives unembedded
 -- under backend/internal/db/legacy-00001-00052/ for reference only. It is the
--- post-00053 schema MINUS the ten legacy quantity tables and the five views
+-- post-00054 schema MINUS the ten legacy quantity tables and the five views
 -- over them:
 --
 --   honey_movements, stock_movements, product_adjustments, equipment_stock,
@@ -17,7 +17,7 @@
 --     equipment_loss_events
 --
 -- Everything else is verbatim, columns included: a retained domain table here
--- has exactly the columns it had after 00053, so a Phase-A snapshot restores
+-- has exactly the columns it had after 00054, so a Phase-A snapshot restores
 -- into this schema without a column-level transform. Four foreign keys that
 -- pointed INTO the dropped set are gone with them and their columns are now
 -- unconstrained uuids (consignment_settlements.location_id,
@@ -249,6 +249,40 @@ CREATE TYPE public.transcription_status AS ENUM (
     'complete',
     'failed'
 );
+
+
+--
+-- Name: inventory_bom_cycle_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+-- +goose StatementBegin
+CREATE FUNCTION public.inventory_bom_cycle_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.role <> 'input' THEN
+    RETURN NEW;
+  END IF;
+  IF EXISTS (
+    WITH RECURSIVE ancestry AS (
+      SELECT b.output_item_id AS item_id
+      FROM inventory_boms b WHERE b.id = NEW.bom_id
+      UNION
+      SELECT b.output_item_id
+      FROM inventory_bom_lines l
+      JOIN inventory_boms b ON b.id = l.bom_id
+      JOIN ancestry a ON a.item_id = l.item_id
+      WHERE l.role = 'input'
+    )
+    SELECT 1 FROM ancestry WHERE item_id = NEW.item_id
+  ) THEN
+    RAISE EXCEPTION 'bill-of-materials input % would create a cycle', NEW.item_id
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
 
 
 --
@@ -4071,6 +4105,13 @@ CREATE TRIGGER inspections_updated_at BEFORE UPDATE ON public.inspections FOR EA
 --
 
 CREATE TRIGGER inventory_balance_checkpoints_updated_at BEFORE UPDATE ON public.inventory_balance_checkpoints FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+
+--
+-- Name: inventory_bom_lines inventory_bom_lines_cycle_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER inventory_bom_lines_cycle_guard BEFORE INSERT OR UPDATE ON public.inventory_bom_lines FOR EACH ROW EXECUTE FUNCTION public.inventory_bom_cycle_guard();
 
 
 --

@@ -153,12 +153,12 @@ func (s *Server) equipUpdateType(w http.ResponseWriter, r *http.Request) {
 // dropped table unconditionally would fail this endpoint outright on a
 // baseline database, which is what it used to do (wave-3c finding F2).
 //
-// NOTE: the rest of the bill-of-materials surface (equipListComponents,
-// equipSetComponents, and the component read inside app/equipment.Assembly)
-// still names equipment_type_components unconditionally and therefore still
-// fails on a baseline database. Moving those is a separate change — it has to
-// decide whether the operator edits inventory_boms directly and where the
-// 00046 cycle trigger goes once its table is gone.
+// This composer is deliberately the ONE place that still branches. The rest of
+// the bill-of-materials surface reads the ledger BOM on both profiles now
+// (app/equipment/bom.go), but delete-type has to answer for a legacy database
+// whose equipment_type_components rows were written before that surface
+// existed — legacy 00054 seeds those into the ledger, and the legacy arm here
+// is what protects a database that has not run it yet.
 func equipComponentParentSQL() string {
 	if db.ActiveProfile() != db.ProfileBaseline {
 		return `
@@ -296,37 +296,38 @@ type equipComponentRow struct {
 }
 
 // GET /equipment/components — every BOM line, for the type-management page.
+//
+// The recipe is the ledger BOM on both profiles (app/equipment/bom.go), so
+// this endpoint names nothing Phase B drops. The line ids it returns are
+// inventory_bom_lines ids now; the JSON shape is unchanged.
 func (s *Server) equipListComponents(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.pool.Query(r.Context(), `
-		SELECT c.id, c.parent_type_id, pt.name, c.component_type_id, ct.name, c.quantity
-		FROM equipment_type_components c
-		JOIN equipment_types pt ON pt.id = c.parent_type_id
-		JOIN equipment_types ct ON ct.id = c.component_type_id
-		ORDER BY pt.name, ct.name`)
+	lines, err := appequipment.AllComponents(r.Context(), s.pool)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		equipWriteError(w, err)
 		return
 	}
-	defer rows.Close()
-	out := make([]equipComponentRow, 0)
-	for rows.Next() {
-		var row equipComponentRow
-		if err := rows.Scan(&row.ID, &row.ParentTypeID, &row.ParentTypeName,
-			&row.ComponentTypeID, &row.ComponentTypeName, &row.Quantity); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		out = append(out, row)
-	}
-	if rows.Err() != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+	out := make([]equipComponentRow, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, equipComponentRow{
+			ID:                line.LineID,
+			ParentTypeID:      line.ParentTypeID,
+			ParentTypeName:    line.ParentTypeName,
+			ComponentTypeID:   line.ComponentTypeID,
+			ComponentTypeName: line.ComponentTypeName,
+			Quantity:          line.Quantity,
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // PUT /equipment/types/{id}/components {components: [{componentTypeId, quantity}]}
 // Replaces the whole bill of materials for one parent type.
+//
+// The write lands in inventory_boms / inventory_bom_lines, mirrored into
+// equipment_type_components while the legacy chain is alive; the cycle refusal
+// is app/equipment's graph walk plus the inventory_bom_lines trigger behind it
+// (see app/equipment/bom.go). A cycle is a typed precondition and therefore a
+// 409 — it used to be the trigger's 23514 rendered as a 400.
 func (s *Server) equipSetComponents(w http.ResponseWriter, r *http.Request) {
 	parentID, err := uuidParam(r, "id")
 	if err != nil {
@@ -343,11 +344,7 @@ func (s *Server) equipSetComponents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	type line struct {
-		typeID   uuid.UUID
-		quantity int
-	}
-	lines := make([]line, 0, len(req.Components))
+	lines := make([]appequipment.SetLine, 0, len(req.Components))
 	seen := make(map[uuid.UUID]bool, len(req.Components))
 	for _, c := range req.Components {
 		typeID, err := uuid.Parse(c.ComponentTypeID)
@@ -368,39 +365,12 @@ func (s *Server) equipSetComponents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Component quantity must be at least 1")
 			return
 		}
-		lines = append(lines, line{typeID: typeID, quantity: c.Quantity})
+		lines = append(lines, appequipment.SetLine{ComponentTypeID: typeID, Quantity: c.Quantity})
 	}
 
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		var exists bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM equipment_types WHERE id = $1)`, parentID).
-			Scan(&exists); err != nil {
+	s.equipInUOW(w, r, func(ctx context.Context, uow *app.UnitOfWork) (map[string]any, error) {
+		if err := appequipment.SetComponents(ctx, uow, parentID, lines); err != nil {
 			return nil, err
-		}
-		if !exists {
-			return nil, equipFail(http.StatusNotFound, "type not found")
-		}
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM equipment_type_components WHERE parent_type_id = $1`,
-			parentID); err != nil {
-			return nil, err
-		}
-		for _, l := range lines {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO equipment_type_components
-					(parent_type_id, component_type_id, quantity, created_by)
-				VALUES ($1, $2, $3, $4)`,
-				parentID, l.typeID, l.quantity, equipActor(r)); err != nil {
-				switch {
-				case equipPgErrCode(err, "23503"):
-					return nil, equipBadRequest("invalid componentTypeId")
-				case equipPgErrCode(err, "23514"):
-					return nil, equipBadRequest(
-						"That component would make the type contain itself")
-				}
-				return nil, err
-			}
 		}
 		return map[string]any{"count": len(lines)}, nil
 	})
@@ -495,26 +465,8 @@ func equipApplyAssembly(
 	if err := uow.QueryRow(ctx, `SELECT name FROM equipment_types WHERE id=$1`, typeID).Scan(&parentName); err != nil {
 		return nil, err
 	}
-	rows, err := uow.Query(ctx, `SELECT c.component_type_id,ct.name,c.quantity FROM equipment_type_components c JOIN equipment_types ct ON ct.id=c.component_type_id WHERE c.parent_type_id=$1 ORDER BY ct.id`, typeID)
+	components, err := equipAssemblyComponents(ctx, uow, typeID, req.Action, req.Quantity)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	components := make([]map[string]any, 0)
-	sign := -1
-	if req.Action == "disassemble" {
-		sign = 1
-	}
-	for rows.Next() {
-		var componentTypeID uuid.UUID
-		var componentName string
-		var componentQuantity int
-		if err := rows.Scan(&componentTypeID, &componentName, &componentQuantity); err != nil {
-			return nil, err
-		}
-		components = append(components, map[string]any{"typeId": componentTypeID, "typeName": componentName, "quantity": sign * componentQuantity * req.Quantity})
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -525,4 +477,32 @@ func equipApplyAssembly(
 		"quantity":    req.Quantity,
 		"components":  components,
 	}, nil
+}
+
+// equipAssemblyComponents is the response body's account of what the assembly
+// moved: the parent's recipe, signed the way the movements were written
+// (consumed when assembling, produced when taking apart). It reads the ledger
+// BOM through app/equipment, which is the same read the service itself used to
+// build the operation, so the report cannot describe a different recipe than
+// the one that was applied.
+func equipAssemblyComponents(
+	ctx context.Context, uow *app.UnitOfWork, typeID uuid.UUID, action string, quantity int,
+) ([]map[string]any, error) {
+	lines, err := appequipment.Components(ctx, uow, typeID)
+	if err != nil {
+		return nil, err
+	}
+	sign := -1
+	if action == "disassemble" {
+		sign = 1
+	}
+	out := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, map[string]any{
+			"typeId":   line.ComponentTypeID,
+			"typeName": line.ComponentTypeName,
+			"quantity": sign * line.Quantity * quantity,
+		})
+	}
+	return out, nil
 }

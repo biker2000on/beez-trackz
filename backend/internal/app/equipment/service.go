@@ -231,40 +231,26 @@ func (s *Service) Assembly(ctx context.Context, uow *app.UnitOfWork, c AssemblyC
 	if err != nil {
 		return inventory.Recorded{}, err
 	}
-	rows, err := uow.Query(ctx, `SELECT ct.id,x.quantity,ct.unit_cost_cents FROM equipment_type_components x JOIN equipment_types ct ON ct.id=x.component_type_id WHERE x.parent_type_id=$1 ORDER BY ct.id`, c.TypeID)
+	// The recipe is the ledger BOM (see bom.go): inventory_boms /
+	// inventory_bom_lines on both schema profiles, read back in catalog terms
+	// so each component type still resolves to the identity EnsureItem gives
+	// it — a split frame type consumes what it always consumed.
+	bomLines, err := Components(ctx, uow, c.TypeID)
 	if err != nil {
-		return inventory.Recorded{}, app.Internal(action, err)
-	}
-	type componentRow struct {
-		typeID uuid.UUID
-		qty    int
-		cost   *int
-	}
-	var componentRows []componentRow
-	for rows.Next() {
-		var row componentRow
-		if err := rows.Scan(&row.typeID, &row.qty, &row.cost); err != nil {
-			rows.Close()
-			return inventory.Recorded{}, app.Internal(action, err)
-		}
-		componentRows = append(componentRows, row)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return inventory.Recorded{}, app.Internal(action, err)
+		return inventory.Recorded{}, err
 	}
 	type component struct {
 		item Item
 		qty  int
 		cost *int
 	}
-	components := make([]component, 0, len(componentRows))
-	for _, row := range componentRows {
-		item, err := EnsureItem(ctx, uow, row.typeID, "")
+	components := make([]component, 0, len(bomLines))
+	for _, row := range bomLines {
+		item, err := EnsureItem(ctx, uow, row.ComponentTypeID, "")
 		if err != nil {
 			return inventory.Recorded{}, err
 		}
-		components = append(components, component{item: item, qty: row.qty, cost: row.cost})
+		components = append(components, component{item: item, qty: row.Quantity, cost: row.UnitCostCents})
 	}
 	if len(components) == 0 {
 		return inventory.Recorded{}, app.Precondition(action, "equipment type has no BOM")

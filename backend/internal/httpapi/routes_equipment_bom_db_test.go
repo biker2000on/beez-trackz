@@ -34,10 +34,31 @@ func equipBOMType(t *testing.T, ctx context.Context, uow *app.UnitOfWork, catego
 	return id
 }
 
+// equipBOMLine appends one line to a parent's recipe through the writer the
+// operator uses, so these tests exercise the same rows assembly reads: the
+// ledger BOM, mirrored into equipment_type_components on the legacy chain.
 func equipBOMLine(t *testing.T, ctx context.Context, uow *app.UnitOfWork, parent, component uuid.UUID, quantity int) {
 	t.Helper()
-	if _, err := uow.Exec(ctx, `INSERT INTO equipment_type_components(parent_type_id,component_type_id,quantity) VALUES($1,$2,$3)`, parent, component, quantity); err != nil {
-		t.Fatalf("insert BOM line: %v", err)
+	existing, err := appequipment.Components(ctx, uow, parent)
+	if err != nil {
+		t.Fatalf("read BOM: %v", err)
+	}
+	lines := make([]appequipment.SetLine, 0, len(existing)+1)
+	for _, line := range existing {
+		lines = append(lines, appequipment.SetLine{
+			ComponentTypeID: line.ComponentTypeID, Quantity: line.Quantity})
+	}
+	lines = append(lines, appequipment.SetLine{ComponentTypeID: component, Quantity: quantity})
+	if err := appequipment.SetComponents(ctx, uow, parent, lines); err != nil {
+		t.Fatalf("set BOM line: %v", err)
+	}
+	// The legacy mirror has to agree, or a Phase A backfill would undo the edit.
+	var mirrored int
+	if err := uow.QueryRow(ctx, `SELECT quantity FROM equipment_type_components WHERE parent_type_id=$1 AND component_type_id=$2`, parent, component).Scan(&mirrored); err != nil {
+		t.Fatalf("read the legacy mirror: %v", err)
+	}
+	if mirrored != quantity {
+		t.Fatalf("legacy mirror quantity=%d, want %d", mirrored, quantity)
 	}
 }
 
@@ -165,6 +186,47 @@ func TestEquipmentAssembleIdempotentReplay(t *testing.T) {
 }
 
 func TestEquipmentComponentCycleGuard(t *testing.T) {
+	// Two refusals, both meaningful. The writer walks the ledger BOM graph in
+	// Go and returns a typed precondition; underneath it the trigger legacy
+	// 00054 installs on inventory_bom_lines refuses the same shape written by
+	// hand, and 00046's trigger still guards the legacy mirror table.
+	withEquipmentBOMUOW(t, func(ctx context.Context, uow *app.UnitOfWork) {
+		a := equipBOMType(t, ctx, uow, "box")
+		b := equipBOMType(t, ctx, uow, "frame")
+		c := equipBOMType(t, ctx, uow, "accessory")
+		equipBOMLine(t, ctx, uow, a, b, 1)
+		equipBOMLine(t, ctx, uow, b, c, 1)
+
+		err := appequipment.SetComponents(ctx, uow, c, []appequipment.SetLine{{ComponentTypeID: a, Quantity: 1}})
+		if !app.IsKind(err, app.KindPrecondition) {
+			t.Fatalf("expected a precondition refusal for the cycle, got %v", err)
+		}
+		// Nothing was written by the refused edit.
+		lines, err := appequipment.Components(ctx, uow, c)
+		if err != nil || len(lines) != 0 {
+			t.Fatalf("refused edit left %d lines (err %v)", len(lines), err)
+		}
+
+		// Straight at the tables, bypassing the Go rule entirely.
+		cItem, err := appequipment.BOMItemID(ctx, uow, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		aItem, err := appequipment.BOMItemID(ctx, uow, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var bomID uuid.UUID
+		if err := uow.QueryRow(ctx, `INSERT INTO inventory_boms(name,output_item_id) VALUES('cycle',$1) RETURNING id`, cItem).Scan(&bomID); err != nil {
+			t.Fatal(err)
+		}
+		_, err = uow.Exec(ctx, `INSERT INTO inventory_bom_lines(bom_id,role,item_id,quantity) VALUES($1,'input',$2,1)`, bomID, aItem)
+		if !equipPgErrCode(err, "23514") {
+			t.Fatalf("expected the inventory_bom_lines trigger to raise 23514, got %v", err)
+		}
+	})
+
+	// The legacy mirror keeps its own guard until Phase B drops the table.
 	ctx, tx := equipTx(t)
 	a := equipFixtureType(t, ctx, tx, "box")
 	b := equipFixtureType(t, ctx, tx, "frame")
@@ -176,4 +238,71 @@ func TestEquipmentComponentCycleGuard(t *testing.T) {
 	if !equipPgErrCode(err, "23514") {
 		t.Fatalf("expected 23514 cycle rejection, got %v", err)
 	}
+}
+
+// TestEquipmentSetComponentsIsTheLedgerBOM pins the writer's row shape against
+// the shape app/backfill mirrors into: one inventory_boms row keyed on
+// equipment_types.item_id, role='input' lines keyed on the component items, and
+// an empty recipe that takes the BOM row with it.
+func TestEquipmentSetComponentsIsTheLedgerBOM(t *testing.T) {
+	withEquipmentBOMUOW(t, func(ctx context.Context, uow *app.UnitOfWork) {
+		parent := equipBOMType(t, ctx, uow, "box")
+		boxes := equipBOMType(t, ctx, uow, "box")
+		frames := equipBOMType(t, ctx, uow, "frame")
+		if err := appequipment.SetComponents(ctx, uow, parent, []appequipment.SetLine{
+			{ComponentTypeID: boxes, Quantity: 1},
+			{ComponentTypeID: frames, Quantity: 9},
+		}); err != nil {
+			t.Fatalf("set components: %v", err)
+		}
+
+		var parentItem uuid.UUID
+		if err := uow.QueryRow(ctx, `SELECT item_id FROM equipment_types WHERE id=$1`, parent).Scan(&parentItem); err != nil {
+			t.Fatal(err)
+		}
+		var boms, lines int
+		if err := uow.QueryRow(ctx, `
+			SELECT (SELECT COUNT(*) FROM inventory_boms WHERE output_item_id=$1),
+			       (SELECT COUNT(*) FROM inventory_bom_lines l JOIN inventory_boms b ON b.id=l.bom_id
+			        WHERE b.output_item_id=$1 AND l.role='input')`, parentItem).Scan(&boms, &lines); err != nil {
+			t.Fatal(err)
+		}
+		if boms != 1 || lines != 2 {
+			t.Fatalf("boms=%d lines=%d, want 1/2", boms, lines)
+		}
+
+		// Replacing the recipe replaces the rows rather than adding to them.
+		if err := appequipment.SetComponents(ctx, uow, parent, []appequipment.SetLine{
+			{ComponentTypeID: frames, Quantity: 10},
+		}); err != nil {
+			t.Fatalf("replace components: %v", err)
+		}
+		read, err := appequipment.Components(ctx, uow, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(read) != 1 || read[0].ComponentTypeID != frames || read[0].Quantity != 10 {
+			t.Fatalf("after replace: %+v", read)
+		}
+		var mirrored int
+		if err := uow.QueryRow(ctx, `SELECT COUNT(*) FROM equipment_type_components WHERE parent_type_id=$1`, parent).Scan(&mirrored); err != nil {
+			t.Fatal(err)
+		}
+		if mirrored != 1 {
+			t.Fatalf("legacy mirror holds %d lines, want 1", mirrored)
+		}
+
+		// An empty recipe deletes the BOM row, which is the state
+		// app/backfill's NOT EXISTS guard expects for a type with no
+		// components.
+		if err := appequipment.SetComponents(ctx, uow, parent, nil); err != nil {
+			t.Fatalf("clear components: %v", err)
+		}
+		if err := uow.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_boms WHERE output_item_id=$1`, parentItem).Scan(&boms); err != nil {
+			t.Fatal(err)
+		}
+		if boms != 0 {
+			t.Fatalf("cleared recipe left %d BOM rows", boms)
+		}
+	})
 }

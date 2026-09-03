@@ -20,11 +20,11 @@ import (
 // Two migration chains ship in the binary during the Phase B rehearsal
 // (spec section 9 steps 6-9).
 //
-//   - legacy-00001-00052 contains the 00001-00053 chain that builds the
+//   - legacy-00001-00052 contains the 00001-00054 chain that builds the
 //     current Phase A ledger. It stays the default, so
 //     the same tree keeps serving, testing, and migrating on the current
 //     schema while the squash is being rehearsed.
-//   - migrations holds the single 00001_baseline.sql: the post-00053 schema
+//   - migrations holds the single 00001_baseline.sql: the post-00054 schema
 //     minus the dropped legacy quantity tables, stamped as its own generation.
 //     It is selected explicitly, never by accident.
 //
@@ -54,7 +54,7 @@ const (
 type SchemaProfile string
 
 const (
-	// ProfileLegacyChain is 00001-00053: the schema every live database is
+	// ProfileLegacyChain is 00001-00054: the schema every live database is
 	// on today. Default.
 	ProfileLegacyChain SchemaProfile = "legacy-chain"
 	// ProfileBaseline is the squashed 00001_baseline.sql.

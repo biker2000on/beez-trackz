@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Phase B, spec section 9 step 6: 00001_baseline.sql must be the post-00053
+// Phase B, spec section 9 step 6: 00001_baseline.sql must be the post-00054
 // schema minus the dropped legacy quantity tables — no more, no less. The only
 // way to assert that honestly is to build both databases and diff the
 // catalogue, which is what these tests do. They skip cleanly without
@@ -435,8 +435,8 @@ func TestEmbeddedLayout(t *testing.T) {
 		t.Fatalf("baseline directory holds %v, want exactly [00001_baseline.sql]", baseline)
 	}
 	legacy := catalogNames(t, ProfileLegacyChain)
-	if len(legacy) < 53 {
-		t.Fatalf("legacy chain holds %d migrations, want the full 00001-00053", len(legacy))
+	if len(legacy) < 54 {
+		t.Fatalf("legacy chain holds %d migrations, want the full 00001-00054", len(legacy))
 	}
 	if legacy[0] != "00001_init.sql" {
 		t.Fatalf("legacy chain starts at %s, want 00001_init.sql", legacy[0])

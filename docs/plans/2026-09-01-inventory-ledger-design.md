@@ -251,7 +251,10 @@ inventory_bom_lines (id uuid PK, bom_id uuid, role text, item_id uuid, quantity 
                      UNIQUE (bom_id, role, item_id))
 ```
 
-Absorbs `equipment_type_components` (assembly BOMs), `jar_sizes.packaging_type_id`
+Absorbs `equipment_type_components` (assembly BOMs — landed in wave 3e: the
+equipment BOM editor and assembly read and write these tables on both schema
+profiles, with a cycle-guard trigger on `inventory_bom_lines`),
+`jar_sizes.packaging_type_id`
 (one-line packaging BOM per jar size), and `equipment_types.variant_of_type_id`
 (recorded as an `attributes` link on the item, not a BOM). Transform
 operations record *actuals*; the BOM is the expectation used for validation
@@ -835,10 +838,20 @@ translation and gate tests extend the P0 suites.
   Phase A helpers removed. **New open item 8** below: fixing delete-type
   surfaced that the rest of the bill-of-materials surface reads the dropped
   table too.
+- **Wave 3e (2026-09-03):** open item 8 — the bill-of-materials surface on the
+  ledger. `inventory_boms` / `inventory_bom_lines` are the single BOM
+  authority: the operator's BOM editor writes them (mirroring into
+  `equipment_type_components` while the legacy chain is alive), the listing and
+  `app/equipment.Assembly` read them through one profile-agnostic query, the
+  cycle guard is an application graph walk plus a new trigger on
+  `inventory_bom_lines`, and migration `00054` installs that trigger and seeds
+  the existing catalog recipes into the ledger. `00001_baseline.sql`
+  regenerated; the whole BOM surface is now walked on a baseline database.
 
 **Open items carried into wave 3b/3c** (found by the wave-3a workers) — **items
-1–6 are closed as of 2026-09-03 (wave 3c/3d); item 7 closed in wave 3b. Item 8
-was opened by wave 3d and is still OPEN**:
+1–6 are closed as of 2026-09-03 (wave 3c/3d); item 7 closed in wave 3b; item 8,
+opened by wave 3d, closed in wave 3e. Item 9 is the one still OPEN, and it is a
+Phase A blocker**:
 
 1. **Closed (wave 3c).** `routes_harvest_sessions.go:735` — the harvest-entry
    soft-delete guard is vacuous now that lot pounds are receipts (decision 6);
@@ -867,8 +880,9 @@ was opened by wave 3d and is still OPEN**:
    boots the real handlers against `db.MigrateProfile(…, ProfileBaseline)`,
    asserts the eight tables and views are absent, and walks create → stock
    status → PATCH → adjust → deploy → return → damage → loss report →
-   reconciliation → history listings → delete type. The bill-of-materials
-   endpoints are the exception and are carried as open item 8.
+   reconciliation → history listings → delete type, and (wave 3e) the
+   bill-of-materials surface: list, set, cycle refusal, assemble, disassemble.
+   No exception remains.
 4. **Closed (wave 3c).** `app/sales.CheckAvailability` subtracts the asking
    sale's own stored reservation; any caller that re-validates a stored sale
    in place needs a "less this sale" variant. →
@@ -892,21 +906,55 @@ was opened by wave 3d and is still OPEN**:
 7. **Closed (wave 3b).** Frontend `features/equipment` still names legacy
    identities (46 occurrences) — the equipment UI now addresses ledger
    identities.
-8. **Open (found in wave 3d).** The bill-of-materials surface still names
-   `equipment_type_components` unconditionally and therefore fails on a
+8. **Closed (wave 3e).** The bill-of-materials surface named
+   `equipment_type_components` unconditionally and therefore failed on a
    baseline database: `equipListComponents` (`GET /equipment/components`),
    `equipSetComponents` (`PUT /equipment/types/{id}/components`), and the
    component read inside `app/equipment.Assembly` (which
-   `POST /equipment/assemblies` runs). Phase B drops that table
-   (`db.BaselineDroppedDomains`) in favour of `inventory_boms` /
-   `inventory_bom_lines`, the shape `app/backfill` already mirrors into
-   (`role = 'input'`, keyed on inventory items rather than catalog rows).
-   Moving them is not mechanical — it has to decide whether the operator now
-   edits `inventory_boms` directly, and where migration 00046's cycle-guard
-   trigger goes once its table is gone (`TestEquipmentComponentCycleGuard`
-   pins the trigger, not an application rule). Until it lands, the equipment
-   surface serves a baseline database everywhere **except** the BOM editor and
-   assembly. This is a Phase B blocker, not a Phase A one.
+   `POST /equipment/assemblies` runs). The design as implemented:
+
+   - **`inventory_boms` / `inventory_bom_lines` are the single authority.** One
+     BOM per equipment type — `output_item_id` is the type's inventory item —
+     and one `role = 'input'` line per component item. That is exactly the
+     shape `app/backfill` mirrors into, so a backfilled database and an
+     operator-edited one hold the same rows.
+   - **The operator's BOM editor is the writer** (`app/equipment.SetComponents`,
+     `backend/internal/app/equipment/bom.go`). It keys on
+     `equipment_types.item_id` — the same column the backfill mirror uses, not
+     `EnsureItem`'s default identity, because for a split frame type the two can
+     differ and the mirror would then write a second, disagreeing BOM. An empty
+     recipe deletes the BOM row, which is the state the backfill's `NOT EXISTS`
+     guard expects.
+   - **The legacy mirror.** On the legacy chain the same write also replaces the
+     type's `equipment_type_components` rows, so the unfrozen table cannot drift
+     from the ledger and a Phase A backfill (whose `ON CONFLICT DO UPDATE`
+     re-derives the lines from it) cannot undo an edit. On the baseline profile
+     the mirror is a no-op by construction.
+   - **Reads are one profile-agnostic query** (`bomSelect`), stated in item keys
+     and read back in catalog terms through `inventory_items.source_id`.
+     `Assembly` still resolves each component type to the item it consumes with
+     `EnsureItem`, so a split frame type consumes exactly the identity it always
+     did.
+   - **The cycle guard moved twice.** `app/equipment.CheckBOMCycle` walks the
+     ledger BOM graph before the write and returns a typed precondition (the
+     endpoint now answers **409** where the trigger's `23514` used to surface as
+     a 400 — the one deliberate behaviour change). Underneath it, migration
+     `00054` installs `inventory_bom_cycle_guard()` as a `BEFORE INSERT OR
+     UPDATE` trigger on `inventory_bom_lines`, carried into
+     `00001_baseline.sql` by the regeneration procedure in that file's header,
+     so a hand-run `INSERT` is refused on both chains.
+     `TestEquipmentComponentCycleGuard` now asserts all three: the Go rule, the
+     new ledger trigger, and 00046's trigger on the legacy mirror.
+   - **Existing recipes.** `00054` also seeds `inventory_boms` /
+     `inventory_bom_lines` from `equipment_type_components` once, creating the
+     inventory identity for any catalog type that had none, in `EnsureItem`'s
+     exact column shape. Without it a live Phase A database — whose recipes
+     predate the ledger — would read an empty BOM after this change.
+
+   `equipDeleteType`'s `equipComponentParentSQL` is deliberately left as the one
+   profile-branching composer: it has to answer for a database that has not yet
+   run `00054`.
+
 9. **Open (found by the first prod-copy Phase A rehearsal, 2026-09-03).**
    `import-snapshot -backfill-ledger` against a fresh copy of production
    migrated the copy 48 → 53 and then refused with
@@ -921,7 +969,8 @@ was opened by wave 3d and is still OPEN**:
 ### Phase A rehearsal on a prod copy (next act)
 
 Phase A code is complete and Phase B is built and rehearsed against the seeded
-fixture. What has *not* happened is a rehearsal against a copy of production.
+fixture; as of wave 3e the whole equipment surface, bill of materials included,
+serves a baseline database. What has *not* happened is a rehearsal against a copy of production.
 Run it before anything is frozen; the operator procedure is
 `docs/restore-runbook.md` **section 6**, and nothing below replaces it.
 

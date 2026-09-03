@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Generation is the schema generation of the legacy 00001-00053 chain — the
+// Generation is the schema generation of the legacy 00001-00054 chain — the
 // Phase A ledger, and the schema every database in service today carries. It
 // is stamped by migration 00051; a database claiming anything else is a
 // different schema wearing the same goose chain (design review A6).
@@ -31,7 +31,7 @@ const BaselineGeneration = "ledger-v1-baseline"
 const LegacyGeneration = "legacy"
 
 // ExpectedMaxMigration reports the goose version this binary expects a
-// database of ActiveGeneration to be at: 53 on the legacy chain, 1 on the
+// database of ActiveGeneration to be at: the legacy chain head, 1 on the
 // baseline. It is derived from the embedded FS rather than hardcoded, so
 // adding a migration cannot leave the guard behind.
 func ExpectedMaxMigration() int64 { return maxEmbeddedMigrationFor(ActiveProfile()) }
