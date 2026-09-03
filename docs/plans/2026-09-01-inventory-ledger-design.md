@@ -1003,11 +1003,18 @@ migrated production 48 → 54 and backfilled with results identical to the
 rehearsal table above; the freeze was proven by a refused `UPDATE`; the stack
 was repointed to image tag `abdd2a7…` and came up healthy at goose 54. GnuCash
 sync had never been configured on production, so the between-phase GnuCash
-steps are vacuous there. One deviation from runbook §6 precondition 5: the
-P0 gate on the pre-Phase-A artifact failed for a reader defect (a pre-ledger
-artifact carries no `inventory_*` domains and the reader treats them as
-required) — the `pg_dump` is the rollback boundary until that fix lands and
-the gate is re-run on the same artifact.
+steps are vacuous there. One deviation from runbook §6 precondition 5 at the
+time of the freeze: the P0 gate on the pre-Phase-A artifact failed for a
+reader defect (a pre-ledger artifact carries no `inventory_*` domains and the
+reader treated them as required), so the `pg_dump` was the rollback boundary
+for the day. **Closed the same day**: `9f592dc` (pre-ledger artifacts are
+first-class; the runbook §6.5 rollback path — restore into a head-54
+database, re-run the backfill — is proven by
+`TestPreLedgerRollbackRestoreAndBackfillEndToEnd`) and `c3fe72d` (null
+columns that migrations 00050–00054 add to retained tables are explained
+under `pre-ledger-artifact-v1`); the gate re-run on the same copy of the
+pre-Phase-A database **passed** (steps 0–9 ok, 56 explained pre-ledger
+findings, nothing unexplained).
 
 **Phase B applied to production 2026-09-03 16:00Z**, twenty minutes after
 Phase A, on the operator's instruction (the roadmap's "run alone for a real
