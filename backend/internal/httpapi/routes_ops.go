@@ -22,7 +22,7 @@ import (
 )
 
 // mountOps wires units-adjacent operations: ntfy dispatch, yard-visit labor
-// minutes, and the authenticated compliance packet. Distinct from
+// minutes, and the Insights-owned compliance packet. Distinct from
 // mountOperations (treatments / varroa / yard queue).
 func (s *Server) mountOps(r chi.Router) {
 	r.Get("/ops/units", s.handleUnitsGet)
@@ -30,21 +30,31 @@ func (s *Server) mountOps(r chi.Router) {
 	r.Get("/ops/labor", s.handleLaborList)
 	r.Post("/ops/labor/start", s.handleLaborStart)
 	r.Post("/ops/labor/stop", s.handleLaborStop)
+	// Retired report URLs stay behind authentication so probing a previously
+	// protected path does not reveal route churn. They are tombstones, not
+	// aliases: authenticated callers receive 404 and no report body.
+	r.Get("/ops/compliance-packet", http.NotFound)
+	r.Get("/ops/compliance-packet/print", http.NotFound)
 
 	admin := r.With(s.requireAdmin)
-	admin.Get("/ops/compliance-packet", s.handleCompliancePacket)
-	admin.Get("/ops/compliance-packet/print", s.handleCompliancePacket)
+	admin.Get("/insights/compliance", s.handleCompliancePacket)
+	admin.Get("/insights/compliance/print", s.handleCompliancePacket)
 	admin.Post("/ops/ntfy/dispatch", s.handleNtfyDispatch)
 	admin.Post("/ops/ntfy/test", s.handleNtfyTest)
 }
 
-// GET /ops/units — canonical display preference for any authenticated user.
-// Admin settings remains the writer; API payloads stay in storage units.
+// GET /ops/units — canonical display preference for the authenticated user.
+// API payloads stay in storage units.
 func (s *Server) handleUnitsGet(w http.ResponseWriter, r *http.Request) {
+	user := principalFrom(r)
+	if user == nil {
+		writeError(w, http.StatusForbidden, "authenticated user required")
+		return
+	}
 	var units, temperature *string
 	err := s.pool.QueryRow(r.Context(), `
-		SELECT units, temperature_unit FROM user_settings LIMIT 1`).
-		Scan(&units, &temperature)
+		SELECT units, temperature_unit FROM user_preferences WHERE user_id=$1`,
+		user.ID).Scan(&units, &temperature)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

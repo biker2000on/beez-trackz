@@ -12,6 +12,8 @@ func (s *Server) mountDomains(r chi.Router) {
 	r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, principalFrom(r))
 	})
+	s.mountMe(r)
+	s.mountAdmin(r)
 	s.mountAccess(r)
 	s.mountApiaries(r)
 	s.mountHives(r)

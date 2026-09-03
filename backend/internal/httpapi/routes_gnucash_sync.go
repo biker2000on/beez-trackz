@@ -46,11 +46,11 @@ func (s *Server) mountGnuCashSync(r chi.Router) {
 	admin.Put("/settings/gnucash", s.handleGnuCashSettingsPut)
 	admin.Post("/settings/gnucash/test", s.handleGnuCashTest)
 	admin.Get("/settings/gnucash/accounts", s.handleGnuCashAccounts)
-	admin.Get("/settings/gnucash/rows", s.handleGnuCashRows)
 	admin.Post("/settings/gnucash/sync", s.handleGnuCashSyncNow)
 	admin.Post("/settings/gnucash/restore", s.handleGnuCashRestore)
-	admin.Post("/settings/gnucash/rows/{id}/push", s.handleGnuCashRowPush)
-	admin.Post("/settings/gnucash/rows/{id}/ignore", s.handleGnuCashRowIgnore)
+	admin.Get("/insights/reconciliation", s.handleGnuCashRows)
+	admin.Post("/insights/reconciliation/{id}/push", s.handleGnuCashRowPush)
+	admin.Post("/insights/reconciliation/{id}/ignore", s.handleGnuCashRowIgnore)
 }
 
 // --- settings ---------------------------------------------------------------
