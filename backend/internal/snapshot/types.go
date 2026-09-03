@@ -21,6 +21,19 @@ const (
 	PreLedgerTransform = "pre-ledger-artifact-v1"
 )
 
+// PreLedgerAddedColumns declares the nullable columns that migrations
+// 00050-00054 added to retained pre-ledger domains. A round-trip into a
+// ledger-bearing schema may therefore add these keys with JSON null values;
+// no other value or field difference is part of PreLedgerTransform.
+var PreLedgerAddedColumns = map[string][]string{
+	"equipment_types": {"first_deployed_year", "item_id", "needed_quantity", "storage_location", "unit_cost_cents"},
+	"harvest_lots":    {"inventory_lot_id"},
+	"jar_sizes":       {"item_id"},
+	"product_batches": {"inventory_lot_id"},
+	"product_catalog": {"item_id"},
+	"sale_items":      {"inventory_lot_id", "item_id"},
+}
+
 type RecordEnvelope struct {
 	Domain                  string          `json:"domain"`
 	ID                      json.RawMessage `json:"id"`

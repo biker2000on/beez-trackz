@@ -213,6 +213,8 @@ target family. A populated ledger domain or reference, or a non-empty
 named explanations appear in both `gate-report.json` and
 `gate-summary.txt`.
 
+For retained domains, the comparator also explains a digest mismatch only when every differing field is a column added by migrations 00050-00054 and the field is absent in the pre-ledger source but null in the re-export. These record explanations are summarized once per domain with the affected-record count and added keys; non-null added-column values, other field changes, and post-ledger sources remain failures.
+
 On a write restore the importer first applies pending goose migrations. A
 database containing rows beyond known migration seeds is refused under the
 default `fail` policy; `skip` or `overwrite` is required to proceed. Migration

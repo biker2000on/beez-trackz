@@ -55,6 +55,17 @@ func TestRoundTripGatePassesAgainstAPreLedgerSource(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO hives(id,apiary_id,position_label) VALUES('11000000-0000-4000-8000-000000000048','10000000-0000-4000-8000-000000000048','A48')`); err != nil {
 		t.Fatal(err)
 	}
+	fixtureStatements := []string{
+		`INSERT INTO jar_sizes(id,label,honey_oz) VALUES('12000000-0000-4000-8000-000000000048','Pre-ledger pint',16)`,
+		`INSERT INTO equipment_types(id,name,category,frames_per_box) VALUES('13000000-0000-4000-8000-000000000048','Pre-ledger deep box','box',10)`,
+		`INSERT INTO sales(id,date,total_amount_cents,amount_paid_cents,order_status) VALUES('14000000-0000-4000-8000-000000000048','2026-01-10T16:00:00Z',1200,0,'pending')`,
+		`INSERT INTO sale_items(id,sale_id,jar_size_id,quantity,unit_price_cents,kind) VALUES('15000000-0000-4000-8000-000000000048','14000000-0000-4000-8000-000000000048','12000000-0000-4000-8000-000000000048',1,1200,'jar')`,
+	}
+	for _, statement := range fixtureStatements {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed pre-ledger retained record: %v\n%s", err, statement)
+		}
+	}
 	pool.Close()
 
 	report, err := run(ctx, options{
@@ -93,7 +104,7 @@ func TestRoundTripGatePassesAgainstAPreLedgerSource(t *testing.T) {
 			addedZeroLedgerChecks++
 		}
 	}
-	wantTransforms := len(snapshot.LedgerDomains) + addedZeroLedgerChecks + 1
+	wantTransforms := len(snapshot.LedgerDomains) + addedZeroLedgerChecks + 1 + 3
 	if len(transformed) != wantTransforms {
 		t.Fatalf("pre-ledger explanations = %d, want %d domains/checks plus aggregate: %v",
 			len(transformed), wantTransforms, transformed)
@@ -113,6 +124,17 @@ func TestRoundTripGatePassesAgainstAPreLedgerSource(t *testing.T) {
 	}
 	if !strings.Contains(string(summaryBytes), snapshot.PreLedgerTransform) {
 		t.Fatalf("gate-summary.txt does not name %s", snapshot.PreLedgerTransform)
+	}
+	summary := string(summaryBytes)
+	for domain, columns := range map[string]string{
+		"equipment_types": "first_deployed_year, item_id, needed_quantity, storage_location, unit_cost_cents",
+		"jar_sizes":       "item_id",
+		"sale_items":      "inventory_lot_id, item_id",
+	} {
+		want := "domain " + domain + ": 1 records gained only declared null columns absent from the pre-ledger source: " + columns
+		if strings.Count(summary, want) != 1 {
+			t.Errorf("gate-summary.txt does not contain exactly one %s summary:\n%s", domain, summary)
+		}
 	}
 }
 

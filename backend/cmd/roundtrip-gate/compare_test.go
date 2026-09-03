@@ -322,4 +322,79 @@ func TestPreLedgerComparatorExplainsOnlyEmptyLedgerAdditions(t *testing.T) {
 	}
 }
 
+func TestPreLedgerComparatorExplainsOnlyDeclaredNullAddedColumns(t *testing.T) {
+	loadPair := func(t *testing.T) (*artifact, *artifact) {
+		t.Helper()
+		sourceModel := baselineFixture()
+		restoredModel := baselineFixture()
+		sourceModel.Domains["sale_items"] = []fixtureRecord{
+			{Data: map[string]any{"id": "10000000-0000-4000-8000-000000000001", "quantity": 1}},
+			{Data: map[string]any{"id": "10000000-0000-4000-8000-000000000002", "quantity": 2}},
+		}
+		restoredModel.Domains["sale_items"] = []fixtureRecord{
+			{Data: map[string]any{"id": "10000000-0000-4000-8000-000000000001", "quantity": 1, "item_id": nil, "inventory_lot_id": nil}},
+			{Data: map[string]any{"id": "10000000-0000-4000-8000-000000000002", "quantity": 2, "item_id": nil, "inventory_lot_id": nil}},
+		}
+		source, sourceFindings := loadArtifact(sourceModel.write(t, t.TempDir()))
+		restored, restoredFindings := loadArtifact(restoredModel.write(t, t.TempDir()))
+		if len(failures(sourceFindings)) != 0 || len(failures(restoredFindings)) != 0 {
+			t.Fatalf("load fixtures: source=%v restored=%v", sourceFindings, restoredFindings)
+		}
+		restored.Manifest.SchemaMigration = snapshot.LedgerSchemaMigration
+		return source, restored
+	}
+
+	t.Run("aggregates records by domain", func(t *testing.T) {
+		source, restored := loadPair(t)
+		findings := compareRecords(source, restored)
+		if got := failures(findings); len(got) != 0 {
+			t.Fatalf("declared null columns failed comparison: %v", got)
+		}
+		var explanations []finding
+		for _, item := range findings {
+			if item.Code == snapshot.PreLedgerTransform {
+				explanations = append(explanations, item)
+			}
+		}
+		if len(explanations) != 1 {
+			t.Fatalf("pre-ledger explanations = %d, want one domain summary: %v", len(explanations), explanations)
+		}
+		detail := explanations[0].Detail
+		for _, want := range []string{"domain sale_items: 2 records", "inventory_lot_id, item_id"} {
+			if !contains(detail, want) {
+				t.Fatalf("domain summary %q does not contain %q", detail, want)
+			}
+		}
+	})
+
+	t.Run("rejects a non-null added column", func(t *testing.T) {
+		source, restored := loadPair(t)
+		restored.ByID["sale_items"][`"10000000-0000-4000-8000-000000000001"`].Fields["item_id"] = "20000000-0000-4000-8000-000000000001"
+		if findings := compareRecords(source, restored); !hasCode(findings, "record-digest-mismatch") {
+			t.Fatalf("non-null ledger link was explained: %v", findings)
+		}
+	})
+
+	for name, mutate := range map[string]func(map[string]any){
+		"changed existing field": func(fields map[string]any) { fields["quantity"] = json.Number("9") },
+		"undeclared null field":  func(fields map[string]any) { fields["unexpected"] = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			source, restored := loadPair(t)
+			mutate(restored.ByID["sale_items"][`"10000000-0000-4000-8000-000000000001"`].Fields)
+			if findings := compareRecords(source, restored); !hasCode(findings, "record-digest-mismatch") {
+				t.Fatalf("other field difference was explained: %v", findings)
+			}
+		})
+	}
+
+	t.Run("does not affect post-ledger sources", func(t *testing.T) {
+		source, restored := loadPair(t)
+		source.Manifest.SchemaMigration = snapshot.LedgerSchemaMigration
+		if findings := compareRecords(source, restored); !hasCode(findings, "record-digest-mismatch") {
+			t.Fatalf("post-ledger source difference was explained: %v", findings)
+		}
+	})
+}
+
 func contains(haystack, needle string) bool { return indexOf(haystack, needle) >= 0 }

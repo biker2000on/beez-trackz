@@ -132,6 +132,8 @@ func compareRecords(source, restored *artifact) []finding {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
+		explainedRecords := 0
+		explainedColumns := map[string]bool{}
 		for _, id := range ids {
 			want := sourceIndex[id]
 			got, present := restoredIndex[id]
@@ -141,10 +143,27 @@ func compareRecords(source, restored *artifact) []finding {
 				continue
 			}
 			if got.Digest != want.Digest {
+				if columns, ok := preLedgerNullAddedColumns(source, restored, domain, want, got); ok {
+					explainedRecords++
+					for _, column := range columns {
+						explainedColumns[column] = true
+					}
+					continue
+				}
 				findings = append(findings, fail(stepCompare, "record-digest-mismatch",
 					"%s %s: source digest %s, re-export %s; first difference: %s",
 					domain, id, want.Digest, got.Digest, firstFieldDifference(want, got)))
 			}
+		}
+		if explainedRecords > 0 {
+			columns := make([]string, 0, len(explainedColumns))
+			for column := range explainedColumns {
+				columns = append(columns, column)
+			}
+			sort.Strings(columns)
+			findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
+				"domain %s: %d records gained only declared null columns absent from the pre-ledger source: %s",
+				domain, explainedRecords, strings.Join(columns, ", ")))
 		}
 		extras := make([]string, 0)
 		for id := range restoredIndex {
@@ -163,6 +182,46 @@ func compareRecords(source, restored *artifact) []finding {
 		}
 	}
 	return findings
+}
+
+// preLedgerNullAddedColumns recognizes only the record shape introduced by
+// nullable columns on retained tables: the source key is absent and the
+// ledger-bearing re-export carries that declared key with a null value.
+func preLedgerNullAddedColumns(source, restored *artifact, domain string, want, got artifactRecord) ([]string, bool) {
+	if source.Manifest.SchemaMigration >= snapshot.LedgerSchemaMigration ||
+		restored.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration {
+		return nil, false
+	}
+	declared, ok := snapshot.PreLedgerAddedColumns[domain]
+	if !ok {
+		return nil, false
+	}
+	allowed := make(map[string]bool, len(declared))
+	for _, column := range declared {
+		allowed[column] = true
+	}
+
+	for name, left := range want.Fields {
+		right, present := got.Fields[name]
+		if !present || !equalJSON(left, right) {
+			return nil, false
+		}
+	}
+	var added []string
+	for name, right := range got.Fields {
+		if _, present := want.Fields[name]; present {
+			continue
+		}
+		if !allowed[name] || right != nil {
+			return nil, false
+		}
+		added = append(added, name)
+	}
+	if len(added) == 0 {
+		return nil, false
+	}
+	sort.Strings(added)
+	return added, true
 }
 
 // firstFieldDifference names one differing field so a digest mismatch is
