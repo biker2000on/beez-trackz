@@ -977,8 +977,19 @@ Phase A blocker**:
    **Phase A blocker**. The pre-Phase-A snapshot export via `--legacy-source`
    worked (65 domains at migration 48).
 
-10. **Open (found on production 2026-09-03 20:10Z, four hours after Phase
-    B).** Five readers still named the dropped `stock_locations`:
+10. **Fixed on main 2026-09-03 (`20cfd9f`), deploy pending with the wave-6
+    UI.** Twin migration `00056/00003` re-adds `slug`, `customer_id`,
+    `address`, `notes`, `deleted_at` to `inventory_locations`, drops the
+    legacy-chain foreign keys from `sales.stock_location_id`,
+    `consignment_settlements.location_id` and `external_sync.location_id`
+    to the dropped table, and lets `inventory_reservations` resolve a sale's
+    location by either id; every reader below now resolves
+    `inventory_locations` (consignee rows, or the seeded home) by inventory
+    id or legacy source id; `TestProductionSQLDoesNotReadBaselineDroppedObjects`
+    walks all production SQL for dropped objects (legacy-only branches carry
+    a `// legacy-chain-only` marker); `TestStockLocationReadersServeABaselineDatabase`
+    proves the routes on a baseline database. Found originally as: five
+    readers still named the dropped `stock_locations`:
     `routes_stock_locations.go` (list/detail/`stockRequireLive`),
     `honey_ledger.go` `stockHomeLocationID`, `app/production/catalog.go`,
     `app/sales/commands.go` (settlement, `resolveSaleLocation`) and
