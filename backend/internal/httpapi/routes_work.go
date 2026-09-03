@@ -28,60 +28,6 @@ func (s *Server) mountWork(r chi.Router) {
 	r.Get("/work/yard", s.handleWorkYard)
 }
 
-// workMembershipsKey carries the actor's apiary memberships, loaded once per
-// request (section 5.3: authorization inputs travel with the actor and are
-// never queried from inside a command).
-//
-// It lives here rather than in middleware.go because wave 1 owns only these
-// routes. Wave 3 moves the load into the auth middleware, at which point
-// every handler gets a fully populated actor and this helper goes away.
-type workContextKey int
-
-const workMembershipsKey workContextKey = iota
-
-func apiaryMembershipsFrom(r *http.Request) map[uuid.UUID]string {
-	value, _ := r.Context().Value(workMembershipsKey).(map[uuid.UUID]string)
-	return value
-}
-
-// loadApiaryMemberships reads apiary id -> role for one user. An admin still
-// gets their explicit rows; app.Actor.ApiaryRole reads admin as editor
-// everywhere regardless, matching Server.apiaryRole.
-func (s *Server) loadApiaryMemberships(
-	ctx context.Context, userID uuid.UUID,
-) (map[uuid.UUID]string, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT apiary_id, role::text FROM apiary_memberships WHERE user_id=$1`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[uuid.UUID]string{}
-	for rows.Next() {
-		var apiaryID uuid.UUID
-		var role string
-		if err := rows.Scan(&apiaryID, &role); err != nil {
-			return nil, err
-		}
-		out[apiaryID] = role
-	}
-	return out, rows.Err()
-}
-
-// withMemberships returns the request carrying this user's memberships, so
-// appActor can build a fully authorized actor from it.
-func (s *Server) withMemberships(r *http.Request) (*http.Request, error) {
-	user := principalFrom(r)
-	if user == nil || user.ID == uuid.Nil {
-		return r, nil
-	}
-	memberships, err := s.loadApiaryMemberships(r.Context(), user.ID)
-	if err != nil {
-		return r, err
-	}
-	return r.WithContext(context.WithValue(r.Context(), workMembershipsKey, memberships)), nil
-}
-
 // GET /work/today — the field slice grouped into "needs attention" and
 // "today's field actions".
 func (s *Server) handleWorkToday(w http.ResponseWriter, r *http.Request) {
@@ -108,12 +54,7 @@ func (s *Server) workItems(w http.ResponseWriter, r *http.Request) ([]work.Item,
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, time.Time{}, false
 	}
-	scoped, err := s.withMemberships(r)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return nil, time.Time{}, false
-	}
-	inputs, err := s.workInputs(scoped, filter)
+	inputs, err := s.workInputs(r, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return nil, time.Time{}, false
@@ -121,7 +62,7 @@ func (s *Server) workItems(w http.ResponseWriter, r *http.Request) ([]work.Item,
 	// offlineRoutes.supports is the manifest the service worker is
 	// generated from, so no item can advertise a queueable command the
 	// service worker would refuse to queue.
-	items := work.Build(inputs, appActor(scoped), filter, offlineRoutes.supports)
+	items := work.Build(inputs, appActor(r), filter, offlineRoutes.supports)
 	return items, inputs.AsOf, true
 }
 

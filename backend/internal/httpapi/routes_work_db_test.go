@@ -52,6 +52,9 @@ func newWorkParityFixture(t *testing.T) *workParityFixture {
 		VALUES ($1,$2,'editor')`, base.editor.ID, base.apiaryB); err != nil {
 		t.Fatalf("grant editor on B: %v", err)
 	}
+	if err := base.server.loadPrincipalMemberships(ctx, base.editor); err != nil {
+		t.Fatalf("load actor memberships: %v", err)
+	}
 
 	// Registered before the first insert: a seed that fails part way still
 	// has to clean up, or ai_recommendations_active_unique (type plus hive,
@@ -149,6 +152,11 @@ func (f *workParityFixture) yardQueueKeys(t *testing.T) []workParityKey {
 
 func (f *workParityFixture) workYard(t *testing.T) work.YardResponse {
 	t.Helper()
+	// These tests call the handler directly, so perform the authentication
+	// edge's per-request snapshot before each request.
+	if err := f.server.loadPrincipalMemberships(f.ctx, f.editor); err != nil {
+		t.Fatalf("load actor memberships: %v", err)
+	}
 	response := f.call(t, f.server.handleWorkYard, http.MethodGet, "/work/yard", nil, nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("work/yard: status %d: %s", response.Code, response.Body.String())

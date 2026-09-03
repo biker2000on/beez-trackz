@@ -28,6 +28,10 @@ type principal struct {
 	DisplayName string    `json:"displayName"`
 	Email       *string   `json:"email"`
 	IsAdmin     bool      `json:"isAdmin"`
+	// Memberships is the per-request apiary authorization snapshot. It is
+	// loaded in one batched query by requireSession and copied into app.Actor
+	// when a handler starts a command.
+	Memberships map[uuid.UUID]string `json:"-"`
 	// FromAPIToken is set when the principal was resolved from a bt_ API
 	// token rather than a browser session; credential changes refuse it.
 	FromAPIToken bool `json:"-"`
@@ -41,6 +45,43 @@ func sessionFrom(r *http.Request) *auth.Session {
 func principalFrom(r *http.Request) *principal {
 	value, _ := r.Context().Value(principalKey).(*principal)
 	return value
+}
+
+func apiaryMembershipsFrom(r *http.Request) map[uuid.UUID]string {
+	if user := principalFrom(r); user != nil {
+		return user.Memberships
+	}
+	return nil
+}
+
+// loadPrincipalMemberships snapshots every apiary role for this principal in
+// one query. The snapshot lives only for the request: authorization inputs
+// travel with app.Actor, while commands never query them or cache them across
+// requests.
+func (s *Server) loadPrincipalMemberships(ctx context.Context, user *principal) error {
+	rows, err := s.pool.Query(ctx, `
+		SELECT apiary_id, role::text
+		FROM apiary_memberships
+		WHERE user_id=$1`, user.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	memberships := make(map[uuid.UUID]string)
+	for rows.Next() {
+		var apiaryID uuid.UUID
+		var role string
+		if err := rows.Scan(&apiaryID, &role); err != nil {
+			return err
+		}
+		memberships[apiaryID] = role
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	user.Memberships = memberships
+	return nil
 }
 
 func apiTokenHash(value string) string {
@@ -132,6 +173,10 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		}
 		if err != nil || session == nil || user == nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := s.loadPrincipalMemberships(r.Context(), user); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
 		ctx := context.WithValue(r.Context(), sessionKey, session)
@@ -252,11 +297,22 @@ func (s *Server) apiaryRole(r *http.Request, apiaryID uuid.UUID) (string, error)
 	if user.IsAdmin {
 		return "editor", nil
 	}
-	var role string
-	err := s.pool.QueryRow(r.Context(), `
-		SELECT role::text FROM apiary_memberships
-		WHERE user_id=$1 AND apiary_id=$2`, user.ID, apiaryID).Scan(&role)
-	return role, err
+	// A nil map means an internal caller bypassed requireSession. Keep the
+	// direct-handler test and job path compatible; authenticated HTTP requests
+	// always carry a non-nil snapshot, including for a non-member, and never
+	// take this per-entity fallback.
+	if user.Memberships == nil {
+		var role string
+		err := s.pool.QueryRow(r.Context(), `
+			SELECT role::text FROM apiary_memberships
+			WHERE user_id=$1 AND apiary_id=$2`, user.ID, apiaryID).Scan(&role)
+		return role, err
+	}
+	role, ok := user.Memberships[apiaryID]
+	if !ok {
+		return "", pgx.ErrNoRows
+	}
+	return role, nil
 }
 
 func (s *Server) requireApiaryRole(
@@ -387,6 +443,21 @@ func (s *Server) requireHiveParamRole(edit bool) func(http.Handler) http.Handler
 }
 
 func (s *Server) entityApiaryID(r *http.Request, kind string, id uuid.UUID) (uuid.UUID, error) {
+	if kind == "recommendation" {
+		var apiaryID *uuid.UUID
+		err := s.pool.QueryRow(r.Context(), `
+			SELECT hive.apiary_id FROM ai_recommendations item
+			LEFT JOIN hives hive ON hive.id=item.hive_id
+			WHERE item.id=$1`, id).Scan(&apiaryID)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if apiaryID == nil {
+			return uuid.Nil, errEntityRequiresAdmin
+		}
+		return *apiaryID, nil
+	}
+
 	var apiaryID uuid.UUID
 	queries := map[string]string{
 		"inspection": `SELECT hive.apiary_id FROM inspections item
@@ -403,8 +474,6 @@ func (s *Server) entityApiaryID(r *http.Request, kind string, id uuid.UUID) (uui
 		"treatment": `SELECT hive.apiary_id FROM treatment_events item
 			JOIN hives hive ON hive.id=item.hive_id WHERE item.id=$1`,
 		"queen_event": `SELECT hive.apiary_id FROM queen_events item
-			JOIN hives hive ON hive.id=item.hive_id WHERE item.id=$1`,
-		"recommendation": `SELECT hive.apiary_id FROM ai_recommendations item
 			JOIN hives hive ON hive.id=item.hive_id WHERE item.id=$1`,
 		"photo": `SELECT CASE item.owner_type::text
 				WHEN 'apiary' THEN item.owner_id
@@ -438,6 +507,8 @@ func (s *Server) entityApiaryID(r *http.Request, kind string, id uuid.UUID) (uui
 	return apiaryID, err
 }
 
+var errEntityRequiresAdmin = errors.New("resource requires administrator access")
+
 func (s *Server) requireEntityParamRole(kind string, edit bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -447,6 +518,15 @@ func (s *Server) requireEntityParamRole(kind string, edit bool) func(http.Handle
 				return
 			}
 			apiaryID, err := s.entityApiaryID(r, kind, id)
+			if errors.Is(err, errEntityRequiresAdmin) {
+				user := principalFrom(r)
+				if user == nil || !user.IsAdmin {
+					writeError(w, http.StatusForbidden, "administrator access required")
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "resource not found")
 				return
