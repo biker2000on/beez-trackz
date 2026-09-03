@@ -168,7 +168,10 @@ func freshDatabase(ctx context.Context, t *testing.T, name string) (*pgxpool.Poo
 	if err != nil {
 		t.Fatalf("connect admin: %v", err)
 	}
-	if _, err := admin.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)); err != nil {
+	// WITH (FORCE): pgxpool.Close returns before Postgres reaps the backends,
+	// so a straggler from the previous run would otherwise fail the drop
+	// with 55006 and take the whole test with it.
+	if _, err := admin.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", name)); err != nil {
 		admin.Close()
 		t.Fatalf("drop database: %v", err)
 	}
@@ -184,7 +187,7 @@ func freshDatabase(ctx context.Context, t *testing.T, name string) (*pgxpool.Poo
 	}
 	return pool, func() {
 		pool.Close()
-		_, _ = admin.Exec(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s", name))
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", name))
 		admin.Close()
 	}
 }

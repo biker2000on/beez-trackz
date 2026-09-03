@@ -412,7 +412,7 @@ func newLedgerFixture(ctx context.Context, t *testing.T, name string) (ledgerFix
 	if err != nil {
 		t.Fatalf("connect admin: %v", err)
 	}
-	if _, err = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name); err != nil {
+	if _, err = admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); err != nil {
 		admin.Close()
 		t.Fatal(err)
 	}
@@ -449,7 +449,7 @@ func newLedgerFixture(ctx context.Context, t *testing.T, name string) (ledgerFix
 	mustExecTest(ctx, t, pool, `INSERT INTO inventory_lots(id,item_id,code) VALUES($1,$2,'test-mass')`, massLot, massItem)
 	cleanup := func() {
 		pool.Close()
-		_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name)
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
 		admin.Close()
 	}
 	return ledgerFixture{pool: pool, runner: app.NewRunner(pool), service: NewService(), home: home, consignee: consignee, countItem: countItem, massItem: massItem, massLot: massLot}, cleanup

@@ -79,7 +79,9 @@ func freshDatabase(ctx context.Context, adminURL, name string) (string, func(), 
 	if err != nil {
 		return "", nil, fmt.Errorf("connect admin database: %w", err)
 	}
-	if _, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name); err != nil {
+	// WITH (FORCE): a backend left behind by an earlier run (pool close
+	// returns before the server reaps connections) must not fail the drop.
+	if _, err := admin.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); err != nil {
 		admin.Close()
 		return "", nil, fmt.Errorf("drop %s: %w", name, err)
 	}
@@ -88,7 +90,7 @@ func freshDatabase(ctx context.Context, adminURL, name string) (string, func(), 
 		return "", nil, fmt.Errorf("create %s: %w", name, err)
 	}
 	cleanup := func() {
-		_, _ = admin.Exec(context.WithoutCancel(ctx), "DROP DATABASE IF EXISTS "+name)
+		_, _ = admin.Exec(context.WithoutCancel(ctx), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
 		admin.Close()
 	}
 	return replaceDatabase(adminURL, name), cleanup, nil
