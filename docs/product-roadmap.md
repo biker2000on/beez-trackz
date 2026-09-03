@@ -126,7 +126,16 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    actor) the importer requires — see the importer contract — and the folio
    reconciliation API work runs in parallel with it. Neither existed at review
    time, and P0's acceptance criteria cannot pass without them.
-9. **P1 — Inventory ledger rearchitecture.** Establish one canonical signed
+9. ~~**P1 — Inventory ledger rearchitecture.**~~ — **shipped 2026-09-03**:
+   spec + waves 1–3e landed, Phase A (backfill + freeze) applied to
+   production 15:38Z and Phase B (baseline squash, ten legacy tables dropped)
+   applied 16:00Z the same day on the operator's instruction; the app runs on
+   `schema_generation = ledger-v1-baseline`. Still owed: the physical count as
+   `count_adjust` operations (retires the `legacy-unassigned` lots), the
+   legacy-chain retirement after a release (runbook 7.5 step 9), and open
+   item 10 in the spec (readers of the dropped `stock_locations` — production
+   defect found the same evening, fix run in flight). Original text follows.
+   Establish one canonical signed
    quantity ledger on a clean baseline, with domain provenance and importer-backed
    recovery. The detailed design is below. Do not add further inventory features
    or label flows until its invariants hold. *Amended 2026-09-01:* the open
@@ -150,7 +159,13 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    production** (checklist in spec §12.1, procedure in
    `docs/restore-runbook.md` section 6) — nothing is frozen or squashed on
    the real database yet.
-10. **P1 — Workflow and application architecture reset.** Replace the
+10. **P1 — Workflow and application architecture reset.** **In progress
+    (started 2026-09-03):** design + rename map, wave 1 (WorkItem projection),
+    wave 2 (Today / Yard Queue), wave 3 (idempotent runner, outbox, six
+    commands) and wave 4 (Production/Sales workbenches, named commands, first
+    outbox consumers) are on main and deployed; wave 5 (route rewrite) is on
+    its worker branch (5a done, 5b running); waves 6–7 pending. Status detail:
+    `docs/plans/2026-09-03-workflow-reset-design.md` §7. Replace the
     module-first information architecture, add a use-case/application layer and
     stable workbench read models, introduce one apiary/hive observation and
     activity stream, and rewrite internal routes directly across the app. This is
