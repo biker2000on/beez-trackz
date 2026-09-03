@@ -17,6 +17,10 @@ type legacySpec struct {
 	query      string
 }
 
+type aggregateQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 const globalHoneyCTE = `
 WITH global_honey AS (
  SELECT
@@ -62,7 +66,7 @@ func legacySpecs(currency string) []legacySpec {
 	}
 }
 
-func computeLegacyAggregates(ctx context.Context, tx pgx.Tx, currency string) ([]AggregateDefinition, error) {
+func computeLegacyAggregates(ctx context.Context, tx aggregateQuerier, currency string) ([]AggregateDefinition, error) {
 	specs := legacySpecs(currency)
 	out := make([]AggregateDefinition, 0, len(specs))
 	for _, spec := range specs {
@@ -82,6 +86,12 @@ func computeLegacyAggregates(ctx context.Context, tx pgx.Tx, currency string) ([
 		out = append(out, spec.definition)
 	}
 	return out, nil
+}
+
+// ComputeLegacyAggregates exposes the exact legacy parity oracle to the
+// in-place backfill without duplicating any of the legacy formulas.
+func ComputeLegacyAggregates(ctx context.Context, tx aggregateQuerier, currency string) ([]AggregateDefinition, error) {
+	return computeLegacyAggregates(ctx, tx, currency)
 }
 
 // roundAggregateValue applies the declared aggregate rounding rule: every
@@ -141,4 +151,37 @@ func newLedgerFamily() AggregateFamily {
 			{LegacyName: "home_product_residual", NewLedgerName: "inventory_on_hand", Transform: "create per-product-item opening balances at home equal to global balance minus all non-home balances", TransformVer: "legacy-residual-split-v1"},
 		},
 	}
+}
+
+func computeNewLedgerFamily(ctx context.Context, tx aggregateQuerier) (AggregateFamily, error) {
+	family := newLedgerFamily()
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('public.inventory_movements') IS NOT NULL`).Scan(&present); err != nil {
+		return AggregateFamily{}, err
+	}
+	if !present {
+		return family, nil
+	}
+	var raw []byte
+	err := tx.QueryRow(ctx, `
+		SELECT COALESCE(jsonb_agg(to_jsonb(q) ORDER BY item_id,location_id,lot_id NULLS FIRST,condition NULLS FIRST,container_hive_id NULLS FIRST),'[]'::jsonb)
+		FROM (SELECT b.item_id,b.location_id,b.lot_id,b.condition,b.container_hive_id,
+		             i.canonical_unit,b.on_hand
+		      FROM inventory_balances b JOIN inventory_items i ON i.id=b.item_id
+		      WHERE b.on_hand<>0) q`).Scan(&raw)
+	if err != nil {
+		return AggregateFamily{}, fmt.Errorf("aggregate inventory_on_hand: %w", err)
+	}
+	canonical, err := CanonicalJSON(raw)
+	if err != nil {
+		return AggregateFamily{}, fmt.Errorf("canonicalize inventory_on_hand: %w", err)
+	}
+	family.Definitions[0].Value = json.RawMessage(canonical)
+	family.Version = "new-ledger-v1"
+	return family, nil
+}
+
+// ComputeNewLedgerFamily is used by the backfill parity/freeze gate.
+func ComputeNewLedgerFamily(ctx context.Context, tx aggregateQuerier) (AggregateFamily, error) {
+	return computeNewLedgerFamily(ctx, tx)
 }

@@ -99,8 +99,12 @@ func Export(ctx context.Context, pool *pgxpool.Pool, options ExportOptions) (*Ex
 		DigestAlgorithm: DigestAlgorithmVersion, RecordCounts: make(map[string]int64),
 		AggregateFamilies: make(map[string]AggregateFamily),
 	}
-	files := make([]FileManifest, 0, len(Domains))
-	for _, item := range RegisteredDomains() {
+	domains, err := domainsPresent(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]FileManifest, 0, len(domains))
+	for _, item := range domains {
 		file, digests, err := exportDomain(ctx, tx, options.OutputDirectory, item)
 		if err != nil {
 			return nil, err
@@ -113,12 +117,22 @@ func Export(ctx context.Context, pool *pgxpool.Pool, options ExportOptions) (*Ex
 	if err != nil {
 		return nil, err
 	}
-	legacy, err := computeLegacyAggregates(ctx, tx, options.Currency)
+	legacyPresent, frozen, err := legacyState(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	verification.AggregateFamilies["legacy"] = AggregateFamily{Label: "legacy definitions", Version: LegacyAggregateFamily, Definitions: legacy}
-	verification.AggregateFamilies["newLedger"] = newLedgerFamily()
+	if legacyPresent && !frozen {
+		legacy, err := computeLegacyAggregates(ctx, tx, options.Currency)
+		if err != nil {
+			return nil, err
+		}
+		verification.AggregateFamilies["legacy"] = AggregateFamily{Label: "legacy definitions", Version: LegacyAggregateFamily, Definitions: legacy}
+	}
+	ledger, err := computeNewLedgerFamily(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	verification.AggregateFamilies["newLedger"] = ledger
 	media, mediaVerification, err := collectMedia(ctx, tx, options)
 	if err != nil {
 		return nil, err
@@ -160,6 +174,30 @@ func Export(ctx context.Context, pool *pgxpool.Pool, options ExportOptions) (*Ex
 		return nil, err
 	}
 	return &ExportResult{Manifest: manifest, Verification: verification, Directory: options.OutputDirectory}, nil
+}
+
+func domainsPresent(ctx context.Context, tx pgx.Tx) ([]Domain, error) {
+	var out []Domain
+	for _, item := range RegisteredDomains() {
+		var present bool
+		if err := tx.QueryRow(ctx, `SELECT to_regclass('public.' || $1) IS NOT NULL`, item.Table).Scan(&present); err != nil {
+			return nil, fmt.Errorf("inspect snapshot domain %s: %w", item.Name, err)
+		}
+		if present {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func legacyState(ctx context.Context, tx pgx.Tx) (present, frozen bool, err error) {
+	if err = tx.QueryRow(ctx, `SELECT to_regclass('public.honey_movements') IS NOT NULL`).Scan(&present); err != nil || !present {
+		return present, false, err
+	}
+	err = tx.QueryRow(ctx, `SELECT EXISTS(
+		SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+		WHERE c.relname='honey_movements' AND t.tgname='inventory_legacy_freeze' AND NOT t.tgisinternal)`).Scan(&frozen)
+	return
 }
 
 func exportDomain(ctx context.Context, tx pgx.Tx, root string, item Domain) (FileManifest, []RecordDigest, error) {

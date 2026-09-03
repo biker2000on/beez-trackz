@@ -66,7 +66,7 @@ func TestExportImportReexportDigestEquality(t *testing.T) {
 	reportPath := t.TempDir() + "/restore-report.json"
 	report := newReport(false)
 	if err := execute(ctx, options{input: sourceArtifact, database: targetURL, conflict: "fail", report: reportPath}, report); err != nil {
-		t.Fatalf("import: %v; validation=%v", err, report.ValidationErrors)
+		t.Fatalf("import: %v; validation=%v; records=%+v", err, report.ValidationErrors, report.Records)
 	}
 	if report.Counts["failed"] != 0 || report.Counts["conflicted"] != 0 {
 		t.Fatalf("restore report: %+v", report.Counts)

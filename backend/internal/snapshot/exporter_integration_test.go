@@ -33,8 +33,8 @@ func TestExporterIntegration(t *testing.T) {
 	if result.Manifest.FormatVersion != 1 || result.Manifest.SchemaMigration < 48 {
 		t.Fatalf("manifest versions: %+v", result.Manifest)
 	}
-	if len(result.Manifest.Files) != len(Domains) {
-		t.Fatalf("domain files = %d, want %d", len(result.Manifest.Files), len(Domains))
+	if len(result.Manifest.Files) != len(Domains)+len(LedgerDomains) {
+		t.Fatalf("domain files = %d, want %d", len(result.Manifest.Files), len(Domains)+len(LedgerDomains))
 	}
 	for _, relative := range []string{"manifest.json", "verification.json", "media-manifest.json"} {
 		if _, err := os.Stat(filepath.Join(root, relative)); err != nil {

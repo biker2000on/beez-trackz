@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	appequipment "github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -145,6 +147,21 @@ func equipStateSnapshot(state equipStockState) map[string]any {
 	}
 }
 
+func equipLedgerSnapshot(ctx context.Context, q app.Querier, itemID uuid.UUID) (map[string]any, error) {
+	var owned, deployed, damaged, retired, available int
+	err := q.QueryRow(ctx, `
+		SELECT COALESCE(SUM(b.on_hand),0)::int,
+		 COALESCE(SUM(b.on_hand) FILTER(WHERE l.kind='deployed'),0)::int,
+		 COALESCE(SUM(b.on_hand) FILTER(WHERE b.condition='damaged'),0)::int,
+		 COALESCE(SUM(b.on_hand) FILTER(WHERE b.condition='retired'),0)::int,
+		 COALESCE((SELECT SUM(a.available)::int FROM inventory_available a JOIN inventory_locations al ON al.id=a.location_id WHERE a.item_id=$1 AND al.is_home AND a.condition='serviceable' AND a.container_hive_id IS NULL),0)
+		FROM inventory_balances b JOIN inventory_locations l ON l.id=b.location_id WHERE b.item_id=$1`, itemID).Scan(&owned, &deployed, &damaged, &retired, &available)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"totalOwned": owned, "deployed": deployed, "damaged": damaged, "retired": retired, "available": available}, nil
+}
+
 // --- receive ---
 
 // POST /equipment/stock/{id}/receive {quantity, reason, unitCostCents?, notes?, date?}
@@ -154,39 +171,19 @@ func (s *Server) equipReceiveStock(w http.ResponseWriter, r *http.Request) {
 		equipWriteError(w, err)
 		return
 	}
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		state, err := equipLockStock(ctx, tx, parsed.StockID)
+	s.equipInUOW(w, r, func(ctx context.Context, uow *app.UnitOfWork) (map[string]any, error) {
+		cmd := appequipment.Command{Reference: parsed.StockID, Quantity: parsed.Quantity, OccurredAt: parsed.Date, Reason: parsed.Reason, UnitCostCents: parsed.Cost}
+		if parsed.Notes != nil {
+			cmd.Notes = *parsed.Notes
+		}
+		if parsed.IdempotencyKey != nil {
+			cmd.IdempotencyKey = *parsed.IdempotencyKey
+		}
+		recorded, err := appequipment.NewService().Receive(ctx, uow, cmd)
 		if err != nil {
 			return nil, err
 		}
-		replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-			StockID:        state.ID,
-			Quantity:       parsed.Quantity,
-			Reason:         parsed.Reason,
-			Notes:          parsed.Notes,
-			UnitCostCents:  parsed.Cost,
-			Date:           parsed.Date,
-			CreatedBy:      parsed.CreatedBy,
-			IdempotencyKey: parsed.IdempotencyKey,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if replayed {
-			return equipStateSnapshot(state), nil
-		}
-		// The most recent purchase price becomes the type's unit cost, which is
-		// what the loss report values future losses at.
-		if parsed.Cost != nil {
-			if _, err := tx.Exec(ctx,
-				`UPDATE equipment_stock SET unit_cost_cents = $2 WHERE id = $1`,
-				state.ID, *parsed.Cost); err != nil {
-				return nil, err
-			}
-			state.UnitCostCents = parsed.Cost
-		}
-		state.TotalOwned += parsed.Quantity
-		return equipStateSnapshot(state), nil
+		return equipLedgerSnapshot(ctx, uow, recorded.Operation.Lines[0].Tuple.ItemID)
 	})
 }
 
@@ -290,8 +287,19 @@ func (s *Server) equipAdjustStock(w http.ResponseWriter, r *http.Request) {
 		equipWriteError(w, err)
 		return
 	}
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		return equipAdjustTx(ctx, tx, parsed)
+	s.equipInUOW(w, r, func(ctx context.Context, uow *app.UnitOfWork) (map[string]any, error) {
+		cmd := appequipment.Command{Reference: parsed.StockID, Quantity: parsed.Quantity, OccurredAt: parsed.Date, Reason: parsed.Reason, UnitCostCents: parsed.Cost}
+		if parsed.Notes != nil {
+			cmd.Notes = *parsed.Notes
+		}
+		if parsed.IdempotencyKey != nil {
+			cmd.IdempotencyKey = *parsed.IdempotencyKey
+		}
+		recorded, err := appequipment.NewService().Adjust(ctx, uow, cmd, parsed.From)
+		if err != nil {
+			return nil, err
+		}
+		return equipLedgerSnapshot(ctx, uow, recorded.Operation.Lines[0].Tuple.ItemID)
 	})
 }
 
@@ -384,9 +392,7 @@ func (s *Server) equipMarkDamaged(w http.ResponseWriter, r *http.Request) {
 		equipWriteError(w, equipBadRequest("Damaged equipment comes from serviceable stock"))
 		return
 	}
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		return equipMoveState(ctx, tx, parsed, "damaged")
-	})
+	s.equipConditionHandler(w, r, parsed, "damaged")
 }
 
 // POST /equipment/stock/{id}/repair {quantity, reason?, notes?, date?}
@@ -399,9 +405,7 @@ func (s *Server) equipRepairStock(w http.ResponseWriter, r *http.Request) {
 	if parsed.From == "serviceable" {
 		parsed.From = "damaged"
 	}
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		return equipMoveState(ctx, tx, parsed, "serviceable")
-	})
+	s.equipConditionHandler(w, r, parsed, "serviceable")
 }
 
 // POST /equipment/stock/{id}/retire {quantity, reason, from?, notes?, date?}
@@ -415,8 +419,23 @@ func (s *Server) equipRetireStock(w http.ResponseWriter, r *http.Request) {
 		equipWriteError(w, equipBadRequest("Equipment is already retired"))
 		return
 	}
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		return equipMoveState(ctx, tx, parsed, "retired")
+	s.equipConditionHandler(w, r, parsed, "retired")
+}
+
+func (s *Server) equipConditionHandler(w http.ResponseWriter, r *http.Request, parsed equipParsedRequest, to string) {
+	s.equipInUOW(w, r, func(ctx context.Context, uow *app.UnitOfWork) (map[string]any, error) {
+		cmd := appequipment.ConditionCommand{Command: appequipment.Command{Reference: parsed.StockID, Quantity: parsed.Quantity, OccurredAt: parsed.Date, Reason: parsed.Reason, UnitCostCents: parsed.Cost}, From: parsed.From, To: to}
+		if parsed.Notes != nil {
+			cmd.Notes = *parsed.Notes
+		}
+		if parsed.IdempotencyKey != nil {
+			cmd.IdempotencyKey = *parsed.IdempotencyKey
+		}
+		recorded, err := appequipment.NewService().ConditionChange(ctx, uow, cmd)
+		if err != nil {
+			return nil, err
+		}
+		return equipLedgerSnapshot(ctx, uow, recorded.Operation.Lines[0].Tuple.ItemID)
 	})
 }
 
@@ -621,49 +640,57 @@ func (s *Server) equipPhysicalCount(w http.ResponseWriter, r *http.Request) {
 		date = *d
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	results, lineErrors, err := equipPhysicalCountTx(ctx, tx, equipCountInput{
-		Lines:          req.Lines,
-		Date:           date,
-		Notes:          equipTrimPtr(req.Notes),
-		CreatedBy:      equipActor(r),
-		IdempotencyKey: equipTrimPtr(req.IdempotencyKey),
-	})
-	if err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if len(lineErrors) > 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":  "Some counted lines could not be applied",
-			"errors": lineErrors,
-		})
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	applied := 0
-	for _, line := range results {
-		if line.Delta != 0 {
-			applied++
+	s.equipInUOW(w, r, func(ctx context.Context, uow *app.UnitOfWork) (map[string]any, error) {
+		service := appequipment.NewService()
+		seen := map[uuid.UUID]bool{}
+		results := make([]equipCountLineResult, 0, len(req.Lines))
+		applied := 0
+		for index, raw := range req.Lines {
+			if raw.CountedQuantity == nil || *raw.CountedQuantity < 0 {
+				return nil, app.Invalid("physical count", "line %d has invalid counted quantity", index+1)
+			}
+			var ref uuid.UUID
+			var err error
+			if raw.StockID != nil && *raw.StockID != "" {
+				ref, err = uuid.Parse(*raw.StockID)
+			} else if raw.TypeID != nil && *raw.TypeID != "" {
+				ref, err = uuid.Parse(*raw.TypeID)
+			} else {
+				return nil, app.Invalid("physical count", "line %d requires stockId or typeId", index+1)
+			}
+			if err != nil {
+				return nil, app.Invalid("physical count", "line %d has invalid id", index+1)
+			}
+			item, err := appequipment.ResolveItem(ctx, uow, ref)
+			if err != nil {
+				return nil, err
+			}
+			if seen[item.ItemID] {
+				return nil, app.Invalid("physical count", "item %s was counted twice", item.ItemID)
+			}
+			seen[item.ItemID] = true
+			var available int
+			if err := uow.QueryRow(ctx, `SELECT COALESCE((SELECT SUM(a.available)::int FROM inventory_available a JOIN inventory_locations l ON l.id=a.location_id WHERE a.item_id=$1 AND l.is_home AND a.condition='serviceable' AND a.container_hive_id IS NULL),0)`, item.ItemID).Scan(&available); err != nil {
+				return nil, err
+			}
+			delta := *raw.CountedQuantity - available
+			if delta != 0 {
+				key := ""
+				if req.IdempotencyKey != nil {
+					key = *req.IdempotencyKey + ":" + item.ItemID.String()
+				}
+				notes := ""
+				if req.Notes != nil {
+					notes = *req.Notes
+				}
+				if _, err := service.Adjust(ctx, uow, appequipment.Command{Reference: item.ItemID, Quantity: delta, OccurredAt: date, IdempotencyKey: key, Reason: "count", Notes: notes}, "serviceable"); err != nil {
+					return nil, err
+				}
+				applied++
+			}
+			results = append(results, equipCountLineResult{StockID: item.ItemID, TypeID: item.TypeID, TypeName: item.Name, PreviousAvailable: available, CountedQuantity: *raw.CountedQuantity, Delta: delta, TotalOwned: available + delta})
 		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success":   true,
-		"counted":   len(results),
-		"adjusted":  applied,
-		"unchanged": len(results) - applied,
-		"lines":     results,
+		return map[string]any{"counted": len(results), "adjusted": applied, "unchanged": len(results) - applied, "lines": results}, nil
 	})
 }
 
@@ -707,13 +734,19 @@ func (s *Server) equipLossReport(w http.ResponseWriter, r *http.Request) {
 		ValueCents   int       `json:"valueCents"`
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT type_id, type_name, type_category,
-		       COALESCE(SUM(quantity) FILTER (WHERE kind = 'damaged'), 0)::int,
-		       COALESCE(SUM(quantity) FILTER (WHERE kind = 'retired'), 0)::int,
-		       COALESCE(SUM(quantity) FILTER (WHERE kind = 'written_off'), 0)::int,
-		       COALESCE(SUM(value_cents), 0)::int
-		FROM equipment_loss_events
-		WHERE ($1::timestamptz IS NULL OR date >= $1)
+		WITH events AS (
+		 SELECT o.id,i.source_id type_id,et.name type_name,et.category type_category,
+		  CASE WHEN o.kind='shrink' THEN 'written_off' ELSE m.condition END kind,
+		  abs(m.quantity)::int quantity,COALESCE(et.unit_cost_cents,0)*abs(m.quantity)::int value_cents,o.occurred_at date
+		 FROM inventory_operations o JOIN inventory_movements m ON m.operation_id=o.id
+		 JOIN inventory_items i ON i.id=m.item_id JOIN equipment_types et ON et.id=i.source_id
+		 WHERE (o.kind='condition_change' AND m.quantity>0 AND m.condition IN('damaged','retired')) OR (o.kind='shrink' AND m.quantity<0))
+		SELECT type_id,type_name,type_category,
+		       COALESCE(SUM(quantity) FILTER(WHERE kind='damaged'),0)::int,
+		       COALESCE(SUM(quantity) FILTER(WHERE kind='retired'),0)::int,
+		       COALESCE(SUM(quantity) FILTER(WHERE kind='written_off'),0)::int,
+		       COALESCE(SUM(value_cents),0)::int
+		FROM events WHERE ($1::timestamptz IS NULL OR date >= $1)
 		  AND ($2::timestamptz IS NULL OR date < $2)
 		GROUP BY type_id, type_name, type_category
 		ORDER BY type_category, type_name`, from, to)
@@ -756,12 +789,16 @@ func (s *Server) equipLossReport(w http.ResponseWriter, r *http.Request) {
 		Date         time.Time `json:"date"`
 	}
 	eventRows, err := s.pool.Query(ctx, `
-		SELECT event_id, stock_id, type_name, type_category, kind, quantity,
-		       reason, notes, value_cents, date
-		FROM equipment_loss_events
-		WHERE ($1::timestamptz IS NULL OR date >= $1)
-		  AND ($2::timestamptz IS NULL OR date < $2)
-		ORDER BY date DESC
+		SELECT o.id,m.item_id,et.name,et.category,
+		       CASE WHEN o.kind='shrink' THEN 'written_off' ELSE m.condition END,
+		       abs(m.quantity)::int,o.reason,o.details->>'notes',
+		       COALESCE(et.unit_cost_cents,0)*abs(m.quantity)::int,o.occurred_at
+		FROM inventory_operations o JOIN inventory_movements m ON m.operation_id=o.id
+		JOIN inventory_items i ON i.id=m.item_id JOIN equipment_types et ON et.id=i.source_id
+		WHERE ((o.kind='condition_change' AND m.quantity>0 AND m.condition IN('damaged','retired')) OR (o.kind='shrink' AND m.quantity<0))
+		  AND ($1::timestamptz IS NULL OR o.occurred_at >= $1)
+		  AND ($2::timestamptz IS NULL OR o.occurred_at < $2)
+		ORDER BY o.occurred_at DESC
 		LIMIT 200`, from, to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -803,11 +840,18 @@ func (s *Server) equipLossReport(w http.ResponseWriter, r *http.Request) {
 // triggers keep these equal; this endpoint is how an operator confirms it.
 func (s *Server) equipReconciliation(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT stock_id, type_name, total_owned, ledger_total_owned,
-		       damaged_quantity, ledger_damaged, retired_quantity, ledger_retired,
-		       reconciled
-		FROM equipment_stock_reconciliation
-		ORDER BY type_name`)
+		WITH raw AS(SELECT m.item_id,SUM(m.quantity)::int total,
+		 COALESCE(SUM(m.quantity) FILTER(WHERE m.condition='damaged'),0)::int damaged,
+		 COALESCE(SUM(m.quantity) FILTER(WHERE m.condition='retired'),0)::int retired FROM inventory_movements m GROUP BY m.item_id),
+		 projected AS(SELECT item_id,SUM(on_hand)::int total,
+		 COALESCE(SUM(on_hand) FILTER(WHERE condition='damaged'),0)::int damaged,
+		 COALESCE(SUM(on_hand) FILTER(WHERE condition='retired'),0)::int retired FROM inventory_balances GROUP BY item_id)
+		SELECT i.id,et.name,COALESCE(p.total,0),COALESCE(r.total,0),
+		 COALESCE(p.damaged,0),COALESCE(r.damaged,0),COALESCE(p.retired,0),COALESCE(r.retired,0),
+		 COALESCE(p.total,0)=COALESCE(r.total,0) AND COALESCE(p.damaged,0)=COALESCE(r.damaged,0) AND COALESCE(p.retired,0)=COALESCE(r.retired,0)
+		FROM inventory_items i JOIN equipment_types et ON et.id=i.source_id
+		LEFT JOIN raw r ON r.item_id=i.id LEFT JOIN projected p ON p.item_id=i.id
+		WHERE i.source_type IN('equipment_type','equipment_type_frame_drawn','equipment_type_frame_fresh') ORDER BY et.name,i.source_type`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

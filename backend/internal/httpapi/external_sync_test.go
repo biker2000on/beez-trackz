@@ -25,7 +25,7 @@ func TestSyncEntityTypesMatchCheckConstraint(t *testing.T) {
 	}
 
 	codeTypes := map[string]bool{}
-	for _, name := range syncEntityTypes {
+	for _, name := range legacySyncEntityTypes {
 		codeTypes[name] = true
 	}
 
@@ -50,6 +50,26 @@ func TestSyncEntityTypesMatchCheckConstraint(t *testing.T) {
 	} {
 		if !dbTypes[required] {
 			t.Errorf("CHECK is missing %q: %s", required, clause)
+		}
+	}
+}
+
+func TestLedgerSyncEntityTypesReplaceDissolvedTables(t *testing.T) {
+	got := map[string]bool{}
+	for _, name := range ledgerSyncEntityTypes {
+		got[name] = true
+	}
+	for _, required := range []string{SyncEntityInventoryOperation, SyncEntityInventoryLocation} {
+		if !got[required] {
+			t.Errorf("ledger allowlist is missing %q", required)
+		}
+	}
+	for _, dissolved := range []string{
+		SyncEntityHoneyMovement, SyncEntityStockMovement, SyncEntityEquipmentStock,
+		SyncEntityEquipmentStockAdjustment, SyncEntityProductAdjustment, SyncEntityStockLocation,
+	} {
+		if got[dissolved] {
+			t.Errorf("ledger allowlist retains dissolved type %q", dissolved)
 		}
 	}
 }

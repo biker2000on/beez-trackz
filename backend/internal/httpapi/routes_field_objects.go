@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	appfield "github.com/biker2000on/beez-trackz/backend/internal/app/field"
 	"github.com/biker2000on/beez-trackz/backend/internal/recs"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -316,6 +319,11 @@ func (s *Server) colonyIntakeCreate(w http.ResponseWriter, r *http.Request) {
 		Cost           money      `json:"cost"`
 		ParentQueenID  *uuid.UUID `json:"parentQueenId"`
 		Notes          *string    `json:"notes"`
+		Equipment      []struct {
+			TypeID        uuid.UUID `json:"typeId"`
+			Quantity      int       `json:"quantity"`
+			FrameIdentity string    `json:"frameCondition"`
+		} `json:"equipment"`
 	}
 	if decodeJSON(r, &req) != nil {
 		writeError(w, 400, "invalid request body")
@@ -357,62 +365,58 @@ func (s *Server) colonyIntakeCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
+	var hiveID, queenID, expenseID, intakeID uuid.UUID
+	err = app.NewRunner(s.pool).Run(ctx, equipAppActor(r), func(ctx context.Context, uow *app.UnitOfWork) error {
+		if err = uow.QueryRow(ctx, `INSERT INTO hives (apiary_id,position_label,status,installed_date,notes) VALUES ($1,$2,'active',$3,$4) RETURNING id`, req.ApiaryID, label, date, hiveTextOrNil(req.Notes)).Scan(&hiveID); err != nil {
+			return app.Invalid("colony intake", "invalid hive intake")
+		}
+		if _, err = uow.Exec(ctx, `INSERT INTO hive_location_history (hive_id,apiary_id,position_label,date_from) VALUES ($1,$2,$3,$4)`, hiveID, req.ApiaryID, label, date); err != nil {
+			return app.Internal("colony intake", err)
+		}
+		queenOrigin := "purchased"
+		if req.Source == "swarm" || req.Source == "catch_box" {
+			queenOrigin = "swarm"
+		} else if req.Source == "split" {
+			queenOrigin = "raised"
+		}
+		if err = uow.QueryRow(ctx, `INSERT INTO queens (hive_id,origin,origin_hive_id,parent_queen_id,introduced_date,status,notes) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING id`, hiveID, queenOrigin, req.SourceHiveID, req.ParentQueenID, date, hiveTextOrNil(req.SourceDetail)).Scan(&queenID); err != nil {
+			return app.Invalid("colony intake", "invalid queen lineage")
+		}
+		description := fmt.Sprintf("%s colony intake: %s", strings.ReplaceAll(req.Source, "_", " "), label)
+		if err = uow.QueryRow(ctx, `INSERT INTO expenses (expense_date,category,description,amount_cents,apiary_id,hive_id,season,vendor,notes,created_by) VALUES ($1,'bees_queens',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, date, description, req.Cost, req.ApiaryID, hiveID, fmt.Sprintf("%d", date.Year()), hiveTextOrNil(req.SourceDetail), hiveTextOrNil(req.Notes), actorID(r)).Scan(&expenseID); err != nil {
+			return app.Internal("colony intake", err)
+		}
+		if err = uow.QueryRow(ctx, `INSERT INTO colony_intakes (hive_id,apiary_id,source,source_detail,source_hive_id,catch_box_id,intake_date,starting_stores,cost_cents,expense_id,queen_id,cohort_year,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`, hiveID, req.ApiaryID, req.Source, hiveTextOrNil(req.SourceDetail), req.SourceHiveID, req.CatchBoxID, date, hiveTextOrNil(req.StartingStores), req.Cost, expenseID, queenID, date.Year(), hiveTextOrNil(req.Notes), actorID(r)).Scan(&intakeID); err != nil {
+			return app.Invalid("colony intake", "invalid colony intake")
+		}
+		if req.Source == "split" && req.SourceHiveID != nil {
+			if _, err = uow.Exec(ctx, `INSERT INTO hive_splits (parent_hive_id,child_hive_id,split_date,split_type,notes) VALUES ($1,$2,$3,'other',$4)`, req.SourceHiveID, hiveID, date, hiveTextOrNil(req.Notes)); err != nil {
+				return app.Internal("colony intake", err)
+			}
+		}
+		if req.CatchBoxID != nil {
+			tag, updateErr := uow.Exec(ctx, `UPDATE catch_boxes SET occupied=true,occupied_at=$2,occupied_hive_id=$3 WHERE id=$1 AND apiary_id=$4 AND deleted_at IS NULL`, req.CatchBoxID, date, hiveID, req.ApiaryID)
+			if updateErr != nil {
+				return app.Internal("colony intake", updateErr)
+			}
+			if tag.RowsAffected() == 0 {
+				return app.Invalid("colony intake", "catch box must belong to the selected apiary")
+			}
+		}
+		lines := make([]appfield.EquipmentLine, 0, len(req.Equipment))
+		for _, line := range req.Equipment {
+			if line.TypeID == uuid.Nil || line.Quantity < 1 {
+				return app.Invalid("colony intake", "equipment lines require typeId and positive quantity")
+			}
+			lines = append(lines, appfield.EquipmentLine{Reference: line.TypeID, Quantity: line.Quantity, FrameIdentity: line.FrameIdentity})
+		}
+		if err := appfield.RecordColonyIntake(ctx, uow, intakeID, hiveID, date, lines); err != nil {
+			return err
+		}
+		return nil
+	})
 	if err != nil {
-		writeError(w, 500, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-	var hiveID uuid.UUID
-	if err = tx.QueryRow(ctx, `INSERT INTO hives (apiary_id,position_label,status,installed_date,notes) VALUES ($1,$2,'active',$3,$4) RETURNING id`, req.ApiaryID, label, date, hiveTextOrNil(req.Notes)).Scan(&hiveID); err != nil {
-		writeError(w, 400, "invalid hive intake")
-		return
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO hive_location_history (hive_id,apiary_id,position_label,date_from) VALUES ($1,$2,$3,$4)`, hiveID, req.ApiaryID, label, date); err != nil {
-		writeError(w, 500, "database error")
-		return
-	}
-	queenOrigin := "purchased"
-	if req.Source == "swarm" || req.Source == "catch_box" {
-		queenOrigin = "swarm"
-	} else if req.Source == "split" {
-		queenOrigin = "raised"
-	}
-	var queenID uuid.UUID
-	if err = tx.QueryRow(ctx, `INSERT INTO queens (hive_id,origin,origin_hive_id,parent_queen_id,introduced_date,status,notes) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING id`, hiveID, queenOrigin, req.SourceHiveID, req.ParentQueenID, date, hiveTextOrNil(req.SourceDetail)).Scan(&queenID); err != nil {
-		writeError(w, 400, "invalid queen lineage")
-		return
-	}
-	var expenseID uuid.UUID
-	description := fmt.Sprintf("%s colony intake: %s", strings.ReplaceAll(req.Source, "_", " "), label)
-	if err = tx.QueryRow(ctx, `INSERT INTO expenses (expense_date,category,description,amount_cents,apiary_id,hive_id,season,vendor,notes,created_by) VALUES ($1,'bees_queens',$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, date, description, req.Cost, req.ApiaryID, hiveID, fmt.Sprintf("%d", date.Year()), hiveTextOrNil(req.SourceDetail), hiveTextOrNil(req.Notes), actorID(r)).Scan(&expenseID); err != nil {
-		writeError(w, 500, "database error")
-		return
-	}
-	var intakeID uuid.UUID
-	if err = tx.QueryRow(ctx, `INSERT INTO colony_intakes (hive_id,apiary_id,source,source_detail,source_hive_id,catch_box_id,intake_date,starting_stores,cost_cents,expense_id,queen_id,cohort_year,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`, hiveID, req.ApiaryID, req.Source, hiveTextOrNil(req.SourceDetail), req.SourceHiveID, req.CatchBoxID, date, hiveTextOrNil(req.StartingStores), req.Cost, expenseID, queenID, date.Year(), hiveTextOrNil(req.Notes), actorID(r)).Scan(&intakeID); err != nil {
-		writeError(w, 400, "invalid colony intake")
-		return
-	}
-	if req.Source == "split" && req.SourceHiveID != nil {
-		if _, err = tx.Exec(ctx, `INSERT INTO hive_splits (parent_hive_id,child_hive_id,split_date,split_type,notes) VALUES ($1,$2,$3,'other',$4)`, req.SourceHiveID, hiveID, date, hiveTextOrNil(req.Notes)); err != nil {
-			writeError(w, 500, "database error")
-			return
-		}
-	}
-	if req.CatchBoxID != nil {
-		tag, updateErr := tx.Exec(ctx, `UPDATE catch_boxes SET occupied=true,occupied_at=$2,occupied_hive_id=$3 WHERE id=$1 AND apiary_id=$4 AND deleted_at IS NULL`, req.CatchBoxID, date, hiveID, req.ApiaryID)
-		if updateErr != nil {
-			writeError(w, 500, "database error")
-			return
-		}
-		if tag.RowsAffected() == 0 {
-			writeError(w, 400, "catch box must belong to the selected apiary")
-			return
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		writeError(w, 500, "database error")
+		equipWriteError(w, err)
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": intakeID, "hiveId": hiveID, "queenId": queenID, "expenseId": expenseID})

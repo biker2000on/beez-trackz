@@ -225,16 +225,18 @@ func checkTreatmentReminder(ctx context.Context, pool *pgxpool.Pool, now time.Ti
 // ---------------------------------------------------------------------------
 
 func checkEquipmentNeeded(ctx context.Context, pool *pgxpool.Pool, _ time.Time) ([]Result, error) {
-	// Frame shortage per hive from active deployments: box deployments provide
-	// capacity (frames_per_box), frame deployments fill it.
+	// Frame shortage per hive from the deployed inventory projection: box
+	// balances provide capacity (frames_per_box), frame balances fill it.
 	rows, err := pool.Query(ctx, `
-		SELECT d.hive_id, h.position_label, d.quantity - d.quantity_returned,
+		SELECT b.container_hive_id, h.position_label, b.on_hand::int,
 			t.category, t.frames_per_box
-		FROM equipment_deployments d
-		JOIN equipment_stock s ON s.id = d.stock_id
-		JOIN equipment_types t ON t.id = s.type_id
-		JOIN hives h ON h.id = d.hive_id
-		WHERE d.date_removed IS NULL AND d.quantity > d.quantity_returned
+		FROM inventory_balances b
+		JOIN inventory_items i ON i.id=b.item_id
+		JOIN equipment_types t ON t.id=i.source_id
+		  AND i.source_type IN ('equipment_type','equipment_type_frame_drawn','equipment_type_frame_fresh')
+		JOIN inventory_locations l ON l.id=b.location_id AND l.kind='deployed'
+		JOIN hives h ON h.id=b.container_hive_id
+		WHERE b.on_hand > 0 AND b.condition='serviceable'
 			AND h.status = 'active' AND h.is_archived = false`)
 	if err != nil {
 		return nil, err

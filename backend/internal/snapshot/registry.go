@@ -53,6 +53,19 @@ var Domains = []Domain{
 	{Name: "gnucash_sync_settings", Table: "gnucash_sync_settings", ExcludedColumns: []string{"api_token", "restore_state"}, RenameColumns: map[string]string{"last_synced_at": "last_attempt_at"}},
 }
 
+// LedgerDomains are additive in format v1. Export chooses domains by actual
+// table presence, allowing the same binary to read the Phase-A schema (legacy
+// plus ledger) and the Phase-B schema (ledger only).
+var LedgerDomains = []Domain{
+	domain("inventory_item_kinds"), domain("inventory_location_kinds"),
+	domain("inventory_operation_kinds"), domain("inventory_conditions"),
+	domain("inventory_operation_reasons"), domain("inventory_items"),
+	domain("inventory_locations"), domain("inventory_lots"),
+	domain("inventory_operations"), domain("inventory_movements"),
+	domain("inventory_boms"), domain("inventory_bom_lines"),
+	domain("inventory_balance_checkpoints"), domain("schema_generation"),
+}
+
 var omittedDomains = []OmittedDomain{
 	{Domain: "api_tokens", Reason: "API tokens and token hashes are credentials and must be recreated."},
 	{Domain: "oidc_identities", Reason: "OIDC login identities are authentication configuration and must be relinked."},
@@ -65,6 +78,7 @@ var omittedDomains = []OmittedDomain{
 
 func RegisteredDomains() []Domain {
 	out := append([]Domain(nil), Domains...)
+	out = append(out, LedgerDomains...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
@@ -74,8 +88,8 @@ func OmittedDomains() []OmittedDomain {
 }
 
 func domainByTable() map[string]string {
-	out := make(map[string]string, len(Domains))
-	for _, item := range Domains {
+	out := make(map[string]string, len(Domains)+len(LedgerDomains))
+	for _, item := range RegisteredDomains() {
 		out[item.Table] = item.Name
 	}
 	return out

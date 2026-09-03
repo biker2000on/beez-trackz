@@ -31,10 +31,15 @@ const (
 	SyncEntityProductCatalog           = "product_catalog"
 	SyncEntityProductBatch             = "product_batch"
 	SyncEntityProductAdjustment        = "product_adjustment"
+	SyncEntityInventoryOperation       = "inventory_operation"
+	SyncEntityInventoryLocation        = "inventory_location"
 )
 
-// syncEntityTypes is the allowlist that must equal the DB CHECK.
-var syncEntityTypes = []string{
+// legacySyncEntityTypes matches migration 00041 before the one-shot ledger
+// backfill. ledgerSyncEntityTypes matches the constraint installed by that
+// gate. Restore validation accepts both because this binary operates on
+// either side of the transactional cutover.
+var legacySyncEntityTypes = []string{
 	SyncEntitySale,
 	SyncEntitySaleItem,
 	SyncEntityExpense,
@@ -53,6 +58,16 @@ var syncEntityTypes = []string{
 	SyncEntityProductBatch,
 	SyncEntityProductAdjustment,
 }
+
+var ledgerSyncEntityTypes = []string{
+	SyncEntitySale, SyncEntitySaleItem, SyncEntityExpense, SyncEntityCustomer,
+	SyncEntityHarvestLot, SyncEntityJarSize, SyncEntityBottlingRun,
+	SyncEntityConsignmentSettlement, SyncEntityHive, SyncEntityProductCatalog,
+	SyncEntityProductBatch, SyncEntityInventoryOperation, SyncEntityInventoryLocation,
+}
+
+var syncEntityTypes = append(append([]string(nil), legacySyncEntityTypes...),
+	SyncEntityInventoryOperation, SyncEntityInventoryLocation)
 
 // ensureSyncRow inserts a pending mapping for (system, entityType, entityID)
 // if one is not already present. An existing row — including one already

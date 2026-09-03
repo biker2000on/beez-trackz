@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	ledgerbackfill "github.com/biker2000on/beez-trackz/backend/internal/app/backfill"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ import (
 type options struct {
 	input, database, conflict, report string
 	dryRun                            bool
+	backfillLedger                    bool
 }
 
 type reportRecord struct {
@@ -32,13 +34,14 @@ type reportRecord struct {
 }
 
 type restoreReport struct {
-	Success          bool                `json:"success"`
-	DryRun           bool                `json:"dryRun"`
-	Counts           map[app.Outcome]int `json:"counts"`
-	Records          []reportRecord      `json:"records"`
-	MissingMedia     []string            `json:"missingMedia"`
-	ExcludedConfig   []string            `json:"excludedConfiguration"`
-	ValidationErrors []string            `json:"validationErrors"`
+	Success          bool                   `json:"success"`
+	DryRun           bool                   `json:"dryRun"`
+	Counts           map[app.Outcome]int    `json:"counts"`
+	Records          []reportRecord         `json:"records"`
+	MissingMedia     []string               `json:"missingMedia"`
+	ExcludedConfig   []string               `json:"excludedConfiguration"`
+	ValidationErrors []string               `json:"validationErrors"`
+	LedgerBackfill   *ledgerbackfill.Report `json:"ledgerBackfill,omitempty"`
 }
 
 func newReport(dryRun bool) *restoreReport {
@@ -70,6 +73,7 @@ func run(args []string) int {
 	flags.StringVar(&opts.input, "input", "", "snapshot directory")
 	flags.StringVar(&opts.database, "database", "", "Postgres target URL")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "validate without writes")
+	flags.BoolVar(&opts.backfillLedger, "backfill-ledger", false, "translate live legacy inventory tables and freeze them after parity")
 	flags.StringVar(&opts.conflict, "conflict-policy", "fail", "fail, skip, or overwrite")
 	flags.StringVar(&opts.report, "report", "./restore-report.json", "restore report path outside the snapshot")
 	if err := flags.Parse(args); err != nil {
@@ -122,7 +126,7 @@ func unsafeReportPath(input, report string) bool {
 }
 
 func execute(ctx context.Context, opts options, report *restoreReport) error {
-	if strings.TrimSpace(opts.input) == "" {
+	if !opts.backfillLedger && strings.TrimSpace(opts.input) == "" {
 		return fmt.Errorf("-input is required")
 	}
 	if strings.TrimSpace(opts.database) == "" {
@@ -130,6 +134,19 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 	}
 	if opts.report == "" {
 		return fmt.Errorf("-report may not be empty")
+	}
+	if opts.backfillLedger {
+		if opts.dryRun {
+			return fmt.Errorf("-dry-run is not supported with -backfill-ledger; the gate is already all-or-nothing")
+		}
+		pool, err := db.Connect(ctx, opts.database)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		result, err := ledgerbackfill.Run(ctx, pool, ledgerbackfill.Options{})
+		report.LedgerBackfill = &result
+		return err
 	}
 	input, err := filepath.Abs(opts.input)
 	if err != nil {
@@ -198,6 +215,19 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 			if !nonempty {
 				if err := app.SeededRowsYieldToSnapshot(ctx, uow); err != nil {
 					return err
+				}
+				// Ledger singleton rows carry migration timestamps. Let the
+				// snapshot supply those identities so a restore preserves exact
+				// content and re-export digests instead of conflicting with the
+				// target migration's later timestamps.
+				for _, statement := range []string{
+					`DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`,
+					`DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`,
+					`DELETE FROM schema_generation WHERE generation='ledger-v1'`,
+				} {
+					if _, err := uow.Exec(ctx, statement); err != nil {
+						return err
+					}
 				}
 			}
 			// Ledger replay updates a newly restored materialized stock row.
@@ -301,6 +331,15 @@ func databaseNonempty(ctx context.Context, uow *app.UnitOfWork) (bool, error) {
 		table := quoteIdent(domain.Table)
 		predicate := "TRUE"
 		switch domain.Name {
+		case "inventory_item_kinds", "inventory_location_kinds", "inventory_operation_kinds",
+			"inventory_conditions", "inventory_operation_reasons", "schema_generation":
+			// These rows are schema registries, not user data. Fresh databases
+			// contain them immediately after migrations.
+			continue
+		case "inventory_items", "inventory_locations":
+			// Migration 00050 installs singleton/default rows with no legacy
+			// source identity. Backfilled or live catalog rows always have one.
+			predicate = "source_type IS NOT NULL"
 		case "stock_locations":
 			predicate = "slug <> 'home'"
 		case "treatment_products":
