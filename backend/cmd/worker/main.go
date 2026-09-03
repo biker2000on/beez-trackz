@@ -13,6 +13,7 @@ import (
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/httpapi"
 	"github.com/biker2000on/beez-trackz/backend/internal/jobs"
+	"github.com/biker2000on/beez-trackz/backend/internal/notify"
 	"github.com/biker2000on/beez-trackz/backend/internal/storage"
 )
 
@@ -60,7 +61,9 @@ func main() {
 	}
 	eventClient := asynq.NewClient(redisOpt)
 	defer eventClient.Close()
-	mux.HandleFunc(domainEventTaskType, handleDomainEvent)
+	eventConsumer := &domainEventConsumer{pool: pool,
+		notifier: notify.DomainEventPublisher{Pool: pool, Client: notify.New(nil)}}
+	mux.Handle(domainEventTaskType, eventConsumer)
 	go runDomainEventDrain(ctx, pool, eventClient)
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 	if err := jobs.RegisterPeriodic(scheduler); err != nil {

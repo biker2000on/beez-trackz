@@ -13,7 +13,6 @@ import (
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -176,19 +175,15 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sets := make([]string, 0, 4)
-	args := make([]any, 0, 5)
-	addSet := func(column string, value any) {
-		args = append(args, value)
-		sets = append(sets, fmt.Sprintf("%s = $%d", column, len(args)))
-	}
+	input := production.UpdateJarSizeInput{JarSizeID: id, OccurredAt: time.Now().UTC()}
+	hasChanges := false
 	if req.PackagingTypeID != nil {
 		var packagingTypeID *uuid.UUID
 		if err := json.Unmarshal(req.PackagingTypeID, &packagingTypeID); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid packagingTypeId")
 			return
 		}
-		addSet("packaging_type_id", packagingTypeID)
+		input.SetPackagingType, input.PackagingTypeID, hasChanges = true, packagingTypeID, true
 	}
 	if req.Label != nil {
 		var label *string
@@ -197,7 +192,7 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Label is required")
 			return
 		}
-		addSet("label", strings.TrimSpace(*label))
+		input.SetLabel, input.Label, hasChanges = true, strings.TrimSpace(*label), true
 	}
 	if req.HoneyOz != nil {
 		var oz *float64
@@ -205,7 +200,7 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid honeyOz")
 			return
 		}
-		addSet("honey_oz", oz)
+		input.SetHoneyOz, input.HoneyOz, hasChanges = true, oz, true
 	}
 	if req.DefaultPrice != nil {
 		var price *money
@@ -213,17 +208,19 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid defaultPrice")
 			return
 		}
-		addSet("default_price_cents", price)
+		input.SetDefaultPrice, hasChanges = true, true
+		if price != nil {
+			value := int64(*price)
+			input.DefaultPriceCents = &value
+		}
 	}
-	deactivating := false
 	if req.IsActive != nil {
 		var active bool
 		if err := json.Unmarshal(req.IsActive, &active); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid isActive")
 			return
 		}
-		deactivating = !active
-		addSet("is_active", active)
+		input.SetActive, input.Active, hasChanges = true, active, true
 	}
 	if req.LowStockThreshold != nil {
 		var threshold int
@@ -231,88 +228,26 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "lowStockThreshold must be non-negative")
 			return
 		}
-		addSet("low_stock_threshold", threshold)
+		input.SetLowStockThreshold, input.LowStockThreshold, hasChanges = true, threshold, true
 	}
-	if len(sets) == 0 {
+	if !hasChanges {
 		writeJSON(w, http.StatusOK, map[string]any{"success": true})
 		return
 	}
 
 	// One unit of work for both halves: the write-off operation and the
 	// jar_sizes UPDATE either both land or neither does.
-	wroteOff := 0
+	input.WriteOffRemaining = req.WriteOffRemaining
+	input.WriteOffReason = req.WriteOffReason
+	var commandResult production.UpdateJarSizeResult
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
-		wroteOff = 0
-		if deactivating {
-			// Home availability straight from the ledger. No row lock is taken
-			// here (review A4): quantity locking belongs to the inventory
-			// service, which locks the tuple inside Record.
-			var remaining int
-			if err := uow.QueryRow(ctx, `
-				SELECT COALESCE((SELECT SUM(a.available) FROM inventory_available a
-				                 JOIN inventory_locations l ON l.id = a.location_id
-				                 WHERE a.item_id = js.item_id AND l.is_home), 0)::int
-				FROM jar_sizes js WHERE js.id = $1`, id).Scan(&remaining); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return equipFail(http.StatusNotFound, "jar size not found")
-				}
-				return err
-			}
-			away, err := stockAwayJarTotals(ctx, uow)
-			if err != nil {
-				return err
-			}
-			if consigned := away[id]; consigned != 0 {
-				return equipFail(http.StatusConflict,
-					"%d jars of this size are at consignment locations. Return or settle "+
-						"them before deactivating the size.", consigned)
-			}
-			if remaining != 0 {
-				if !req.WriteOffRemaining {
-					return equipFail(http.StatusConflict,
-						"%d jars are still on hand for this size. Sell, give away, or adjust them "+
-							"to zero first, or resend with writeOffRemaining=true to record a write-off.",
-						remaining)
-				}
-				// The write-off is a count correction, not a loss: the jars are
-				// not gone, the size is being retired and its shelf zeroed. It
-				// records one count_adjust operation with the registry reason
-				// "count"; the operator's wording rides along as the note.
-				reason := "jar size deactivation write-off"
-				if value := honeyTrimPtr(req.WriteOffReason); value != nil {
-					reason = *value
-				}
-				lines := []production.JarLine{{JarSizeID: id, Quantity: -remaining}}
-				if _, err := production.New().AdjustJarCounts(
-					ctx, uow, lines, time.Now().UTC(), &reason); err != nil {
-					return err
-				}
-				wroteOff = remaining
-			}
-		}
-
-		args := append(append([]any(nil), args...), id)
-		query := fmt.Sprintf("UPDATE jar_sizes SET %s WHERE id = $%d",
-			strings.Join(sets, ", "), len(args))
-		tag, err := uow.Exec(ctx, query, args...)
-		if err != nil {
-			if jarIsUniqueViolation(err) {
-				return equipFail(http.StatusConflict, "label already exists")
-			}
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return equipFail(http.StatusNotFound, "jar size not found")
-		}
-		return nil
+		var err error
+		commandResult, err = production.UpdateJarSize(ctx, uow, input)
+		return err
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	response := map[string]any{"success": true}
-	if wroteOff != 0 {
-		response["jarsWrittenOff"] = wroteOff
-	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, commandResult)
 }

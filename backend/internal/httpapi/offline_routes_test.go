@@ -80,6 +80,7 @@ func TestOfflineRouteManifestRules(t *testing.T) {
 		{http.MethodPost, "/api/v1/canvas/hives", false},
 		{http.MethodPut, "/api/v1/canvas/hives", true},
 		{http.MethodPost, "/api/v1/harvest-sessions", false},
+		{http.MethodPut, "/api/v1/harvest-sessions", true},
 		{http.MethodPost, "/api/v1/harvest-sessions/abc/entries", true},
 		{http.MethodPost, "/api/v1/hives/bulk", true},
 		{http.MethodDelete, "/api/v1/hives/bulk", true},

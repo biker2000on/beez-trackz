@@ -299,134 +299,23 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 	}
 	notes := honeyTrimPtr(req.Notes)
 
-	commands := production.New()
-	var warnings []string
-	result, err := s.runApplicationMutation(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) error {
-		// Honey per jar size, read inside the transaction: a read on the pool
-		// before it began could see a jar-size edit the transaction then would
-		// not, deriving pounds from stale ounces.
-		ozBySize := make(map[uuid.UUID]*float64)
-		packagingBySize := make(map[uuid.UUID]uuid.UUID)
-		if len(lines) > 0 {
-			ids := make([]uuid.UUID, 0, len(lines))
-			for _, line := range lines {
-				ids = append(ids, line.JarSizeID)
-			}
-			rows, err := uow.Query(ctx,
-				`SELECT id, honey_oz, packaging_type_id FROM jar_sizes WHERE id = ANY($1)`, ids)
-			if err != nil {
-				return err
-			}
-			for rows.Next() {
-				var id uuid.UUID
-				var oz *float64
-				var packagingTypeID *uuid.UUID
-				if err := rows.Scan(&id, &oz, &packagingTypeID); err != nil {
-					rows.Close()
-					return err
-				}
-				ozBySize[id] = oz
-				if packagingTypeID != nil {
-					packagingBySize[id] = *packagingTypeID
-				}
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
-				return err
-			}
-		}
-
-		// Class 2 of honeyLockOrder: the lot row, then the bulk advisory lock
-		// (class 3), then — inside Record — the ledger's tuple locks. Same
-		// order bottlingRunCreate uses, so the two cannot deadlock.
-		lotCode, lotOnHandLbs, err := honeyLockLot(ctx, uow, lotID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return equipBadRequest("invalid harvest lot")
-		}
-		if err != nil {
-			return err
-		}
-		if msg, err := refuseLotBottling(ctx, uow, lotID, lotCode, date); err != nil {
-			return err
-		} else if msg != "" {
-			return equipFail(http.StatusConflict, "%s", msg)
-		}
-		bulk, err := honeyLockBulk(ctx, uow)
-		if err != nil {
-			return err
-		}
-
-		requestedLbs := 0.0
-		amountByLine := make([]float64, len(lines))
-		for i, line := range lines {
-			// A jar size with no honey_oz attributes no pounds; that is
-			// recorded as an explicit zero so the ledger never carries an
-			// undefined weight.
-			if oz := ozBySize[line.JarSizeID]; oz != nil {
-				amountByLine[i] = *oz * float64(line.Quantity) / 16
-			}
-			requestedLbs += amountByLine[i]
-		}
-		if hasLoss {
-			requestedLbs += *req.LossLbs
-		}
-		// The ledger refuses an overdraw on its own; these two checks run
-		// first so the operator sees the sentence they have always seen
-		// instead of a tuple identity.
-		if message := honeyBulkShortfall(requestedLbs, bulk.BulkOnHandLbs); message != "" {
-			return equipBadRequest("%s", message)
-		}
-		if message := honeyLotShortfall(requestedLbs, lotOnHandLbs, lotCode); message != "" {
-			return equipBadRequest("%s", message)
-		}
-
-		actor := actorID(r)
-		for i, line := range lines {
-			// Each jar line becomes its own bottling run, which is what
-			// carries the lot forward to serials and sale traceability.
-			runID := uuid.New()
-			if _, err := uow.Exec(ctx, `
-				INSERT INTO bottling_runs
-					(id, lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes, created_by)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-				runID, lotID, date, line.JarSizeID, line.Quantity, amountByLine[i],
-				notes, actor); err != nil {
-				return err
-			}
-			packaging := map[uuid.UUID]int{}
-			if typeID, ok := packagingBySize[line.JarSizeID]; ok {
-				packaging[typeID] = line.Quantity
-			}
-			result, err := commands.RecordBottling(ctx, uow, production.BottlingInput{
-				RunID: runID, HarvestLotID: lotID, JarSizeID: line.JarSizeID,
-				Quantity: line.Quantity, HoneyLbs: amountByLine[i], Date: date,
-				PackagingTypes: packaging, Notes: notes,
-			})
-			if err != nil {
-				return err
-			}
-			warnings = append(warnings, result.PackagingWarnings...)
-		}
-		if hasLoss {
-			if _, err := commands.RecordBulkDraw(ctx, uow, production.BulkDrawInput{
-				HarvestLotID: lotID, AmountLbs: *req.LossLbs,
-				Reason: production.ReasonLoss, Date: date, Notes: notes,
-			}); err != nil {
-				return err
-			}
-		}
-		return uow.Emit(ctx, app.Event{
-			AggregateType: "harvest_lot", AggregateID: lotID, Type: "bottling.recorded",
-			Payload: map[string]any{"lines": len(lines), "lossRecorded": hasLoss},
+	commandLines := make([]production.RecordBottlingLine, 0, len(lines))
+	for _, line := range lines {
+		commandLines = append(commandLines, production.RecordBottlingLine{
+			JarSizeID: line.JarSizeID, Quantity: line.Quantity,
 		})
-	}, func() any {
-		if warnings == nil {
-			warnings = []string{}
-		}
-		return map[string]any{
-			"success": true, "packagingWarnings": warnings,
-		}
-	})
+	}
+	lossLbs := 0.0
+	if hasLoss {
+		lossLbs = *req.LossLbs
+	}
+	result, err := s.runApplicationCommand(r, http.StatusOK,
+		func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+			return production.RecordBottling(ctx, uow, production.RecordBottlingInput{
+				HarvestLotID: lotID, Date: date, Lines: commandLines,
+				LossLbs: lossLbs, Notes: notes,
+			})
+		})
 	if err != nil {
 		writeCommandError(w, err)
 		return
@@ -1277,7 +1166,98 @@ func saleResolveBottlingRuns(
 }
 
 // POST /honey/sales creates either an immediate sale or an order/invoice.
+// Parsing and wire defaults remain here; sales.RecordSale owns all database
+// orchestration and failure semantics.
 func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Date                 string               `json:"date"`
+		Location             *string              `json:"location"`
+		StockLocationID      *uuid.UUID           `json:"stockLocationId"`
+		CustomerID           *uuid.UUID           `json:"customerId"`
+		HarvestLotID         *uuid.UUID           `json:"harvestLotId"`
+		CustomerName         *string              `json:"customerName"`
+		Channel              string               `json:"channel"`
+		PaymentMethod        string               `json:"paymentMethod"`
+		DiscountAmount       money                `json:"discountAmount"`
+		AmountPaid           *money               `json:"amountPaid"`
+		Tax                  *money               `json:"tax"`
+		OrderStatus          string               `json:"orderStatus"`
+		OrderNumber          *string              `json:"orderNumber"`
+		DueDate              *string              `json:"dueDate"`
+		WholesalePriceListID *uuid.UUID           `json:"wholesalePriceListId"`
+		Lines                []honeySaleLineInput `json:"lines"`
+		Notes                *string              `json:"notes"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	lines, err := normalizeHoneySaleLines(req.Lines)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(lines) == 0 {
+		writeError(w, http.StatusBadRequest, "Add at least one line")
+		return
+	}
+	date, err := parseDate(req.Date)
+	if err != nil || req.Date == "" {
+		writeError(w, http.StatusBadRequest, "invalid date")
+		return
+	}
+	if req.Channel == "" {
+		req.Channel = "direct"
+	}
+	if req.PaymentMethod == "" {
+		req.PaymentMethod = "cash"
+	}
+	if req.OrderStatus == "" {
+		req.OrderStatus = "paid"
+	}
+	if !honeySaleChannels[req.Channel] || !honeyPaymentMethods[req.PaymentMethod] || !honeyOrderStatuses[req.OrderStatus] || req.DiscountAmount < 0 {
+		writeError(w, http.StatusBadRequest, "invalid channel, payment method, order status, or discount")
+		return
+	}
+	var due *time.Time
+	if req.DueDate != nil && *req.DueDate != "" {
+		v, e := parseDate(*req.DueDate)
+		if e != nil {
+			writeError(w, http.StatusBadRequest, "invalid dueDate")
+			return
+		}
+		due = &v
+	}
+	id := uuid.New()
+	order := honeyTrimPtr(req.OrderNumber)
+	if order == nil {
+		v := "BT-" + strings.ToUpper(id.String()[:8])
+		order = &v
+	}
+	commandLines := make([]sales.SaleLine, 0, len(lines))
+	for _, line := range lines {
+		commandLines = append(commandLines, sales.SaleLine{Kind: line.Kind, JarSizeID: line.JarSizeID, HiveID: line.HiveID, ItemID: line.ItemID, EquipmentStockID: line.EquipmentStockID, ProductID: line.ProductID, BottlingRunID: line.BottlingRunID, Quantity: line.Quantity, UnitPriceCents: int64(line.UnitPrice)})
+	}
+	var paid, tax *int64
+	if req.AmountPaid != nil {
+		v := int64(*req.AmountPaid)
+		paid = &v
+	}
+	if req.Tax != nil {
+		v := int64(*req.Tax)
+		tax = &v
+	}
+	result, err := s.runApplicationCommand(r, http.StatusCreated, func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+		return sales.RecordSale(ctx, uow, sales.RecordSaleInput{SaleID: id, Date: date, Location: req.Location, StockLocationID: req.StockLocationID, CustomerID: req.CustomerID, HarvestLotID: req.HarvestLotID, CustomerName: req.CustomerName, Channel: req.Channel, PaymentMethod: req.PaymentMethod, OrderStatus: req.OrderStatus, DiscountAmountCents: int64(req.DiscountAmount), AmountPaidCents: paid, TaxCents: tax, OrderNumber: order, DueDate: due, WholesalePriceListID: req.WholesalePriceListID, Lines: commandLines, Notes: req.Notes})
+	})
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	writeApplicationResult(w, result)
+}
+
+func (s *Server) honeyRecordSaleLegacy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Date                 string               `json:"date"`
 		Location             *string              `json:"location"`
@@ -1731,6 +1711,67 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "tax must be non-negative")
 		return
 	}
+	var due *time.Time
+	if req.DueDate != nil && *req.DueDate != "" {
+		v, e := parseDate(*req.DueDate)
+		if e != nil {
+			writeError(w, http.StatusBadRequest, "invalid dueDate")
+			return
+		}
+		due = &v
+	}
+	var paid, tax *int64
+	if req.AmountPaid != nil {
+		v := int64(*req.AmountPaid)
+		paid = &v
+	}
+	if req.Tax != nil {
+		v := int64(*req.Tax)
+		tax = &v
+	}
+	result, err := s.runApplicationCommand(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+		if req.OrderStatus == "cancelled" {
+			return sales.CancelSale(ctx, uow, sales.CancelSaleInput{SaleID: id, Reason: req.CancellationReason})
+		}
+		return sales.UpdateSale(ctx, uow, sales.UpdateSaleInput{SaleID: id, OrderStatus: req.OrderStatus, AmountPaidCents: paid, PaymentMethod: req.PaymentMethod, DueDateSet: req.DueDate != nil, DueDate: due, TaxCents: tax})
+	})
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	writeApplicationResult(w, result)
+}
+
+func (s *Server) honeyUpdateSaleLegacy(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		OrderStatus        string  `json:"orderStatus"`
+		AmountPaid         *money  `json:"amountPaid"`
+		PaymentMethod      *string `json:"paymentMethod"`
+		DueDate            *string `json:"dueDate"`
+		Tax                *money  `json:"tax"`
+		CancellationReason *string `json:"cancellationReason"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !honeyOrderStatuses[req.OrderStatus] {
+		writeError(w, http.StatusBadRequest, "invalid order status")
+		return
+	}
+	if req.PaymentMethod != nil && !honeyPaymentMethods[*req.PaymentMethod] {
+		writeError(w, http.StatusBadRequest, "invalid payment method")
+		return
+	}
+	if req.Tax != nil && *req.Tax < 0 {
+		writeError(w, http.StatusBadRequest, "tax must be non-negative")
+		return
+	}
 	var dueDate *time.Time
 	if req.DueDate != nil && *req.DueDate != "" {
 		value, err := parseDate(*req.DueDate)
@@ -1842,6 +1883,26 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 //
 // Optional body: {"reason": "..."}.
 func (s *Server) honeyCancelSale(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Reason *string `json:"reason"`
+	}
+	_ = decodeJSON(r, &req)
+	result, err := s.runApplicationCommand(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+		return sales.CancelSale(ctx, uow, sales.CancelSaleInput{SaleID: id, Reason: req.Reason})
+	})
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	writeApplicationResult(w, result)
+}
+
+func (s *Server) honeyCancelSaleLegacy(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())

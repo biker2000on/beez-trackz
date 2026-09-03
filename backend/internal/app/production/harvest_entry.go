@@ -79,11 +79,16 @@ func AddHarvestEntry(ctx context.Context, uow *app.UnitOfWork, input AddHarvestE
 			Notes: entry.Notes,
 		})
 	}
-	if err := uow.Emit(ctx, app.Event{
-		AggregateType: "harvest_session", AggregateID: input.SessionID,
-		Type: "harvest.entries_added", Payload: map[string]any{"count": len(created)},
-	}); err != nil {
-		return nil, err
+	for _, entry := range created {
+		if err := uow.Emit(ctx, app.Event{
+			AggregateType: "harvest_entry", AggregateID: entry.ID,
+			Type: "harvest_entry.added", Payload: map[string]any{
+				"sessionId": input.SessionID, "hiveId": entry.HiveID,
+				"calculatedHoneyWeight": entry.CalculatedHoneyWeight,
+			},
+		}); err != nil {
+			return nil, err
+		}
 	}
 	if !input.Batch {
 		return created[0], nil

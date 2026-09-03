@@ -46,6 +46,7 @@ func (s *Server) mountDomains(r chi.Router) {
 	// The WorkItem projection: one server-side answer to "what is there to
 	// do?" for Today and the yard queue (routes_work.go).
 	s.mountWork(r)
+	s.mountWorkbenches(r)
 	s.mountMCP(r)
 
 	// Place and flow: yard scales (CSV ingest, daily weights, and the

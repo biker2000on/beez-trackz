@@ -1731,22 +1731,27 @@ func (s *Server) stockSettlementCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result stockSettlementResult
+	commandLines := make([]sales.SettlementLine, 0, len(req.Lines))
+	for _, line := range req.Lines {
+		var unitPrice *int64
+		if line.UnitPrice != nil {
+			value := int64(*line.UnitPrice)
+			unitPrice = &value
+		}
+		commandLines = append(commandLines, sales.SettlementLine{
+			JarSizeID: line.JarSizeID, ProductID: line.ProductID,
+			QuantitySold: line.QuantitySold, QuantityReturned: line.QuantityReturned,
+			UnitPriceCents: unitPrice, CountOnShelf: line.CountOnShelf,
+		})
+	}
+	var result sales.ApplySettlementResult
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
-		locations, err := s.stockLoadLocationsTx(ctx, uow, locationID)
-		if err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		if len(locations) == 0 {
-			return equipFail(http.StatusNotFound, "location not found")
-		}
-		location := locations[0]
-		if location.IsHome {
-			return equipFail(http.StatusBadRequest, "home does not settle with itself")
-		}
-
-		result, err = s.stockApplySettlement(ctx, uow, location, req,
-			periodStart, periodEnd, reportedAt, actorID(r))
+		var err error
+		result, err = sales.ApplySettlement(ctx, uow, sales.ApplySettlementInput{
+			LocationID: locationID, PeriodStart: periodStart, PeriodEnd: periodEnd,
+			ReportedAt: reportedAt, Lines: commandLines, AmountPaidCents: int64(req.AmountPaid),
+			PaymentMethod: req.PaymentMethod, OrderNumber: req.OrderNumber, Notes: req.Notes,
+		})
 		return err
 	})
 	if err != nil {

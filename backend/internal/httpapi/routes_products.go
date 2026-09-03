@@ -990,112 +990,18 @@ func (s *Server) productBatchCreate(w http.ResponseWriter, r *http.Request) {
 		req.HoneyLbs = nil
 	}
 
-	commands := production.New()
 	batchID := uuid.New()
+	var commandResult production.RecordBatchResult
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
-		var productKind, productName string
-		if err := uow.QueryRow(ctx, `
-		SELECT kind, name FROM product_catalog WHERE id=$1 FOR UPDATE`, productID).
-			Scan(&productKind, &productName); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return equipFail(http.StatusBadRequest, "invalid productId")
-			}
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		if productKind != kind {
-			return equipFail(http.StatusBadRequest, "batch kind must match the catalog product")
-		}
-
-		if honeyConsuming {
-			bulk, err := honeyLockBulk(ctx, uow)
-			if err != nil {
-				return equipFail(http.StatusInternalServerError, "database error")
-			}
-			if message := honeyBulkShortfall(*req.HoneyLbs, bulk.BulkOnHandLbs); message != "" {
-				return equipFail(http.StatusBadRequest, "%s", message)
-			}
-		} else {
-			remaining, err := propolisHarvestRemainingGrams(ctx, uow, *req.PropolisHarvestID)
-			if err != nil {
-				return err
-			}
-			need := propolisToGrams(*req.PropolisAmount, *req.PropolisUnit)
-			if need > remaining+honeyPoundTolerance {
-				return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
-					"Not enough propolis: need %.1f g, have %.1f g", need, remaining))
-			}
-		}
-
-		if err := productValidateExpenses(ctx, uow, req.ExpenseIDs); err != nil {
-			return equipFail(http.StatusBadRequest, "%s", err.Error())
-		}
-
-		var lotCode *string
-		if req.HarvestLotID != nil {
-			if err := uow.QueryRow(ctx, `SELECT lot_code FROM harvest_lots WHERE id=$1`,
-				*req.HarvestLotID).Scan(&lotCode); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return equipFail(http.StatusBadRequest, "invalid harvestLotId")
-				}
-				return equipFail(http.StatusInternalServerError, "database error")
-			}
-			// Same treatment lockout as a jar sale off the lot: honey from a lot
-			// still inside a withdrawal window cannot be converted either.
-			if msg, err := refuseLotSale(ctx, uow, *req.HarvestLotID, startedAt); err != nil {
-				return equipFail(http.StatusInternalServerError, "database error")
-			} else if msg != "" {
-				return equipFail(http.StatusConflict, "%s", msg)
-			}
-		}
-
-		actor := actorID(r)
-		if _, err := uow.Exec(ctx, `
-		INSERT INTO product_batches
-			(id, kind, product_id, harvest_lot_id, started_at, finished_at,
-			 honey_lbs, water_liters, yeast, vessel,
-			 propolis_harvest_id, propolis_amount, propolis_unit,
-			 quantity_out, notes, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-			batchID, kind, productID, req.HarvestLotID, startedAt, finishedAt,
-			req.HoneyLbs, req.WaterLiters, honeyTrimPtr(req.Yeast), honeyTrimPtr(req.Vessel),
-			req.PropolisHarvestID, req.PropolisAmount, req.PropolisUnit,
-			req.QuantityOut, honeyTrimPtr(req.Notes), actor); err != nil {
-			if honeyIsFKViolation(err) {
-				return equipFail(http.StatusBadRequest, "invalid product, harvest lot, or propolis harvest")
-			}
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		for _, expenseID := range req.ExpenseIDs {
-			if _, err := uow.Exec(ctx, `
-			INSERT INTO product_batch_expenses (batch_id, expense_id) VALUES ($1,$2)`,
-				batchID, expenseID); err != nil {
-				if honeyIsFKViolation(err) {
-					return equipFail(http.StatusBadRequest, "invalid expenseId")
-				}
-				return equipFail(http.StatusInternalServerError, "database error")
-			}
-		}
-
-		// The batch is a transform (spec 6.2): the honey or propolis it drew
-		// are input lines and its finished units are the output, into the
-		// batch's own lot. A batch made from a named harvest lot draws that
-		// lot's bucket; one that names none draws the legacy-unassigned lot
-		// and the operation records the allocation as inferred.
-		honeyLbs := 0.0
-		if honeyConsuming && req.HoneyLbs != nil {
-			honeyLbs = *req.HoneyLbs
-		}
-		propolisGrams := 0.0
-		if !honeyConsuming && req.PropolisAmount != nil && req.PropolisUnit != nil {
-			propolisGrams = propolisToGrams(*req.PropolisAmount, *req.PropolisUnit)
-		}
-		_ = productName
-		_ = lotCode
-		_, err := commands.RecordBatch(ctx, uow, production.BatchInput{
-			BatchID: batchID, ProductID: productID, HarvestLotID: req.HarvestLotID,
-			HoneyLbs: honeyLbs, PropolisHarvestID: req.PropolisHarvestID,
-			PropolisGrams: propolisGrams, QuantityOut: req.QuantityOut,
-			Date: startedAt, Notes: honeyTrimPtr(req.Notes),
+		var err error
+		commandResult, err = production.RecordBatch(ctx, uow, production.RecordBatchInput{
+			BatchID: batchID, Kind: kind, ProductID: productID,
+			HarvestLotID: req.HarvestLotID, StartedAt: startedAt, FinishedAt: finishedAt,
+			HoneyLbs: req.HoneyLbs, WaterLiters: req.WaterLiters,
+			Yeast: honeyTrimPtr(req.Yeast), Vessel: honeyTrimPtr(req.Vessel),
+			PropolisHarvestID: req.PropolisHarvestID, PropolisAmount: req.PropolisAmount,
+			PropolisUnit: req.PropolisUnit, QuantityOut: req.QuantityOut,
+			Notes: honeyTrimPtr(req.Notes), ExpenseIDs: req.ExpenseIDs,
 		})
 		return err
 	})
@@ -1103,7 +1009,7 @@ func (s *Server) productBatchCreate(w http.ResponseWriter, r *http.Request) {
 		writeCommandError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": batchID})
+	writeJSON(w, http.StatusCreated, commandResult)
 }
 
 func productBatchHoneyReason(kind, productName string, lotCode *string) string {

@@ -668,89 +668,19 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
 		return
 	}
-	commands := production.New()
-	var id uuid.UUID
-	result, err := s.runApplicationMutation(r, http.StatusCreated, func(ctx context.Context, uow *app.UnitOfWork) error {
-		// Lock the requested harvests FIRST — class 1 of honeyLockOrder — before
-		// their weights are read and before any lot row is touched. This is what
-		// stops a concurrent hsDeleteEntry from soft-deleting a harvest between
-		// the weight read below and the link inserts at the end of this handler.
-		if msg, err := lockRequestedHarvests(ctx, uow, req.HarvestIDs); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		} else if msg != "" {
-			return equipFail(http.StatusUnprocessableEntity, "%s", msg)
-		}
-		claimElevation, err = fillClaimElevation(ctx, uow, claimApiaryID, claimElevation)
-		if err != nil {
-			if err.Error() == "invalid claimApiaryId" {
-				return equipFail(http.StatusBadRequest, "%s", err.Error())
-			}
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(ctx, uow, req.HarvestIDs)
-		if err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
-			req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
-			derivedLbs, linkedHarvests)
-		if weightMsg != "" {
-			return equipFail(http.StatusBadRequest, "%s", weightMsg)
-		}
-		err = uow.QueryRow(ctx, `
-		INSERT INTO harvest_lots
-			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_weight_entered,
-			 honey_weight_source,
-			 honey_variety, season, apiary_region, bloom_notes, beekeeper_story, testing_data,
-			 reorder_url, is_public, moisture_pct, bottling_moisture_pct,
-			 claim_species, claim_year, claim_apiary_id, claim_elevation_m, varietal_id,
-			 created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
-			strings.TrimSpace(req.LotCode), slug, date, weightLbs,
-			weightEntered, weightSource,
-			honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
-			honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
-			honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-			reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-			claimSpecies, claimYear, claimApiaryID, claimElevation, req.VarietalID,
-			actorID(r)).Scan(&id)
-		if err != nil {
-			return dbCommandError(err, "lot code or public slug already exists",
-				"invalid reference")
-		}
-		if err := stampMoistureOverride(ctx, uow, id, overrideReason, actorID(r)); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		for _, harvestID := range req.HarvestIDs {
-			if _, err := uow.Exec(ctx, `
-			INSERT INTO harvest_lot_harvests (lot_id, harvest_id) VALUES ($1, $2)`,
-				id, harvestID); err != nil {
-				return dbCommandError(err, "duplicate harvestId", "invalid harvestId")
-			}
-		}
-		for i, photoID := range req.PhotoIDs {
-			if _, err := uow.Exec(ctx, `
-			INSERT INTO harvest_lot_photos (lot_id, photo_id, sort_order) VALUES ($1, $2, $3)`,
-				id, photoID, i); err != nil {
-				return dbCommandError(err, "duplicate photoId", "invalid photoId")
-			}
-		}
-		// The lot's weight IS a receipt into its bulk-honey lot (decision 6):
-		// honey_weight_lbs stays the domain fact, and the pounds that can
-		// actually be drawn are this operation's balance.
-		if err := commands.SetLotCeiling(ctx, uow, id, weightLbs, date); err != nil {
-			return err
-		}
-		return uow.Emit(ctx, app.Event{
-			AggregateType: "harvest_lot", AggregateID: id, Type: "harvest_lot.created",
-			Payload: map[string]any{"publicSlug": slug},
+	id := uuid.New()
+	result, err := s.runApplicationCommand(r, http.StatusCreated,
+		func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+			return production.CreateLot(ctx, uow, production.LotInput{
+				ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,
+				HoneyWeightLbs: req.HoneyWeightLbs, HoneyWeightEntered: honeyTrimPtr(req.HoneyWeightEntered), HoneyWeightSource: req.HoneyWeightSource,
+				HoneyVariety: req.HoneyVariety, VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
+				BloomNotes: req.BloomNotes, BeekeeperStory: req.BeekeeperStory, TestingData: req.TestingData, ReorderURL: reorderURL, IsPublic: public,
+				HarvestIDs: req.HarvestIDs, PhotoIDs: req.PhotoIDs, MoisturePct: req.MoisturePct, BottlingMoisturePct: req.BottlingMoisturePct,
+				MoistureOverrideReason: overrideReason, ClaimSpecies: claimSpecies, ClaimYear: claimYear, ClaimApiaryID: claimApiaryID,
+				ClaimElevationM: claimElevation, StoryBaseURL: s.cfg.StoryBaseURL(),
+			})
 		})
-	}, func() any {
-		return map[string]any{
-			"id": id, "publicSlug": slug,
-			"storyUrl": s.cfg.StoryBaseURL() + "/honey/" + slug,
-		}
-	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
@@ -807,126 +737,17 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
 		return
 	}
-	commands := production.New()
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
-		// Lock the requested harvests first — class 1 of honeyLockOrder. The link
-		// inserts at the bottom of this handler take an FK key-share lock on each
-		// of these rows, so taking them here, before the lot row, is what keeps
-		// this path from reaching backwards into class 1 while holding class 2
-		// and deadlocking against hsDeleteEntry. It also re-validates under the
-		// lock that none of them has been deleted.
-		if msg, err := lockRequestedHarvests(ctx, uow, req.HarvestIDs); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		} else if msg != "" {
-			return equipFail(http.StatusUnprocessableEntity, "%s", msg)
-		}
-		// Then the lot row, before anything is read off it. The bottled total
-		// below and the UPDATE that acts on it have to be one atomic step:
-		// without this, a bottling run committing between the two stores a derived
-		// weight lower than the pounds live runs have already taken out of the lot,
-		// and every later run 400s on a ceiling that was never really there.
-		// bottlingRunCreate takes the same lock on the same row, so both paths
-		// order their locks identically and neither can deadlock the other.
-		var lockedLotCode string
-		if err := uow.QueryRow(ctx,
-			`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, id).
-			Scan(&lockedLotCode); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return equipFail(http.StatusNotFound, "harvest lot not found")
-			}
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		claimElevation, err = fillClaimElevation(ctx, uow, claimApiaryID, claimElevation)
-		if err != nil {
-			if err.Error() == "invalid claimApiaryId" {
-				return equipFail(http.StatusBadRequest, "%s", err.Error())
-			}
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(ctx, uow, req.HarvestIDs)
-		if err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		// req.HarvestIDs replaces the link set wholesale below, so a derived lot
-		// whose harvests were added, dropped, or soft-deleted picks up the new sum
-		// on this same update — the weight can never drift from its sources.
-		weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
-			req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
-			derivedLbs, linkedHarvests)
-		if weightMsg != "" {
-			return equipFail(http.StatusBadRequest, "%s", weightMsg)
-		}
-		// The lot's weight cannot drop below what its runs already bottled —
-		// existing runs would exceed capacity and every future run would 400.
-		var alreadyBottledLbs float64
-		if err := uow.QueryRow(ctx, `
-		SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
-			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
-		FROM bottling_runs run
-		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-		WHERE run.lot_id = $1 AND run.voided_at IS NULL`, id).Scan(&alreadyBottledLbs); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		if weightLbs < alreadyBottledLbs-honeyPoundTolerance {
-			if weightSource == lotWeightSourceDerived {
-				return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
-					"The linked harvests total %.2f lbs but this lot's bottling runs already used %.2f lbs; "+
-						"fix the harvests or type a manual weight",
-					weightLbs, alreadyBottledLbs))
-			}
-			return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
-				"Lot weight cannot be below the %.2f lbs its bottling runs already used",
-				alreadyBottledLbs))
-		}
-		// The row has been held FOR UPDATE since the top of this transaction, so
-		// the bottled total read above is still current and the row still exists.
-		_, err = uow.Exec(ctx, `
-		UPDATE harvest_lots SET lot_code=$1, public_slug=$2, extraction_date=$3,
-			honey_weight_lbs=$4, honey_weight_entered=$5, honey_variety=$6, season=$7,
-			apiary_region=$8, bloom_notes=$9, beekeeper_story=$10, testing_data=$11,
-			reorder_url=$12, is_public=$13, moisture_pct=$14, bottling_moisture_pct=$15,
-			claim_species=$16, claim_year=$17, claim_apiary_id=$18, claim_elevation_m=$19,
-			honey_weight_source=$21, varietal_id=$22
-		WHERE id=$20`,
-			strings.TrimSpace(req.LotCode), slug, date, weightLbs,
-			weightEntered,
-			honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
-			honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
-			honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-			reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-			claimSpecies, claimYear, claimApiaryID, claimElevation, id, weightSource,
-			req.VarietalID)
-		if err != nil {
-			return dbCommandError(err, "lot code or public slug already exists",
-				"invalid reference")
-		}
-		// nil reason (reading within threshold) clears any previous override, so a
-		// corrected reading does not leave a stale justification behind.
-		if err := stampMoistureOverride(ctx, uow, id, overrideReason, actorID(r)); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		if _, err := uow.Exec(ctx, `DELETE FROM harvest_lot_harvests WHERE lot_id=$1`, id); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		if _, err := uow.Exec(ctx, `DELETE FROM harvest_lot_photos WHERE lot_id=$1`, id); err != nil {
-			return equipFail(http.StatusInternalServerError, "database error")
-		}
-		for _, harvestID := range req.HarvestIDs {
-			if _, err := uow.Exec(ctx, `INSERT INTO harvest_lot_harvests VALUES ($1,$2)`, id, harvestID); err != nil {
-				return dbCommandError(err, "duplicate harvestId", "invalid harvestId")
-			}
-		}
-		for i, photoID := range req.PhotoIDs {
-			if _, err := uow.Exec(ctx, `INSERT INTO harvest_lot_photos VALUES ($1,$2,$3)`, id, photoID, i); err != nil {
-				return dbCommandError(err, "duplicate photoId", "invalid photoId")
-			}
-		}
-		// Re-linking or re-weighing a lot is a new receipt for the new
-		// ceiling followed by a reversal of the old one (decision 6). The
-		// order keeps the lot's balance nonnegative at every step, and a
-		// ceiling below what has already been drawn is refused by the ledger
-		// as well as by the bottled-pounds check above.
-		return commands.SetLotCeiling(ctx, uow, id, weightLbs, date)
+		_, err := production.UpdateLot(ctx, uow, production.LotInput{
+			ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,
+			HoneyWeightLbs: req.HoneyWeightLbs, HoneyWeightEntered: honeyTrimPtr(req.HoneyWeightEntered), HoneyWeightSource: req.HoneyWeightSource,
+			HoneyVariety: req.HoneyVariety, VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
+			BloomNotes: req.BloomNotes, BeekeeperStory: req.BeekeeperStory, TestingData: req.TestingData, ReorderURL: reorderURL, IsPublic: public,
+			HarvestIDs: req.HarvestIDs, PhotoIDs: req.PhotoIDs, MoisturePct: req.MoisturePct, BottlingMoisturePct: req.BottlingMoisturePct,
+			MoistureOverrideReason: overrideReason, ClaimSpecies: claimSpecies, ClaimYear: claimYear, ClaimApiaryID: claimApiaryID,
+			ClaimElevationM: claimElevation,
+		})
+		return err
 	})
 	if err != nil {
 		writeCommandError(w, err)
@@ -984,139 +805,23 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commands := production.New()
 	runID := uuid.New()
-	serials := make([]string, 0)
+	var commandResult production.RecordBottlingRunResult
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
-		// The lot row (class 2 of honeyLockOrder), then the bulk advisory lock
-		// (class 3), then the ledger's tuple locks inside Record. This path
-		// takes no harvest row locks, so it is a suffix of the global order
-		// and cannot deadlock against the paths that do.
-		var lotCode string
-		var lotWeightLbs float64
-		if err := uow.QueryRow(ctx,
-			`SELECT lot_code, honey_weight_lbs FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
-			Scan(&lotCode, &lotWeightLbs); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return equipBadRequest("invalid harvest lot")
-			}
-			return err
-		}
-
-		// Jar lines are not traced back to a lot, so the bottling run is the
-		// last point where a withdrawal window can still be enforced. Same
-		// rule refuseLotSale applies to sales, and it runs before any builder.
-		if msg, err := refuseLotBottling(ctx, uow, lotID, lotCode, date); err != nil {
-			return err
-		} else if msg != "" {
-			return equipFail(http.StatusConflict, "%s", msg)
-		}
-
-		// Pounds this run consumes. When honeyLbs is omitted it is derived
-		// from the jar size, using the same oz/16 rule as jarring.
-		var honeyOz *float64
-		var packagingTypeID *uuid.UUID
-		if err := uow.QueryRow(ctx,
-			`SELECT honey_oz, packaging_type_id FROM jar_sizes WHERE id=$1`, *req.JarSizeID).
-			Scan(&honeyOz, &packagingTypeID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return equipBadRequest("invalid jar size")
-			}
-			return err
-		}
-		runLbs := 0.0
-		switch {
-		case req.HoneyLbs != nil:
-			runLbs = *req.HoneyLbs
-		case honeyOz != nil:
-			runLbs = *honeyOz * float64(req.Quantity) / 16
-		}
-
-		// A run cannot bottle more than its lot yielded. The ledger enforces
-		// it too — the lot's receipt is its ceiling (decision 6) — but the
-		// operator gets the sentence naming both numbers.
-		var alreadyBottledLbs float64
-		if err := uow.QueryRow(ctx, `
-			SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
-				run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
-			FROM bottling_runs run
-			LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-			WHERE run.lot_id = $1 AND run.voided_at IS NULL`, lotID).
-			Scan(&alreadyBottledLbs); err != nil {
-			return err
-		}
-		if alreadyBottledLbs+runLbs > lotWeightLbs+honeyPoundTolerance {
-			return equipBadRequest(
-				"Lot %s holds %.2f lbs; %.2f lbs are already bottled and this run needs %.2f lbs",
-				lotCode, lotWeightLbs, alreadyBottledLbs, runLbs)
-		}
-		bulk, err := honeyLockBulk(ctx, uow)
-		if err != nil {
-			return err
-		}
-		if message := honeyBulkShortfall(runLbs, bulk.BulkOnHandLbs); message != "" {
-			return equipBadRequest("%s", message)
-		}
-
-		actor := actorID(r)
-		if _, err := uow.Exec(ctx, `
-			INSERT INTO bottling_runs
-				(id, lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			runID, lotID, date, req.JarSizeID, req.Quantity, req.HoneyLbs,
-			honeyTrimPtr(req.Notes), actor); err != nil {
-			if pgErrCode(err) == "23505" {
-				return equipFail(http.StatusConflict, "duplicate bottling run")
-			}
-			if pgErrCode(err) == "23503" {
-				return equipBadRequest("invalid harvest lot or jar size")
-			}
-			return err
-		}
-		packaging := map[uuid.UUID]int{}
-		if packagingTypeID != nil {
-			packaging[*packagingTypeID] = req.Quantity
-		}
-		if _, err := commands.RecordBottling(ctx, uow, production.BottlingInput{
+		var err error
+		commandResult, err = production.RecordBottlingRun(ctx, uow, production.RecordBottlingRunInput{
 			RunID: runID, HarvestLotID: lotID, JarSizeID: *req.JarSizeID,
-			Quantity: req.Quantity, HoneyLbs: runLbs, Date: date,
-			PackagingTypes: packaging, Notes: honeyTrimPtr(req.Notes),
-		}); err != nil {
-			return err
-		}
-
-		if req.Serialize {
-			for i := 1; i <= req.Quantity; i++ {
-				serial := fmt.Sprintf(
-					"%s-%s-%s-%04d",
-					lotCode,
-					date.Format("20060102"),
-					strings.ToUpper(strings.ReplaceAll(runID.String()[:6], "-", "")),
-					i,
-				)
-				if _, err := uow.Exec(ctx, `
-					INSERT INTO jar_serials (bottling_run_id, serial_number) VALUES ($1,$2)`,
-					runID, serial); err != nil {
-					return equipFail(http.StatusConflict,
-						"serial numbers already exist for this lot and date")
-				}
-				serials = append(serials, serial)
-			}
-		}
-		if req.MoisturePct != nil {
-			if _, err := uow.Exec(ctx, `
-				UPDATE harvest_lots SET bottling_moisture_pct = $2 WHERE id = $1`,
-				lotID, req.MoisturePct); err != nil {
-				return err
-			}
-		}
-		return nil
+			Date: date, Quantity: req.Quantity, HoneyLbs: req.HoneyLbs,
+			Notes: honeyTrimPtr(req.Notes), Serialize: req.Serialize,
+			MoisturePct: req.MoisturePct,
+		})
+		return err
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": runID, "serialNumbers": serials})
+	writeJSON(w, http.StatusCreated, commandResult)
 }
 
 // POST /bottling-runs/{id}/void — undo a bottling run.

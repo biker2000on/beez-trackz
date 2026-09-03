@@ -49,7 +49,7 @@ export const OFFLINE_ROUTE_MANIFEST: OfflineRouteManifest = {
       "prefix": "/api/v1/canvas/"
     },
     {
-      "prefix": "/api/v1/harvest-sessions/"
+      "prefix": "/api/v1/harvest-sessions"
     },
     {
       "prefix": "/api/v1/harvest-entries/"

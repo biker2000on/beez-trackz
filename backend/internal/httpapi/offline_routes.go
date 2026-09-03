@@ -39,7 +39,9 @@ var offlineRoutes = offlineRouteManifest{
 		{Prefix: "/api/v1/queens"},
 		{Prefix: "/api/v1/photos/"},
 		{Prefix: "/api/v1/canvas/"},
-		{Prefix: "/api/v1/harvest-sessions/"},
+		// No trailing slash: the exact create path must match this rule before
+		// POSTExclusions can keep start-extraction online-only.
+		{Prefix: "/api/v1/harvest-sessions"},
 		{Prefix: "/api/v1/harvest-entries/"},
 		{Prefix: "/api/v1/recommendations/"},
 		// Honey and commerce writes. Market day is the most offline-prone
