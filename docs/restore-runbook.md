@@ -1068,10 +1068,23 @@ Drop the ledger rows? **No.**
 |---|---|
 | Parity failed, job exited nonzero | Nothing to roll back. The transaction did not commit. Legacy tables are still writable; the ledger is empty. Fix and retry. |
 | You think a failed job "left rows behind" | Treat that as a translator/CLI bug. Do not `DELETE FROM inventory_operations`. Restore the pre-Phase-A snapshot into a disposable database and compare. |
-| Freeze **committed** and you need to undo Phase A | Restore the **pre-Phase-A snapshot** through the canonical importer (section 4) onto a replacement database. That is the only rollback. Do not drop freeze triggers by hand. Do not `TRUNCATE` `inventory_*`. Do not squash. |
+| Freeze **committed** and you need to undo Phase A | Restore the **pre-Phase-A snapshot** through the canonical importer (section 4) onto a fresh replacement database, then run the canonical importer again with `-backfill-ledger`. That is the only rollback. Do not drop freeze triggers by hand. Do not `TRUNCATE` `inventory_*`. Do not squash. |
 
 The pre-Phase-A snapshot plus its passing gate report are the recovery
 boundary. Keep them on storage independent of the database you froze.
+
+An artifact whose manifest has `schemaMigration < 50` legitimately has no
+`inventory_*` domain files. The reader/importer declare those missing domains
+as `pre-ledger-artifact-v1`; restore replays the legacy tables onto the fresh
+head database and leaves every ledger domain empty. Re-run
+`import-snapshot -database <replacement-url> -backfill-ledger` to translate
+that restored legacy state, require parity, and arm the freeze. Never aim this
+restore at the frozen database: the importer returns a typed precondition
+naming `inventory_legacy_freeze` and this section. The end-to-end database test
+`TestPreLedgerRollbackRestoreAndBackfillEndToEnd` proves this exact section 6.5
+path (migration-48 export → head restore → backfill parity/freeze), while
+`TestRoundTripGatePassesAgainstAPreLedgerSource` proves the corresponding
+gate and named explanations.
 
 ### 6.6 Between the phases
 

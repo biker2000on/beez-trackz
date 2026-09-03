@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"sort"
@@ -14,6 +15,8 @@ import (
 	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 )
 
 func TestExportImportReexportDigestEquality(t *testing.T) {
@@ -152,6 +155,136 @@ func TestRestoreLegacySnapshotRefusesFrozenDatabase(t *testing.T) {
 	err = execute(ctx, options{input: artifact, database: targetURL, conflict: "fail", report: t.TempDir() + "/report.json", dryRun: true}, report)
 	if !app.IsKind(err, app.KindPrecondition) || !strings.Contains(err.Error(), "inventory_legacy_freeze") {
 		t.Fatalf("restore into frozen target returned %v, want named precondition", err)
+	}
+}
+
+// TestPreLedgerRollbackRestoreAndBackfillEndToEnd is the executable proof of
+// restore-runbook section 6.5: restore the artifact taken before migration
+// 00050 into a fresh head database, then run the canonical ledger backfill.
+func TestPreLedgerRollbackRestoreAndBackfillEndToEnd(t *testing.T) {
+	adminURL := os.Getenv("TEST_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	sourceURL, sourceCleanup := freshImportDatabase(ctx, t, adminURL, "beez_preledger_src_"+suffix)
+	defer sourceCleanup()
+	targetURL, targetCleanup := freshImportDatabase(ctx, t, adminURL, "beez_preledger_dst_"+suffix)
+	defer targetCleanup()
+	migrateImportDatabaseTo(t, sourceURL, snapshot.LedgerSchemaMigration-2)
+
+	source, err := pgxpool.New(ctx, sourceURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var typeID, stockID uuid.UUID
+	if err := source.QueryRow(ctx, `INSERT INTO equipment_types(name,category) VALUES($1,'box') RETURNING id`, "Pre-ledger box "+suffix).Scan(&typeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.QueryRow(ctx, `INSERT INTO equipment_stock(type_id,total_owned) VALUES($1,0) RETURNING id`, typeID).Scan(&stockID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Exec(ctx, `INSERT INTO equipment_stock_adjustments(stock_id,quantity,reason,date) VALUES($1,7,'purchased','2026-09-01T00:00:00Z')`, stockID); err != nil {
+		t.Fatal(err)
+	}
+	artifactDir := t.TempDir() + "-pre-ledger"
+	if _, err := snapshot.Export(ctx, source, snapshot.ExportOptions{OutputDirectory: artifactDir, BusinessTimezone: "UTC", Currency: "USD"}); err != nil {
+		t.Fatalf("export migration-48 source: %v", err)
+	}
+	source.Close()
+	artifact, err := snapshot.OpenArtifact(artifactDir)
+	if err != nil {
+		t.Fatalf("read pre-ledger artifact: %v", err)
+	}
+	if len(artifact.PreLedgerDomains) != len(snapshot.LedgerDomains) {
+		t.Fatalf("pre-ledger domains = %v, want all %d ledger domains", artifact.PreLedgerDomains, len(snapshot.LedgerDomains))
+	}
+
+	target, err := db.Connect(ctx, targetURL)
+	if err != nil {
+		t.Fatalf("migrate target to head: %v", err)
+	}
+	target.Close()
+	reportPath := t.TempDir() + "/restore-report.json"
+	dryRun := newReport(true)
+	if err := execute(ctx, options{input: artifactDir, database: targetURL, conflict: "fail", report: reportPath, dryRun: true}, dryRun); err != nil {
+		t.Fatalf("dry-run pre-ledger restore: %v", err)
+	}
+	probe, err := db.ConnectWithoutMigrations(ctx, targetURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyRows, operations int
+	if err := probe.QueryRow(ctx, `SELECT COUNT(*) FROM equipment_stock`).Scan(&legacyRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := probe.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations`).Scan(&operations); err != nil {
+		t.Fatal(err)
+	}
+	probe.Close()
+	if legacyRows != 0 || operations != 0 {
+		t.Fatalf("dry-run wrote legacy rows=%d ledger operations=%d", legacyRows, operations)
+	}
+
+	restore := newReport(false)
+	if err := execute(ctx, options{input: artifactDir, database: targetURL, conflict: "fail", report: reportPath}, restore); err != nil {
+		t.Fatalf("restore pre-ledger artifact: %v", err)
+	}
+	transformed := map[string]bool{}
+	for _, record := range restore.Records {
+		if record.Transform == snapshot.PreLedgerTransform {
+			transformed[record.Domain] = true
+		}
+	}
+	if len(transformed) != len(snapshot.LedgerDomains) {
+		t.Fatalf("restore report names %d pre-ledger domains, want %d: %v", len(transformed), len(snapshot.LedgerDomains), transformed)
+	}
+	probe, err = db.ConnectWithoutMigrations(ctx, targetURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range snapshot.LedgerDomains {
+		var records int
+		if err := probe.QueryRow(ctx, "SELECT COUNT(*) FROM "+quoteIdent(domain.Table)).Scan(&records); err != nil {
+			probe.Close()
+			t.Fatalf("count %s after pre-ledger restore: %v", domain.Name, err)
+		}
+		if records != 0 {
+			t.Errorf("ledger domain %s has %d records after pre-ledger restore, want 0", domain.Name, records)
+		}
+	}
+	probe.Close()
+
+	backfill := newReport(false)
+	if err := execute(ctx, options{database: targetURL, report: reportPath, backfillLedger: true}, backfill); err != nil {
+		t.Fatalf("backfill restored pre-ledger artifact: %v; report=%+v", err, backfill.LedgerBackfill)
+	}
+	if backfill.LedgerBackfill == nil || backfill.LedgerBackfill.Operations == 0 {
+		t.Fatalf("backfill did not translate restored legacy inventory: %+v", backfill.LedgerBackfill)
+	}
+
+	frozenRestore := newReport(true)
+	err = execute(ctx, options{input: artifactDir, database: targetURL, conflict: "skip", report: reportPath, dryRun: true}, frozenRestore)
+	if !app.IsKind(err, app.KindPrecondition) || !strings.Contains(err.Error(), "inventory_legacy_freeze") || !strings.Contains(err.Error(), "section 6.5") {
+		t.Fatalf("pre-ledger restore into frozen target returned %v, want section 6.5 typed precondition", err)
+	}
+}
+
+func migrateImportDatabaseTo(t *testing.T, databaseURL string, version int64) {
+	t.Helper()
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	goose.SetBaseFS(os.DirFS("../../internal/db"))
+	sqlDB, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := goose.UpTo(sqlDB, db.LegacyChainDir, version); err != nil {
+		t.Fatalf("migrate source to %d: %v", version, err)
 	}
 }
 

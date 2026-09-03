@@ -101,6 +101,13 @@ func compareRecords(source, restored *artifact) []finding {
 		sourceIndex, inSource := source.ByID[domain]
 		restoredIndex, inRestored := restored.ByID[domain]
 		if !inSource {
+			if source.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration &&
+				snapshot.IsLedgerDomain(domain) && len(restoredIndex) == 0 {
+				findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
+					"domain %s has zero records in the re-export and was absent before migration %05d",
+					domain, snapshot.LedgerSchemaMigration))
+				continue
+			}
 			findings = append(findings, fail(stepCompare, "extra-domain",
 				"the re-export contains domain %s, which the source artifact does not", domain))
 			continue
@@ -219,11 +226,23 @@ func compareReferences(source, restored *artifact) []finding {
 	}
 	for name := range restoredChecks {
 		if _, present := sourceChecks[name]; !present {
+			check := restoredChecks[name]
+			if source.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration &&
+				referenceTouchesLedger(check) && check.PopulatedCount == 0 &&
+				check.ResolvedCount == 0 && check.DanglingCount == 0 {
+				findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
+					"reference check %s is new with the ledger schema and has zero populated records", name))
+				continue
+			}
 			findings = append(findings, fail(stepCompare, "reference-check-additional",
 				"the re-export carries reference check %s, which the source does not", name))
 		}
 	}
 	return findings
+}
+
+func referenceTouchesLedger(check snapshot.ReferenceCheck) bool {
+	return snapshot.IsLedgerDomain(check.FromDomain) || snapshot.IsLedgerDomain(check.ToDomain)
 }
 
 func indexReferences(checks []snapshot.ReferenceCheck) map[string]snapshot.ReferenceCheck {
@@ -321,6 +340,15 @@ func compareAggregates(source, restored *artifact) []finding {
 	for _, family := range families {
 		want, hasWant := source.Verification.AggregateFamilies[family]
 		got, hasGot := restored.Verification.AggregateFamilies[family]
+		if family == "newLedger" &&
+			source.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration &&
+			newLedgerFamilyEmpty(want, hasWant) && hasGot && newLedgerFamilyEmpty(got, true) &&
+			(!hasWant || !equalJSON(want, got)) {
+			findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
+				"aggregate family %q was absent or empty before migration %05d and is empty in the re-export",
+				family, snapshot.LedgerSchemaMigration))
+			continue
+		}
 		if !hasWant || !hasGot {
 			findings = append(findings, fail(stepCompare, "aggregate-family-missing",
 				"aggregate family %q present in source=%v, re-export=%v", family, hasWant, hasGot))
@@ -377,6 +405,20 @@ func compareAggregates(source, restored *artifact) []finding {
 		}
 	}
 	return findings
+}
+
+func newLedgerFamilyEmpty(family snapshot.AggregateFamily, present bool) bool {
+	if !present {
+		return true
+	}
+	for _, definition := range family.Definitions {
+		switch string(bytes.TrimSpace(definition.Value)) {
+		case "", "null", "[]":
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func indexAggregates(definitions []snapshot.AggregateDefinition) map[string]snapshot.AggregateDefinition {

@@ -84,6 +84,17 @@ func RegisteredDomains() []Domain {
 	return out
 }
 
+// IsLedgerDomain reports whether name belongs to the additive inventory
+// ledger introduced by migration 00050.
+func IsLedgerDomain(name string) bool {
+	for _, item := range LedgerDomains {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func OmittedDomains() []OmittedDomain {
 	return append([]OmittedDomain(nil), omittedDomains...)
 }

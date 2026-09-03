@@ -75,6 +75,13 @@ func (r *restoreReport) addBaselineDrop(domain string) {
 	})
 }
 
+func (r *restoreReport) addPreLedgerDomain(domain string) {
+	r.Counts[app.OutcomeSkipped]++
+	r.Records = append(r.Records, reportRecord{
+		Domain: domain, Outcome: app.OutcomeSkipped, Transform: snapshot.PreLedgerTransform,
+	})
+}
+
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
@@ -171,6 +178,13 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 			return err
 		}
 		defer pool.Close()
+		// A pre-ledger restore deliberately leaves every ledger domain empty,
+		// including migration registries. Re-establish the canonical schema
+		// identities immediately before the translator needs them. The inserts
+		// are idempotent for ordinary head databases.
+		if err := ensureLedgerBackfillSeeds(ctx, pool); err != nil {
+			return err
+		}
 		result, err := ledgerbackfill.Run(ctx, pool, ledgerbackfill.Options{})
 		report.LedgerBackfill = &result
 		return err
@@ -223,13 +237,17 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 	runner := app.NewRunner(pool)
 	actor := app.SystemRestoreActor(uuid.Nil)
 	hasLegacyInventory := artifactHasLegacyInventory(artifact)
+	preLedgerArtifact := len(artifact.PreLedgerDomains) > 0
 	restoreFn := func(ctx context.Context, uow *app.UnitOfWork) error {
 		equipmentTriggerDisabled := false
 		if _, err := uow.Exec(ctx, `SET LOCAL TIME ZONE 'UTC'`); err != nil {
 			return err
 		}
-		if hasLegacyInventory {
+		if hasLegacyInventory || preLedgerArtifact {
 			if err := app.EnsureLegacyRestoreTargetIsWritable(ctx, uow); err != nil {
+				if preLedgerArtifact && app.IsKind(err, app.KindPrecondition) {
+					return app.Precondition("import pre-ledger snapshot", "target database has inventory_legacy_freeze triggers; restore the pre-Phase-A artifact onto a fresh replacement database per docs/restore-runbook.md section 6.5")
+				}
 				return err
 			}
 		}
@@ -244,7 +262,7 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 			// DryRun rolls this transaction back. Performing the same seed
 			// deletions is necessary for the validation pass to see the same
 			// empty logical target as the real restore.
-			if err := seededRowsYieldToSnapshot(ctx, uow); err != nil {
+			if err := seededRowsYieldToSnapshot(ctx, uow, preLedgerArtifact); err != nil {
 				return err
 			}
 		}
@@ -255,6 +273,11 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 				return err
 			}
 			presentTables[domain.Table] = present
+		}
+		for _, domainName := range artifact.PreLedgerDomains {
+			if presentTables[domainName] {
+				report.addPreLedgerDomain(domainName)
+			}
 		}
 		if !opts.dryRun {
 			// Ledger replay updates a newly restored materialized stock row.
@@ -422,12 +445,40 @@ func targetTablePresent(ctx context.Context, uow *app.UnitOfWork, table string) 
 	return present, nil
 }
 
-func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork) error {
+func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork, clearLedgerSeeds bool) error {
 	stockLocationsPresent, err := targetTablePresent(ctx, uow, "stock_locations")
 	if err != nil {
 		return err
 	}
 	if stockLocationsPresent {
+		if clearLedgerSeeds {
+			// The artifact predates every inventory_* record. Clear the head
+			// migration seeds in dependency order so its declared transform is
+			// literally an empty ledger, not a mixture of artifact and target
+			// state. -backfill-ledger restores the schema identities before use.
+			for _, statement := range []string{
+				`DELETE FROM stock_locations WHERE slug='home'`,
+				`DELETE FROM treatment_products`,
+				`DELETE FROM inventory_balance_checkpoints`,
+				`DELETE FROM inventory_bom_lines`,
+				`DELETE FROM inventory_boms`,
+				`DELETE FROM inventory_movements`,
+				`DELETE FROM inventory_operations`,
+				`DELETE FROM inventory_lots`,
+				`DELETE FROM inventory_locations`,
+				`DELETE FROM inventory_items`,
+				`DELETE FROM inventory_operation_reasons`,
+				`DELETE FROM inventory_conditions`,
+				`DELETE FROM inventory_operation_kinds`,
+				`DELETE FROM inventory_location_kinds`,
+				`DELETE FROM inventory_item_kinds`,
+			} {
+				if _, err := uow.Exec(ctx, statement); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		return app.SeededRowsYieldToSnapshot(ctx, uow)
 	}
 	if !db.BaselineDrops("stock_locations") {
@@ -441,6 +492,73 @@ func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork) error {
 		if _, err := uow.Exec(ctx, statement); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func ensureLedgerBackfillSeeds(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO inventory_item_kinds (kind, description, unit_family) VALUES
+		  ('honey_bulk', 'Bulk honey', 'mass'),
+		  ('jar', 'Filled honey jar', 'count'),
+		  ('catalog_product', 'Finished catalog product', 'count'),
+		  ('propolis_raw', 'Raw propolis', 'mass'),
+		  ('equipment', 'Beekeeping equipment', 'count'),
+		  ('packaging', 'Packaging material', 'count')
+		ON CONFLICT (kind) DO NOTHING;
+		INSERT INTO inventory_location_kinds (kind, description) VALUES
+		  ('site', 'Physical site'),
+		  ('storage_area', 'Storage area'),
+		  ('apiary', 'Apiary'),
+		  ('consignee', 'Consignment location'),
+		  ('in_transit', 'Goods in transit'),
+		  ('deployed', 'Virtual location for hive-deployed stock')
+		ON CONFLICT (kind) DO NOTHING;
+		INSERT INTO inventory_operation_kinds (kind, description, sided) VALUES
+		  ('receive', 'Receipt into inventory', 'one'),
+		  ('opening_balance', 'Imported opening balance', 'one'),
+		  ('transfer', 'Location-to-location transfer', 'paired'),
+		  ('deploy', 'Deploy stock to a hive', 'paired'),
+		  ('return', 'Return stock from a hive', 'paired'),
+		  ('transform', 'Consume inputs and produce outputs', 'transform'),
+		  ('sale_consume', 'Physical sale consumption', 'one'),
+		  ('sale_return', 'Physical sale return', 'one'),
+		  ('shrink', 'Loss or other shrink', 'one'),
+		  ('count_adjust', 'Physical count adjustment', 'one'),
+		  ('condition_change', 'Move stock between conditions', 'paired'),
+		  ('reversal', 'Exact negation of an operation', 'paired')
+		ON CONFLICT (kind) DO NOTHING;
+		INSERT INTO inventory_conditions (condition, description, sellable) VALUES
+		  ('serviceable', 'Available for service or sale', true),
+		  ('damaged', 'Damaged and unavailable for ordinary use', false),
+		  ('retired', 'Retired from service', false)
+		ON CONFLICT (condition) DO NOTHING;
+		INSERT INTO inventory_operation_reasons (reason, description, applies_to_kinds) VALUES
+		  ('none', 'No additional reason applies', ARRAY['receive','opening_balance','transfer','deploy','return','transform','sale_consume','sale_return','reversal']),
+		  ('give_away', 'Given away', ARRAY['shrink']),
+		  ('loss', 'Lost or destroyed', ARRAY['shrink']),
+		  ('feeding', 'Consumed as bee feed', ARRAY['shrink','transform']),
+		  ('settlement_shrink', 'Consignee-reported shrink', ARRAY['shrink']),
+		  ('count', 'Physical count correction', ARRAY['count_adjust']),
+		  ('packaging_consumed_untraced', 'Packaging consumption without a traced BOM line', ARRAY['shrink','transform']),
+		  ('damage', 'Changed to damaged condition', ARRAY['condition_change']),
+		  ('retire', 'Changed to retired condition', ARRAY['condition_change']),
+		  ('repair', 'Returned to serviceable condition', ARRAY['condition_change'])
+		ON CONFLICT (reason) DO NOTHING;
+		INSERT INTO inventory_items
+		  (id, kind, name, canonical_unit, quantity_scale, lot_tracked, condition_tracked, container_tracked)
+		VALUES
+		  ('00000000-0000-0000-0000-000000000101', 'honey_bulk', 'Bulk honey', 'lb', 4, true, false, false),
+		  ('00000000-0000-0000-0000-000000000102', 'propolis_raw', 'Raw propolis', 'g', 4, true, false, false)
+		ON CONFLICT (id) DO NOTHING;
+		INSERT INTO inventory_locations (id, kind, name, is_home) VALUES
+		  ('00000000-0000-0000-0000-000000000201', 'site', 'Home', true)
+		ON CONFLICT (id) DO NOTHING;
+		INSERT INTO inventory_locations (id, kind, name) VALUES
+		  ('00000000-0000-0000-0000-000000000202', 'deployed', 'Deployed')
+		ON CONFLICT (id) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("restore ledger schema seeds before backfill: %w", err)
 	}
 	return nil
 }

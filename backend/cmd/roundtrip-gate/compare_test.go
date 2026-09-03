@@ -277,4 +277,49 @@ func TestCompareAggregatesAcceptsAbsentOptionalLegacyFamily(t *testing.T) {
 	}
 }
 
+func TestPreLedgerComparatorExplainsOnlyEmptyLedgerAdditions(t *testing.T) {
+	source, _ := loadArtifact(baselineFixture().write(t, t.TempDir()))
+	restored, _ := loadArtifact(baselineFixture().write(t, t.TempDir()))
+	source.Manifest.SchemaMigration = snapshot.LedgerSchemaMigration - 1
+	restored.Manifest.SchemaMigration = snapshot.LedgerSchemaMigration
+	restored.Records["inventory_movements"] = []artifactRecord{}
+	restored.ByID["inventory_movements"] = map[string]artifactRecord{}
+
+	findings := compareRecords(source, restored)
+	if detail := detailFor(findings, snapshot.PreLedgerTransform); !contains(detail, "inventory_movements") {
+		t.Fatalf("zero-record ledger domain was not explained: %v", findings)
+	}
+
+	restored.Records["inventory_movements"] = []artifactRecord{{IDKey: `"movement"`}}
+	restored.ByID["inventory_movements"] = map[string]artifactRecord{`"movement"`: restored.Records["inventory_movements"][0]}
+	if findings := compareRecords(source, restored); !hasCode(findings, "extra-domain") {
+		t.Fatalf("non-empty ledger domain was explained: %v", findings)
+	}
+
+	restored.Verification.ReferenceChecks = append(restored.Verification.ReferenceChecks, snapshot.ReferenceCheck{
+		Name: "inventory_movements_item_id_fkey", FromDomain: "inventory_movements", ToDomain: "inventory_items",
+	})
+	findings = compareReferences(source, restored)
+	if detail := detailFor(findings, snapshot.PreLedgerTransform); !contains(detail, "inventory_movements_item_id_fkey") {
+		t.Fatalf("zero-count ledger reference was not explained: %v", findings)
+	}
+	restored.Verification.ReferenceChecks[len(restored.Verification.ReferenceChecks)-1].PopulatedCount = 1
+	if findings := compareReferences(source, restored); !hasCode(findings, "reference-check-additional") {
+		t.Fatalf("populated ledger reference was explained: %v", findings)
+	}
+
+	delete(source.Verification.AggregateFamilies, "newLedger")
+	findings = compareAggregates(source, restored)
+	if detail := detailFor(findings, snapshot.PreLedgerTransform); !contains(detail, "newLedger") {
+		t.Fatalf("empty newLedger family was not explained: %v", findings)
+	}
+
+	family := restored.Verification.AggregateFamilies["newLedger"]
+	family.Definitions = []snapshot.AggregateDefinition{{Name: "inventory_on_hand", Value: json.RawMessage(`[{"on_hand":1}]`)}}
+	restored.Verification.AggregateFamilies["newLedger"] = family
+	if findings := compareAggregates(source, restored); !hasCode(findings, "aggregate-family-missing") {
+		t.Fatalf("non-empty newLedger family was explained: %v", findings)
+	}
+}
+
 func contains(haystack, needle string) bool { return indexOf(haystack, needle) >= 0 }

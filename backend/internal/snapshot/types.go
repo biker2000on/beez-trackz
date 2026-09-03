@@ -12,6 +12,13 @@ const (
 	ExporterVersion       = "snapshot-export-v1"
 	LegacyAggregateFamily = "legacy-v1-migrations-00001-00048"
 	NewAggregateFamily    = "new-ledger-v1-reserved"
+	// LedgerSchemaMigration is the first migration that created the
+	// inventory_* ledger tables. Artifacts below this ceiling legitimately
+	// have no ledger domain files.
+	LedgerSchemaMigration = 50
+	// PreLedgerTransform names the format-v1 compatibility transform used
+	// when such an artifact is restored into a ledger-bearing target.
+	PreLedgerTransform = "pre-ledger-artifact-v1"
 )
 
 type RecordEnvelope struct {

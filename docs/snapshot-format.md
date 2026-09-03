@@ -15,10 +15,10 @@ snapshot/
   media-manifest.json
   domains/
     apiaries.jsonl
-    ...one UTF-8 JSON Lines file for every registered domain...
+    ...one UTF-8 JSON Lines file for every registered domain present at export...
 ```
 
-Files use UTF-8 without a BOM and LF line endings. JSONL files end every record, including the last, with LF. Empty domains are represented by an empty file, not an omitted file. `manifest.json` is written last. Its own hash is intentionally not recursive; all other canonical artifact files are linked from it by SHA-256.
+Files use UTF-8 without a BOM and LF line endings. JSONL files end every record, including the last, with LF. Empty domains are represented by an empty file, not an omitted file. The one compatibility exception is a pre-ledger artifact (`schemaMigration < 50`): migration 00050 had not created the `inventory_*` tables, so those registered ledger domains are absent rather than empty. `manifest.json` is written last. Its own hash is intentionally not recursive; all other canonical artifact files are linked from it by SHA-256.
 
 ## `manifest.json`
 
@@ -27,7 +27,7 @@ The manifest has these required fields:
 - `formatVersion`: integer `1`.
 - `exportedAt`: RFC 3339 UTC export timestamp.
 - `appCommit`: Beez Trackz application commit.
-- `schemaMigration`: highest applied Goose migration version (currently expected to be 48).
+- `schemaMigration`: highest applied Goose migration version. Values below 50 identify artifacts exported before the inventory ledger tables existed.
 - `exporterVersion`: version of the exporter implementation.
 - `files`: one entry per domain file, each with `domain`, relative `path`, `records`, exact `bytes`, and lowercase hexadecimal `sha256`. The hash covers the complete JSONL bytes, including LF.
 - `canonical`: the canonical JSON/digest version, UTF-8 and line-ending declarations, UTC and named-business-timezone rules, canonical units, money representation, record-envelope rule, external-sync idempotency derivation, and the migration-00034 treatment reconciliation rule.
@@ -58,6 +58,7 @@ Version 1 exports every domain below:
 - Media and derived text: `photos` (canonicalized `tags`), `media_files`, and `transcript_versions`.
 - Work intelligence: `yard_labor_sessions` and `ai_recommendations`.
 - Safe accounting replay state: `external_sync` (including canonicalized account/category/tax mappings, conflict projection, per-record `last_synced_at` success timestamp, `content_hash`, `remote_transaction_guid`, and `remote_enter_date`) and `gnucash_sync_settings` (base URL, expected book identity/currency, cursor, sync-enabled state, canonicalized account mapping, and singleton `last_attempt_at`; the misleading source column `last_synced_at` is renamed because it is written on attempts, including failed pulls; never the API token).
+- Inventory ledger (migration 00050 and later): `inventory_item_kinds`, `inventory_location_kinds`, `inventory_operation_kinds`, `inventory_conditions`, `inventory_operation_reasons`, `inventory_items`, `inventory_locations`, `inventory_lots`, `inventory_operations`, `inventory_movements`, `inventory_boms`, `inventory_bom_lines`, and `inventory_balance_checkpoints`. These files are absent, by declaration rather than corruption, from a pre-ledger artifact.
 
 Treatments have three authoritative stores: `treatment_events`, `inspections.treatments`, and `treatment_products`. All three are exported. `canonical.treatmentReconciliation` names `migration-00034-v1`: when inspection treatment JSON is edited, linked treatment events are reconciled by `inspection_id`. Import and verification must preserve the three stores and this provenance rule; one store must not be synthesized by dropping another.
 
@@ -117,7 +118,7 @@ Secret filtering is column-specific or key-path-specific and occurs before canon
 The version-1 verification file contains:
 
 - `version`, `formatVersion`, `generatedAt`, `canonicalizationVersion`, and `digestAlgorithm`;
-- `recordCounts` by every registered domain;
+- `recordCounts` by every domain represented in the artifact (pre-ledger artifacts do not invent counts for tables that did not exist);
 - `recordDigests`, each with domain, preserved ID, algorithm versions, and semantic digest;
 - `referenceChecks`, naming both domains/field sets, whether the relationship is required, and populated/resolved/dangling counts. These cover declared FKs plus non-FK transcript pointers and polymorphic media owners and `external_sync.entity_id` projections;
 - `media`, carrying original reference hash/resolution states;
@@ -178,7 +179,11 @@ restore failure is nonzero.
 The reader treats the artifact as untrusted until all checks complete. It
 requires the exact supported `formatVersion`, canonicalization and digest
 declarations, UTF-8/LF declarations, and one manifest entry for every
-registered domain. Manifest paths must be relative and contained by the
+registered domain, except that a ledger domain may be absent when and only
+when `schemaMigration < 50`. The reader records every such name in
+`Artifact.PreLedgerDomains`; the declared transform name is
+`pre-ledger-artifact-v1`. A ledger domain absent at migration 50 or later, or
+any absent non-ledger domain, is an error. Manifest paths must be relative and contained by the
 artifact. Each file's byte count and SHA-256 are recomputed before decoding.
 JSONL files require one complete envelope per LF-terminated line; envelope
 domain/version declarations must match the manifest, preserved IDs must be
@@ -187,6 +192,26 @@ unique within the domain, and each digest is recomputed from canonical
 matching digest for every record, matching counts for every domain, and no
 dangling declared reference. `media-manifest.json` must use the declared
 supported media version.
+
+When `pre-ledger-artifact-v1` is imported into a ledger-v1 target, the
+importer restores the legacy domain files and records each absent ledger
+domain in the restore report under that transform. The target ledger domains
+remain empty; a later canonical `-backfill-ledger` invocation reinstates the
+schema registries/default identities and translates the restored legacy
+inventory through the normal parity gate. Dry-run performs the same validation
+and transform planning inside a rolled-back transaction. A target carrying an
+`inventory_legacy_freeze` trigger is refused with a typed precondition that
+directs the operator to restore-runbook section 6.5 and a fresh replacement
+database.
+
+The round-trip comparator uses the same transform name for only the additive
+facts expected after restoring such an artifact: zero-record ledger domains,
+zero-count ledger-related reference checks introduced by the newer schema,
+and an absent/reserved-empty source `newLedger` family becoming an empty
+target family. A populated ledger domain or reference, or a non-empty
+`newLedger` aggregate, remains an unexplained finding and fails the gate. The
+named explanations appear in both `gate-report.json` and
+`gate-summary.txt`.
 
 On a write restore the importer first applies pending goose migrations. A
 database containing rows beyond known migration seeds is refused under the

@@ -26,6 +26,9 @@ type Artifact struct {
 	// baseline intentionally omits. An undeclared missing domain is still a
 	// reader error.
 	DroppedDomains []string
+	// PreLedgerDomains names ledger domains legitimately absent because the
+	// artifact was exported before migration 00050 created their tables.
+	PreLedgerDomains []string
 }
 
 // OpenArtifact reads and independently verifies a format-v1 snapshot.
@@ -74,6 +77,10 @@ func OpenArtifact(directory string) (*Artifact, error) {
 		if !seenDomains[domain.Name] {
 			if db.BaselineDrops(domain.Name) {
 				artifact.DroppedDomains = append(artifact.DroppedDomains, domain.Name)
+				continue
+			}
+			if manifest.SchemaMigration < LedgerSchemaMigration && IsLedgerDomain(domain.Name) {
+				artifact.PreLedgerDomains = append(artifact.PreLedgerDomains, domain.Name)
 				continue
 			}
 			return nil, fmt.Errorf("snapshot reader: required domain %q is absent", domain.Name)

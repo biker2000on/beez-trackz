@@ -78,6 +78,30 @@ func TestOpenArtifactRecordsDomainsDroppedByBaseline(t *testing.T) {
 	}
 }
 
+func TestOpenArtifactRecordsLedgerDomainsAbsentBeforeMigration50(t *testing.T) {
+	root, manifest := readerFixture(t, nil)
+	omitFixtureDomains(t, root, manifest, []string{"inventory_balance_checkpoints"})
+
+	artifact, err := OpenArtifact(root)
+	if err != nil {
+		t.Fatalf("open pre-ledger artifact: %v", err)
+	}
+	if got, want := strings.Join(artifact.PreLedgerDomains, ","), "inventory_balance_checkpoints"; got != want {
+		t.Fatalf("pre-ledger domains = %q, want %q", got, want)
+	}
+}
+
+func TestOpenArtifactRejectsLedgerDomainAbsentAtMigration50(t *testing.T) {
+	root, manifest := readerFixture(t, nil)
+	manifest.SchemaMigration = LedgerSchemaMigration
+	omitFixtureDomains(t, root, manifest, []string{"inventory_balance_checkpoints"})
+
+	_, err := OpenArtifact(root)
+	if err == nil || !strings.Contains(err.Error(), `required domain "inventory_balance_checkpoints" is absent`) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestOpenArtifactStillRejectsUndeclaredMissingDomain(t *testing.T) {
 	root, manifest := readerFixture(t, nil)
 	omitFixtureDomains(t, root, manifest, []string{"hives"})
