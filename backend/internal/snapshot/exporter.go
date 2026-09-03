@@ -117,11 +117,14 @@ func Export(ctx context.Context, pool *pgxpool.Pool, options ExportOptions) (*Ex
 	if err != nil {
 		return nil, err
 	}
-	legacyPresent, frozen, err := legacyState(ctx, tx)
+	legacyPresent, _, err := legacyState(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	if legacyPresent && !frozen {
+	// Phase A keeps the frozen compatibility tables as the parity oracle.
+	// Exporting their family after freeze is what lets the P0 gate prove that
+	// a ledger-bearing Phase-A snapshot survives restore byte-for-byte.
+	if legacyPresent {
 		legacy, err := computeLegacyAggregates(ctx, tx, options.Currency)
 		if err != nil {
 			return nil, err

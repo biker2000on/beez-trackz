@@ -21,13 +21,21 @@ func RekeyExternalSync(ctx context.Context, uow *app.UnitOfWork) (int64, error) 
 		return 0, err
 	}
 	changed += tag.RowsAffected()
-	for _, legacy := range []string{"honey_movement", "stock_movement", "equipment_stock_adjustment", "product_adjustment"} {
+	for _, legacy := range []string{"honey_movement", "equipment_stock_adjustment", "product_adjustment"} {
 		tag, err = uow.Exec(ctx, `UPDATE external_sync e SET entity_type='inventory_operation',entity_id=o.id FROM inventory_operations o WHERE e.entity_type=$1 AND o.legacy_ref_type=$1 AND o.legacy_ref_id=e.entity_id`, legacy)
 		if err != nil {
 			return 0, err
 		}
 		changed += tag.RowsAffected()
 	}
+	// A legacy transfer/return is two stock_movement rows but one paired
+	// operation. The translator stores both row ids on that operation so an
+	// accounting key attached to either half converges on the same target.
+	tag, err = uow.Exec(ctx, `UPDATE external_sync e SET entity_type='inventory_operation',entity_id=o.id FROM inventory_operations o WHERE e.entity_type='stock_movement' AND ((o.legacy_ref_type='stock_movement' AND o.legacy_ref_id=e.entity_id) OR o.details->'legacy_movement_ids' ? e.entity_id::text)`)
+	if err != nil {
+		return 0, err
+	}
+	changed += tag.RowsAffected()
 	// equipment_stock is catalog-plus-history rather than a one-to-one legacy
 	// operation. Bind it to the earliest operation affecting the split item.
 	tag, err = uow.Exec(ctx, `UPDATE external_sync e SET entity_type='inventory_operation',entity_id=(

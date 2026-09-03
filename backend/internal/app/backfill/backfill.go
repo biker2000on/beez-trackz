@@ -11,6 +11,7 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -24,11 +25,19 @@ var FreezeTables = []string{
 type Options struct{ Currency string }
 
 type Report struct {
-	AlreadyFrozen       bool     `json:"alreadyFrozen"`
-	Operations          int      `json:"operations"`
-	EquipmentItems      int      `json:"equipmentItems"`
-	ExternalSyncRekeyed int64    `json:"externalSyncRekeyed"`
-	FrozenTables        []string `json:"frozenTables"`
+	AlreadyFrozen       bool            `json:"alreadyFrozen"`
+	Operations          int             `json:"operations"`
+	EquipmentItems      int             `json:"equipmentItems"`
+	ExternalSyncRekeyed int64           `json:"externalSyncRekeyed"`
+	FrozenTables        []string        `json:"frozenTables"`
+	ResidualSplits      []ResidualSplit `json:"residualSplits"`
+}
+
+type ResidualSplit struct {
+	Domain      string    `json:"domain"`
+	SourceID    uuid.UUID `json:"sourceId,omitempty"`
+	Amount      string    `json:"amount"`
+	OperationID uuid.UUID `json:"operationId"`
 }
 
 // Run is the app-level gate used by import-snapshot and operators. The runner
@@ -55,16 +64,36 @@ func Run(ctx context.Context, pool *pgxpool.Pool, opts Options) (Report, error) 
 		if err := ensureCatalogs(ctx, uow, &report); err != nil {
 			return err
 		}
-		if err := rejectNegativeBulkResidual(ctx, uow); err != nil {
+		catalog, err := preloadCatalog(ctx, uow)
+		if err != nil {
+			return err
+		}
+		translator := newTranslator(uow, catalog, &report)
+		if err := translator.harvestReceipts(ctx); err != nil {
+			return err
+		}
+		if err := translator.honeyMovements(ctx); err != nil {
+			return err
+		}
+		if err := translator.products(ctx); err != nil {
 			return err
 		}
 		if err := translateEquipment(ctx, uow, &report); err != nil {
 			return err
 		}
-		if err := rejectUntranslatedDomains(ctx, uow); err != nil {
+		if err := translator.stockMovements(ctx); err != nil {
 			return err
 		}
-		if err := verifyEquipmentParity(ctx, uow); err != nil {
+		if err := translator.sales(ctx); err != nil {
+			return err
+		}
+		if err := translator.linkSaleReservations(ctx); err != nil {
+			return err
+		}
+		if err := translator.residualSplits(ctx); err != nil {
+			return err
+		}
+		if err := verifyParity(ctx, uow, opts.Currency); err != nil {
 			return err
 		}
 		n, err := RekeyExternalSync(ctx, uow)
@@ -83,22 +112,37 @@ func Run(ctx context.Context, pool *pgxpool.Pool, opts Options) (Report, error) 
 
 func ensureCatalogs(ctx context.Context, uow *app.UnitOfWork, report *Report) error {
 	actor := auditID(uow)
-	if _, err := uow.Exec(ctx, `
-		INSERT INTO inventory_items(kind,name,canonical_unit,quantity_scale,lot_tracked,condition_tracked,container_tracked,source_type,source_id,created_by)
-		SELECT 'jar',label,'count',0,true,false,false,'jar_size',id,$1 FROM jar_sizes
-		ON CONFLICT(source_type,source_id) DO UPDATE SET name=EXCLUDED.name,is_active=true`, actor); err != nil {
-		return app.Internal("seed jar inventory items", err)
-	}
-	if _, err := uow.Exec(ctx, `UPDATE jar_sizes j SET item_id=i.id FROM inventory_items i WHERE i.source_type='jar_size' AND i.source_id=j.id AND j.item_id IS DISTINCT FROM i.id`); err != nil {
+	jarIDs, err := queryIDs(ctx, uow, `SELECT id FROM jar_sizes ORDER BY id`)
+	if err != nil {
 		return err
 	}
-	if _, err := uow.Exec(ctx, `
-		INSERT INTO inventory_items(kind,name,canonical_unit,quantity_scale,lot_tracked,condition_tracked,container_tracked,source_type,source_id,created_by)
-		SELECT 'catalog_product',name || COALESCE(' '||size_label,''),'count',0,true,false,false,'product_catalog',id,$1 FROM product_catalog
-		ON CONFLICT(source_type,source_id) DO UPDATE SET name=EXCLUDED.name,is_active=true`, actor); err != nil {
-		return app.Internal("seed product inventory items", err)
+	for _, id := range jarIDs {
+		if _, err := production.EnsureJarItem(ctx, uow, id); err != nil {
+			return err
+		}
 	}
-	if _, err := uow.Exec(ctx, `UPDATE product_catalog p SET item_id=i.id FROM inventory_items i WHERE i.source_type='product_catalog' AND i.source_id=p.id AND p.item_id IS DISTINCT FROM i.id`); err != nil {
+	productIDs, err := queryIDs(ctx, uow, `SELECT id FROM product_catalog ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	for _, id := range productIDs {
+		if _, err := production.EnsureProductItem(ctx, uow, id); err != nil {
+			return err
+		}
+	}
+	stockLocationIDs, err := queryIDs(ctx, uow, `SELECT id FROM stock_locations WHERE deleted_at IS NULL ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	for _, id := range stockLocationIDs {
+		if _, err := production.EnsureLocationForStockLocation(ctx, uow, id); err != nil {
+			return err
+		}
+	}
+	if _, err := uow.Exec(ctx, `
+		INSERT INTO inventory_locations(kind,name,source_type,source_id,created_by)
+		SELECT 'apiary',a.name,'apiary',a.id,$1 FROM apiaries a
+		ON CONFLICT(source_type,source_id) DO UPDATE SET name=EXCLUDED.name,is_active=true`, actor); err != nil {
 		return err
 	}
 	rows, err := uow.Query(ctx, `SELECT et.id,COALESCE(es.frame_condition::text,'') FROM equipment_types et LEFT JOIN equipment_stock es ON es.type_id=et.id ORDER BY et.id`)
@@ -128,6 +172,99 @@ func ensureCatalogs(ctx context.Context, uow *app.UnitOfWork, report *Report) er
 		}
 		report.EquipmentItems++
 	}
+	harvestLotIDs, err := queryIDs(ctx, uow, `SELECT id FROM harvest_lots ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	for _, id := range harvestLotIDs {
+		if _, err := production.EnsureHarvestLot(ctx, uow, id); err != nil {
+			return err
+		}
+	}
+	if _, err := production.LegacyUnassignedLot(ctx, uow, production.HoneyBulkItemID); err != nil {
+		return err
+	}
+	for _, id := range jarIDs {
+		itemID, err := production.EnsureJarItem(ctx, uow, id)
+		if err != nil {
+			return err
+		}
+		if _, err := production.LegacyUnassignedLot(ctx, uow, itemID); err != nil {
+			return err
+		}
+	}
+	for _, id := range productIDs {
+		itemID, err := production.EnsureProductItem(ctx, uow, id)
+		if err != nil {
+			return err
+		}
+		if _, err := production.LegacyUnassignedLot(ctx, uow, itemID); err != nil {
+			return err
+		}
+	}
+	rowsLots, err := uow.Query(ctx, `SELECT DISTINCT jar_size_id,lot_id FROM honey_movements WHERE jar_size_id IS NOT NULL AND lot_id IS NOT NULL UNION SELECT DISTINCT jar_size_id,lot_id FROM bottling_runs WHERE jar_size_id IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	type jarLot struct{ jar, lot uuid.UUID }
+	var jarLots []jarLot
+	for rowsLots.Next() {
+		var r jarLot
+		if err := rowsLots.Scan(&r.jar, &r.lot); err != nil {
+			rowsLots.Close()
+			return err
+		}
+		jarLots = append(jarLots, r)
+	}
+	rowsLots.Close()
+	if err := rowsLots.Err(); err != nil {
+		return err
+	}
+	for _, r := range jarLots {
+		itemID, err := production.EnsureJarItem(ctx, uow, r.jar)
+		if err != nil {
+			return err
+		}
+		if _, err := production.EnsureJarLotForHarvestLot(ctx, uow, itemID, r.lot); err != nil {
+			return err
+		}
+	}
+	batchRows, err := uow.Query(ctx, `SELECT id,product_id FROM product_batches ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type batchPair struct{ batch, product uuid.UUID }
+	var batches []batchPair
+	for batchRows.Next() {
+		var r batchPair
+		if err := batchRows.Scan(&r.batch, &r.product); err != nil {
+			batchRows.Close()
+			return err
+		}
+		batches = append(batches, r)
+	}
+	batchRows.Close()
+	if err := batchRows.Err(); err != nil {
+		return err
+	}
+	for _, r := range batches {
+		itemID, err := production.EnsureProductItem(ctx, uow, r.product)
+		if err != nil {
+			return err
+		}
+		if _, err := production.EnsureBatchLot(ctx, uow, itemID, r.batch); err != nil {
+			return err
+		}
+	}
+	propolisIDs, err := queryIDs(ctx, uow, `SELECT id FROM propolis_harvests WHERE deleted_at IS NULL ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	for _, id := range propolisIDs {
+		if _, err := production.EnsurePropolisLot(ctx, uow, id); err != nil {
+			return err
+		}
+	}
 	// Catalog facts were historically stored on the quantity row. Move them
 	// once; COALESCE makes the job idempotent and preserves later catalog edits.
 	if _, err := uow.Exec(ctx, `
@@ -155,6 +292,23 @@ func ensureCatalogs(ctx context.Context, uow *app.UnitOfWork, report *Report) er
 		return err
 	}
 	return nil
+}
+
+func queryIDs(ctx context.Context, q app.Querier, sql string) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func translateEquipment(ctx context.Context, uow *app.UnitOfWork, report *Report) error {

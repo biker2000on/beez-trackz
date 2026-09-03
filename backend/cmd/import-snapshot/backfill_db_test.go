@@ -10,8 +10,10 @@ import (
 
 	ledgerbackfill "github.com/biker2000on/beez-trackz/backend/internal/app/backfill"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
+	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestEquipmentBackfillFreezesAndRekeys(t *testing.T) {
@@ -191,4 +193,154 @@ func TestNegativeResidualRollsBackLedgerAndFreeze(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='inventory_legacy_freeze' AND NOT tgisinternal)`).Scan(&frozen); err != nil || frozen {
 		t.Fatalf("frozen=%v err=%v", frozen, err)
 	}
+}
+
+func TestCompleteLedgerBackfillFixtureAndFrozenNoOp(t *testing.T) {
+	adminURL := os.Getenv("TEST_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_full_backfill_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
+	defer cleanup()
+	pool, err := db.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	ids := make([]uuid.UUID, 26)
+	for i := range ids {
+		ids[i] = uuid.New()
+	}
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	commands := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO apiaries(id,name,canvas_layout)VALUES($1,'Backfill apiary',$2)`, []any{ids[0], []byte(`{"z":2,"a":{"n":1}}`)}},
+		{`INSERT INTO hives(id,apiary_id,position_label)VALUES($1,$2,'A1')`, []any{ids[1], ids[0]}},
+		// The five-pound session true-up becomes the positive unassigned-bulk split.
+		{`INSERT INTO harvest_sessions(id,apiary_id,date,total_extracted_weight)VALUES($1,$2,$3,25)`, []any{ids[2], ids[0], now}},
+		{`INSERT INTO honey_harvests(id,session_id,hive_id,date,super_weight_before,super_weight_after,calculated_honey_weight)VALUES($1,$2,$3,$4,30,10,20)`, []any{ids[3], ids[2], ids[1], now}},
+		{`INSERT INTO honey_harvests(id,hive_id,date,super_weight_before,super_weight_after,calculated_honey_weight,direct_weight)VALUES($1,$2,$3,0,0,10,true)`, []any{ids[4], ids[1], now.Add(time.Hour)}},
+		{`INSERT INTO harvest_lots(id,lot_code,public_slug,extraction_date,honey_weight_lbs,testing_data)VALUES($1,'BF-LOT','bf-lot','2026-01-02',20,$2)`, []any{ids[5], []byte(`{"moisture":17.2,"trace":{"b":2,"a":1}}`)}},
+		{`INSERT INTO harvest_lot_harvests(lot_id,harvest_id)VALUES($1,$2)`, []any{ids[5], ids[3]}},
+		{`INSERT INTO jar_sizes(id,label,honey_oz)VALUES($1,'Backfill pint',16)`, []any{ids[6]}},
+		{`INSERT INTO bottling_runs(id,lot_id,bottled_date,jar_size_id,quantity,honey_lbs)VALUES($1,$2,'2026-01-03',$3,10,5)`, []any{ids[7], ids[5], ids[6]}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,jar_size_id,quantity,bottling_run_id,lot_id)VALUES($1,$2,'jarring',5,$3,10,$4,$5)`, []any{ids[8], now.Add(24 * time.Hour), ids[6], ids[7], ids[5]}},
+		// Historical jarring with no run or lot exercises legacy-unassigned.
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,jar_size_id,quantity,reason)VALUES($1,$2,'jarring',2,$3,4,'untraced fixture')`, []any{ids[9], now.Add(25 * time.Hour), ids[6]}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,lot_id)VALUES($1,$2,'loss',1,$3)`, []any{ids[10], now.Add(26 * time.Hour), ids[5]}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,lot_id,reverses_movement_id)VALUES($1,$2,'loss',-1,$3,$4)`, []any{ids[11], now.Add(27 * time.Hour), ids[5], ids[10]}},
+		// A voided run remains historical and its movement pair nets to zero.
+		{`INSERT INTO bottling_runs(id,lot_id,bottled_date,jar_size_id,quantity,honey_lbs,voided_at,void_reason)VALUES($1,$2,'2026-01-04',$3,2,1,$4,'fixture void')`, []any{ids[12], ids[5], ids[6], now.Add(72 * time.Hour)}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,jar_size_id,quantity,bottling_run_id,lot_id)VALUES($1,$2,'jarring',1,$3,2,$4,$5)`, []any{ids[13], now.Add(48 * time.Hour), ids[6], ids[12], ids[5]}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,jar_size_id,quantity,bottling_run_id,lot_id,reverses_movement_id)VALUES($1,$2,'jarring',-1,$3,-2,$4,$5,$6)`, []any{ids[14], now.Add(72 * time.Hour), ids[6], ids[12], ids[5], ids[13]}},
+		{`INSERT INTO product_catalog(id,name,kind,unit,default_price_cents)VALUES($1,'Backfill hot honey','hot_honey','bottle',900)`, []any{ids[15]}},
+		{`INSERT INTO product_batches(id,kind,product_id,harvest_lot_id,started_at,honey_lbs,quantity_out,voided_at,void_reason)VALUES($1,'hot_honey',$2,$3,$4,1,5,$5,'fixture void')`, []any{ids[16], ids[15], ids[5], now.Add(50 * time.Hour), now.Add(51 * time.Hour)}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,lot_id,product_batch_id)VALUES($1,$2,'bulk_use',1,$3,$4)`, []any{ids[24], now.Add(50 * time.Hour), ids[5], ids[16]}},
+		{`INSERT INTO honey_movements(id,date,kind,amount_lbs,lot_id,product_batch_id,reverses_movement_id)VALUES($1,$2,'bulk_use',-1,$3,$4,$5)`, []any{ids[25], now.Add(51 * time.Hour), ids[5], ids[16], ids[24]}},
+		{`INSERT INTO product_adjustments(id,product_id,date,delta,reason)VALUES($1,$2,$3,3,'opening count')`, []any{ids[17], ids[15], now.Add(52 * time.Hour)}},
+		{`INSERT INTO product_adjustments(id,product_id,date,delta,reason,deleted_at)VALUES($1,$2,$3,99,'soft deleted',$4)`, []any{ids[18], ids[15], now.Add(52 * time.Hour), now.Add(53 * time.Hour)}},
+		{`INSERT INTO propolis_harvests(id,hive_id,date,amount,unit)VALUES($1,$2,$3,100,'grams')`, []any{ids[19], ids[1], now.Add(2 * time.Hour)}},
+		{`INSERT INTO stock_locations(id,name,slug,is_consignment,price_basis)VALUES($1,'Backfill shop','backfill-shop',true,'retail')`, []any{ids[20]}},
+		{`INSERT INTO stock_movements(id,date,kind,location_id,counterparty_location_id,transfer_id,jar_size_id,quantity) SELECT $1,$2,'transfer',id,$3,$4,$5,-2 FROM stock_locations WHERE is_home`, []any{ids[21], now.Add(80 * time.Hour), ids[20], ids[23], ids[6]}},
+		{`INSERT INTO stock_movements(id,date,kind,location_id,counterparty_location_id,transfer_id,jar_size_id,quantity) SELECT $1,$2,'transfer',$3,id,$4,$5,2 FROM stock_locations WHERE is_home`, []any{ids[22], now.Add(80 * time.Hour), ids[20], ids[23], ids[6]}},
+	}
+	for _, command := range commands {
+		if _, err := pool.Exec(ctx, command.sql, command.args...); err != nil {
+			t.Fatalf("seed fixture: %v\n%s", err, command.sql)
+		}
+	}
+	var appliedSale, draftSale uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO sales(date,total_amount_cents,amount_paid_cents,order_status,stock_location_id,physical_applied_at)VALUES($1,900,900,'paid',$2,$1)RETURNING id`, now.Add(90*time.Hour), ids[20]).Scan(&appliedSale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sale_items(sale_id,jar_size_id,quantity,unit_price_cents,kind,bottling_run_id)VALUES($1,$2,1,900,'jar',$3)`, appliedSale, ids[6], ids[7]); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO sales(date,total_amount_cents,order_status)VALUES($1,900,'draft')RETURNING id`, now.Add(91*time.Hour)).Scan(&draftSale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sale_items(sale_id,product_id,quantity,unit_price_cents,kind)VALUES($1,$2,1,900,'hot_honey')`, draftSale, ids[15]); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ledgerbackfill.Run(ctx, pool, ledgerbackfill.Options{})
+	if err != nil {
+		t.Fatalf("complete backfill: %v", err)
+	}
+	if report.Operations == 0 || len(report.FrozenTables) != len(ledgerbackfill.FreezeTables) || len(report.ResidualSplits) != 1 || report.ResidualSplits[0].Amount != "5" {
+		t.Fatalf("report=%+v", report)
+	}
+	var unattributed, reversals, transfers, appliedSales int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations WHERE provenance='legacy-unattributed'`).Scan(&unattributed); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations WHERE kind='reversal'`).Scan(&reversals); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations WHERE kind='transfer'`).Scan(&transfers); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations WHERE source_type='sale' AND source_id=$1`, appliedSale).Scan(&appliedSales); err != nil {
+		t.Fatal(err)
+	}
+	if unattributed < 6 || reversals < 3 || transfers != 1 || appliedSales != 1 {
+		t.Fatalf("translated unattributed=%d reversals=%d transfers=%d appliedSales=%d", unattributed, reversals, transfers, appliedSales)
+	}
+	var draftOps int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations WHERE source_type='sale' AND source_id=$1`, draftSale).Scan(&draftOps); err != nil || draftOps != 0 {
+		t.Fatalf("draft sale operations=%d err=%v", draftOps, err)
+	}
+	second, err := ledgerbackfill.Run(ctx, pool, ledgerbackfill.Options{})
+	if err != nil || !second.AlreadyFrozen || second.Operations != 0 {
+		t.Fatalf("frozen rerun=%+v err=%v", second, err)
+	}
+
+	// The Phase-A artifact carries both frozen legacy history and the ledger.
+	// Restore it into a fresh migrated target and prove every operation keeps
+	// its identity rather than being rebuilt under a new UUID.
+	operationIDs, err := queryUUIDColumn(ctx, pool, `SELECT id FROM inventory_operations ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := t.TempDir() + "-phase-a"
+	if _, err := snapshot.Export(ctx, pool, snapshot.ExportOptions{OutputDirectory: artifact, BusinessTimezone: "UTC", Currency: "USD"}); err != nil {
+		t.Fatalf("export Phase-A database: %v", err)
+	}
+	targetURL, targetCleanup := freshImportDatabase(ctx, t, adminURL, "beez_full_backfill_rt_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
+	defer targetCleanup()
+	restore := newReport(false)
+	if err := execute(ctx, options{input: artifact, database: targetURL, conflict: "fail", report: t.TempDir() + "/restore.json"}, restore); err != nil {
+		t.Fatalf("restore Phase-A artifact: %v", err)
+	}
+	target, err := db.ConnectWithoutMigrations(ctx, targetURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	var preserved int
+	if err := target.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations WHERE id=ANY($1)`, operationIDs).Scan(&preserved); err != nil || preserved != len(operationIDs) {
+		t.Fatalf("preserved ledger operation ids=%d/%d err=%v", preserved, len(operationIDs), err)
+	}
+}
+
+func queryUUIDColumn(ctx context.Context, pool *pgxpool.Pool, query string) ([]uuid.UUID, error) {
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
