@@ -50,6 +50,12 @@ Sources for the open items below:
   discarding the imported data, define a portable versioned export/import format,
   export and validate the current dataset, and use that artifact to restore the
   useful data after the reset.
+- Requested 2026-09-03 — rename the product to **Apiary Atlas** and make every
+  deployment white-labelable. Apiary Atlas is the upstream/default identity;
+  this operator's deployment is **GentleBee Atlas**, and another operator may
+  supply a different display name and visual identity without forking source.
+  Branding is runtime configuration, while compatibility-sensitive machine
+  identifiers stay stable unless separately migrated.
 - Reviewed 2026-09-01 — three-vendor Polyagent review of the three sections
   below at `241f7ea` (`polyagent-review-2026-09-01.md`; worker reports under
   run `20260901-roadmap-review-bz01`). Verdict: diagnosis and ordering
@@ -146,7 +152,15 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
     Today/Yard after the shared command/policy seam (may start during the
     ledger work), Production/Sales workbenches only after ledger-backed
     commands exist.
-11. **P1 — Zebra label printing and physical traceability.** Starts after the
+11. **P1 — Apiary Atlas brand and white-label migration.** Starts after the
+    workflow/application route rewrite and before new physical label work.
+    Replace the Beez Trackz product identity with Apiary Atlas as the default,
+    introduce one runtime brand contract shared by the API and web app, and set
+    the Gentle Bee deployment to GentleBee Atlas. Keep database names, container
+    image coordinates, public URLs, API paths/tokens, offline storage keys, and other
+    machine contracts stable unless an explicit compatibility migration says
+    otherwise. Detailed sequence and acceptance criteria are below.
+12. **P1 — Zebra label printing and physical traceability.** Starts after the
     inventory-ledger and workflow/application resets, so printed stock and
     serialized jars consume a single quantity authority through stable workflows.
     *Amended 2026-09-01, revised the same day:* serialized jars are fungible
@@ -154,18 +168,18 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
     works from `jar_serials` + lot + the bottling run's operation; a consigned
     serialized jar is located by its lot's balance at the consignee, not by
     serial. Gated only on the ledger and workflow resets.
-12. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
-   Polyagent waves (migrations 00025–00029): field objects, health
-   objects, units preference + display sweep, ntfy, labor, compliance
-   packet, place/flow (elevation-banded flora, forage radius, Immich
-   yard timeline, scale-hive CSV ingest, frost), photo time-series,
-   mating-yard field, floral claim. Deliberately still open per their
-   sections: pollination contracts (skip until signed), grafting cycle
-   (skip until recorded), MQTT scale ingest (CSV only for now).
-13. **Extractor controller** — long-term; hardware plus an ingest
-   contract onto harvest sessions. Design the session payload when
-   extraction IDs stabilize; do not wait to start the controller.
-14. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
+13. ~~**The rest of the 2026-08-18 wave**~~ — **shipped 2026-08-20** in two
+    Polyagent waves (migrations 00025–00029): field objects, health
+    objects, units preference + display sweep, ntfy, labor, compliance
+    packet, place/flow (elevation-banded flora, forage radius, Immich
+    yard timeline, scale-hive CSV ingest, frost), photo time-series,
+    mating-yard field, floral claim. Deliberately still open per their
+    sections: pollination contracts (skip until signed), grafting cycle
+    (skip until recorded), MQTT scale ingest (CSV only for now).
+14. **Extractor controller** — long-term; hardware plus an ingest
+    contract onto harvest sessions. Design the session payload when
+    extraction IDs stabilize; do not wait to start the controller.
+15. ~~P2 structural/a11y items and leftover ASI lows~~ — shipped
     2026-08-19 (see history); the ASI lows were already closed 2026-08-11.
 
 ## Shipped 2026-08-17 — review P0/P1 fixes
@@ -1148,6 +1162,103 @@ compatibility redirects remain; configuration has one owning surface in My
 Preferences, Operation Setup, or Admin & Integrations; and desktop/mobile online,
 offline, stale-data, forbidden-command, error, undo/reversal, and interrupted-
 workflow states are verified before the old pages are removed.
+
+## P1 — Apiary Atlas brand and white-label migration
+
+**Requested 2026-09-03; execute after the workflow/application reset and before
+Zebra label templates.** The upstream product becomes **Apiary Atlas**. A fresh
+deployment displays that name without configuration; this operator's production
+deployment overrides it with **GentleBee Atlas**. White-labeling must be a
+supported runtime capability, not a search-and-replace fork or a value baked into
+one Docker image.
+
+**Brand boundary.** Separate human-facing identity from machine identity before
+renaming anything:
+
+- **Product identity:** Apiary Atlas is the default name used by source docs,
+  metadata, and any deployment with no override.
+- **Deployment identity:** a small, validated runtime brand contract supplies at
+  least display name, short name, description/tagline, wordmark/mark assets, and
+  theme colors. Missing optional values fall back independently to the Apiary
+  Atlas defaults. Gentle Bee production sets the display and short names to
+  `GentleBee Atlas`; another installation can supply its own values without a
+  rebuild.
+- **Stable machine identity:** do not cosmetically rename PostgreSQL database or
+  role names, MinIO buckets, container/image coordinates, Go module paths,
+  migration/profile names, API token prefixes, HTTP routes, external-sync entity
+  IDs, idempotency keys, cookie names, service-worker/cache/IndexedDB keys, or
+  compatibility headers. Existing names such as `beez-trackz`, `beeztrackz`,
+  `bt_`, `X-Beez-Cache`, and `/api/integrations/beez` may remain internal. Change
+  one only with an inventoried reader/writer migration and rollback plan; a brand
+  migration alone is not that authority.
+- **External public contracts:** preserve `/honey/[slug]`, existing Honey Story
+  and hive-tag URLs, and the configured origins. Branding may change their visible
+  copy and artwork, never their resolvability or embedded record identity.
+
+**Execution sequence.**
+
+1. Inventory every visible product-name, logo, icon, color, description, document
+   title, install prompt, generated filename, and outbound message in the frontend,
+   backend, PWA, public Honey Story, MCP metadata, compliance export, notifications,
+   deployment files, tests, and current documentation. Classify each hit as
+   product default, deployment brand, historical prose, or stable machine
+   identifier; do not run a blind repository-wide replacement.
+2. Define one typed brand schema and defaults. The server-side runtime
+   configuration is authoritative and exposes only public presentation values to
+   the browser. Both server-rendered and client-rendered UI consume the same
+   resolved object so titles and visible copy cannot disagree or hydrate with a
+   different name. Validate lengths, colors, and asset paths at startup; brand
+   configuration must never admit arbitrary HTML, script, or remote executable
+   content.
+3. Make the PWA brand-aware at request time: document metadata, web manifest,
+   Apple/install titles, shortcuts, icons, theme colors, offline/error pages, and
+   install prompts all use the resolved deployment brand. Keep cache and IndexedDB
+   identifiers stable so upgrading does not strand queued field work. Version the
+   shell cache when branded assets change, and document that installed launchers
+   may require refresh or reinstall before an OS redraws their name/icon.
+4. Replace user-facing hardcoding with shared brand primitives: application logo
+   and wordmark, authentication/setup screens, sidebar/mobile shell, toasts and
+   recovery pages, Settings install copy, public Honey Story attribution, and
+   customer-facing error/not-found states. Custom assets must have accessible
+   text/fallbacks and preserve contrast in light/dark themes; the Apiary Atlas
+   mark remains the fallback when a deployment supplies only a name.
+5. Carry the same contract through backend-produced surfaces: notification title
+   and body, compliance packet title and download filename, MCP display title, and
+   any printable/exported human-facing heading. Keep protocol identifiers stable
+   (for example, MCP's machine `name` and GnuCash integration paths/external IDs)
+   while changing only their display labels. Snapshot/import metadata must record
+   the product and deployment brand as non-authoritative provenance, never use a
+   brand string as a restore key.
+6. Add deployment plumbing without image forks. Pass the public brand variables to
+   both API and web containers at runtime; document the Apiary Atlas defaults in
+   `.env.example`; set Gentle Bee production to GentleBee Atlas in its deployment
+   environment; and provide a minimal second-brand fixture used only by automated
+   tests. Secrets and infrastructure coordinates are not part of the public brand
+   object.
+7. Test a two-brand matrix against the same build: unconfigured **Apiary Atlas**
+   and overridden **GentleBee Atlas**. Cover server metadata, hydrated UI, manifest
+   and install copy, public Honey Story, offline fallback, notification/compliance
+   output, MCP initialize metadata, custom/fallback assets, and reset-to-default
+   behavior. Add a repository scan gate that rejects new user-facing `Beez Trackz`
+   strings while explicitly allowlisting historical prose and stable machine
+   identifiers.
+8. Roll out as one bounded presentation migration after the route reset has
+   settled. Take the normal pre-deploy backup, deploy GentleBee Atlas, verify old
+   public and authenticated links, queued offline writes, login/OIDC, Honey Story
+   QR targets, MCP clients, GnuCash sync, and PWA upgrade behavior, then retain the
+   previous image/config pair as the rollback. No database migration or data
+   rewrite is expected for branding alone.
+
+**Acceptance criteria.** One unchanged application image serves Apiary Atlas by
+default and GentleBee Atlas when configured at runtime; a third test brand works
+without a source edit or rebuild. Every visible app-owned name and mark comes from
+the resolved brand contract, including SSR metadata, PWA/install surfaces, public
+stories, backend-generated documents/messages, and MCP's human-facing title.
+There is no hydration mismatch, unsafe custom markup, contrast/accessibility
+regression, loss of offline queue/cache data, or broken old QR/public URL. Stable
+machine identifiers and external-sync contracts remain byte-for-byte compatible,
+and the repository scan distinguishes those intentional legacy identifiers from
+accidental user-facing Beez Trackz copy.
 
 ## P1 — Zebra label printing and physical traceability
 
