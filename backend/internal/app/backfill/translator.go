@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -152,10 +153,19 @@ type translator struct {
 	report    *Report
 	honeyOps  map[uuid.UUID]inventory.Operation
 	stockOps  map[uuid.UUID]inventory.Operation
+	injected  map[itemLocation]*big.Rat
+}
+
+type itemLocation struct{ item, location uuid.UUID }
+
+type legacyDraw struct {
+	at     time.Time
+	id     uuid.UUID
+	source string
 }
 
 func newTranslator(uow *app.UnitOfWork, c *catalogLookup, r *Report) *translator {
-	return &translator{uow: uow, catalog: c, inventory: inventory.NewService(), report: r, honeyOps: map[uuid.UUID]inventory.Operation{}, stockOps: map[uuid.UUID]inventory.Operation{}}
+	return &translator{uow: uow, catalog: c, inventory: inventory.NewService(), report: r, honeyOps: map[uuid.UUID]inventory.Operation{}, stockOps: map[uuid.UUID]inventory.Operation{}, injected: map[itemLocation]*big.Rat{}}
 }
 
 func (t *translator) base(table, sourceType string, id uuid.UUID, at time.Time, reason, provenance string, details map[string]any) build.Base {
@@ -174,6 +184,120 @@ func (t *translator) record(ctx context.Context, op inventory.Operation) (invent
 }
 func movement(item, location, lot uuid.UUID, quantity string, scale int) inventory.Movement {
 	return inventory.Movement{Tuple: inventory.Tuple{ItemID: item, LocationID: location, LotID: &lot}, Quantity: quantity, QuantityScale: scale}
+}
+
+func (t *translator) allocateCountDraw(ctx context.Context, item, location uuid.UUID, quantity int, preferred *uuid.UUID, draw legacyDraw) ([]production.Allocation, string, error) {
+	wanted := big.NewRat(int64(quantity), 1)
+	// Count allocation historically permits a recorded preferred lot to fall
+	// back to other on-hand lots. Preserve that allocator contract, but never
+	// synthesize stock when the legacy row named a lot.
+	available, err := t.balanceAt(ctx, item, location, nil, draw.at)
+	if err != nil {
+		return nil, "", err
+	}
+	if preferred != nil && available.Cmp(wanted) < 0 {
+		return nil, "", app.Precondition("allocate lots", "named lot %s has only %s of %d units on hand at %s", *preferred, decimalRat(available, production.CountScale), quantity, draw.at.UTC().Format(time.RFC3339))
+	}
+	if preferred == nil && available.Cmp(wanted) < 0 {
+		shortfall := new(big.Rat).Sub(wanted, maxZero(available))
+		if err := t.injectDrawShortfall(ctx, item, location, shortfall, production.CountScale, draw); err != nil {
+			return nil, "", err
+		}
+	}
+	return production.AllocateFIFO(ctx, t.uow, "inventory_balances", item, location, quantity, preferred)
+}
+
+// ensureLotDraw covers measured and transform inputs which already identify
+// their ledger lot. A nil legacy lot is allowed to receive a shortfall in the
+// legacy-unassigned lot; a named lot is a hard provenance boundary.
+func (t *translator) ensureLotDraw(ctx context.Context, item, location, lot uuid.UUID, amount string, scale int, named bool, draw legacyDraw) error {
+	wanted, err := inventory.ParseQuantity(amount, scale, true)
+	if err != nil {
+		return err
+	}
+	wanted.Abs(wanted)
+	available, err := t.balanceAt(ctx, item, location, &lot, draw.at)
+	if err != nil {
+		return err
+	}
+	if available.Cmp(wanted) >= 0 {
+		return nil
+	}
+	if named {
+		return app.Precondition("translate legacy draw", "named lot %s has only %s of %s on hand at %s", lot, decimalRat(available, scale), decimalRat(wanted, scale), draw.at.UTC().Format(time.RFC3339))
+	}
+	return t.injectDrawShortfall(ctx, item, location, new(big.Rat).Sub(wanted, maxZero(available)), scale, draw)
+}
+
+func (t *translator) balanceAt(ctx context.Context, item, location uuid.UUID, lot *uuid.UUID, at time.Time) (*big.Rat, error) {
+	var value string
+	err := t.uow.QueryRow(ctx, `
+		SELECT COALESCE(SUM(m.quantity),0)::text
+		FROM inventory_movements m
+		JOIN inventory_operations o ON o.id=m.operation_id
+		WHERE m.item_id=$1 AND m.location_id=$2
+		  AND ($3::uuid IS NULL OR m.lot_id=$3)
+		  AND o.occurred_at <= $4`, item, location, lot, at.UTC()).Scan(&value)
+	if err != nil {
+		return nil, err
+	}
+	parsed, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return nil, app.Internal("read legacy draw balance", fmt.Errorf("balance %q is not numeric", value))
+	}
+	return parsed, nil
+}
+
+func (t *translator) injectDrawShortfall(ctx context.Context, item, location uuid.UUID, shortfall *big.Rat, scale int, draw legacyDraw) error {
+	if shortfall.Sign() <= 0 {
+		return nil
+	}
+	lot, ok := t.catalog.unassigned[item]
+	if !ok {
+		return app.Precondition("translate legacy draw", "item %s has no legacy-unassigned lot for a draw-before-receipt shortfall", item)
+	}
+	quantity := decimalRat(shortfall, scale)
+	base := build.Base{
+		ID: uuid.New(), OccurredAt: draw.at.UTC(),
+		IdempotencyKey: "legacy:draw-before-receipt:" + draw.source + ":" + item.String() + ":" + location.String(),
+		SourceType:     "legacy_draw_before_receipt", SourceID: draw.id,
+		Reason: production.ReasonNone, Actor: t.uow.Actor(),
+		Details:    map[string]any{"reason": "draw-before-receipt", "source": draw.source},
+		Provenance: "legacy-import",
+	}
+	op, err := build.OpeningBalance(build.SingleParams{Base: base, Line: movement(item, location, lot, quantity, scale)})
+	if err != nil {
+		return err
+	}
+	recorded, err := t.record(ctx, op)
+	if err != nil {
+		return err
+	}
+	key := itemLocation{item: item, location: location}
+	if t.injected[key] == nil {
+		t.injected[key] = new(big.Rat)
+	}
+	t.injected[key].Add(t.injected[key], shortfall)
+	t.report.DrawBeforeReceiptInjections = append(t.report.DrawBeforeReceiptInjections, DrawBeforeReceiptEntry{
+		ItemID: item, LocationID: location, LotID: lot, Quantity: quantity, Source: draw.source, OperationID: recorded.ID,
+	})
+	return nil
+}
+
+func maxZero(value *big.Rat) *big.Rat {
+	if value.Sign() < 0 {
+		return new(big.Rat)
+	}
+	return new(big.Rat).Set(value)
+}
+
+func decimalRat(value *big.Rat, scale int) string {
+	s := value.FloatString(scale)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	if s == "" || s == "-" {
+		return "0"
+	}
+	return s
 }
 
 func (t *translator) harvestReceipts(ctx context.Context) error {
@@ -307,6 +431,10 @@ func (t *translator) honeyMovements(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			draw := legacyDraw{at: r.at, id: r.id, source: "honey_movement:" + r.id.String()}
+			if err := t.ensureLotDraw(ctx, production.HoneyBulkItemID, t.catalog.home, bulkLot, production.Pounds(math.Abs(*r.amount)), production.MassScale, r.lot != nil, draw); err != nil {
+				return fmt.Errorf("translate jarring %s: %w", r.id, err)
+			}
 			input := movement(production.HoneyBulkItemID, t.catalog.home, bulkLot, production.Negate(production.Pounds(math.Abs(*r.amount))), production.MassScale)
 			output := movement(item, t.catalog.home, jarLot, production.Quantity(abs(*r.qty)), production.CountScale)
 			op, err = build.BottlingTransform(build.TransformParams{Base: base, Inputs: []inventory.Movement{input}, Outputs: []inventory.Movement{output}})
@@ -328,6 +456,10 @@ func (t *translator) honeyMovements(ctx context.Context) error {
 				reason = production.ReasonFeeding
 			}
 			base.Reason = reason
+			draw := legacyDraw{at: r.at, id: r.id, source: "honey_movement:" + r.id.String()}
+			if err := t.ensureLotDraw(ctx, production.HoneyBulkItemID, t.catalog.home, lot, production.Pounds(math.Abs(*r.amount)), production.MassScale, r.lot != nil, draw); err != nil {
+				return fmt.Errorf("translate bulk draw %s: %w", r.id, err)
+			}
 			var e error
 			op, e = build.Shrink(build.SingleParams{Base: base, Line: movement(production.HoneyBulkItemID, t.catalog.home, lot, production.Negate(production.Pounds(math.Abs(*r.amount))), production.MassScale)})
 			if e != nil {
@@ -342,7 +474,7 @@ func (t *translator) honeyMovements(ctx context.Context) error {
 			if r.kind == "give_away" {
 				delta = -abs(delta)
 			}
-			lines, err := t.jarAdjustmentLines(ctx, item, delta)
+			lines, err := t.jarAdjustmentLines(ctx, item, delta, legacyDraw{at: r.at, id: r.id, source: "honey_movement:" + r.id.String()})
 			if err != nil {
 				return err
 			}
@@ -372,12 +504,12 @@ func (t *translator) honeyMovements(ctx context.Context) error {
 	return nil
 }
 
-func (t *translator) jarAdjustmentLines(ctx context.Context, item uuid.UUID, delta int) ([]inventory.Movement, error) {
+func (t *translator) jarAdjustmentLines(ctx context.Context, item uuid.UUID, delta int, draw legacyDraw) ([]inventory.Movement, error) {
 	if delta > 0 {
 		lot := t.catalog.unassigned[item]
 		return []inventory.Movement{movement(item, t.catalog.home, lot, production.Quantity(delta), production.CountScale)}, nil
 	}
-	alloc, _, err := production.AllocateFIFO(ctx, t.uow, "inventory_balances", item, t.catalog.home, -delta, nil)
+	alloc, _, err := t.allocateCountDraw(ctx, item, t.catalog.home, -delta, nil, draw)
 	if err != nil {
 		return nil, err
 	}
@@ -471,11 +603,19 @@ func (t *translator) products(ctx context.Context) error {
 			if r.harvest != nil {
 				lot = t.catalog.bulkLots[*r.harvest]
 			}
+			draw := legacyDraw{at: r.at, id: r.id, source: "product_batch:" + r.id.String()}
+			if err := t.ensureLotDraw(ctx, production.HoneyBulkItemID, t.catalog.home, lot, production.Pounds(*r.honey), production.MassScale, r.harvest != nil, draw); err != nil {
+				return fmt.Errorf("translate product batch %s: %w", r.id, err)
+			}
 			inputs = append(inputs, movement(production.HoneyBulkItemID, t.catalog.home, lot, production.Negate(production.Pounds(*r.honey)), production.MassScale))
 		}
 		if r.grams != nil && *r.grams > 0 {
 			if r.prop == nil {
 				return app.Precondition("translate product batch", "batch %s has propolis amount without harvest", r.id)
+			}
+			draw := legacyDraw{at: r.at, id: r.id, source: "product_batch:" + r.id.String()}
+			if err := t.ensureLotDraw(ctx, production.PropolisItemID, t.catalog.home, t.catalog.propolisLots[*r.prop], production.Pounds(*r.grams), production.MassScale, true, draw); err != nil {
+				return fmt.Errorf("translate product batch %s: %w", r.id, err)
 			}
 			inputs = append(inputs, movement(production.PropolisItemID, t.catalog.home, t.catalog.propolisLots[*r.prop], production.Negate(production.Pounds(*r.grams)), production.MassScale))
 		}
@@ -550,7 +690,7 @@ func (t *translator) products(ctx context.Context) error {
 			details["notes"] = *r.notes
 		}
 		base := t.base("product_adjustments", "product_adjustment", r.id, r.at, production.ReasonCount, "legacy-import", details)
-		lines, err := t.countLines(ctx, item, loc, r.delta, nil)
+		lines, err := t.countLines(ctx, item, loc, r.delta, nil, legacyDraw{at: r.at, id: r.id, source: "product_adjustment:" + r.id.String()})
 		if err != nil {
 			return err
 		}
@@ -566,12 +706,12 @@ func (t *translator) products(ctx context.Context) error {
 	return nil
 }
 
-func (t *translator) countLines(ctx context.Context, item, location uuid.UUID, delta int, preferred *uuid.UUID) ([]inventory.Movement, error) {
+func (t *translator) countLines(ctx context.Context, item, location uuid.UUID, delta int, preferred *uuid.UUID, draw legacyDraw) ([]inventory.Movement, error) {
 	if delta > 0 {
 		lot := t.catalog.unassigned[item]
 		return []inventory.Movement{movement(item, location, lot, production.Quantity(delta), production.CountScale)}, nil
 	}
-	alloc, _, err := production.AllocateFIFO(ctx, t.uow, "inventory_balances", item, location, -delta, preferred)
+	alloc, _, err := t.allocateCountDraw(ctx, item, location, -delta, preferred, draw)
 	if err != nil {
 		return nil, err
 	}
@@ -762,7 +902,7 @@ func (t *translator) stockAdjustment(ctx context.Context, r stockRow) error {
 		details["notes"] = *r.notes
 	}
 	base := t.base("stock_movements", "stock_movement", r.id, r.at, production.ReasonCount, "legacy-import", details)
-	lines, err := t.countLines(ctx, item, loc, r.qty, preferred)
+	lines, err := t.countLines(ctx, item, loc, r.qty, preferred, legacyDraw{at: r.at, id: r.id, source: "stock_movement:" + r.id.String()})
 	if err != nil {
 		return err
 	}
@@ -835,7 +975,7 @@ func (t *translator) sales(ctx context.Context) error {
 					}
 					preferred = &lot
 				}
-				alloc, method, e := production.AllocateFIFO(ctx, t.uow, "inventory_balances", item, location, line.Quantity, preferred)
+				alloc, method, e := t.allocateCountDraw(ctx, item, location, line.Quantity, preferred, legacyDraw{at: r.at, id: line.ID, source: "sale_item:" + line.ID.String()})
 				if e != nil {
 					return e
 				}
@@ -852,7 +992,7 @@ func (t *translator) sales(ctx context.Context) error {
 				inferred = true
 			case line.ProductID != nil && line.Kind != sales.KindEquipment:
 				item := t.catalog.productItems[*line.ProductID]
-				alloc, method, e := production.AllocateFIFO(ctx, t.uow, "inventory_balances", item, location, line.Quantity, line.LotID)
+				alloc, method, e := t.allocateCountDraw(ctx, item, location, line.Quantity, line.LotID, legacyDraw{at: r.at, id: line.ID, source: "sale_item:" + line.ID.String()})
 				if e != nil {
 					return e
 				}
@@ -923,7 +1063,18 @@ func (t *translator) residualSplits(ctx context.Context) error {
 	}
 	delta := desired - current
 	if delta < -0.0001 {
-		return app.Precondition("backfill inventory ledger", "negative unassigned bulk residual %.4f", delta)
+		amount, _ := new(big.Rat).SetString(production.Pounds(-delta))
+		key := itemLocation{item: production.HoneyBulkItemID, location: t.catalog.home}
+		if injected := t.injected[key]; injected == nil || amount.Cmp(injected) > 0 {
+			return app.Precondition("backfill inventory ledger", "negative unassigned bulk residual %.4f exceeds draw-before-receipt injections", delta)
+		}
+		at, err := t.lastLegacyEvent(ctx, "unassigned_bulk", uuid.Nil, t.catalog.home)
+		if err != nil {
+			return err
+		}
+		if err := t.reconcileDrawInjection(ctx, production.HoneyBulkItemID, t.catalog.home, amount, production.MassScale, at, "unassigned_bulk"); err != nil {
+			return err
+		}
 	}
 	if delta > .0001 {
 		var at time.Time
@@ -937,7 +1088,69 @@ func (t *translator) residualSplits(ctx context.Context) error {
 	if err := t.countResiduals(ctx, "home_jar", `WITH global AS (SELECT js.id source_id,COALESCE(m.jarred,0)+COALESCE(m.adjusted,0)-COALESCE(si.sold,0)-COALESCE(m.given,0) desired FROM jar_sizes js LEFT JOIN(SELECT jar_size_id,SUM(quantity)FILTER(WHERE kind='jarring')jarred,SUM(quantity)FILTER(WHERE kind='jar_adjustment')adjusted,SUM(quantity)FILTER(WHERE kind='give_away')given FROM honey_movements GROUP BY jar_size_id)m ON m.jar_size_id=js.id LEFT JOIN(SELECT si.jar_size_id,SUM(si.quantity)sold FROM sale_items si JOIN sales s ON s.id=si.sale_id WHERE s.order_status<>'cancelled' AND si.jar_size_id IS NOT NULL GROUP BY si.jar_size_id)si ON si.jar_size_id=js.id),away AS(SELECT jar_size_id,SUM(qty)qty FROM(SELECT location_id,jar_size_id,quantity qty FROM stock_movements WHERE jar_size_id IS NOT NULL UNION ALL SELECT s.stock_location_id,si.jar_size_id,-si.quantity FROM sale_items si JOIN sales s ON s.id=si.sale_id WHERE s.order_status<>'cancelled' AND s.stock_location_id IS NOT NULL AND si.jar_size_id IS NOT NULL)x WHERE location_id NOT IN(SELECT id FROM stock_locations WHERE is_home)GROUP BY jar_size_id)SELECT g.source_id,(g.desired-COALESCE(a.qty,0))::int FROM global g LEFT JOIN away a ON a.jar_size_id=g.source_id ORDER BY g.source_id`, t.catalog.jarItems); err != nil {
 		return err
 	}
-	return t.countResiduals(ctx, "home_product", `WITH global AS(SELECT p.id source_id,COALESCE(b.made,0)+COALESCE(a.adjusted,0)-COALESCE(s.sold,0)desired FROM product_catalog p LEFT JOIN(SELECT product_id,SUM(quantity_out)made FROM product_batches WHERE voided_at IS NULL GROUP BY product_id)b ON b.product_id=p.id LEFT JOIN(SELECT product_id,SUM(delta)adjusted FROM product_adjustments WHERE deleted_at IS NULL GROUP BY product_id)a ON a.product_id=p.id LEFT JOIN(SELECT si.product_id,SUM(si.quantity)sold FROM sale_items si JOIN sales sale ON sale.id=si.sale_id WHERE sale.order_status<>'cancelled' AND si.product_id IS NOT NULL GROUP BY si.product_id)s ON s.product_id=p.id),away AS(SELECT product_id,SUM(qty)qty FROM(SELECT location_id,product_id,quantity qty FROM stock_movements WHERE product_id IS NOT NULL UNION ALL SELECT s.stock_location_id,si.product_id,-si.quantity FROM sale_items si JOIN sales s ON s.id=si.sale_id WHERE s.order_status<>'cancelled' AND s.stock_location_id IS NOT NULL AND si.product_id IS NOT NULL)x WHERE location_id NOT IN(SELECT id FROM stock_locations WHERE is_home)GROUP BY product_id)SELECT g.source_id,(g.desired-COALESCE(a.qty,0))::int FROM global g LEFT JOIN away a ON a.product_id=g.source_id ORDER BY g.source_id`, t.catalog.productItems)
+	if err := t.countResiduals(ctx, "home_product", `WITH global AS(SELECT p.id source_id,COALESCE(b.made,0)+COALESCE(a.adjusted,0)-COALESCE(s.sold,0)desired FROM product_catalog p LEFT JOIN(SELECT product_id,SUM(quantity_out)made FROM product_batches WHERE voided_at IS NULL GROUP BY product_id)b ON b.product_id=p.id LEFT JOIN(SELECT product_id,SUM(delta)adjusted FROM product_adjustments WHERE deleted_at IS NULL GROUP BY product_id)a ON a.product_id=p.id LEFT JOIN(SELECT si.product_id,SUM(si.quantity)sold FROM sale_items si JOIN sales sale ON sale.id=si.sale_id WHERE sale.order_status<>'cancelled' AND si.product_id IS NOT NULL GROUP BY si.product_id)s ON s.product_id=p.id),away AS(SELECT product_id,SUM(qty)qty FROM(SELECT location_id,product_id,quantity qty FROM stock_movements WHERE product_id IS NOT NULL UNION ALL SELECT s.stock_location_id,si.product_id,-si.quantity FROM sale_items si JOIN sales s ON s.id=si.sale_id WHERE s.order_status<>'cancelled' AND s.stock_location_id IS NOT NULL AND si.product_id IS NOT NULL)x WHERE location_id NOT IN(SELECT id FROM stock_locations WHERE is_home)GROUP BY product_id)SELECT g.source_id,(g.desired-COALESCE(a.qty,0))::int FROM global g LEFT JOIN away a ON a.product_id=g.source_id ORDER BY g.source_id`, t.catalog.productItems); err != nil {
+		return err
+	}
+	return t.reconcileAwayDrawInjections(ctx)
+}
+
+func (t *translator) reconcileAwayDrawInjections(ctx context.Context) error {
+	type candidate struct {
+		key            itemLocation
+		domain         string
+		catalogSource  uuid.UUID
+		injectedAmount *big.Rat
+	}
+	var all []candidate
+	for key, amount := range t.injected {
+		if key.location == t.catalog.home {
+			continue
+		}
+		for source, item := range t.catalog.jarItems {
+			if item == key.item {
+				all = append(all, candidate{key: key, domain: "away_jar", catalogSource: source, injectedAmount: amount})
+			}
+		}
+		for source, item := range t.catalog.productItems {
+			if item == key.item {
+				all = append(all, candidate{key: key, domain: "away_product", catalogSource: source, injectedAmount: amount})
+			}
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].key.item.String()+all[i].key.location.String() < all[j].key.item.String()+all[j].key.location.String()
+	})
+	for _, candidate := range all {
+		column := "jar_size_id"
+		if candidate.domain == "away_product" {
+			column = "product_id"
+		}
+		var desired, current int
+		query := fmt.Sprintf(`SELECT COALESCE((SELECT SUM(quantity) FROM stock_movements WHERE location_id=(SELECT source_id FROM inventory_locations WHERE id=$1) AND %s=$2),0)::int
+			-COALESCE((SELECT SUM(si.quantity) FROM sale_items si JOIN sales s ON s.id=si.sale_id WHERE s.order_status<>'cancelled' AND s.stock_location_id=(SELECT source_id FROM inventory_locations WHERE id=$1) AND si.%s=$2),0)::int`, column, column)
+		if err := t.uow.QueryRow(ctx, query, candidate.key.location, candidate.catalogSource).Scan(&desired); err != nil {
+			return err
+		}
+		if err := t.uow.QueryRow(ctx, `SELECT COALESCE(SUM(available),0)::int FROM inventory_available WHERE item_id=$1 AND location_id=$2`, candidate.key.item, candidate.key.location).Scan(&current); err != nil {
+			return err
+		}
+		delta := desired - current
+		if delta >= 0 {
+			continue
+		}
+		amount := big.NewRat(int64(-delta), 1)
+		if amount.Cmp(candidate.injectedAmount) > 0 {
+			return app.Precondition("backfill inventory ledger", "%s %s at %s has negative residual %d beyond draw-before-receipt injections", candidate.domain, candidate.catalogSource, candidate.key.location, delta)
+		}
+		at, err := t.lastLegacyEvent(ctx, candidate.domain, candidate.catalogSource, candidate.key.location)
+		if err != nil {
+			return err
+		}
+		if err := t.reconcileDrawInjection(ctx, candidate.key.item, candidate.key.location, amount, production.CountScale, at, candidate.domain+":"+candidate.catalogSource.String()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (t *translator) countResiduals(ctx context.Context, domain, query string, items map[uuid.UUID]uuid.UUID) error {
 	rows, err := t.uow.Query(ctx, query)
@@ -969,7 +1182,19 @@ func (t *translator) countResiduals(ctx context.Context, domain, query string, i
 		}
 		delta := x.desired - current
 		if delta < 0 {
-			return app.Precondition("backfill inventory ledger", "%s %s has negative residual %d", domain, x.source, delta)
+			amount := big.NewRat(int64(-delta), 1)
+			key := itemLocation{item: item, location: t.catalog.home}
+			if injected := t.injected[key]; injected == nil || amount.Cmp(injected) > 0 {
+				return app.Precondition("backfill inventory ledger", "%s %s has negative residual %d beyond draw-before-receipt injections", domain, x.source, delta)
+			}
+			at, err := t.lastLegacyEvent(ctx, domain, x.source, t.catalog.home)
+			if err != nil {
+				return err
+			}
+			if err := t.reconcileDrawInjection(ctx, item, t.catalog.home, amount, production.CountScale, at, domain+":"+x.source.String()); err != nil {
+				return err
+			}
+			continue
 		}
 		if delta == 0 {
 			continue
@@ -979,6 +1204,99 @@ func (t *translator) countResiduals(ctx context.Context, domain, query string, i
 		}
 	}
 	return nil
+}
+
+func (t *translator) reconcileDrawInjection(ctx context.Context, item, location uuid.UUID, amount *big.Rat, scale int, at time.Time, source string) error {
+	lots, err := production.LotsFIFO(ctx, t.uow, "inventory_balances", item, location)
+	if err != nil {
+		return err
+	}
+	remaining := new(big.Rat).Set(amount)
+	lines := make([]inventory.Movement, 0, len(lots))
+	quantities := make([]*big.Rat, 0, len(lots))
+	for _, lot := range lots {
+		if remaining.Sign() == 0 {
+			break
+		}
+		take := new(big.Rat).Set(lot.OnHand)
+		if take.Cmp(remaining) > 0 {
+			take.Set(remaining)
+		}
+		if take.Sign() <= 0 {
+			continue
+		}
+		lines = append(lines, movement(item, location, lot.LotID, production.Negate(decimalRat(take, scale)), scale))
+		quantities = append(quantities, new(big.Rat).Set(take))
+		remaining.Sub(remaining, take)
+	}
+	if remaining.Sign() > 0 {
+		return app.Precondition("backfill inventory ledger", "cannot reconcile %s: only %s of %s is on hand", source, decimalRat(new(big.Rat).Sub(amount, remaining), scale), decimalRat(amount, scale))
+	}
+	base := build.Base{
+		ID: uuid.New(), OccurredAt: at.UTC(),
+		IdempotencyKey: "legacy:draw-before-receipt-reconcile:" + item.String() + ":" + location.String(),
+		SourceType:     "legacy_reconcile", SourceID: item, Reason: production.ReasonCount,
+		Actor: t.uow.Actor(), Details: map[string]any{"reason": "draw-before-receipt-reconcile", "source": source},
+		Provenance: "legacy-import",
+	}
+	op, err := build.CountAdjust(build.SingleParams{Base: base, Line: lines[0]})
+	if err != nil {
+		return err
+	}
+	op.Lines = lines
+	recorded, err := t.record(ctx, op)
+	if err != nil {
+		return err
+	}
+	for i, line := range lines {
+		t.report.DrawBeforeReceiptReconciles = append(t.report.DrawBeforeReceiptReconciles, DrawBeforeReceiptEntry{
+			ItemID: item, LocationID: location, LotID: *line.Tuple.LotID, Quantity: production.Negate(decimalRat(quantities[i], scale)), Source: source, OperationID: recorded.ID,
+		})
+	}
+	return nil
+}
+
+func (t *translator) lastLegacyEvent(ctx context.Context, domain string, source, location uuid.UUID) (time.Time, error) {
+	var query string
+	var args []any
+	switch domain {
+	case "unassigned_bulk":
+		query = `SELECT COALESCE(MAX(at),to_timestamp(0)) FROM (
+			SELECT date at FROM honey_harvests WHERE deleted_at IS NULL
+			UNION ALL SELECT date FROM honey_movements
+			UNION ALL SELECT started_at FROM product_batches) events`
+	case "home_jar":
+		query = `SELECT COALESCE(MAX(at),to_timestamp(0)) FROM (
+			SELECT date at FROM honey_movements WHERE jar_size_id=$1
+			UNION ALL SELECT sm.date FROM stock_movements sm JOIN stock_locations sl ON sl.id=sm.location_id WHERE sm.jar_size_id=$1 AND sl.is_home
+			UNION ALL SELECT s.date FROM sale_items si JOIN sales s ON s.id=si.sale_id LEFT JOIN stock_locations sl ON sl.id=s.stock_location_id WHERE si.jar_size_id=$1 AND (s.stock_location_id IS NULL OR sl.is_home)) events`
+		args = []any{source}
+	case "home_product":
+		query = `SELECT COALESCE(MAX(at),to_timestamp(0)) FROM (
+			SELECT started_at at FROM product_batches WHERE product_id=$1
+			UNION ALL SELECT pa.date FROM product_adjustments pa LEFT JOIN stock_locations sl ON sl.id=pa.location_id WHERE pa.product_id=$1 AND pa.deleted_at IS NULL AND (pa.location_id IS NULL OR sl.is_home)
+			UNION ALL SELECT sm.date FROM stock_movements sm JOIN stock_locations sl ON sl.id=sm.location_id WHERE sm.product_id=$1 AND sl.is_home
+			UNION ALL SELECT s.date FROM sale_items si JOIN sales s ON s.id=si.sale_id LEFT JOIN stock_locations sl ON sl.id=s.stock_location_id WHERE si.product_id=$1 AND (s.stock_location_id IS NULL OR sl.is_home)) events`
+		args = []any{source}
+	case "away_jar":
+		query = `SELECT COALESCE(MAX(at),to_timestamp(0)) FROM (
+			SELECT sm.date at FROM stock_movements sm JOIN inventory_locations il ON il.source_type='stock_location' AND il.source_id=sm.location_id WHERE sm.jar_size_id=$1 AND il.id=$2
+			UNION ALL SELECT s.date FROM sale_items si JOIN sales s ON s.id=si.sale_id JOIN inventory_locations il ON il.source_type='stock_location' AND il.source_id=s.stock_location_id WHERE si.jar_size_id=$1 AND il.id=$2) events`
+		args = []any{source, location}
+	case "away_product":
+		query = `SELECT COALESCE(MAX(at),to_timestamp(0)) FROM (
+			SELECT pa.date at FROM product_adjustments pa JOIN inventory_locations il ON il.source_type='stock_location' AND il.source_id=pa.location_id WHERE pa.product_id=$1 AND pa.deleted_at IS NULL AND il.id=$2
+			UNION ALL SELECT sm.date FROM stock_movements sm JOIN inventory_locations il ON il.source_type='stock_location' AND il.source_id=sm.location_id WHERE sm.product_id=$1 AND il.id=$2
+			UNION ALL SELECT s.date FROM sale_items si JOIN sales s ON s.id=si.sale_id JOIN inventory_locations il ON il.source_type='stock_location' AND il.source_id=s.stock_location_id WHERE si.product_id=$1 AND il.id=$2) events`
+		args = []any{source, location}
+	default:
+		return time.Time{}, app.Internal("find last legacy event", fmt.Errorf("unsupported residual domain %q at %s", domain, location))
+	}
+	var at time.Time
+	if err := t.uow.QueryRow(ctx, query, args...).Scan(&at); err != nil {
+		return time.Time{}, err
+	}
+	return at.UTC(), nil
 }
 func (t *translator) opening(ctx context.Context, domain string, source, item, lot uuid.UUID, amount string, scale int, at time.Time) error {
 	id := source

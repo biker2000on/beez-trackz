@@ -195,6 +195,145 @@ func TestNegativeResidualRollsBackLedgerAndFreeze(t *testing.T) {
 	}
 }
 
+func TestDrawBeforeReceiptInjectsReconcilesAndFreezes(t *testing.T) {
+	adminURL := os.Getenv("TEST_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_draw_before_receipt_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
+	defer cleanup()
+	pool, err := db.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	apiaryID, hiveID, harvestID, jarSizeID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	saleAt := time.Date(2022, 9, 11, 0, 0, 0, 0, time.UTC)
+	jarringAt := time.Date(2023, 7, 3, 0, 0, 0, 0, time.UTC)
+	commands := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO apiaries(id,name)VALUES($1,$2)`, []any{apiaryID, "Draw-before-receipt apiary " + uuid.NewString()}},
+		{`INSERT INTO hives(id,apiary_id,position_label)VALUES($1,$2,'A1')`, []any{hiveID, apiaryID}},
+		{`INSERT INTO honey_harvests(id,hive_id,date,super_weight_before,super_weight_after,calculated_honey_weight)VALUES($1,$2,$3,1,0,1)`, []any{harvestID, hiveID, saleAt.Add(-24 * time.Hour)}},
+		{`INSERT INTO jar_sizes(id,label,honey_oz)VALUES($1,$2,8)`, []any{jarSizeID, "Draw-before-receipt jar " + uuid.NewString()}},
+		{`INSERT INTO honey_movements(date,kind,amount_lbs,jar_size_id,quantity)VALUES($1,'jarring',1,$2,2)`, []any{jarringAt, jarSizeID}},
+	}
+	for _, command := range commands {
+		if _, err := pool.Exec(ctx, command.sql, command.args...); err != nil {
+			t.Fatalf("seed fixture: %v\n%s", err, command.sql)
+		}
+	}
+	var saleID uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO sales(date,total_amount_cents,amount_paid_cents,order_status,physical_applied_at)VALUES($1,1000,1000,'paid',$1)RETURNING id`, saleAt).Scan(&saleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sale_items(sale_id,jar_size_id,quantity,unit_price_cents,kind)VALUES($1,$2,2,500,'jar')`, saleID, jarSizeID); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ledgerbackfill.Run(ctx, pool, ledgerbackfill.Options{})
+	if err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	if len(report.DrawBeforeReceiptInjections) != 1 || len(report.DrawBeforeReceiptReconciles) != 1 {
+		t.Fatalf("draw-before-receipt report=%+v", report)
+	}
+	injection, reconcile := report.DrawBeforeReceiptInjections[0], report.DrawBeforeReceiptReconciles[0]
+	if injection.ItemID == uuid.Nil || injection.LocationID == uuid.Nil || injection.LotID == uuid.Nil || injection.Quantity != "2" || !strings.HasPrefix(injection.Source, "sale_item:") {
+		t.Fatalf("injection=%+v", injection)
+	}
+	if reconcile.ItemID != injection.ItemID || reconcile.LocationID != injection.LocationID || reconcile.LotID != injection.LotID || reconcile.Quantity != "-2" || reconcile.Source != "home_jar:"+jarSizeID.String() {
+		t.Fatalf("reconcile=%+v injection=%+v", reconcile, injection)
+	}
+	var injectionReason, reconcileReason string
+	var injectionAt, reconcileAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT details->>'reason',occurred_at FROM inventory_operations WHERE id=$1`, injection.OperationID).Scan(&injectionReason, &injectionAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT details->>'reason',occurred_at FROM inventory_operations WHERE id=$1`, reconcile.OperationID).Scan(&reconcileReason, &reconcileAt); err != nil {
+		t.Fatal(err)
+	}
+	if injectionReason != "draw-before-receipt" || !injectionAt.Equal(saleAt) || reconcileReason != "draw-before-receipt-reconcile" || !reconcileAt.Equal(jarringAt) {
+		t.Fatalf("injection=%q@%s reconcile=%q@%s", injectionReason, injectionAt, reconcileReason, reconcileAt)
+	}
+	var available, triggers int
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(SUM(a.available),0)::int FROM inventory_available a JOIN inventory_items i ON i.id=a.item_id WHERE i.source_type='jar_size' AND i.source_id=$1`, jarSizeID).Scan(&available); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM pg_trigger WHERE tgname='inventory_legacy_freeze' AND NOT tgisinternal`).Scan(&triggers); err != nil {
+		t.Fatal(err)
+	}
+	if available != 0 || triggers != len(ledgerbackfill.FreezeTables) {
+		t.Fatalf("parity available=%d freeze triggers=%d", available, triggers)
+	}
+}
+
+func TestDrawBeforeReceiptDoesNotTopUpNamedLot(t *testing.T) {
+	adminURL := os.Getenv("TEST_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_named_draw_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
+	defer cleanup()
+	pool, err := db.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	apiaryID, hiveID, harvestID, harvestLotID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	jarSizeID, runID := uuid.New(), uuid.New()
+	saleAt := time.Date(2022, 9, 11, 0, 0, 0, 0, time.UTC)
+	jarringAt := time.Date(2023, 7, 3, 0, 0, 0, 0, time.UTC)
+	commands := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO apiaries(id,name)VALUES($1,$2)`, []any{apiaryID, "Named draw apiary " + uuid.NewString()}},
+		{`INSERT INTO hives(id,apiary_id,position_label)VALUES($1,$2,'A1')`, []any{hiveID, apiaryID}},
+		{`INSERT INTO honey_harvests(id,hive_id,date,super_weight_before,super_weight_after,calculated_honey_weight)VALUES($1,$2,$3,1,0,1)`, []any{harvestID, hiveID, saleAt.Add(-24 * time.Hour)}},
+		{`INSERT INTO harvest_lots(id,lot_code,public_slug,extraction_date,honey_weight_lbs)VALUES($1,$2,$3,$4,1)`, []any{harvestLotID, "NAMED-" + uuid.NewString(), "named-" + uuid.NewString(), saleAt.Add(-24 * time.Hour)}},
+		{`INSERT INTO harvest_lot_harvests(lot_id,harvest_id)VALUES($1,$2)`, []any{harvestLotID, harvestID}},
+		{`INSERT INTO jar_sizes(id,label,honey_oz)VALUES($1,$2,8)`, []any{jarSizeID, "Named draw jar " + uuid.NewString()}},
+		{`INSERT INTO bottling_runs(id,lot_id,bottled_date,jar_size_id,quantity,honey_lbs)VALUES($1,$2,$3,$4,2,1)`, []any{runID, harvestLotID, jarringAt, jarSizeID}},
+		{`INSERT INTO honey_movements(date,kind,amount_lbs,jar_size_id,quantity,bottling_run_id,lot_id)VALUES($1,'jarring',1,$2,2,$3,$4)`, []any{jarringAt, jarSizeID, runID, harvestLotID}},
+	}
+	for _, command := range commands {
+		if _, err := pool.Exec(ctx, command.sql, command.args...); err != nil {
+			t.Fatalf("seed fixture: %v\n%s", err, command.sql)
+		}
+	}
+	var saleID uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO sales(date,total_amount_cents,amount_paid_cents,order_status,physical_applied_at)VALUES($1,1000,1000,'paid',$1)RETURNING id`, saleAt).Scan(&saleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO sale_items(sale_id,jar_size_id,quantity,unit_price_cents,kind,bottling_run_id)VALUES($1,$2,2,500,'jar',$3)`, saleID, jarSizeID, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := ledgerbackfill.Run(ctx, pool, ledgerbackfill.Options{})
+	if err == nil || !strings.Contains(err.Error(), "named lot") {
+		t.Fatalf("named-lot overdraw report=%+v error=%v", report, err)
+	}
+	var operations, triggers int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM inventory_operations`).Scan(&operations); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM pg_trigger WHERE tgname='inventory_legacy_freeze' AND NOT tgisinternal`).Scan(&triggers); err != nil {
+		t.Fatal(err)
+	}
+	if operations != 0 || triggers != 0 {
+		t.Fatalf("failed gate left operations=%d triggers=%d", operations, triggers)
+	}
+}
+
 func TestCompleteLedgerBackfillFixtureAndFrozenNoOp(t *testing.T) {
 	adminURL := os.Getenv("TEST_DATABASE_URL")
 	if adminURL == "" {

@@ -25,18 +25,32 @@ var FreezeTables = []string{
 type Options struct{ Currency string }
 
 type Report struct {
-	AlreadyFrozen       bool            `json:"alreadyFrozen"`
-	Operations          int             `json:"operations"`
-	EquipmentItems      int             `json:"equipmentItems"`
-	ExternalSyncRekeyed int64           `json:"externalSyncRekeyed"`
-	FrozenTables        []string        `json:"frozenTables"`
-	ResidualSplits      []ResidualSplit `json:"residualSplits"`
+	AlreadyFrozen               bool                     `json:"alreadyFrozen"`
+	Operations                  int                      `json:"operations"`
+	EquipmentItems              int                      `json:"equipmentItems"`
+	ExternalSyncRekeyed         int64                    `json:"externalSyncRekeyed"`
+	FrozenTables                []string                 `json:"frozenTables"`
+	ResidualSplits              []ResidualSplit          `json:"residualSplits"`
+	DrawBeforeReceiptInjections []DrawBeforeReceiptEntry `json:"drawBeforeReceiptInjections"`
+	DrawBeforeReceiptReconciles []DrawBeforeReceiptEntry `json:"drawBeforeReceiptReconciles"`
 }
 
 type ResidualSplit struct {
 	Domain      string    `json:"domain"`
 	SourceID    uuid.UUID `json:"sourceId,omitempty"`
 	Amount      string    `json:"amount"`
+	OperationID uuid.UUID `json:"operationId"`
+}
+
+// DrawBeforeReceiptEntry identifies one compensating movement created while
+// replaying order-sensitive legacy history. Quantity is positive for an
+// opening-balance injection and negative for its residual reconciliation.
+type DrawBeforeReceiptEntry struct {
+	ItemID      uuid.UUID `json:"item"`
+	LocationID  uuid.UUID `json:"location"`
+	LotID       uuid.UUID `json:"lot"`
+	Quantity    string    `json:"quantity"`
+	Source      string    `json:"source"`
 	OperationID uuid.UUID `json:"operationId"`
 }
 
@@ -47,7 +61,11 @@ func Run(ctx context.Context, pool *pgxpool.Pool, opts Options) (Report, error) 
 	if pool == nil {
 		return Report{}, app.Invalid("backfill inventory ledger", "database pool is required")
 	}
-	var report Report
+	report := Report{
+		ResidualSplits:              []ResidualSplit{},
+		DrawBeforeReceiptInjections: []DrawBeforeReceiptEntry{},
+		DrawBeforeReceiptReconciles: []DrawBeforeReceiptEntry{},
+	}
 	err := app.NewRunner(pool).Run(ctx, app.SystemRestoreActor(uuid.Nil), func(ctx context.Context, uow *app.UnitOfWork) error {
 		if _, err := uow.Exec(ctx, `SET LOCAL TIME ZONE 'UTC'`); err != nil {
 			return err

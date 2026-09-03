@@ -932,6 +932,8 @@ After translation steps 1–9, the job applies the declared splits (spec
 | Unassigned bulk honey (`total harvested − Σ lot ceilings − Σ lot-less draws`) | one `opening_balance` receipt of that many lbs into item `honey_bulk` at `home` | lot `legacy-unassigned`, dated at the earliest harvest |
 | Home jar residual per jar size (`global jars − Σ away`) | one `opening_balance` per jar-size item at `home` | lot `legacy-unassigned` where the jar cannot be traced; `details.reason = 'home-residual-split'` |
 | Home product residual per catalog product | same shape per catalog item | same |
+| Draw before its receipt | an `opening_balance` for the shortfall only, immediately before the draw | that item's `legacy-unassigned` lot at the draw location and date; `details.reason = 'draw-before-receipt'` |
+| Remaining draw-before-receipt excess | one `legacy_reconcile` count adjustment, limited to the injected total for that item and location | dated at the last legacy event there; `details.reason = 'draw-before-receipt-reconcile'` |
 
 Each split is listed in the restore report **and** in the new-ledger
 `verification.json` family with its amount (spec §7.4). Exact JSON
@@ -950,6 +952,22 @@ a lot to hide it.
 `legacy-unassigned` jar stock is expected to be large relative to
 traced stock until the physical count retires it (spec OV7 / §7.1
 step 10). That is not a failure.
+
+Read `ledgerBackfill.drawBeforeReceiptInjections` and
+`ledgerBackfill.drawBeforeReceiptReconciles` together. The command summary
+prints the same entries. Every row identifies `item`, `location`, `lot`,
+signed `quantity`, and `source` (plus `operationId` in JSON). An injection is
+positive and must be the exact shortage at that draw. A reconcile is negative
+and removes only the end-state excess caused by those injections; the sum of
+reconciles for an item/location must never exceed its injected total. Confirm
+that its timestamp is the last legacy event for that item/location and that
+the final parity cell equals the legacy figure.
+
+A named harvest or batch lot is not eligible for an injection. If the report
+or command error says a named lot was overdrawn, stop and investigate that
+provenance; do not reinterpret it as `legacy-unassigned`. Likewise, a
+negative residual larger than the listed injections is still a gate failure,
+not permission to add a larger reconcile adjustment.
 
 ### 6.4 What the freeze means
 

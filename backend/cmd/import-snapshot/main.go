@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -119,7 +120,23 @@ func run(args []string) int {
 		}
 		return 1
 	}
+	if opts.backfillLedger && report.LedgerBackfill != nil {
+		printLedgerBackfillSummary(os.Stdout, *report.LedgerBackfill)
+	}
 	return 0
+}
+
+func printLedgerBackfillSummary(w io.Writer, report ledgerbackfill.Report) {
+	fmt.Fprintf(w, "ledger backfill: operations=%d frozen_tables=%d draw_before_receipt_injections=%d draw_before_receipt_reconciles=%d\n",
+		report.Operations, len(report.FrozenTables), len(report.DrawBeforeReceiptInjections), len(report.DrawBeforeReceiptReconciles))
+	for _, entry := range report.DrawBeforeReceiptInjections {
+		fmt.Fprintf(w, "draw-before-receipt injection: item=%s location=%s lot=%s quantity=%s source=%s\n",
+			entry.ItemID, entry.LocationID, entry.LotID, entry.Quantity, entry.Source)
+	}
+	for _, entry := range report.DrawBeforeReceiptReconciles {
+		fmt.Fprintf(w, "draw-before-receipt reconcile: item=%s location=%s lot=%s quantity=%s source=%s\n",
+			entry.ItemID, entry.LocationID, entry.LotID, entry.Quantity, entry.Source)
+	}
 }
 
 func unsafeReportPath(input, report string) bool {
