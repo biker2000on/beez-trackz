@@ -3,9 +3,9 @@
 -- ledger-v1-baseline — the squashed initial schema (spec section 9, Phase B
 -- step 6; decisions 9 and 10 of docs/plans/2026-09-01-inventory-ledger-design.md).
 --
--- This one file replaces the 00001–00052 chain, which now lives unembedded
+-- This one file replaces the 00001–00053 chain, which now lives unembedded
 -- under backend/internal/db/legacy-00001-00052/ for reference only. It is the
--- post-00052 schema MINUS the ten legacy quantity tables and the five views
+-- post-00053 schema MINUS the ten legacy quantity tables and the five views
 -- over them:
 --
 --   honey_movements, stock_movements, product_adjustments, equipment_stock,
@@ -17,7 +17,7 @@
 --     equipment_loss_events
 --
 -- Everything else is verbatim, columns included: a retained domain table here
--- has exactly the columns it had after 00052, so a Phase-A snapshot restores
+-- has exactly the columns it had after 00053, so a Phase-A snapshot restores
 -- into this schema without a column-level transform. Four foreign keys that
 -- pointed INTO the dropped set are gone with them and their columns are now
 -- unconstrained uuids (consignment_settlements.location_id,
@@ -1171,6 +1171,36 @@ CREATE TABLE public.inventory_locations (
 
 
 --
+-- Name: product_catalog; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.product_catalog (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    kind text NOT NULL,
+    unit text NOT NULL,
+    default_price_cents bigint NOT NULL,
+    size_label text,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid,
+    net_grams double precision,
+    item_id uuid,
+    CONSTRAINT product_catalog_default_price_cents_check CHECK ((default_price_cents >= 0)),
+    CONSTRAINT product_catalog_kind_check CHECK ((kind = ANY (ARRAY['creamed_honey'::text, 'hot_honey'::text, 'mead'::text, 'propolis'::text, 'tincture'::text]))),
+    CONSTRAINT product_catalog_net_grams_check CHECK (((net_grams IS NULL) OR (net_grams > (0)::double precision)))
+);
+
+
+--
+-- Name: COLUMN product_catalog.net_grams; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.product_catalog.net_grams IS 'Net propolis grams per unit sold. Required for kind=propolis so sales decrement the harvest ledger; optional otherwise.';
+
+
+--
 -- Name: sale_items; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1256,7 +1286,11 @@ COMMENT ON COLUMN public.sales.stock_location_id IS 'Location the sold stock cam
 --
 
 CREATE VIEW public.inventory_reservations AS
- SELECT si.item_id,
+ SELECT
+        CASE
+            WHEN (si.kind = 'propolis'::text) THEN '00000000-0000-0000-0000-000000000102'::uuid
+            ELSE si.item_id
+        END AS item_id,
         CASE
             WHEN (si.hive_id IS NOT NULL) THEN deployed.id
             ELSE COALESCE(mapped.id, home.id)
@@ -1264,8 +1298,12 @@ CREATE VIEW public.inventory_reservations AS
     si.inventory_lot_id AS lot_id,
     NULL::text AS condition,
     si.hive_id AS container_hive_id,
-    (sum(si.quantity))::numeric(14,4) AS reserved
-   FROM ((((public.sale_items si
+    (sum(
+        CASE
+            WHEN (si.kind = 'propolis'::text) THEN ((si.quantity)::double precision * COALESCE(pc.net_grams, (1)::double precision))
+            ELSE (si.quantity)::double precision
+        END))::numeric(14,4) AS reserved
+   FROM (((((public.sale_items si
      JOIN public.sales s ON ((s.id = si.sale_id)))
      CROSS JOIN ( SELECT inventory_locations.id
            FROM public.inventory_locations
@@ -1274,8 +1312,13 @@ CREATE VIEW public.inventory_reservations AS
            FROM public.inventory_locations
           WHERE (inventory_locations.kind = 'deployed'::text)) deployed)
      LEFT JOIN public.inventory_locations mapped ON (((mapped.source_type = 'stock_location'::text) AND (mapped.source_id = s.stock_location_id))))
-  WHERE ((s.physical_applied_at IS NULL) AND (s.order_status <> 'cancelled'::text) AND (si.item_id IS NOT NULL))
-  GROUP BY si.item_id,
+     LEFT JOIN public.product_catalog pc ON ((pc.id = si.product_id)))
+  WHERE ((s.physical_applied_at IS NULL) AND (s.order_status <> 'cancelled'::text) AND ((si.item_id IS NOT NULL) OR (si.kind = 'propolis'::text)))
+  GROUP BY
+        CASE
+            WHEN (si.kind = 'propolis'::text) THEN '00000000-0000-0000-0000-000000000102'::uuid
+            ELSE si.item_id
+        END,
         CASE
             WHEN (si.hive_id IS NOT NULL) THEN deployed.id
             ELSE COALESCE(mapped.id, home.id)
@@ -1745,36 +1788,6 @@ END) STORED,
 --
 
 COMMENT ON COLUMN public.product_batches.voided_at IS 'Set by POST /product-batches/{id}/void. A voided batch produces nothing, consumes no propolis, and its honey bulk_use movement carries a reversing entry.';
-
-
---
--- Name: product_catalog; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.product_catalog (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    name text NOT NULL,
-    kind text NOT NULL,
-    unit text NOT NULL,
-    default_price_cents bigint NOT NULL,
-    size_label text,
-    is_active boolean DEFAULT true NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    created_by uuid,
-    net_grams double precision,
-    item_id uuid,
-    CONSTRAINT product_catalog_default_price_cents_check CHECK ((default_price_cents >= 0)),
-    CONSTRAINT product_catalog_kind_check CHECK ((kind = ANY (ARRAY['creamed_honey'::text, 'hot_honey'::text, 'mead'::text, 'propolis'::text, 'tincture'::text]))),
-    CONSTRAINT product_catalog_net_grams_check CHECK (((net_grams IS NULL) OR (net_grams > (0)::double precision)))
-);
-
-
---
--- Name: COLUMN product_catalog.net_grams; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.product_catalog.net_grams IS 'Net propolis grams per unit sold. Required for kind=propolis so sales decrement the harvest ledger; optional otherwise.';
 
 
 --

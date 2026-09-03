@@ -250,9 +250,10 @@ func (s *Service) storedReservation(
 }
 
 // NeedsForSale turns a stored sale's lines into the demands the reservation
-// check works from. Colony lines have no item (a hive is not stock) and
-// raw-propolis lines are measured in grams rather than in SKU units, so
-// neither appears; equipment sells serviceable off the shelf.
+// check works from. Colony lines have no item (a hive is not stock).
+// Raw-propolis lines are reserved by the view in grams but remain on the
+// products endpoint's cumulative grams availability path, so neither appears
+// here; equipment sells serviceable off the shelf.
 func NeedsForSale(ctx context.Context, uow *app.UnitOfWork, saleID uuid.UUID) ([]Need, error) {
 	lines, err := LoadLines(ctx, uow, saleID)
 	if err != nil {
@@ -273,38 +274,4 @@ func NeedsForSale(ctx context.Context, uow *app.UnitOfWork, saleID uuid.UUID) ([
 		needs = append(needs, need)
 	}
 	return needs, nil
-}
-
-// PropolisReservedGrams is the one reservation inventory_reservations cannot
-// express (spec 12.1 open item 5).
-//
-// A raw-propolis line sells a packaged SKU, but its stock is harvested grams
-// against the propolis_raw item: two bags of a 10 g SKU take 20 g off the
-// harvest, not two units of anything. inventory_reservations reserves
-// SUM(sale_items.quantity) — SKU units — so giving these lines an item_id
-// today would reserve 2 where 20 is owed, and every reader of
-// inventory_available for propolis would be wrong by the difference.
-//
-// Until the view multiplies by product_catalog.net_grams, the grams an
-// unapplied sale is holding are computed here, and the propolis on-hand
-// formula subtracts them itself. This is that formula's only home, so the
-// report, the availability guard, and the Phase A parity check cannot drift
-// apart.
-//
-// When the view does express it, this function is what the migration has to
-// reproduce, and its callers become the ones to delete.
-func PropolisReservedGrams(ctx context.Context, q app.Querier) (float64, error) {
-	var grams float64
-	err := q.QueryRow(ctx, `
-		SELECT COALESCE(SUM(si.quantity * pc.net_grams), 0)::float8
-		FROM sale_items si
-		JOIN sales s ON s.id = si.sale_id
-		JOIN product_catalog pc ON pc.id = si.product_id
-		WHERE si.kind = $1 AND pc.net_grams IS NOT NULL
-		  AND s.order_status <> 'cancelled' AND s.physical_applied_at IS NULL`,
-		KindPropolis).Scan(&grams)
-	if err != nil {
-		return 0, app.Wrap(app.KindInternal, "read propolis reservation", err)
-	}
-	return grams, nil
 }

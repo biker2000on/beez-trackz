@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/google/uuid"
 )
 
@@ -84,8 +85,9 @@ func TestCheckAvailabilityExcludingCreditsTheSaleItsOwnReservation(t *testing.T)
 	}
 }
 
-// NeedsForSale is what the edit path hands the check. The two lines it must
-// leave out are the ones with no unit of stock behind them.
+// NeedsForSale is what the edit path hands the generic item-unit check. The
+// colony line has no stock item, while the propolis line stays on the product
+// endpoint's cumulative grams check even though LinkLines gives it an item.
 func TestNeedsForSaleSkipsColonyAndPropolisLines(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -113,7 +115,7 @@ func TestNeedsForSaleSkipsColonyAndPropolisLines(t *testing.T) {
 	}
 
 	// A raw-propolis line: its stock is harvested grams against the propolis
-	// item, not units of the SKU, so it carries no item and no unit demand.
+	// item, not units of the SKU, so it has no generic unit demand.
 	var propolisID uuid.UUID
 	if err := fixture.pool.QueryRow(ctx, `
 		INSERT INTO product_catalog (name, kind, unit, default_price_cents, net_grams)
@@ -130,6 +132,9 @@ func TestNeedsForSaleSkipsColonyAndPropolisLines(t *testing.T) {
 	var needs []Need
 	if err := app.NewRunner(fixture.pool).Run(ctx, fixture.actor,
 		func(ctx context.Context, uow *app.UnitOfWork) error {
+			if err := fixture.service.LinkLines(ctx, uow, saleID, fixture.home); err != nil {
+				return err
+			}
 			var err error
 			needs, err = NeedsForSale(ctx, uow, saleID)
 			return err
@@ -144,14 +149,10 @@ func TestNeedsForSaleSkipsColonyAndPropolisLines(t *testing.T) {
 	}
 }
 
-// Spec 12.1 open item 5: raw-propolis lines are the one reservation the view
-// cannot express, so the grams they hold have exactly one definition.
-//
-// The test also pins WHY they cannot be folded into inventory_reservations
-// yet: the view reserves SUM(sale_items.quantity), and for these lines the
-// demand is quantity x net_grams. Until it multiplies, giving the lines an
-// item_id would reserve the unit count and understate the hold.
-func TestPropolisReservedGramsCountsOnlyLiveUnappliedLines(t *testing.T) {
+// Spec 12.1 open item 5: inventory_reservations expresses raw-propolis holds
+// in the singleton item's canonical unit. Two units of a 25 g SKU reserve 50
+// grams, never two packaged units, and LinkLines leaves the lot unpinned.
+func TestPropolisReservationViewUsesItemGrams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newReservationFixture(ctx, t, "beez_sales_propolis_reserved")
@@ -188,28 +189,44 @@ func TestPropolisReservedGramsCountsOnlyLiveUnappliedLines(t *testing.T) {
 		return saleID
 	}
 
-	seedSale("pending", false, 2) // 50 g held
-	seedSale("draft", false, 1)   // 25 g held
-	seedSale("paid", true, 4)     // applied: consumed, not reserved
+	heldSale := seedSale("pending", false, 2) // 50 g held
+	seedSale("paid", true, 4)                 // applied: consumed, not reserved
 	seedSale("cancelled", false, 8)
 
-	var reserved float64
 	if err := fixture.runner.Run(ctx, fixture.actor,
 		func(ctx context.Context, uow *app.UnitOfWork) error {
-			var err error
-			reserved, err = PropolisReservedGrams(ctx, uow)
-			return err
+			return fixture.service.LinkLines(ctx, uow, heldSale, fixture.home)
 		}); err != nil {
-		t.Fatalf("read propolis reservation: %v", err)
-	}
-	if reserved != 75 {
-		t.Fatalf("reserved = %v g, want 75 (2 + 1 bags of 25 g)", reserved)
+		t.Fatalf("link propolis sale: %v", err)
 	}
 
-	// The magnitude is grams, not bags. If it ever comes back as the unit
-	// count, the view could take it over as it stands — and that is the check
-	// the open item is waiting on.
-	if reserved == 3 {
-		t.Fatal("reserved came back as a unit count; inventory_reservations could hold this")
+	var linkedItem uuid.UUID
+	var linkedLot *uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT item_id, inventory_lot_id FROM sale_items
+		WHERE sale_id=$1`, heldSale).Scan(&linkedItem, &linkedLot); err != nil {
+		t.Fatalf("read linked propolis line: %v", err)
+	}
+	if linkedItem != production.PropolisItemID {
+		t.Fatalf("linked item = %s, want raw propolis %s", linkedItem, production.PropolisItemID)
+	}
+	if linkedLot != nil {
+		t.Fatalf("linked lot = %s, want nil item-level reservation", *linkedLot)
+	}
+
+	var reserved float64
+	var lotID *uuid.UUID
+	if err := fixture.pool.QueryRow(ctx, `
+		SELECT reserved::float8, lot_id
+		FROM inventory_reservations
+		WHERE item_id=$1 AND location_id=$2`,
+		production.PropolisItemID, fixture.home).Scan(&reserved, &lotID); err != nil {
+		t.Fatalf("read propolis reservation view: %v", err)
+	}
+	if reserved != 50 {
+		t.Fatalf("reserved = %v g, want 50 (2 bags x 25 g)", reserved)
+	}
+	if lotID != nil {
+		t.Fatalf("reservation lot = %s, want nil", *lotID)
 	}
 }

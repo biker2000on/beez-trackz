@@ -114,15 +114,16 @@ func (s *Service) LinkLines(
 }
 
 // itemForLine resolves the inventory item a line consumes, creating the
-// catalog item on demand. Colony lines have none — a hive is not stock — and
-// neither do raw-propolis lines, whose stock is measured in harvested grams
-// against the propolis item rather than in units of the SKU.
+// catalog item on demand. Colony lines have none — a hive is not stock. Raw
+// propolis lines consume the singleton propolis item, whose canonical unit is
+// grams; inventory_reservations translates their packaged SKU quantities.
 func (s *Service) itemForLine(ctx context.Context, uow *app.UnitOfWork, line Line) (*uuid.UUID, error) {
 	switch {
 	case line.Kind == KindColony:
 		return nil, nil
 	case line.Kind == KindPropolis:
-		return nil, nil
+		id := production.PropolisItemID
+		return &id, nil
 	case line.Kind == KindJar && line.JarSizeID != nil:
 		id, err := production.EnsureJarItem(ctx, uow, *line.JarSizeID)
 		return &id, err
@@ -141,8 +142,9 @@ func (s *Service) itemForLine(ctx context.Context, uow *app.UnitOfWork, line Lin
 func (s *Service) reservationLot(
 	ctx context.Context, uow *app.UnitOfWork, itemID, locationID uuid.UUID, line Line,
 ) (*uuid.UUID, error) {
-	if line.Kind == KindEquipment {
-		// Equipment is condition-tracked, not lot-tracked.
+	if line.Kind == KindEquipment || line.Kind == KindPropolis {
+		// Equipment is condition-tracked, not lot-tracked. Raw propolis
+		// reservations span the harvested lots and are held at item level.
 		return nil, nil
 	}
 	if line.BottlingRunID != nil {

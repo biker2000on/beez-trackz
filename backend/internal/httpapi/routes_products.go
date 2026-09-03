@@ -13,7 +13,6 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
-	"github.com/biker2000on/beez-trackz/backend/internal/app/sales"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -537,27 +536,17 @@ func propolisToGrams(amount float64, unit string) float64 {
 }
 
 // propolisOnHandGrams is harvested propolis minus what tincture batches and
-// applied sales consumed, minus what unapplied sale lines have reserved.
-//
-// The first two are the ledger: a propolis harvest is a receipt into its own
-// lot, a tincture batch is a transform that consumes it, and an applied sale
-// is a sale_consume of quantity x net_grams. The third is the one reservation
-// inventory_reservations cannot express, because it reserves SKU units and
-// this stock is measured in grams; sales.PropolisReservedGrams is its single
-// definition, and spec 12.1 open item 5 records what has to change in the view
-// before this subtraction can go away.
+// applied sales consumed and what unapplied sale lines reserve. The first two
+// are inventory movements; inventory_available folds in the grams reservation
+// derived from quantity x product_catalog.net_grams.
 func propolisOnHandGrams(ctx context.Context, q inspectionQuerier) (float64, error) {
 	var onHand float64
 	if err := q.QueryRow(ctx,
-		`SELECT COALESCE((SELECT SUM(on_hand) FROM inventory_balances WHERE item_id=$1), 0)::float8`,
+		`SELECT COALESCE((SELECT SUM(available) FROM inventory_available WHERE item_id=$1), 0)::float8`,
 		production.PropolisItemID).Scan(&onHand); err != nil {
 		return 0, err
 	}
-	reserved, err := sales.PropolisReservedGrams(ctx, q)
-	if err != nil {
-		return 0, err
-	}
-	return onHand - reserved, nil
+	return onHand, nil
 }
 
 func propolisHarvestRemainingGrams(ctx context.Context, q inspectionQuerier, harvestID uuid.UUID) (float64, error) {
