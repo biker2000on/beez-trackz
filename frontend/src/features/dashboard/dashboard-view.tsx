@@ -1,29 +1,12 @@
 "use client";
 
-import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ArrowRight } from "lucide-react";
-import { toast } from "sonner";
 
-import { ApiError } from "@/lib/api";
-import { isTypingTarget } from "@/lib/keyboard";
 import { useAccessProfile } from "@/features/access/api";
-import { useSetRecommendationState } from "@/features/recommendations/api";
-import {
-  useCloseFeeding,
-  useRefillFeeding,
-} from "@/features/feedings/hooks";
 
-import { FeedingStatusWidget } from "./feeding-status-widget";
 import { FrameShortageWidget } from "./frame-shortage-widget";
-import { HiveOverviewWidget } from "./hive-overview-widget";
 import { HoneySummaryWidget } from "./honey-summary-widget";
-import { NeedsAttentionWidget } from "./needs-attention-widget";
-import { RecentInspectionsWidget } from "./recent-inspections-widget";
-import { TodaysActionsWidget } from "./todays-actions-widget";
-import { YardQueueLink } from "@/features/operations/yard-queue";
-import { FIELD_VISIBLE, useFieldWork, type FieldItem } from "./hooks";
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
@@ -33,232 +16,71 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
   );
 }
 
-const REPORTS = [
-  { href: "/operations/yard-queue", label: "Saturday yard queue" },
-  { href: "/reports", label: "Reports and analytics" },
-  { href: "/recommendations", label: "All recommendations" },
+/**
+ * Where the work went. The dashboard used to assemble the field slice itself
+ * (`useFieldWork`) and split it into two widgets; Today reads that split from
+ * the server now, so the dashboard links to it rather than competing with it.
+ */
+const WORK = [
+  { href: "/today", label: "Today — what needs doing" },
+  { href: "/yard/queue", label: "Yard queue — the Saturday walk" },
+  { href: "/today/recommendations", label: "Recommendations and triage history" },
 ];
 
-/** True while typing or while a dialog is open — keyboard triage stands down. */
-function keyboardBusy(target: EventTarget | null): boolean {
-  if (isTypingTarget(target)) return true;
-  return Boolean(
-    document.querySelector(
-      '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]',
-    ),
-  );
-}
-
-/** Mutations only fire after the user has arrow-focused a row this visit. */
-function isArmedRow(focusedId: string, target: EventTarget | null): boolean {
-  const node =
-    (document.activeElement instanceof HTMLElement && document.activeElement) ||
-    (target instanceof HTMLElement ? target : null);
-  if (!node) return false;
-  return node.closest(`[data-field-id="${CSS.escape(focusedId)}"]`) != null;
-}
+const REPORTS = [
+  { href: "/reports", label: "Reports and analytics" },
+  { href: "/yard", label: "Hive and apiary status" },
+];
 
 /**
- * The dashboard is ordered by what the beekeeper has to do, not by what the
- * app can display: the work first (with the evidence behind each item), then
- * status, then history, then reporting.
+ * What is left of the dashboard after the field slice moved to `/today`.
  *
- * The two work widgets share one action-center-style keyboard order (Needs
- * attention first, then Today's field actions): arrows move a focus ring,
- * Enter opens the hive, and d/s/r resolve the row in place.
+ * §4.1 of the 2026-09-03 design relocates all five status and history
+ * widgets. Two of them have a home in this wave — hive overview and recent
+ * inspections are on `/yard` — and feeding status is now work items on Today.
+ * Frame shortage and honey summary belong to `/equipment` and `/production`,
+ * which wave 5 creates; they stay here until then rather than being deleted
+ * out from under the operator.
  */
 export function DashboardView() {
-  const router = useRouter();
   const access = useAccessProfile();
   const isAdmin = access.data?.isAdmin === true;
 
-  const work = useFieldWork();
-  const setRecState = useSetRecommendationState();
-  const closeFeeding = useCloseFeeding();
-  const refillFeeding = useRefillFeeding();
-  const [focusedIndex, setFocusedIndex] = React.useState(-1);
-  const revealFocused = React.useRef(false);
-
-  // The keyboard order is exactly what is visible: the first five of each
-  // widget, attention before today, matching the on-screen reading order.
-  const visibleItems = React.useMemo(
-    () => [
-      ...work.attention.slice(0, FIELD_VISIBLE),
-      ...work.today.slice(0, FIELD_VISIBLE),
-    ],
-    [work.attention, work.today],
-  );
-  const focusIndex =
-    focusedIndex < 0 || visibleItems.length === 0
-      ? -1
-      : Math.min(focusedIndex, visibleItems.length - 1);
-  const focusedId =
-    focusIndex >= 0 ? (visibleItems[focusIndex]?.id ?? null) : null;
-
-  const mutating =
-    setRecState.isPending || closeFeeding.isPending || refillFeeding.isPending;
-
-  const resolveItem = React.useCallback(
-    async (item: FieldItem, key: "d" | "s" | "r") => {
-      const where = item.hiveName ? ` on ${item.hiveName}` : "";
-      try {
-        if (item.kind === "recommendation" && item.recommendationId) {
-          if (key === "r") return;
-          await setRecState.mutateAsync({
-            ids: [item.recommendationId],
-            state: key === "d" ? "dismissed" : "snoozed",
-          });
-          toast.success(
-            key === "d" ? "Recommendation dismissed" : "Snoozed for 7 days",
-          );
-        } else if (item.kind === "feeding" && item.feedingId) {
-          if (key === "s") {
-            toast.info(
-              "Feeder rows clear when the feeder is refilled or closed.",
-            );
-            return;
-          }
-          if (key === "r") {
-            await refillFeeding.mutateAsync({ id: item.feedingId });
-            toast.success(`Feeder${where} refilled`);
-            return;
-          }
-          await closeFeeding.mutateAsync({
-            id: item.feedingId,
-            reason: item.unverified ? "verified_closed" : "emptied",
-          });
-          toast.success(`Feeder${where} closed`);
-        }
-      } catch (error) {
-        toast.error(
-          error instanceof ApiError
-            ? error.message
-            : "Could not update the item",
-        );
-      }
-    },
-    [closeFeeding, refillFeeding, setRecState],
-  );
-
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      if (keyboardBusy(event.target)) return;
-      if (visibleItems.length === 0) return;
-
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        const direction = event.key === "ArrowDown" ? 1 : -1;
-        const current =
-          focusIndex < 0
-            ? direction > 0
-              ? -1
-              : visibleItems.length
-            : focusIndex;
-        const next = Math.max(
-          0,
-          Math.min(visibleItems.length - 1, current + direction),
-        );
-        if (next !== focusIndex) revealFocused.current = true;
-        setFocusedIndex(next);
-        return;
-      }
-
-      const focused = focusIndex >= 0 ? visibleItems[focusIndex] : undefined;
-      if (!focused) return;
-
-      if (event.key === "Enter" || event.key === "o") {
-        if (
-          event.target instanceof Element &&
-          event.target.closest("a, button")
-        ) {
-          return;
-        }
-        if (focused.hiveId) {
-          event.preventDefault();
-          router.push(`/hives/${focused.hiveId}`);
-        }
-      } else if (
-        (event.key === "d" || event.key === "s" || event.key === "r") &&
-        !mutating &&
-        isArmedRow(focused.id, event.target)
-      ) {
-        event.preventDefault();
-        void resolveItem(focused, event.key);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusIndex, mutating, resolveItem, router, visibleItems]);
-
-  // Reveal the focused row after arrow movement.
-  React.useEffect(() => {
-    if (!revealFocused.current) return;
-    revealFocused.current = false;
-    if (!focusedId) return;
-    const row = document.querySelector<HTMLElement>(
-      `[data-field-id="${CSS.escape(focusedId)}"]`,
-    );
-    if (!row) return;
-    row.focus({ preventScroll: true });
-    const bounds = row.getBoundingClientRect();
-    if (bounds.top < 16 || bounds.bottom > window.innerHeight - 16) {
-      row.scrollIntoView({ block: "nearest" });
-    }
-  }, [focusedId]);
-
   return (
     <div className="grid gap-8">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <YardQueueLink />
-        </div>
-        {visibleItems.length > 0 && (
-          <p className="hidden text-[11px] text-muted-foreground md:block">
-            Keyboard: <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">↑/↓</kbd> move ·{" "}
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">Enter</kbd> open hive ·{" "}
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">d</kbd> close/dismiss ·{" "}
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">s</kbd> snooze ·{" "}
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">r</kbd> refill
-          </p>
-        )}
+      <div className="grid gap-1">
+        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-sm text-muted-foreground">
+          The work itself lives on Today — one list, ordered by the server,
+          with the evidence behind every item.
+        </p>
       </div>
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <NeedsAttentionWidget
-          items={work.attention}
-          isPending={work.isPending}
-          isError={work.isError}
-          focusedId={focusedId}
-        />
-        <TodaysActionsWidget
-          items={work.today}
-          isPending={work.isPending}
-          isError={work.isError}
-          focusedId={focusedId}
-        />
-      </section>
-
       <section className="grid gap-3">
-        <SectionHeading>Hive and apiary status</SectionHeading>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          <HiveOverviewWidget />
-          {isAdmin ? <FrameShortageWidget /> : null}
-          {isAdmin ? <HoneySummaryWidget /> : null}
+        <SectionHeading>Work</SectionHeading>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          {WORK.map((entry) => (
+            <Link
+              key={entry.href}
+              href={entry.href}
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-primary underline-offset-4 hover:underline"
+            >
+              {entry.label}
+              <ArrowRight className="size-3.5" />
+            </Link>
+          ))}
         </div>
       </section>
 
-      <section className="grid gap-3">
-        <SectionHeading>Feeding status</SectionHeading>
-        <FeedingStatusWidget />
-      </section>
-
-      <section className="grid gap-3">
-        <SectionHeading>Recent activity</SectionHeading>
-        <RecentInspectionsWidget />
-      </section>
+      {isAdmin ? (
+        <section className="grid gap-3">
+          <SectionHeading>Equipment and honey</SectionHeading>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FrameShortageWidget />
+            <HoneySummaryWidget />
+          </div>
+        </section>
+      ) : null}
 
       <section className="grid gap-3">
         <SectionHeading>Reporting</SectionHeading>

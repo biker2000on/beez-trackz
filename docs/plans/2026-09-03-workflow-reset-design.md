@@ -544,9 +544,17 @@ none.
 frontend must set `origin: "cache"`, `stale: true` and `cachedAt` from the
 service worker's `X-Beez-Cache: stale` header (`sw.js/route.ts:400`) — which
 requires `frontend/src/lib/api.ts` to start exposing response headers
-(`api.ts:108` reads only `content-type` today). That plumbing is wave-2 scope
-and it is the roadmap's "distinguish stale cached evidence from current server
-evidence" criterion. Nothing satisfies it today.
+(`api.ts:108` read only `content-type`). That plumbing is wave-2 scope and it
+is the roadmap's "distinguish stale cached evidence from current server
+evidence" criterion.
+
+**Landed in wave 2.** `api.getWithMeta` returns an `ApiResponseMeta` carrying
+the response `Headers`, the lowercased `X-Beez-Cache` and the parsed `Date`;
+`features/work/api.ts` rewrites `freshness` to
+`{origin: "cache", stale: true, cachedAt: <Date header>}` on the response and
+on every item inside it when the header says `stale`, and `FreshnessMarker`
+draws connection and freshness as two separate chips — a live connection can
+still serve a cached body, and a cached body can be current.
 
 ### 4.6 The dedup rule for `feeder_check`
 
@@ -1066,7 +1074,7 @@ first and does not depend on any Production or Sales work.
   what is wrong. Fix belongs with wave 3's authorization move or the wave 5
   route rewrite.
 
-### Wave 2 — Today and Yard Queue (frontend field slice)
+### Wave 2 — Today and Yard Queue (frontend field slice) — **landed**
 
 - **Depends on** wave 1.
 - **Scope.** `/today` and `/yard/queue` consume `/work/*`. Delete
@@ -1087,6 +1095,120 @@ first and does not depend on any Production or Sales work.
   filters over one response shape; every action executes its source command;
   the six roadmap states (online, offline, stale, forbidden, error,
   undo/interrupted) are each visibly distinct.
+- **Landed** 2026-09-03 (polyagent run `20260903-item10-runB-bz01`). Green on
+  the Windows checkout: `tsc --noEmit`, `npm run lint` (0 errors; the 17
+  warnings are pre-existing React-Compiler notes in other features),
+  `npm run build` (`/today`, `/today/recommendations`, `/yard`, `/yard/queue`
+  all emit), and the full Playwright suite — 28 passed, 1 skipped on purpose
+  (see deviation 2). `frontend/tests/e2e/work.spec.ts` is new: 11 assertions
+  covering the keyboard order, the armed-row guard, source-command execution,
+  stale versus live, forbidden, offline, queued, error and the recommendation
+  filter.
+
+  New code: `frontend/src/features/work/**` (`types.ts` mirroring §4.2,
+  `api.ts`, `use-action-center.ts`, `use-work-commands.ts`, `use-online.ts`,
+  `work-item-row.tsx`, `work-surface.tsx`, `freshness-marker.tsx`,
+  `command-receipt-bar.tsx`, `today-view.tsx`, `yard-queue-view.tsx`).
+  Deleted: `useFieldWork` and the `FieldItem` split, `needs-attention-widget`,
+  `todays-actions-widget`, `field-item-row`, `feeding-status-widget`,
+  `feeding-actions`.
+
+  **Deviations from the scope above, all deliberate:**
+
+  1. **No component tests — the behaviours are pinned in Playwright.** This
+     repo has no component test runner (no jest/vitest, no
+     `@testing-library/*`), and adding one is a toolchain decision this wave
+     has no mandate for. Every behaviour the scope names as a component test
+     is asserted in `work.spec.ts` against the real page with a mocked
+     `/work/*` response, which pins the projection *contract* as well as the
+     rendering.
+
+  2. **"Today renders offline from the SW cache" cannot pass yet, and says
+     so.** The service worker's `SHELL` precache
+     (`frontend/src/app/sw.js/route.ts:25-36`) still lists `/dashboard` and
+     `/operations/yard-queue`; `/today` and `/yard/queue` are not precached,
+     so an offline navigation to `/today` falls through to `/offline`. `sw.js`
+     is wave 5's file. `work.spec.ts` ends with a test that reads `/sw.js`,
+     asserts `SHELL` contains the two canonical routes, and **skips itself
+     while it does not** — so wave 5 inherits an assertion that arms the
+     moment it edits `SHELL`, rather than a missing test. The *stale-marker*
+     half of §4.5 is fully covered without it: the spec serves the response
+     with `X-Beez-Cache: stale` and asserts the visible marker.
+
+  3. **Widget relocation is as complete as the routes allow.** Hive overview
+     and recent inspections moved to a new `/yard` landing page
+     (`features/dashboard/yard-status-view.tsx`); feeding status became work
+     items and its widget is deleted. Frame shortage and honey summary belong
+     to `/equipment` and `/production`, which do not exist until wave 5 — they
+     stay on `/dashboard` rather than being deleted out from under the
+     operator, and the reporting links point at `/reports` and `/yard`
+     because `/insights` does not exist yet either. The two relocated widgets
+     still live under `features/dashboard/`; moving the folder is wave 5's
+     single coordinated change.
+
+  4. **`/today/recommendations` was built this wave, not deferred.** The
+     acceptance criterion is that Today, the yard queue and the
+     recommendations filter are *three filters over one response shape*; with
+     only two surfaces it is not demonstrable. The page is `TodayView` with
+     `sourceType=recommendation&status=open,snoozed,dismissed` and no code of
+     its own. The old `/recommendations` inbox is untouched and still
+     reachable — wave 7 deletes it.
+
+  5. **`lib/api.ts` gained three things, not one.** `getWithMeta` returns the
+     parsed body plus an `ApiResponseMeta` (status, `Headers`, the lowercased
+     `X-Beez-Cache`, and the parsed `Date` used as `cachedAt`). `send`
+     dispatches by method name so a command's own `method`/`path` executes
+     verbatim. And `buildUrl` now accepts a path that already starts with
+     `/api/v1/`, because that is the form the projection emits (§4.2) — the
+     alternative was every call site stripping a prefix, which is one more
+     place for client and server to disagree.
+
+  6. **Undo is read back from the projection, never constructed.** After a
+     reversible command (`recommendation.dismiss`, `recommendation.snooze`)
+     the receipt bar looks for `recommendation.restore` on the same source row
+     via a second, filtered read of `/work/today`
+     (`sourceType=recommendation&status=snoozed,dismissed`). If the row is not
+     there — offline, or someone else moved it — no undo is offered, because
+     none can be honestly promised. Building `/recommendations/{id}/restore`
+     in the client would have been a second source of truth for a path the
+     server already publishes.
+
+  7. **The row attribute is `data-work-id`, not `data-field-id`.** The guard
+     and the reveal effect are otherwise ported verbatim from
+     `dashboard-view.tsx:139-215`. The keys are no longer the hardcoded
+     `d`/`s`/`r`: each command carries its own `keyboard`, and a keypress on a
+     command with `permitted: false` produces the stated refusal instead of a
+     request the server would reject.
+
+  8. **Nav, manifest and service worker were not touched** (wave 5 owns them),
+     so `/today`, `/today/recommendations`, `/yard` and `/yard/queue` are
+     reachable by URL only. `NAV_ITEMS`' `adminOnly`/`requiresEdit` model is
+     unchanged; per-command `permitted` is additive to it, exactly as §4.4
+     describes.
+
+  9. **`counts.snoozed` is rendered as "n of the items below are snoozed",**
+     which is what wave 1 deviation 7 makes it: a count over the items
+     actually returned. At the default filter it is zero.
+
+- **Follow-ups found while implementing (not fixed here — outside the owned
+  paths).**
+  1. `/dashboard`, `/operations/yard-queue` and `/recommendations` now
+     duplicate `/today`, `/yard/queue` and `/today/recommendations`. That is
+     the intended overlap for waves 2-4 (nothing is deleted before wave 7),
+     but `/operations/yard-queue` still reads the old `yardQueue` assembler,
+     so the two surfaces can disagree until it goes.
+  2. `features/dashboard/hooks.ts` keeps its own `useFrameSummary` and
+     `useHoneyOverview`, which duplicate `features/equipment/hooks.ts:52` and
+     `features/honey/hooks.ts:35` under different query keys. They survive
+     only as long as the two unrelocated widgets do; wave 5 should drop them
+     with the widgets rather than move the duplicates.
+  3. `YardQueueLink` (`features/operations/yard-queue.tsx:132`) lost its only
+     caller when the dashboard stopped hosting the work list. It is exported
+     and unused; it goes with the rest of that file in wave 7.
+  4. `frontend/tests/e2e/navigation.spec.ts:158` flakes on the *first* full
+     suite run on a cold Next dev server (three new routes to compile inside
+     a 15 s expect timeout) and passes on a warm one and in isolation. Not a
+     product defect, but wave 5 adds more routes to the same server.
 
 ### Wave 3 — Application seam: idempotency, outbox, authorization
 

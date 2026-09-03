@@ -59,8 +59,21 @@ interface RequestOptions {
   headers?: Record<string, string>;
 }
 
+/** The API prefix every path in this module is relative to. */
+export const API_PREFIX = API_BASE;
+
+/**
+ * WorkItem commands carry an absolute API path (`/api/v1/feedings/…/refill`,
+ * design §4.2) because the server is the one that knows it. Accepting it here
+ * means a caller executing a command never has to strip a prefix — and can
+ * never strip the wrong one.
+ */
 function buildUrl(path: string, params?: QueryParams): string {
-  const url = path.startsWith("/") ? `${API_BASE}${path}` : `${API_BASE}/${path}`;
+  const url = path.startsWith(`${API_BASE}/`)
+    ? path
+    : path.startsWith("/")
+      ? `${API_BASE}${path}`
+      : `${API_BASE}/${path}`;
   if (!params) return url;
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -84,12 +97,55 @@ function handleUnauthorized(path: string) {
   window.location.assign("/login");
 }
 
-async function request<T>(
+/**
+ * Response metadata a caller may need in addition to the parsed body.
+ *
+ * Reading only `content-type` (as this module did) is what made the service
+ * worker's `X-Beez-Cache: stale` marker unreachable from React: a cached
+ * field response was indistinguishable from a live one, which is exactly the
+ * distinction the WorkItem contract's `freshness` has to make (design
+ * 2026-09-03 §4.5). `headers` is the real `Headers` object so no caller has
+ * to guess which header names matter next.
+ */
+export interface ApiResponseMeta {
+  status: number;
+  headers: Headers;
+  /**
+   * `X-Beez-Cache`, lowercased — "stale" when the service worker served this
+   * body from its data cache because the network did not answer in time
+   * (`sw.js/route.ts:400`). Null on a live response.
+   */
+  cache: string | null;
+  /**
+   * The response `Date`, parsed. For a cached response this is when the
+   * origin produced the body, which is the honest `cachedAt`.
+   */
+  date: Date | null;
+}
+
+/** A parsed body together with the metadata of the response it came from. */
+export interface ApiResult<T> {
+  data: T;
+  meta: ApiResponseMeta;
+}
+
+function responseMeta(res: Response): ApiResponseMeta {
+  const raw = res.headers.get("date");
+  const parsed = raw ? new Date(raw) : null;
+  return {
+    status: res.status,
+    headers: res.headers,
+    cache: res.headers.get("x-beez-cache")?.toLowerCase() ?? null,
+    date: parsed && !Number.isNaN(parsed.getTime()) ? parsed : null,
+  };
+}
+
+async function requestWithMeta<T>(
   method: string,
   path: string,
   body?: unknown,
   options: RequestOptions = {},
-): Promise<T> {
+): Promise<ApiResult<T>> {
   const init: RequestInit = {
     method,
     credentials: "include",
@@ -122,12 +178,40 @@ async function request<T>(
     throw new ApiError(res.status, message, data);
   }
 
-  return data as T;
+  return { data: data as T, meta: responseMeta(res) };
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  options: RequestOptions = {},
+): Promise<T> {
+  const result = await requestWithMeta<T>(method, path, body, options);
+  return result.data;
 }
 
 export const api = {
   get<T>(path: string, options?: RequestOptions): Promise<T> {
     return request<T>("GET", path, undefined, options);
+  },
+  /** GET, keeping the response metadata (freshness headers, status). */
+  getWithMeta<T>(path: string, options?: RequestOptions): Promise<ApiResult<T>> {
+    return requestWithMeta<T>("GET", path, undefined, options);
+  },
+  /**
+   * Dispatch by method name. WorkItem commands carry their own method and
+   * path (design §4.2), so the caller executes the *source* command rather
+   * than a generic work-item mutation; a switch at every call site would be
+   * one more place for the two to disagree.
+   */
+  send<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: RequestOptions,
+  ): Promise<T> {
+    return request<T>(method.toUpperCase(), path, body, options);
   },
   post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
     return request<T>("POST", path, body, options);
