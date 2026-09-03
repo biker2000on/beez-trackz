@@ -41,7 +41,9 @@ jobs:
           TEST_DATABASE_URL: postgres://beez@localhost:5432/beez_trackz_test?sslmode=disable
         # Packages share one TEST_DATABASE_URL. Parallel packages deadlock
         # on TRUNCATE/migrate once sales FKs reach hives (00015).
-        run: go test -p 1 ./...
+        # cmd/roundtrip-gate alone runs five end-to-end gate rehearsals and
+        # exceeds go test's default 10-minute per-package timeout.
+        run: go test -p 1 -timeout 45m ./...
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
