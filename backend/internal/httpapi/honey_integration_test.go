@@ -1307,9 +1307,15 @@ func TestVoidBottlingRunReversesMovementsAndFreesLot(t *testing.T) {
 	}
 }
 
-// ASI-5-004: a true-up cannot take back pounds that were already jarred, and
-// a true-up of exactly 0 is rejected because the bulk formula would silently
-// treat it as unset.
+// ASI-5-004, re-based on the lot ceilings (spec 12.1 open item 1).
+//
+// The old guard compared the declared weight against bulk on hand, which
+// decision 6 made a different quantity: bulk on hand is the balance of the lot
+// receipts, and jarring moves pounds out of it, so the comparison drifted away
+// from what it was meant to protect. What a true-up must not do is take the
+// harvest below the pounds the lots have already been given -- the spec 7.4
+// residual -- and that is what this pins. A true-up of exactly 0 is still
+// rejected outright, because the bulk formula treats a stored 0 as unset.
 func TestTrueUpCannotShrinkBulkBelowJarredPounds(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
@@ -1344,32 +1350,51 @@ func TestTrueUpCannotShrinkBulkBelowJarredPounds(t *testing.T) {
 			map[string]any{"totalExtractedWeight": weight}, "id", sessionID.String()))
 	}
 
+	// Every one of the session 100 lbs is committed: the fixture lot ceiling is
+	// a 100 lb receipt, 90 lbs of which are already jars on the shelf.
 	if response, body := trueUp(50); response.Code != http.StatusBadRequest {
-		t.Errorf("true-up to 50 with 90 jarred = %d %v, want 400", response.Code, body)
+		t.Errorf("true-up to 50 with 100 lbs in lots = %d %v, want 400", response.Code, body)
 	}
 	if response, body := trueUp(0); response.Code != http.StatusBadRequest {
 		t.Errorf("true-up to 0 = %d %v, want 400 (formula treats 0 as unset)", response.Code, body)
 	}
-	if response, body := trueUp(95); response.Code != http.StatusOK {
-		t.Errorf("true-up to 95 = %d %v, want 200", response.Code, body)
+	// Five pounds short of the ceiling is still short: the lot would be
+	// claiming 100 lbs out of a 95 lb harvest, which is the negative residual
+	// spec 7.4 refuses to carry into the reset.
+	response, body := trueUp(95)
+	if response.Code != http.StatusBadRequest {
+		t.Errorf("true-up to 95 against a 100 lb ceiling = %d %v, want 400", response.Code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "allocated to harvest lots") {
+		t.Errorf("refusal %q does not name the lot allocation", message)
+	}
+	// Trueing UP is never a withdrawal, so nothing about it can go negative.
+	if response, body := trueUp(120); response.Code != http.StatusOK {
+		t.Errorf("true-up to 120 = %d %v, want 200", response.Code, body)
+	}
+	// Nor is coming back down to exactly what the lots hold.
+	if response, body := trueUp(100); response.Code != http.StatusOK {
+		t.Errorf("true-up back to the committed 100 = %d %v, want 200", response.Code, body)
+	}
+	var stored float64
+	if err := server.pool.QueryRow(ctx,
+		`SELECT total_extracted_weight FROM harvest_sessions WHERE id=$1`, sessionID).
+		Scan(&stored); err != nil {
+		t.Fatalf("read session weight: %v", err)
+	}
+	if stored != 100 {
+		t.Errorf("stored weight = %v, want 100 (the refused true-ups rolled back)", stored)
 	}
 }
 
-// ASI-5-004 under the ledger: soft-deleting a harvest entry can no longer
-// take jarred pounds away.
+// ASI-5-004 under the ledger: soft-deleting a harvest entry cannot leave a lot
+// claiming pounds that nothing harvested (spec 12.1 open item 1).
 //
-// It used to be a bulk withdrawal, because bulk on hand was "harvested minus
-// jarred" and the entry was one of the harvested terms. Since decision 6 the
-// pounds live in the harvest lot the jars were bottled out of, so removing
-// the entry removes a measurement, not stock: the lot keeps its receipt and
-// the jars keep their honey. The delete is therefore allowed, and what the
-// test guards is that nothing quietly vanishes from inventory when it
-// happens.
-//
-// The pre-ledger refusal still exists in routes_harvest_sessions.go, where it
-// compares the entry's weight against ledger bulk and so can never fire for a
-// harvest row any more. Re-basing it onto the lot ceilings belongs with that
-// file, which is outside this wave's owned paths.
+// The pre-ledger guard compared the entry weight against bulk on hand. Since
+// decision 6 an entry puts no pounds into the ledger at all -- the lot ceiling
+// receipt does -- so that comparison could never fire again and the delete
+// went through no matter what stood behind it. The guard is now the spec 7.4
+// residual: an entry may not leave while the lots still hold what it measured.
 func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
@@ -1390,8 +1415,22 @@ func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 	response, body := call(t, server.hsDeleteEntry, adminRequest(
 		http.MethodDelete, "/api/v1/harvest-entries/"+entryID.String(), nil,
 		"id", entryID.String()))
-	if response.Code != http.StatusOK {
-		t.Fatalf("deleting the entry = %d %v, want 200", response.Code, body)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("deleting the only harvest behind a 100 lb lot = %d %v, want 400",
+			response.Code, body)
+	}
+	if message, _ := body["error"].(string); !strings.Contains(message, "allocated to harvest lots") {
+		t.Errorf("refusal %q does not name the lot allocation", message)
+	}
+
+	// The refusal rolled the soft-delete back with it: nothing half-happened.
+	var deletedAt *time.Time
+	if err := server.pool.QueryRow(ctx,
+		`SELECT deleted_at FROM honey_harvests WHERE id=$1`, entryID).Scan(&deletedAt); err != nil {
+		t.Fatalf("read entry after the refusal: %v", err)
+	}
+	if deletedAt != nil {
+		t.Error("the entry was soft-deleted even though the guard refused")
 	}
 
 	after, err := honeyBulkOnHand(ctx, server.pool)
@@ -1399,17 +1438,18 @@ func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 		t.Fatalf("bulk after delete: %v", err)
 	}
 	if after.BulkOnHandLbs != before.BulkOnHandLbs {
-		t.Errorf("bulk on hand moved from %v to %v when a measurement was deleted",
+		t.Errorf("bulk on hand moved from %v to %v on a refused delete",
 			before.BulkOnHandLbs, after.BulkOnHandLbs)
 	}
-	// And the 90 jars are still there: the entry never held them.
 	for _, row := range mustJarInventory(t, server) {
 		if row.JarSizeID == jarSizeID && row.OnHand != 90 {
-			t.Errorf("jars after deleting the entry = %d, want 90", row.OnHand)
+			t.Errorf("jars after the refused delete = %d, want 90", row.OnHand)
 		}
 	}
 
-	// A second entry deletes just as cleanly.
+	// An entry no lot has claimed is a measurement and nothing more: deleting
+	// it takes 5 lbs off the harvest and leaves 100 lbs still covering the
+	// lots, so it goes through.
 	seedHarvest(t, server, 5)
 	var smallID uuid.UUID
 	if err := server.pool.QueryRow(ctx,
@@ -1420,7 +1460,7 @@ func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 		http.MethodDelete, "/api/v1/harvest-entries/"+smallID.String(), nil,
 		"id", smallID.String()))
 	if response.Code != http.StatusOK {
-		t.Fatalf("deleting a covered entry = %d %v, want 200", response.Code, body)
+		t.Fatalf("deleting an uncommitted entry = %d %v, want 200", response.Code, body)
 	}
 }
 
@@ -1610,10 +1650,12 @@ func TestHarvestSessionBatchEntriesAndFinalization(t *testing.T) {
 		t.Fatalf("rows after failed batch = %d, want 2 (nothing partial)", rows)
 	}
 
-	// The session's 75 lbs are put into a lot before the true-up, because
-	// trueing a weight down is a bulk withdrawal and bulk honey now lives in
-	// lots: without a lot the ledger holds nothing and any shrink is refused.
-	seedFixtureLot(t, server, 0)
+	// Only 65 of the session 75 lbs go into a lot, so trueing the session down
+	// to 70 still leaves the lot covered. A lot sized to the whole 75 would
+	// make the true-up a negative residual and the guard would refuse it --
+	// which is TestTrueUpCannotShrinkBulkBelowJarredPounds subject, not this
+	// test.
+	seedLot(t, server, 65)
 
 	// Finalize with a true-up, then a new entry must be refused.
 	response, body = call(t, server.hsTrueUp, adminRequest(

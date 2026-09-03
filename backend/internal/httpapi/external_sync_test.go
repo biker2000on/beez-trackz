@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 )
 
 func TestSyncEntityTypesMatchCheckConstraint(t *testing.T) {
@@ -167,5 +170,64 @@ func TestExternalSyncRejectsPreRenameEntityTypes(t *testing.T) {
 	}
 	if !equipPgErrCode(err, "23514") {
 		t.Fatalf("honey_sale insert error = %v, want check violation", err)
+	}
+}
+
+// Spec 12.1: after the cutover the dissolved tables have no rows to name, so
+// their entity types stop being addressable. The CHECK in 00001_baseline.sql
+// still carries the wide 00041 list — narrowing it is a later baseline
+// migration — so until then the narrowing lives in the code, which is the only
+// side that can see which schema it is running on.
+func TestSyncEntityTypesNarrowOnTheBaselineProfile(t *testing.T) {
+	dissolved := []string{
+		SyncEntityHoneyMovement, SyncEntityStockMovement, SyncEntityStockLocation,
+		SyncEntityEquipmentStock, SyncEntityEquipmentStockAdjustment,
+		SyncEntityProductAdjustment,
+	}
+	survivors := []string{
+		SyncEntitySale, SyncEntitySaleItem, SyncEntityExpense, SyncEntityCustomer,
+		SyncEntityHarvestLot, SyncEntityJarSize, SyncEntityBottlingRun,
+		SyncEntityConsignmentSettlement, SyncEntityHive, SyncEntityProductCatalog,
+		SyncEntityProductBatch, SyncEntityInventoryOperation, SyncEntityInventoryLocation,
+	}
+
+	// Default (unset) is the legacy chain: every 00041 type is still writable,
+	// because those tables are still in place on every live database.
+	t.Setenv(db.BaselineEnvVar, "")
+	for _, name := range append(append([]string{}, dissolved...), survivors...) {
+		if !syncEntityTypeAllowed(name) {
+			t.Errorf("%q is not addressable on the legacy chain", name)
+		}
+	}
+
+	t.Setenv(db.BaselineEnvVar, "1")
+	for _, name := range dissolved {
+		if syncEntityTypeAllowed(name) {
+			t.Errorf("%q is still addressable on the baseline schema", name)
+		}
+	}
+	for _, name := range survivors {
+		if !syncEntityTypeAllowed(name) {
+			t.Errorf("%q lost its place in the post-cutover allowlist", name)
+		}
+	}
+}
+
+// The narrowing has teeth: ensureSyncRow refuses rather than writing a row
+// that points at a table the schema no longer has.
+func TestEnsureSyncRowRefusesADissolvedEntityTypeOnTheBaseline(t *testing.T) {
+	ctx, tx := equipTx(t)
+	t.Setenv(db.BaselineEnvVar, "1")
+
+	err := ensureSyncRow(ctx, tx, SyncSystemGnuCashWeb, SyncEntityStockMovement, uuid.New())
+	if err == nil {
+		t.Fatal("a stock_movement sync row was accepted on the baseline schema")
+	}
+	if !strings.Contains(err.Error(), "stock_movement") {
+		t.Errorf("refusal %v does not name the entity type", err)
+	}
+	// A survivor still writes.
+	if err := ensureSyncRow(ctx, tx, SyncSystemGnuCashWeb, SyncEntitySale, uuid.New()); err != nil {
+		t.Fatalf("sale sync row on the baseline = %v, want no error", err)
 	}
 }

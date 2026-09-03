@@ -13,28 +13,31 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	appequipment "github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Equipment v3: a type catalog and exactly one stock row per type, driven by
-// two append-only ledgers —
+// Equipment: a type catalog whose quantities live in the inventory ledger
+// (docs/plans/2026-09-01-inventory-ledger-design.md). Every count a handler
+// reports comes from inventory_balances and inventory_available, and every
+// write goes through app/equipment, which records an operation under the
+// caller's unit of work and holds the ledger's tuple locks while it does.
 //
-//	equipment_stock_adjustments : ownership (total_owned)
-//	equipment_state_changes     : condition (damaged / retired quantities)
+// Nothing here reads equipment_stock, equipment_stock_adjustments,
+// equipment_state_changes, equipment_deployments, or the three views over them
+// any more: those are the tables Phase B drops (spec section 8), and an
+// endpoint that still named one could not serve a baseline database. The two
+// places that still MAY name equipment_stock — resolving a pre-ledger stock id
+// handed in as {id} — compose it in only while the legacy chain is active; see
+// equipItemSelect. The Phase A regression suite for the dropped tables, and the
+// helpers it needs, live in routes_equipment_db_test.go.
 //
-// plus deployments (which support partial returns through
-// equipment_deployment_returns). Every count a handler reports is derived from
-// those ledgers by the equipment_stock_status view, and migration 00006 puts a
-// database trigger between the ledgers and the materialised columns so the two
-// cannot drift. Handlers therefore never write total_owned, damaged_quantity
-// or retired_quantity directly; they append ledger entries.
-//
-// Every write that can consume stock locks its stock row and re-derives
-// availability inside the transaction (the pattern the honey sale path uses),
-// so concurrent requests cannot both spend the same units.
+// The descriptive attributes (storage location, needed quantity, unit cost,
+// first deployed year) moved onto equipment_types when the stock row dissolved
+// (review OV2), so an "update stock" PATCH lands on the catalog row.
 
 func (s *Server) mountEquipment(r chi.Router) {
 	admin := r.With(s.requireAdmin)
@@ -77,6 +80,58 @@ func (s *Server) mountEquipment(r chi.Router) {
 	admin.Get("/equipment/loss-report", s.equipLossReport)
 	admin.Get("/equipment/reconciliation", s.equipReconciliation)
 	admin.Post("/equipment/seed-defaults", s.equipSeedDefaults)
+}
+
+// --- identity resolution ---
+
+// equipItemSourceTypes is every inventory_items.source_type an equipment
+// catalog row can carry: the plain type, and the two frame identities a frame
+// type splits into (decision 5 as amended by OV5 — condition is the state
+// axis, drawn and fresh are items).
+const equipItemSourceTypes = `('equipment_type','equipment_type_frame_drawn','equipment_type_frame_fresh')`
+
+// equipItemSelect is a scalar subquery that resolves ONE placeholder — an
+// inventory item id, an equipment type id, or the pre-ledger
+// equipment_stock id — to the inventory item behind it. Every equipment
+// endpoint takes {id} in any of those three shapes, which is what keeps the
+// Phase A HTTP surface stable while the writers moved to the ledger.
+//
+// The equipment_stock arm is emitted only while that table exists. On the
+// baseline schema (spec section 9) it is gone, and a query that named it would
+// fail for EVERY caller rather than only for the callers still passing a stock
+// id, so the arm is dropped and a stale stock id simply resolves to nothing.
+// An item id names one identity exactly and always wins. A type or stock id
+// can match both halves of a split frame type, and the ORDER BY settles it on
+// the drawn one — arbitrary, but stable, where the query it replaced left the
+// choice to the planner.
+func equipItemSelect(placeholder string) string {
+	legacy := ""
+	if db.ActiveProfile() != db.ProfileBaseline {
+		legacy = `OR ii.source_id=(SELECT es.type_id FROM equipment_stock es WHERE es.id=` +
+			placeholder + `) `
+	}
+	return `(SELECT ii.id FROM inventory_items ii
+		WHERE ii.source_type IN ` + equipItemSourceTypes + `
+		  AND (ii.id=` + placeholder + ` OR ii.source_id=` + placeholder + ` ` + legacy + `)
+		ORDER BY CASE WHEN ii.id=` + placeholder + ` THEN 0 ELSE 1 END, ii.source_type
+		LIMIT 1)`
+}
+
+// equipTypeSelect is equipItemSelect for the catalog row rather than the item.
+// The descriptive attributes moved onto equipment_types when equipment_stock
+// dissolved (review OV2), so a PATCH addressed by any of the three identities
+// has to land there.
+func equipTypeSelect(placeholder string) string {
+	legacy := ""
+	if db.ActiveProfile() != db.ProfileBaseline {
+		legacy = `OR et.id=(SELECT es.type_id FROM equipment_stock es WHERE es.id=` +
+			placeholder + `) `
+	}
+	return `(SELECT et.id FROM equipment_types et
+		LEFT JOIN inventory_items ii ON ii.source_id=et.id
+			AND ii.source_type IN ` + equipItemSourceTypes + `
+		WHERE et.id=` + placeholder + ` OR ii.id=` + placeholder + ` ` + legacy + `
+		LIMIT 1)`
 }
 
 // --- small shared helpers ---
@@ -223,161 +278,6 @@ func (s *Server) equipInUOW(w http.ResponseWriter, r *http.Request, action func(
 	}
 	body["success"] = true
 	writeJSON(w, http.StatusOK, body)
-}
-
-// --- stock state (the one availability formula) ---
-
-// equipStockState is a stock row plus everything derived from its ledgers.
-type equipStockState struct {
-	ID            uuid.UUID
-	TypeID        uuid.UUID
-	TypeName      string
-	TotalOwned    int
-	Damaged       int
-	Retired       int
-	Deployed      int
-	UnitCostCents *int
-}
-
-// Available is the only definition of "ready to deploy" in the backend.
-func (s equipStockState) Available() int {
-	return s.TotalOwned - s.Damaged - s.Retired - s.Deployed
-}
-
-// equipLockStock takes a row lock on the stock row and reads its derived
-// counts inside the caller's transaction. Callers that will consume stock must
-// use this before validating, so a concurrent writer cannot spend the same
-// units between the check and the insert.
-func equipLockStock(ctx context.Context, tx pgx.Tx, stockID uuid.UUID) (equipStockState, error) {
-	var state equipStockState
-	err := tx.QueryRow(ctx, `
-		SELECT es.id, es.type_id, et.name, es.total_owned, es.damaged_quantity,
-		       es.retired_quantity, es.unit_cost_cents,
-		       COALESCE((
-		         SELECT SUM(d.quantity - d.quantity_returned)::int
-		         FROM equipment_deployments d WHERE d.stock_id = es.id), 0)
-		FROM equipment_stock es
-		JOIN equipment_types et ON et.id = es.type_id
-		WHERE es.id = $1
-		FOR UPDATE OF es`, stockID).
-		Scan(&state.ID, &state.TypeID, &state.TypeName, &state.TotalOwned,
-			&state.Damaged, &state.Retired, &state.UnitCostCents, &state.Deployed)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return state, equipFail(http.StatusNotFound, "stock not found")
-	}
-	return state, err
-}
-
-// --- ledger writes ---
-
-type equipAdjustmentEntry struct {
-	StockID        uuid.UUID
-	Quantity       int
-	Reason         string
-	Notes          *string
-	UnitCostCents  *int
-	Date           time.Time
-	CreatedBy      *uuid.UUID
-	IdempotencyKey *string
-}
-
-// equipInsertAdjustment appends an ownership-ledger row. A duplicate
-// idempotency key returns (true, nil) so the caller can surface the
-// previously-created row instead of applying the quantity twice.
-// Serialization is the stock row lock (FOR UPDATE), not a 23505 retry.
-func equipInsertAdjustment(ctx context.Context, q inspectionQuerier, e equipAdjustmentEntry) (bool, error) {
-	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey, "stock_id", e.StockID); err != nil {
-		return false, err
-	} else if found {
-		return true, nil
-	}
-	_, err := q.Exec(ctx, `
-		INSERT INTO equipment_stock_adjustments
-			(stock_id, quantity, reason, notes, unit_cost_cents, date, created_by,
-			 idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		e.StockID, e.Quantity, e.Reason, e.Notes, e.UnitCostCents, e.Date, e.CreatedBy,
-		e.IdempotencyKey)
-	return false, err
-}
-
-type equipStateEntry struct {
-	StockID        uuid.UUID
-	From           string
-	To             string
-	Quantity       int
-	Reason         string
-	Notes          *string
-	UnitCostCents  *int
-	Date           time.Time
-	CreatedBy      *uuid.UUID
-	IdempotencyKey *string
-}
-
-// Serialization is the stock row lock (FOR UPDATE), not a 23505 retry.
-func equipInsertStateChange(ctx context.Context, q inspectionQuerier, e equipStateEntry) (bool, error) {
-	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey, "stock_id", e.StockID); err != nil {
-		return false, err
-	} else if found {
-		return true, nil
-	}
-	_, err := q.Exec(ctx, `
-		INSERT INTO equipment_state_changes
-			(stock_id, from_state, to_state, quantity, reason, notes,
-			 unit_cost_cents, date, created_by, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		e.StockID, e.From, e.To, e.Quantity, e.Reason, e.Notes,
-		e.UnitCostCents, e.Date, e.CreatedBy, e.IdempotencyKey)
-	return false, err
-}
-
-// equipLookupIdempotent finds a previously-written ledger row by key bound
-// to this target (stock_id or deployment_id). A key already used on a
-// different resource is a 409, not a replay. Duplicate keys on the same
-// target are serialized by the stock row lock (FOR UPDATE): the second
-// writer waits, then this lookup finds the existing row. table and
-// targetColumn are compile-time identifiers, never request input.
-func equipLookupIdempotent(
-	ctx context.Context,
-	q inspectionQuerier,
-	table string,
-	key *string,
-	targetColumn string,
-	targetID uuid.UUID,
-) (uuid.UUID, bool, error) {
-	if key == nil {
-		return uuid.Nil, false, nil
-	}
-	switch table {
-	case "equipment_stock_adjustments", "equipment_state_changes",
-		"equipment_deployments", "equipment_deployment_returns":
-	default:
-		return uuid.Nil, false, fmt.Errorf("invalid idempotency table")
-	}
-	if targetColumn != "stock_id" && targetColumn != "deployment_id" {
-		return uuid.Nil, false, fmt.Errorf("invalid idempotency target")
-	}
-	var id uuid.UUID
-	err := q.QueryRow(ctx,
-		`SELECT id FROM `+table+` WHERE idempotency_key = $1 AND `+targetColumn+` = $2`,
-		*key, targetID).Scan(&id)
-	if err == nil {
-		return id, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, err
-	}
-	var other uuid.UUID
-	err = q.QueryRow(ctx,
-		`SELECT id FROM `+table+` WHERE idempotency_key = $1`, *key).Scan(&other)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, nil
-	}
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	return uuid.Nil, false, equipFail(http.StatusConflict,
-		"idempotency key already used on a different resource")
 }
 
 // --- types ---
@@ -735,12 +635,8 @@ func (s *Server) equipUpdateStock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	args = append(args, id)
-	query := fmt.Sprintf(`UPDATE equipment_types SET %s WHERE id=(
-		SELECT et.id FROM equipment_types et
-		LEFT JOIN equipment_stock es ON es.type_id=et.id
-		LEFT JOIN inventory_items i ON i.source_id=et.id
-		WHERE et.id=$%d OR es.id=$%d OR i.id=$%d LIMIT 1)`,
-		strings.Join(sets, ", "), len(args), len(args), len(args))
+	query := fmt.Sprintf(`UPDATE equipment_types SET %s WHERE id=%s`,
+		strings.Join(sets, ", "), equipTypeSelect(fmt.Sprintf("$%d", len(args))))
 	tag, err := s.pool.Exec(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -765,9 +661,8 @@ func (s *Server) equipListAdjustments(w http.ResponseWriter, r *http.Request) {
 		       o.details->>'notes',et.unit_cost_cents,o.occurred_at,o.created_at
 		FROM inventory_operations o JOIN inventory_movements m ON m.operation_id=o.id
 		JOIN inventory_items i ON i.id=m.item_id JOIN equipment_types et ON et.id=i.source_id
-		WHERE o.kind IN('receive','count_adjust','shrink','opening_balance') AND i.id=(
-		 SELECT ii.id FROM inventory_items ii JOIN equipment_types x ON x.id=ii.source_id
-		 LEFT JOIN equipment_stock es ON es.type_id=x.id WHERE ii.id=$1 OR x.id=$1 OR es.id=$1 LIMIT 1)
+		WHERE o.kind IN('receive','count_adjust','shrink','opening_balance')
+		  AND i.id=`+equipItemSelect("$1")+`
 		ORDER BY o.occurred_at DESC,o.created_at DESC`, stockID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -816,7 +711,7 @@ func (s *Server) equipListStateChanges(w http.ResponseWriter, r *http.Request) {
 		       et.unit_cost_cents,o.occurred_at,o.created_at
 		FROM inventory_operations o JOIN inventory_movements m ON m.operation_id=o.id
 		JOIN inventory_items i ON i.id=m.item_id JOIN equipment_types et ON et.id=i.source_id
-		WHERE o.kind='condition_change' AND i.id=(SELECT ii.id FROM inventory_items ii JOIN equipment_types x ON x.id=ii.source_id LEFT JOIN equipment_stock es ON es.type_id=x.id WHERE ii.id=$1 OR x.id=$1 OR es.id=$1 LIMIT 1)
+		WHERE o.kind='condition_change' AND i.id=`+equipItemSelect("$1")+`
 		GROUP BY o.id,i.id,et.unit_cost_cents
 		ORDER BY o.occurred_at DESC,o.created_at DESC`, stockID)
 	if err != nil {
@@ -920,173 +815,6 @@ func (s *Server) equipDeploy(w http.ResponseWriter, r *http.Request) {
 		}
 		return map[string]any{"id": recorded.Operation.ID, "replayed": recorded.Existing}, nil
 	})
-}
-
-// equipReturnInput is the validated form of a (possibly partial) return.
-type equipReturnInput struct {
-	DeploymentID uuid.UUID
-	// Quantity nil means "everything still out".
-	Quantity       *int
-	Reason         string
-	Condition      string
-	Notes          *string
-	Date           time.Time
-	CreatedBy      *uuid.UUID
-	SaleID         *uuid.UUID
-	IdempotencyKey *string
-}
-
-type equipReturnResult struct {
-	ID            uuid.UUID
-	Quantity      int
-	TotalReturned int
-	Outstanding   int
-	FullyReturned bool
-	StockID       uuid.UUID
-	DeployedTotal int
-	Replayed      bool
-}
-
-// equipReturnTx returns equipment from a hive. The `date_removed IS NULL`
-// guard is what makes a second return fail loudly instead of silently
-// overwriting the first return date. Serialization of a replayed key is
-// the stock row lock (FOR UPDATE), not a 23505 retry.
-func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipReturnResult, error) {
-	var result equipReturnResult
-
-	// Lock the stock row first (and always in that order) so return and
-	// deploy cannot deadlock against each other.
-	var stockID uuid.UUID
-	err := tx.QueryRow(ctx,
-		`SELECT stock_id FROM equipment_deployments WHERE id = $1`, in.DeploymentID).
-		Scan(&stockID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return result, equipFail(http.StatusNotFound, "deployment not found")
-	}
-	if err != nil {
-		return result, err
-	}
-	if _, err := equipLockStock(ctx, tx, stockID); err != nil {
-		return result, err
-	}
-	if existingID, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey, "deployment_id", in.DeploymentID); err != nil {
-		return result, err
-	} else if found {
-		return equipLoadReturnResult(ctx, tx, existingID, true)
-	}
-
-	var deployed, returned int
-	err = tx.QueryRow(ctx, `
-		SELECT quantity, quantity_returned
-		FROM equipment_deployments
-		WHERE id = $1 AND date_removed IS NULL
-		FOR UPDATE`, in.DeploymentID).Scan(&deployed, &returned)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return result, equipFail(http.StatusConflict,
-			"This deployment has already been returned")
-	}
-	if err != nil {
-		return result, err
-	}
-
-	outstanding := deployed - returned
-	quantity := outstanding
-	if in.Quantity != nil {
-		quantity = *in.Quantity
-	}
-	if quantity < 1 {
-		return result, equipBadRequest("Quantity must be at least 1")
-	}
-	if quantity > outstanding {
-		return result, equipBadRequest(
-			"Only %d still deployed: cannot return %d", outstanding, quantity)
-	}
-
-	var returnID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO equipment_deployment_returns
-			(deployment_id, quantity, reason, condition, notes, date, created_by,
-			 sale_id, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id`,
-		in.DeploymentID, quantity, in.Reason, in.Condition, in.Notes,
-		in.Date, in.CreatedBy, in.SaleID, in.IdempotencyKey).Scan(&returnID)
-	if err != nil {
-		return result, err
-	}
-
-	total := returned + quantity
-	full := total >= deployed
-	tag, err := tx.Exec(ctx, `
-		UPDATE equipment_deployments
-		SET quantity_returned = $2,
-		    date_removed = CASE WHEN $3 THEN $4::timestamptz ELSE NULL END
-		WHERE id = $1 AND date_removed IS NULL`,
-		in.DeploymentID, total, full, in.Date)
-	if err != nil {
-		return result, err
-	}
-	if tag.RowsAffected() == 0 {
-		// Another transaction completed the return between our read and write.
-		return result, equipFail(http.StatusConflict,
-			"This deployment has already been returned")
-	}
-
-	// Equipment that came back broken or worn out does not silently rejoin the
-	// serviceable pool: it lands in a real state with a quantity.
-	//
-	// The return row and this state-change row share the client key. Keys are
-	// unique per table, so a later /damage or /repair that reuses the key
-	// finds the state-change row and silently no-ops.
-	if in.Condition == "damaged" || in.Condition == "retired" {
-		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
-			StockID:        stockID,
-			From:           "serviceable",
-			To:             in.Condition,
-			Quantity:       quantity,
-			Reason:         "returned_damaged",
-			Notes:          in.Notes,
-			Date:           in.Date,
-			CreatedBy:      in.CreatedBy,
-			IdempotencyKey: in.IdempotencyKey,
-		}); err != nil {
-			return result, err
-		}
-	}
-
-	result = equipReturnResult{
-		ID:            returnID,
-		Quantity:      quantity,
-		TotalReturned: total,
-		Outstanding:   deployed - total,
-		FullyReturned: full,
-		StockID:       stockID,
-		DeployedTotal: deployed,
-	}
-	return result, nil
-}
-
-func equipLoadReturnResult(
-	ctx context.Context,
-	tx pgx.Tx,
-	returnID uuid.UUID,
-	replayed bool,
-) (equipReturnResult, error) {
-	var result equipReturnResult
-	err := tx.QueryRow(ctx, `
-		SELECT r.id, r.quantity, d.quantity, d.quantity_returned,
-		       d.stock_id, d.date_removed IS NOT NULL
-		FROM equipment_deployment_returns r
-		JOIN equipment_deployments d ON d.id = r.deployment_id
-		WHERE r.id = $1`, returnID).
-		Scan(&result.ID, &result.Quantity, &result.DeployedTotal,
-			&result.TotalReturned, &result.StockID, &result.FullyReturned)
-	if err != nil {
-		return result, err
-	}
-	result.Outstanding = result.DeployedTotal - result.TotalReturned
-	result.Replayed = replayed
-	return result, nil
 }
 
 // POST /equipment/deployments/{id}/remove (legacy path)

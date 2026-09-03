@@ -13,6 +13,7 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/sales"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -540,26 +541,23 @@ func propolisToGrams(amount float64, unit string) float64 {
 //
 // The first two are the ledger: a propolis harvest is a receipt into its own
 // lot, a tincture batch is a transform that consumes it, and an applied sale
-// is a sale_consume of quantity x net_grams. The third is this SKU family's
-// reservation: raw-propolis lines carry no item_id, because their stock is
-// measured in harvested grams rather than in units of the SKU, so
-// inventory_reservations cannot express them and they are subtracted here.
+// is a sale_consume of quantity x net_grams. The third is the one reservation
+// inventory_reservations cannot express, because it reserves SKU units and
+// this stock is measured in grams; sales.PropolisReservedGrams is its single
+// definition, and spec 12.1 open item 5 records what has to change in the view
+// before this subtraction can go away.
 func propolisOnHandGrams(ctx context.Context, q inspectionQuerier) (float64, error) {
-	var grams float64
-	err := q.QueryRow(ctx, `
-		SELECT COALESCE((SELECT SUM(on_hand) FROM inventory_balances WHERE item_id=$1), 0)::float8
-		     - COALESCE((
-			SELECT SUM(si.quantity * p.net_grams)
-			FROM sale_items si
-			JOIN sales sale ON sale.id = si.sale_id
-			JOIN product_catalog p ON p.id = si.product_id
-			WHERE si.kind = 'propolis' AND p.net_grams IS NOT NULL
-			  AND sale.order_status <> 'cancelled' AND sale.physical_applied_at IS NULL
-		), 0)::float8`, production.PropolisItemID).Scan(&grams)
+	var onHand float64
+	if err := q.QueryRow(ctx,
+		`SELECT COALESCE((SELECT SUM(on_hand) FROM inventory_balances WHERE item_id=$1), 0)::float8`,
+		production.PropolisItemID).Scan(&onHand); err != nil {
+		return 0, err
+	}
+	reserved, err := sales.PropolisReservedGrams(ctx, q)
 	if err != nil {
 		return 0, err
 	}
-	return grams, nil
+	return onHand - reserved, nil
 }
 
 func propolisHarvestRemainingGrams(ctx context.Context, q inspectionQuerier, harvestID uuid.UUID) (float64, error) {

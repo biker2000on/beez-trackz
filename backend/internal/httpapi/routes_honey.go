@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	appequipment "github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/sales"
 	"github.com/go-chi/chi/v5"
@@ -1562,20 +1563,19 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if lines[i].ItemID == uuid.Nil {
-				var typeID uuid.UUID
-				if err := uow.QueryRow(ctx,
-					`SELECT type_id FROM equipment_stock WHERE id=$1`,
-					lines[i].EquipmentStockID).Scan(&typeID); err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
+				// equipmentStockId is the pre-ledger identity. app/equipment
+				// owns the three-shape resolution and drops the
+				// equipment_stock arm on the baseline schema, where a caller
+				// that still sends a stock id gets a 400 rather than a
+				// query against a table that is gone.
+				item, err := appequipment.ResolveItem(ctx, uow, lines[i].EquipmentStockID)
+				if err != nil {
+					if app.KindOf(err) == app.KindNotFound {
 						return equipBadRequest("invalid equipmentStockId")
 					}
 					return err
 				}
-				itemID, err := production.EnsureEquipmentItem(ctx, uow, typeID)
-				if err != nil {
-					return err
-				}
-				lines[i].ItemID = itemID
+				lines[i].ItemID = item.ItemID
 			}
 		}
 		actor := actorID(r)
@@ -1655,6 +1655,18 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			// lines become a reservation as soon as they name an item, and
 			// CheckAvailable holds the same tuple locks a sale does.
 			if err := saleCommands.LinkLines(ctx, uow, saleID, location); err != nil {
+				return err
+			}
+			// The lines are stored, so they are already a reservation the
+			// ledger can see; validating them has to credit the sale its own
+			// reservation back or it would refuse every sale for the units it
+			// just asked for (spec 12.1 open item 4).
+			needs, err := sales.NeedsForSale(ctx, uow, saleID)
+			if err != nil {
+				return err
+			}
+			if err := saleCommands.CheckAvailabilityExcluding(
+				ctx, uow, location, saleID, needs); err != nil {
 				return err
 			}
 			if err := saleCheckHivesSellable(ctx, uow, lines); err != nil {

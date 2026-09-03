@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -575,70 +577,65 @@ func (s *Server) hsTrueUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
 	var previous *float64
-	if err := tx.QueryRow(ctx,
-		`SELECT total_extracted_weight FROM harvest_sessions WHERE id = $1 FOR UPDATE`, id).
-		Scan(&previous); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "session not found")
-			return
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		if err := uow.QueryRow(ctx,
+			`SELECT total_extracted_weight FROM harvest_sessions WHERE id = $1 FOR UPDATE`, id).
+			Scan(&previous); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return app.NotFound("record harvest true-up", "session not found")
+			}
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
 
-	// The extracted weight feeds TotalHarvestedLbs directly, so shrinking it
-	// is a bulk withdrawal: it must hold the bulk advisory lock like every
-	// other bulk-affecting writer and cannot take back pounds that were
-	// already jarred or used.
-	bulk, err := honeyLockBulk(ctx, tx)
+		// The declared weight is no longer the bulk balance (decision 6), so
+		// the old comparison against bulk on hand could never fire. What a
+		// true-up can still break is the spec 7.4 residual: it must not take
+		// the harvest below the pounds already committed into lot ceilings.
+		// The bulk advisory lock is still taken, in its documented order, so
+		// this serialises against every other bulk-affecting writer.
+		if _, err := honeyLockBulk(ctx, uow); err != nil {
+			return err
+		}
+		var entrySum float64
+		if err := uow.QueryRow(ctx, `
+			SELECT COALESCE(SUM(calculated_honey_weight), 0)
+			FROM honey_harvests WHERE session_id = $1 AND deleted_at IS NULL`, id).
+			Scan(&entrySum); err != nil {
+			return err
+		}
+		oldContribution := entrySum
+		if previous != nil && *previous != 0 {
+			oldContribution = *previous
+		}
+		if _, err := uow.Exec(ctx, `
+			INSERT INTO harvest_session_true_ups
+				(session_id, previous_weight_lbs, new_weight_lbs, reason, created_by)
+			VALUES ($1,$2,$3,$4,$5)`,
+			id, previous, *req.TotalExtractedWeight, hsTrimPtr(req.Reason), actorID(r)); err != nil {
+			return err
+		}
+		if _, err := uow.Exec(ctx,
+			`UPDATE harvest_sessions SET total_extracted_weight = $1 WHERE id = $2`,
+			*req.TotalExtractedWeight, id); err != nil {
+			return err
+		}
+		// Checked after the write, against the post-change figures: the guard
+		// is about what the session now declares, not about the delta on its
+		// own, and the transaction is abandoned when it refuses.
+		if removed := oldContribution - *req.TotalExtractedWeight; removed > 0 {
+			message, err := production.New().CheckHarvestResidual(ctx, uow, removed)
+			if err != nil {
+				return err
+			}
+			if message != "" {
+				return app.Precondition("record harvest true-up", "%s", message)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	var entrySum float64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(calculated_honey_weight), 0)
-		FROM honey_harvests WHERE session_id = $1 AND deleted_at IS NULL`, id).
-		Scan(&entrySum); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	oldContribution := entrySum
-	if previous != nil && *previous != 0 {
-		oldContribution = *previous
-	}
-	if delta := *req.TotalExtractedWeight - oldContribution; delta < 0 &&
-		bulk.BulkOnHandLbs+delta < -honeyPoundTolerance {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"True-up would remove %.2f lbs from bulk honey but only %.2f lbs remain unjarred",
-			-delta, bulk.BulkOnHandLbs))
-		return
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO harvest_session_true_ups
-			(session_id, previous_weight_lbs, new_weight_lbs, reason, created_by)
-		VALUES ($1,$2,$3,$4,$5)`,
-		id, previous, *req.TotalExtractedWeight, hsTrimPtr(req.Reason), actorID(r)); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE harvest_sessions SET total_extracted_weight = $1 WHERE id = $2`,
-		*req.TotalExtractedWeight, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -663,82 +660,67 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r, &req)
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	// This handler takes all three of honeyLockOrder's classes (declared in
-	// routes_commerce.go), in that order: the harvest row here, the lot rows
-	// inside reconcileLotsForHarvestDelete, and the bulk advisory lock last.
-	// The bulk check reads as though it belongs up here with the row it is
-	// about, but hoisting it would take class 3 before class 2 and deadlock
-	// against bottlingRunCreate, which holds a lot row while it waits for the
-	// bulk lock.
-	var weight float64
-	var countsTowardBulk bool
-	err = tx.QueryRow(ctx, `
-		SELECT hh.calculated_honey_weight,
-		       hh.session_id IS NULL OR COALESCE(hs.total_extracted_weight, 0) = 0
-		FROM honey_harvests hh
-		LEFT JOIN harvest_sessions hs ON hs.id = hh.session_id
-		WHERE hh.id = $1 AND hh.deleted_at IS NULL
-		FOR UPDATE OF hh`, id).Scan(&weight, &countsTowardBulk)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "entry not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE honey_harvests
-		SET deleted_at=now(), deleted_by=$2, deletion_reason=$3
-		WHERE id = $1 AND deleted_at IS NULL`,
-		id, actorID(r), hsTrimPtr(req.Reason)); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	// The harvest stands behind whatever lots link to it: refuse the delete
-	// when bottled jars still depend on it, and recompute the derived lots
-	// that may let it go. Same transaction, so the lots never disagree with
-	// their harvests at a commit boundary. See reconcileLotsForHarvestDelete
-	// for why refusal is what preserves the treatment-lockout provenance of
-	// the jars already on the shelf.
-	if msg, err := reconcileLotsForHarvestDelete(ctx, tx, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	} else if msg != "" {
-		writeError(w, http.StatusConflict, msg)
-		return
-	}
-
-	// Deleting an entry shrinks TotalHarvestedLbs unless the session has an
-	// authoritative trued-up weight, so it is a bulk withdrawal too: hold the
-	// bulk advisory lock and refuse to remove pounds that were already jarred.
-	// The soft-delete above is already applied in this transaction, so the
-	// totals read here are the POST-delete ones — the pre-delete figure the
-	// operator is told about is this plus the entry's own weight.
-	if countsTowardBulk && weight > 0 {
-		bulk, err := honeyLockBulk(ctx, tx)
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		// This handler takes all three of honeyLockOrder's classes (declared
+		// in routes_commerce.go), in that order: the harvest row here, the lot
+		// rows inside the production commands, and the bulk advisory lock
+		// last, before the residual check reads the ledger totals.
+		var weight float64
+		err := uow.QueryRow(ctx, `
+			SELECT hh.calculated_honey_weight
+			FROM honey_harvests hh
+			WHERE hh.id = $1 AND hh.deleted_at IS NULL
+			FOR UPDATE OF hh`, id).Scan(&weight)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return app.NotFound("delete harvest entry", "entry not found")
+		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return err
 		}
-		if bulk.BulkOnHandLbs < -honeyPoundTolerance {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"Deleting this entry would remove %.2f lbs from bulk honey but only %.2f lbs remain unjarred",
-				weight, bulk.BulkOnHandLbs+weight))
-			return
+
+		if _, err := uow.Exec(ctx, `
+			UPDATE honey_harvests
+			SET deleted_at=now(), deleted_by=$2, deletion_reason=$3
+			WHERE id = $1 AND deleted_at IS NULL`,
+			id, actorID(r), hsTrimPtr(req.Reason)); err != nil {
+			return err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		// The harvest stands behind whatever lots link to it: refuse the
+		// delete when bottled jars still depend on it, then re-base the
+		// derived lots that may let it go. Same transaction, so the lots never
+		// disagree with their harvests at a commit boundary. Both rules moved
+		// into app/production with decision 6, because recomputing the stored
+		// weight is only half the job now: the ceiling receipt moves with it,
+		// and a recompute that would take back pounds the lot has already
+		// given up is refused by lot rather than by the nonnegative invariant.
+		commands := production.New()
+		if msg, err := commands.RebaseDerivedLotCeilings(ctx, uow, id, time.Now().UTC()); err != nil {
+			return err
+		} else if msg != "" {
+			return app.Conflict("delete harvest entry", "%s", msg)
+		}
+
+		// Removing an entry lowers the declared harvest. The old guard
+		// compared that against bulk on hand, which decision 6 made a
+		// different quantity entirely — an unallocated entry never put a pound
+		// in the ledger, so the comparison always passed. What it must not do
+		// is take the harvest below what the lots still hold.
+		if weight > 0 {
+			if _, err := honeyLockBulk(ctx, uow); err != nil {
+				return err
+			}
+			message, err := commands.CheckHarvestResidual(ctx, uow, weight)
+			if err != nil {
+				return err
+			}
+			if message != "" {
+				return app.Precondition("delete harvest entry", "%s", message)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "softDeleted": true})

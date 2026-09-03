@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -89,7 +90,8 @@ func EnsureItem(ctx context.Context, uow *app.UnitOfWork, typeID uuid.UUID, fram
 
 // ResolveItem accepts the compatibility stock id, the catalog id, or the new
 // inventory item id. This keeps the Phase-A HTTP shape stable while writers
-// stop touching equipment_stock.
+// stop touching equipment_stock. The compatibility arm exists only while that
+// table does; see legacyStockResolutionSQL.
 func ResolveItem(ctx context.Context, uow *app.UnitOfWork, ref uuid.UUID) (Item, error) {
 	const action = "resolve equipment inventory item"
 	var direct Item
@@ -109,14 +111,15 @@ func ResolveItem(ctx context.Context, uow *app.UnitOfWork, ref uuid.UUID) (Item,
 	var typeID uuid.UUID
 	var frameIdentity *string
 	var stockID *uuid.UUID
-	err = uow.QueryRow(ctx, `
-		SELECT et.id,es.id,es.frame_condition::text
-		FROM equipment_types et
-		LEFT JOIN equipment_stock es ON es.type_id=et.id
-		LEFT JOIN inventory_items ii ON ii.source_id=et.id
-		WHERE es.id=$1 OR et.id=$1 OR ii.id=$1
-		ORDER BY CASE WHEN es.id=$1 THEN 0 WHEN ii.id=$1 THEN 1 ELSE 2 END
-		LIMIT 1`, ref).Scan(&typeID, &stockID, &frameIdentity)
+	// Second pass: the ref is a catalog id, or the pre-ledger equipment_stock
+	// id the Phase A clients still send. equipment_stock.frame_condition was
+	// the only place a legacy row said whether its frames were drawn or fresh,
+	// and it is one of the tables Phase B drops (spec section 8, report finding
+	// F4), so the query that reads it is emitted only while it exists. On the
+	// baseline the frame identity comes from the split items themselves, which
+	// is where the backfill put it.
+	err = uow.QueryRow(ctx, legacyStockResolutionSQL(), ref).
+		Scan(&typeID, &stockID, &frameIdentity)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Item{}, app.NotFound(action, "equipment stock %s does not exist", ref)
 	}
@@ -133,6 +136,36 @@ func ResolveItem(ctx context.Context, uow *app.UnitOfWork, ref uuid.UUID) (Item,
 	}
 	item.LegacyStockID = stockID
 	return item, nil
+}
+
+// legacyStockResolutionSQL resolves a catalog id — or, on the legacy chain, a
+// pre-ledger stock id — to (type id, stock id, frame identity).
+//
+// On the baseline the equipment_stock arm is gone with the table. The frame
+// identity is then read from the item that already exists for the type, so a
+// frame catalog row still resolves to the drawn or fresh identity the backfill
+// created rather than defaulting silently to fresh. A type with no item yet is
+// necessarily new, and a new frame type is fresh by EnsureItem's own default.
+func legacyStockResolutionSQL() string {
+	if db.ActiveProfile() == db.ProfileBaseline {
+		return `
+		SELECT et.id, NULL::uuid,
+		       NULLIF(replace(ii.source_type,'equipment_type_frame_',''),'equipment_type')
+		FROM equipment_types et
+		LEFT JOIN inventory_items ii ON ii.source_id=et.id
+			AND ii.source_type IN ('equipment_type','equipment_type_frame_drawn','equipment_type_frame_fresh')
+		WHERE et.id=$1 OR ii.id=$1
+		ORDER BY CASE WHEN ii.id=$1 THEN 0 ELSE 1 END, ii.source_type
+		LIMIT 1`
+	}
+	return `
+		SELECT et.id,es.id,es.frame_condition::text
+		FROM equipment_types et
+		LEFT JOIN equipment_stock es ON es.type_id=et.id
+		LEFT JOIN inventory_items ii ON ii.source_id=et.id
+		WHERE es.id=$1 OR et.id=$1 OR ii.id=$1
+		ORDER BY CASE WHEN es.id=$1 THEN 0 WHEN ii.id=$1 THEN 1 ELSE 2 END
+		LIMIT 1`
 }
 
 func auditID(uow *app.UnitOfWork) *uuid.UUID {

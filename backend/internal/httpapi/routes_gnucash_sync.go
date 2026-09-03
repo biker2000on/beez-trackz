@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/gnucashsync"
 )
 
@@ -1062,6 +1063,28 @@ func (s *Server) gnucashBuild(
 	}
 }
 
+// An equipment sale line names the inventory item it consumes; its type name
+// and unit cost live on equipment_types, reached through
+// inventory_items.source_id (spec 12.1 open item 2). sale_items.equipment_stock_id
+// is the pre-ledger identity and is never written any more, so the only rows
+// that still need it are the ones stored before migration 00052 — and those are
+// exactly the rows where item_id is null.
+//
+// The fallback join is emitted only while equipment_stock exists. On the
+// baseline schema that table is gone, and a query naming it would fail for
+// every sale rather than for the historical ones, so the composer drops it and
+// those old lines fall back to the empty label the COALESCE already provides.
+const gnucashLegacyEquipmentLabel = "legacy_et.name, "
+
+func gnucashLegacyEquipmentJoin() string {
+	if db.ActiveProfile() == db.ProfileBaseline {
+		return "LEFT JOIN equipment_types legacy_et ON false"
+	}
+	return `LEFT JOIN equipment_stock legacy_es
+			ON si.item_id IS NULL AND legacy_es.id = si.equipment_stock_id
+		LEFT JOIN equipment_types legacy_et ON legacy_et.id = legacy_es.type_id`
+}
+
 // gnucashLoadSale reads a sale and its lines. found is false when the sale is
 // gone or no longer qualifies (draft, cancelled, or not physically applied).
 func (s *Server) gnucashLoadSale(
@@ -1097,12 +1120,14 @@ func (s *Server) gnucashLoadSale(
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT si.kind, si.quantity, si.unit_price_cents, si.cost_basis_cents,
-			COALESCE(js.label, pc.name, et.name, h.position_label, '')
+			COALESCE(js.label, pc.name, et.name, `+gnucashLegacyEquipmentLabel+`h.position_label, '')
 		FROM sale_items si
 		LEFT JOIN jar_sizes js ON js.id = si.jar_size_id
 		LEFT JOIN product_catalog pc ON pc.id = si.product_id
-		LEFT JOIN equipment_stock es ON es.id = si.equipment_stock_id
-		LEFT JOIN equipment_types et ON et.id = es.type_id
+		LEFT JOIN inventory_items ii ON ii.id = si.item_id
+		LEFT JOIN equipment_types et ON et.id = ii.source_id
+			AND ii.source_type IN ('equipment_type','equipment_type_frame_drawn','equipment_type_frame_fresh')
+		`+gnucashLegacyEquipmentJoin()+`
 		LEFT JOIN hives h ON h.id = si.hive_id
 		WHERE si.sale_id = $1
 		ORDER BY si.kind, si.id`, id)
@@ -1556,7 +1581,7 @@ func validateGnuCashRestore(req gnucashRestoreRequest) error {
 		return app.Invalid(op, "expectedRootCurrency is required").WithField("expectedRootCurrency")
 	}
 	entityTypes := map[string]bool{}
-	for _, entityType := range syncEntityTypes {
+	for _, entityType := range syncEntityTypes() {
 		entityTypes[entityType] = true
 	}
 	seenEntity := map[string]bool{}

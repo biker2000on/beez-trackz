@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
 	"github.com/biker2000on/beez-trackz/backend/internal/gnucashsync"
 )
 
@@ -1980,4 +1982,158 @@ func TestGnuCashRestoreRefusesToMergeIntoExistingSyncRows(t *testing.T) {
 	if count := externalSyncCount(t, server); count != 1 {
 		t.Fatalf("%d rows after the replace, want exactly the artifact's 1", count)
 	}
+}
+
+// Spec 12.1 open item 2: the sale body reads an equipment line through
+// sale_items.item_id, never through the equipment_stock_id column Phase B
+// drops the table behind.
+//
+// A synthetic sale of every line kind — jar, product, colony, equipment on the
+// ledger identity, and equipment on the pre-ledger identity — goes in, and the
+// composer has to label all five. The historical arm is the point: rows stored
+// before migration 00052 carry equipment_stock_id and no item_id, and they
+// still have to name their type while the table is there.
+func TestGnuCashSaleBodyLabelsEveryLineKind(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+
+	var productID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO product_catalog (name, kind, unit, default_price_cents)
+		VALUES ('Creamed 12oz', 'creamed_honey', 'jar', 900) RETURNING id`).
+		Scan(&productID); err != nil {
+		t.Fatalf("seed product: %v", err)
+	}
+
+	var apiaryID, hiveID uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO apiaries (name) VALUES ('GnuCash yard') RETURNING id`).Scan(&apiaryID); err != nil {
+		t.Fatalf("seed apiary: %v", err)
+	}
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO hives (apiary_id, position_label) VALUES ($1,'GC1') RETURNING id`,
+		apiaryID).Scan(&hiveID); err != nil {
+		t.Fatalf("seed hive: %v", err)
+	}
+
+	// Two equipment types: one addressed by its ledger item, one left on the
+	// pre-ledger stock row the way a 2025 sale row is. equipment_types.name is
+	// unique and resetHoneyTables leaves the catalog alone, so the names carry
+	// a suffix rather than colliding with an earlier run.
+	suffix := " " + uuid.NewString()[:8]
+	ledgerName, legacyName := "Ledger deep"+suffix, "Legacy inner cover"+suffix
+	ledgerTypeID := seedEquipmentType(t, server, ledgerName, "box")
+	legacyTypeID := seedEquipmentType(t, server, legacyName, "cover")
+	var ledgerItemID uuid.UUID
+	if err := app.NewRunner(server.pool).Run(ctx, app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			item, err := equipment.EnsureItem(ctx, uow, ledgerTypeID, "")
+			ledgerItemID = item.ItemID
+			return err
+		}); err != nil {
+		t.Fatalf("ensure equipment item: %v", err)
+	}
+	var legacyStockID uuid.UUID
+	if err := server.pool.QueryRow(ctx,
+		`INSERT INTO equipment_stock (type_id, total_owned) VALUES ($1, 0) RETURNING id`,
+		legacyTypeID).Scan(&legacyStockID); err != nil {
+		t.Fatalf("seed legacy stock row: %v", err)
+	}
+
+	saleID := uuid.New()
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO sales (id, date, customer_name, order_number, channel, payment_method,
+			total_amount_cents, amount_paid_cents, order_status, physical_applied_at)
+		VALUES ($1, now(), 'Every Kind', $2, 'direct', 'cash', 10000, 10000, 'paid', now())`,
+		saleID, "BT-"+saleID.String()[:8]); err != nil {
+		t.Fatalf("seed sale: %v", err)
+	}
+	lines := []struct {
+		kind       string
+		jarSize    *uuid.UUID
+		product    *uuid.UUID
+		hive       *uuid.UUID
+		item       *uuid.UUID
+		legacyStub *uuid.UUID
+	}{
+		{kind: "jar", jarSize: &jarSizeID},
+		{kind: "creamed_honey", product: &productID},
+		{kind: "colony", hive: &hiveID},
+		{kind: "equipment", item: &ledgerItemID},
+		{kind: "equipment", legacyStub: &legacyStockID},
+	}
+	for _, line := range lines {
+		if _, err := server.pool.Exec(ctx, `
+			INSERT INTO sale_items
+				(sale_id, kind, jar_size_id, product_id, hive_id, item_id, equipment_stock_id,
+				 quantity, unit_price_cents)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,1,2000)`,
+			saleID, line.kind, line.jarSize, line.product, line.hive, line.item,
+			line.legacyStub); err != nil {
+			t.Fatalf("seed %s line: %v", line.kind, err)
+		}
+	}
+
+	sale, found, err := server.gnucashLoadSale(ctx, saleID)
+	if err != nil || !found {
+		t.Fatalf("load sale: found=%v err=%v", found, err)
+	}
+	if len(sale.Lines) != 5 {
+		t.Fatalf("loaded %d lines, want 5", len(sale.Lines))
+	}
+	labels := map[string]bool{}
+	for _, line := range sale.Lines {
+		if line.Label == "" {
+			t.Errorf("%s line came back with no label", line.Kind)
+		}
+		labels[line.Label] = true
+	}
+	for _, want := range []string{"Pint", "Creamed 12oz", "GC1", ledgerName, legacyName} {
+		if !labels[want] {
+			t.Errorf("no line labelled %q; got %v", want, labels)
+		}
+	}
+
+	// The equipment cost basis is the type's unit cost reached through
+	// item_id, which is the other half of open item 2. It is frozen at apply,
+	// so a line that never froze one contributes nothing rather than picking
+	// up today's price.
+	if _, err := server.pool.Exec(ctx,
+		`UPDATE equipment_types SET unit_cost_cents = 700 WHERE id = $1`, ledgerTypeID); err != nil {
+		t.Fatalf("price the type: %v", err)
+	}
+	if err := app.NewRunner(server.pool).Run(ctx, app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			return saleSnapshotEquipmentCost(ctx, uow, saleID)
+		}); err != nil {
+		t.Fatalf("snapshot equipment cost: %v", err)
+	}
+	sale, _, err = server.gnucashLoadSale(ctx, saleID)
+	if err != nil {
+		t.Fatalf("reload sale: %v", err)
+	}
+	var basisLines int
+	for _, line := range sale.Lines {
+		if line.CostBasisCents != nil {
+			basisLines++
+			if *line.CostBasisCents != 700 {
+				t.Errorf("equipment basis = %d, want 700", *line.CostBasisCents)
+			}
+		}
+	}
+	if basisLines != 1 {
+		t.Errorf("%d lines froze a basis, want only the item_id equipment line", basisLines)
+	}
+}
+
+func seedEquipmentType(t *testing.T, server *Server, name, category string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := server.pool.QueryRow(context.Background(), `
+		INSERT INTO equipment_types (name, category) VALUES ($1,$2) RETURNING id`,
+		name, category).Scan(&id); err != nil {
+		t.Fatalf("seed equipment type %s: %v", name, err)
+	}
+	return id
 }

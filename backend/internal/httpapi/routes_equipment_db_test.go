@@ -3,7 +3,11 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -1031,4 +1035,645 @@ func TestEquipmentIdempotencyKeyDifferentTargetConflicts(t *testing.T) {
 			t.Fatalf("status = %d, want 409: %v", status, err)
 		}
 	})
+}
+
+// --- Phase A legacy scaffolding ---
+//
+// Everything below used to live in routes_equipment.go and
+// routes_equipment_ledger.go. No endpoint reaches it any more: receive,
+// adjust, damage/repair/retire, deploy, return, and physical count all run
+// through app/equipment on the inventory ledger. What it still does is read
+// and write the legacy quantity tables, which Phase B drops (spec section 8),
+// so keeping it in the production files would leave readers of
+// equipment_stock that a baseline database cannot serve (spec 12.1 open
+// item 3).
+//
+// It stays here rather than being deleted because the tests in this file are
+// the Phase A regression suite for those tables and their 00006 triggers, and
+// those tables are still in place on every live database. The suite runs on
+// the legacy chain only; the ledger endpoints are covered against a baseline
+// database in routes_equipment_baseline_test.go.
+// --- stock state (the one availability formula) ---
+
+// equipStockState is a stock row plus everything derived from its ledgers.
+type equipStockState struct {
+	ID            uuid.UUID
+	TypeID        uuid.UUID
+	TypeName      string
+	TotalOwned    int
+	Damaged       int
+	Retired       int
+	Deployed      int
+	UnitCostCents *int
+}
+
+// Available is the only definition of "ready to deploy" in the backend.
+func (s equipStockState) Available() int {
+	return s.TotalOwned - s.Damaged - s.Retired - s.Deployed
+}
+
+// equipLockStock takes a row lock on the stock row and reads its derived
+// counts inside the caller's transaction. Callers that will consume stock must
+// use this before validating, so a concurrent writer cannot spend the same
+// units between the check and the insert.
+func equipLockStock(ctx context.Context, tx pgx.Tx, stockID uuid.UUID) (equipStockState, error) {
+	var state equipStockState
+	err := tx.QueryRow(ctx, `
+		SELECT es.id, es.type_id, et.name, es.total_owned, es.damaged_quantity,
+		       es.retired_quantity, es.unit_cost_cents,
+		       COALESCE((
+		         SELECT SUM(d.quantity - d.quantity_returned)::int
+		         FROM equipment_deployments d WHERE d.stock_id = es.id), 0)
+		FROM equipment_stock es
+		JOIN equipment_types et ON et.id = es.type_id
+		WHERE es.id = $1
+		FOR UPDATE OF es`, stockID).
+		Scan(&state.ID, &state.TypeID, &state.TypeName, &state.TotalOwned,
+			&state.Damaged, &state.Retired, &state.UnitCostCents, &state.Deployed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return state, equipFail(http.StatusNotFound, "stock not found")
+	}
+	return state, err
+}
+
+// --- ledger writes ---
+
+type equipAdjustmentEntry struct {
+	StockID        uuid.UUID
+	Quantity       int
+	Reason         string
+	Notes          *string
+	UnitCostCents  *int
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
+}
+
+// equipInsertAdjustment appends an ownership-ledger row. A duplicate
+// idempotency key returns (true, nil) so the caller can surface the
+// previously-created row instead of applying the quantity twice.
+// Serialization is the stock row lock (FOR UPDATE), not a 23505 retry.
+func equipInsertAdjustment(ctx context.Context, q inspectionQuerier, e equipAdjustmentEntry) (bool, error) {
+	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_stock_adjustments", e.IdempotencyKey, "stock_id", e.StockID); err != nil {
+		return false, err
+	} else if found {
+		return true, nil
+	}
+	_, err := q.Exec(ctx, `
+		INSERT INTO equipment_stock_adjustments
+			(stock_id, quantity, reason, notes, unit_cost_cents, date, created_by,
+			 idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		e.StockID, e.Quantity, e.Reason, e.Notes, e.UnitCostCents, e.Date, e.CreatedBy,
+		e.IdempotencyKey)
+	return false, err
+}
+
+type equipStateEntry struct {
+	StockID        uuid.UUID
+	From           string
+	To             string
+	Quantity       int
+	Reason         string
+	Notes          *string
+	UnitCostCents  *int
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
+}
+
+// Serialization is the stock row lock (FOR UPDATE), not a 23505 retry.
+func equipInsertStateChange(ctx context.Context, q inspectionQuerier, e equipStateEntry) (bool, error) {
+	if _, found, err := equipLookupIdempotent(ctx, q, "equipment_state_changes", e.IdempotencyKey, "stock_id", e.StockID); err != nil {
+		return false, err
+	} else if found {
+		return true, nil
+	}
+	_, err := q.Exec(ctx, `
+		INSERT INTO equipment_state_changes
+			(stock_id, from_state, to_state, quantity, reason, notes,
+			 unit_cost_cents, date, created_by, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		e.StockID, e.From, e.To, e.Quantity, e.Reason, e.Notes,
+		e.UnitCostCents, e.Date, e.CreatedBy, e.IdempotencyKey)
+	return false, err
+}
+
+// equipLookupIdempotent finds a previously-written ledger row by key bound
+// to this target (stock_id or deployment_id). A key already used on a
+// different resource is a 409, not a replay. Duplicate keys on the same
+// target are serialized by the stock row lock (FOR UPDATE): the second
+// writer waits, then this lookup finds the existing row. table and
+// targetColumn are compile-time identifiers, never request input.
+func equipLookupIdempotent(
+	ctx context.Context,
+	q inspectionQuerier,
+	table string,
+	key *string,
+	targetColumn string,
+	targetID uuid.UUID,
+) (uuid.UUID, bool, error) {
+	if key == nil {
+		return uuid.Nil, false, nil
+	}
+	switch table {
+	case "equipment_stock_adjustments", "equipment_state_changes",
+		"equipment_deployments", "equipment_deployment_returns":
+	default:
+		return uuid.Nil, false, fmt.Errorf("invalid idempotency table")
+	}
+	if targetColumn != "stock_id" && targetColumn != "deployment_id" {
+		return uuid.Nil, false, fmt.Errorf("invalid idempotency target")
+	}
+	var id uuid.UUID
+	err := q.QueryRow(ctx,
+		`SELECT id FROM `+table+` WHERE idempotency_key = $1 AND `+targetColumn+` = $2`,
+		*key, targetID).Scan(&id)
+	if err == nil {
+		return id, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, err
+	}
+	var other uuid.UUID
+	err = q.QueryRow(ctx,
+		`SELECT id FROM `+table+` WHERE idempotency_key = $1`, *key).Scan(&other)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	return uuid.Nil, false, equipFail(http.StatusConflict,
+		"idempotency key already used on a different resource")
+}
+
+// equipReturnInput is the validated form of a (possibly partial) return.
+type equipReturnInput struct {
+	DeploymentID uuid.UUID
+	// Quantity nil means "everything still out".
+	Quantity       *int
+	Reason         string
+	Condition      string
+	Notes          *string
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	SaleID         *uuid.UUID
+	IdempotencyKey *string
+}
+
+type equipReturnResult struct {
+	ID            uuid.UUID
+	Quantity      int
+	TotalReturned int
+	Outstanding   int
+	FullyReturned bool
+	StockID       uuid.UUID
+	DeployedTotal int
+	Replayed      bool
+}
+
+// equipReturnTx returns equipment from a hive. The `date_removed IS NULL`
+// guard is what makes a second return fail loudly instead of silently
+// overwriting the first return date. Serialization of a replayed key is
+// the stock row lock (FOR UPDATE), not a 23505 retry.
+func equipReturnTx(ctx context.Context, tx pgx.Tx, in equipReturnInput) (equipReturnResult, error) {
+	var result equipReturnResult
+
+	// Lock the stock row first (and always in that order) so return and
+	// deploy cannot deadlock against each other.
+	var stockID uuid.UUID
+	err := tx.QueryRow(ctx,
+		`SELECT stock_id FROM equipment_deployments WHERE id = $1`, in.DeploymentID).
+		Scan(&stockID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return result, equipFail(http.StatusNotFound, "deployment not found")
+	}
+	if err != nil {
+		return result, err
+	}
+	if _, err := equipLockStock(ctx, tx, stockID); err != nil {
+		return result, err
+	}
+	if existingID, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployment_returns", in.IdempotencyKey, "deployment_id", in.DeploymentID); err != nil {
+		return result, err
+	} else if found {
+		return equipLoadReturnResult(ctx, tx, existingID, true)
+	}
+
+	var deployed, returned int
+	err = tx.QueryRow(ctx, `
+		SELECT quantity, quantity_returned
+		FROM equipment_deployments
+		WHERE id = $1 AND date_removed IS NULL
+		FOR UPDATE`, in.DeploymentID).Scan(&deployed, &returned)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return result, equipFail(http.StatusConflict,
+			"This deployment has already been returned")
+	}
+	if err != nil {
+		return result, err
+	}
+
+	outstanding := deployed - returned
+	quantity := outstanding
+	if in.Quantity != nil {
+		quantity = *in.Quantity
+	}
+	if quantity < 1 {
+		return result, equipBadRequest("Quantity must be at least 1")
+	}
+	if quantity > outstanding {
+		return result, equipBadRequest(
+			"Only %d still deployed: cannot return %d", outstanding, quantity)
+	}
+
+	var returnID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO equipment_deployment_returns
+			(deployment_id, quantity, reason, condition, notes, date, created_by,
+			 sale_id, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id`,
+		in.DeploymentID, quantity, in.Reason, in.Condition, in.Notes,
+		in.Date, in.CreatedBy, in.SaleID, in.IdempotencyKey).Scan(&returnID)
+	if err != nil {
+		return result, err
+	}
+
+	total := returned + quantity
+	full := total >= deployed
+	tag, err := tx.Exec(ctx, `
+		UPDATE equipment_deployments
+		SET quantity_returned = $2,
+		    date_removed = CASE WHEN $3 THEN $4::timestamptz ELSE NULL END
+		WHERE id = $1 AND date_removed IS NULL`,
+		in.DeploymentID, total, full, in.Date)
+	if err != nil {
+		return result, err
+	}
+	if tag.RowsAffected() == 0 {
+		// Another transaction completed the return between our read and write.
+		return result, equipFail(http.StatusConflict,
+			"This deployment has already been returned")
+	}
+
+	// Equipment that came back broken or worn out does not silently rejoin the
+	// serviceable pool: it lands in a real state with a quantity.
+	//
+	// The return row and this state-change row share the client key. Keys are
+	// unique per table, so a later /damage or /repair that reuses the key
+	// finds the state-change row and silently no-ops.
+	if in.Condition == "damaged" || in.Condition == "retired" {
+		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
+			StockID:        stockID,
+			From:           "serviceable",
+			To:             in.Condition,
+			Quantity:       quantity,
+			Reason:         "returned_damaged",
+			Notes:          in.Notes,
+			Date:           in.Date,
+			CreatedBy:      in.CreatedBy,
+			IdempotencyKey: in.IdempotencyKey,
+		}); err != nil {
+			return result, err
+		}
+	}
+
+	result = equipReturnResult{
+		ID:            returnID,
+		Quantity:      quantity,
+		TotalReturned: total,
+		Outstanding:   deployed - total,
+		FullyReturned: full,
+		StockID:       stockID,
+		DeployedTotal: deployed,
+	}
+	return result, nil
+}
+
+func equipLoadReturnResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	returnID uuid.UUID,
+	replayed bool,
+) (equipReturnResult, error) {
+	var result equipReturnResult
+	err := tx.QueryRow(ctx, `
+		SELECT r.id, r.quantity, d.quantity, d.quantity_returned,
+		       d.stock_id, d.date_removed IS NOT NULL
+		FROM equipment_deployment_returns r
+		JOIN equipment_deployments d ON d.id = r.deployment_id
+		WHERE r.id = $1`, returnID).
+		Scan(&result.ID, &result.Quantity, &result.DeployedTotal,
+			&result.TotalReturned, &result.StockID, &result.FullyReturned)
+	if err != nil {
+		return result, err
+	}
+	result.Outstanding = result.DeployedTotal - result.TotalReturned
+	result.Replayed = replayed
+	return result, nil
+}
+
+// equipStateSnapshot reports the counts a caller should see after a write.
+func equipStateSnapshot(state equipStockState) map[string]any {
+	return map[string]any{
+		"totalOwned": state.TotalOwned,
+		"deployed":   state.Deployed,
+		"damaged":    state.Damaged,
+		"retired":    state.Retired,
+		"available":  state.Available(),
+	}
+}
+
+// equipAdjustTx applies a signed correction to what is owned, refusing any
+// adjustment that would drive a count below zero.
+func equipAdjustTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	parsed equipParsedRequest,
+) (map[string]any, error) {
+	if parsed.Quantity > 0 && parsed.From != "serviceable" {
+		return nil, equipBadRequest("Only negative adjustments can name a from state")
+	}
+	state, err := equipLockStock(ctx, tx, parsed.StockID)
+	if err != nil {
+		return nil, err
+	}
+	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_stock_adjustments", parsed.IdempotencyKey, "stock_id", parsed.StockID); err != nil {
+		return nil, err
+	} else if found {
+		return equipStateSnapshot(state), nil
+	}
+	removed := -parsed.Quantity
+	switch {
+	case parsed.Quantity > 0:
+		// Nothing to validate: adding stock cannot go negative.
+	case parsed.From == "serviceable":
+		if removed > state.Available() {
+			return nil, equipBadRequest(
+				"Not enough %s available: removing %d would leave %d",
+				state.TypeName, removed, state.Available()-removed)
+		}
+	case parsed.From == "damaged":
+		if removed > state.Damaged {
+			return nil, equipBadRequest(
+				"Only %d %s are marked damaged", state.Damaged, state.TypeName)
+		}
+	case parsed.From == "retired":
+		if removed > state.Retired {
+			return nil, equipBadRequest(
+				"Only %d %s are retired", state.Retired, state.TypeName)
+		}
+	}
+
+	replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+		StockID:        state.ID,
+		Quantity:       parsed.Quantity,
+		Reason:         parsed.Reason,
+		Notes:          parsed.Notes,
+		UnitCostCents:  parsed.Cost,
+		Date:           parsed.Date,
+		CreatedBy:      parsed.CreatedBy,
+		IdempotencyKey: parsed.IdempotencyKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if replayed {
+		return equipStateSnapshot(state), nil
+	}
+	// The same client key is written onto both the adjustment and the
+	// accompanying state-change row (when disposing from damaged/retired).
+	// Keys are unique per table, not per operation, so a later /damage or
+	// /repair that reuses this key will find the state-change row and
+	// silently no-op. Callers must not reuse a key across ledgers.
+	// Disposing of damaged or retired units also empties that pool, so the
+	// states keep partitioning what is owned.
+	if parsed.Quantity < 0 && parsed.From != "serviceable" {
+		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
+			StockID:        state.ID,
+			From:           parsed.From,
+			To:             "serviceable",
+			Quantity:       removed,
+			Reason:         "disposed",
+			Notes:          parsed.Notes,
+			Date:           parsed.Date,
+			CreatedBy:      parsed.CreatedBy,
+			IdempotencyKey: parsed.IdempotencyKey,
+		}); err != nil {
+			return nil, err
+		}
+		if parsed.From == "damaged" {
+			state.Damaged -= removed
+		} else {
+			state.Retired -= removed
+		}
+	}
+	state.TotalOwned += parsed.Quantity
+	return equipStateSnapshot(state), nil
+}
+
+// equipMoveState validates and records a movement between condition states.
+func equipMoveState(
+	ctx context.Context,
+	tx pgx.Tx,
+	parsed equipParsedRequest,
+	to string,
+) (map[string]any, error) {
+	state, err := equipLockStock(ctx, tx, parsed.StockID)
+	if err != nil {
+		return nil, err
+	}
+	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_state_changes", parsed.IdempotencyKey, "stock_id", parsed.StockID); err != nil {
+		return nil, err
+	} else if found {
+		return equipStateSnapshot(state), nil
+	}
+	if parsed.From == to {
+		return nil, equipBadRequest("Equipment is already %s", to)
+	}
+	switch parsed.From {
+	case "serviceable":
+		if parsed.Quantity > state.Available() {
+			return nil, equipBadRequest(
+				"Only %d %s available: cannot mark %d as %s",
+				state.Available(), state.TypeName, parsed.Quantity, to)
+		}
+	case "damaged":
+		if parsed.Quantity > state.Damaged {
+			return nil, equipBadRequest(
+				"Only %d %s are marked damaged", state.Damaged, state.TypeName)
+		}
+	case "retired":
+		if parsed.Quantity > state.Retired {
+			return nil, equipBadRequest(
+				"Only %d %s are retired", state.Retired, state.TypeName)
+		}
+	}
+
+	cost := parsed.Cost
+	if cost == nil {
+		cost = state.UnitCostCents
+	}
+	replayed, err := equipInsertStateChange(ctx, tx, equipStateEntry{
+		StockID:        state.ID,
+		From:           parsed.From,
+		To:             to,
+		Quantity:       parsed.Quantity,
+		Reason:         parsed.Reason,
+		Notes:          parsed.Notes,
+		UnitCostCents:  cost,
+		Date:           parsed.Date,
+		CreatedBy:      parsed.CreatedBy,
+		IdempotencyKey: parsed.IdempotencyKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if replayed {
+		return equipStateSnapshot(state), nil
+	}
+
+	switch parsed.From {
+	case "damaged":
+		state.Damaged -= parsed.Quantity
+	case "retired":
+		state.Retired -= parsed.Quantity
+	}
+	switch to {
+	case "damaged":
+		state.Damaged += parsed.Quantity
+	case "retired":
+		state.Retired += parsed.Quantity
+	}
+	return equipStateSnapshot(state), nil
+}
+
+// equipPhysicalCountTx applies a physical count. It returns per-line results,
+// or the list of lines that could not be resolved — in which case it has
+// written nothing and the caller must abandon the transaction. Unresolvable
+// lines are never skipped in silence, which was the bug in bulk-adjust.
+func equipPhysicalCountTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	in equipCountInput,
+) ([]equipCountLineResult, []equipCountLineError, error) {
+	lines := make([]equipCountLine, 0, len(in.Lines))
+	lineErrors := make([]equipCountLineError, 0)
+	seen := make(map[uuid.UUID]int, len(in.Lines))
+
+	for index, raw := range in.Lines {
+		fail := func(message string) {
+			lineErrors = append(lineErrors, equipCountLineError{
+				Index: index, StockID: raw.StockID, TypeID: raw.TypeID, Message: message,
+			})
+		}
+		if raw.CountedQuantity == nil {
+			fail("Counted quantity is required")
+			continue
+		}
+		if *raw.CountedQuantity < 0 {
+			fail("Counted quantity cannot be negative")
+			continue
+		}
+
+		var stockID uuid.UUID
+		switch {
+		case raw.StockID != nil && *raw.StockID != "":
+			parsed, err := uuid.Parse(*raw.StockID)
+			if err != nil {
+				fail("Unrecognised stock row")
+				continue
+			}
+			var exists bool
+			if err := tx.QueryRow(ctx,
+				`SELECT true FROM equipment_stock WHERE id = $1`, parsed).Scan(&exists); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					fail("This stock row no longer exists")
+					continue
+				}
+				return nil, nil, err
+			}
+			stockID = parsed
+		case raw.TypeID != nil && *raw.TypeID != "":
+			parsed, err := uuid.Parse(*raw.TypeID)
+			if err != nil {
+				fail("Unrecognised equipment type")
+				continue
+			}
+			if err := tx.QueryRow(ctx,
+				`SELECT id FROM equipment_stock WHERE type_id = $1`, parsed).Scan(&stockID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					fail("This equipment type has no stock row to count")
+					continue
+				}
+				return nil, nil, err
+			}
+		default:
+			fail("A stock row or equipment type is required")
+			continue
+		}
+
+		if first, duplicate := seen[stockID]; duplicate {
+			fail("Counted twice (also on line " + strconv.Itoa(first+1) + ")")
+			continue
+		}
+		seen[stockID] = index
+		lines = append(lines, equipCountLine{
+			StockID:         stockID,
+			CountedQuantity: *raw.CountedQuantity,
+			Index:           index,
+		})
+	}
+
+	if len(lineErrors) > 0 {
+		return nil, lineErrors, nil
+	}
+
+	// Lock in a stable order so two counts running at once cannot deadlock.
+	sort.Slice(lines, func(i, j int) bool {
+		return lines[i].StockID.String() < lines[j].StockID.String()
+	})
+
+	results := make([]equipCountLineResult, 0, len(lines))
+	for _, line := range lines {
+		state, err := equipLockStock(ctx, tx, line.StockID)
+		if err != nil {
+			return nil, nil, err
+		}
+		delta := line.CountedQuantity - state.Available()
+		if delta != 0 {
+			var lineKey *string
+			if in.IdempotencyKey != nil {
+				key := *in.IdempotencyKey + ":" + line.StockID.String()
+				lineKey = &key
+			}
+			replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
+				StockID:        state.ID,
+				Quantity:       delta,
+				Reason:         "physical_count",
+				Notes:          in.Notes,
+				Date:           in.Date,
+				CreatedBy:      in.CreatedBy,
+				IdempotencyKey: lineKey,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			if replayed {
+				delta = 0
+			}
+		}
+		results = append(results, equipCountLineResult{
+			StockID:           state.ID,
+			TypeID:            state.TypeID,
+			TypeName:          state.TypeName,
+			PreviousAvailable: state.Available(),
+			CountedQuantity:   line.CountedQuantity,
+			Delta:             delta,
+			TotalOwned:        state.TotalOwned + delta,
+		})
+	}
+	return results, nil, nil
 }

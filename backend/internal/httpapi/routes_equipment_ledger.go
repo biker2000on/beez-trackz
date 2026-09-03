@@ -2,10 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
-	"sort"
-	"strconv"
 	"time"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
@@ -15,9 +12,10 @@ import (
 )
 
 // Ledger actions for equipment: receive, adjust, mark damaged, repair, retire,
-// and the physical-count flow that replaced bulk-adjust. Every one of them
-// appends a ledger entry inside a transaction that has already locked and
-// re-read the stock row, so nothing can drive a count negative and nothing
+// and the physical-count flow that replaced bulk-adjust. Each one hands a
+// command to app/equipment, which records an inventory operation under the
+// request's unit of work; the nonnegative invariant and the tuple locks belong
+// to the inventory service, so nothing can drive a count negative and nothing
 // changes a quantity without saying why.
 
 // --- shared request plumbing ---
@@ -136,17 +134,6 @@ func (s *Server) equipInTx(
 	writeJSON(w, http.StatusOK, body)
 }
 
-// equipStateSnapshot reports the counts a caller should see after a write.
-func equipStateSnapshot(state equipStockState) map[string]any {
-	return map[string]any{
-		"totalOwned": state.TotalOwned,
-		"deployed":   state.Deployed,
-		"damaged":    state.Damaged,
-		"retired":    state.Retired,
-		"available":  state.Available(),
-	}
-}
-
 func equipLedgerSnapshot(ctx context.Context, q app.Querier, itemID uuid.UUID) (map[string]any, error) {
 	var owned, deployed, damaged, retired, available int
 	err := q.QueryRow(ctx, `
@@ -189,94 +176,6 @@ func (s *Server) equipReceiveStock(w http.ResponseWriter, r *http.Request) {
 
 // --- adjust ---
 
-// equipAdjustTx applies a signed correction to what is owned, refusing any
-// adjustment that would drive a count below zero.
-func equipAdjustTx(
-	ctx context.Context,
-	tx pgx.Tx,
-	parsed equipParsedRequest,
-) (map[string]any, error) {
-	if parsed.Quantity > 0 && parsed.From != "serviceable" {
-		return nil, equipBadRequest("Only negative adjustments can name a from state")
-	}
-	state, err := equipLockStock(ctx, tx, parsed.StockID)
-	if err != nil {
-		return nil, err
-	}
-	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_stock_adjustments", parsed.IdempotencyKey, "stock_id", parsed.StockID); err != nil {
-		return nil, err
-	} else if found {
-		return equipStateSnapshot(state), nil
-	}
-	removed := -parsed.Quantity
-	switch {
-	case parsed.Quantity > 0:
-		// Nothing to validate: adding stock cannot go negative.
-	case parsed.From == "serviceable":
-		if removed > state.Available() {
-			return nil, equipBadRequest(
-				"Not enough %s available: removing %d would leave %d",
-				state.TypeName, removed, state.Available()-removed)
-		}
-	case parsed.From == "damaged":
-		if removed > state.Damaged {
-			return nil, equipBadRequest(
-				"Only %d %s are marked damaged", state.Damaged, state.TypeName)
-		}
-	case parsed.From == "retired":
-		if removed > state.Retired {
-			return nil, equipBadRequest(
-				"Only %d %s are retired", state.Retired, state.TypeName)
-		}
-	}
-
-	replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-		StockID:        state.ID,
-		Quantity:       parsed.Quantity,
-		Reason:         parsed.Reason,
-		Notes:          parsed.Notes,
-		UnitCostCents:  parsed.Cost,
-		Date:           parsed.Date,
-		CreatedBy:      parsed.CreatedBy,
-		IdempotencyKey: parsed.IdempotencyKey,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if replayed {
-		return equipStateSnapshot(state), nil
-	}
-	// The same client key is written onto both the adjustment and the
-	// accompanying state-change row (when disposing from damaged/retired).
-	// Keys are unique per table, not per operation, so a later /damage or
-	// /repair that reuses this key will find the state-change row and
-	// silently no-op. Callers must not reuse a key across ledgers.
-	// Disposing of damaged or retired units also empties that pool, so the
-	// states keep partitioning what is owned.
-	if parsed.Quantity < 0 && parsed.From != "serviceable" {
-		if _, err := equipInsertStateChange(ctx, tx, equipStateEntry{
-			StockID:        state.ID,
-			From:           parsed.From,
-			To:             "serviceable",
-			Quantity:       removed,
-			Reason:         "disposed",
-			Notes:          parsed.Notes,
-			Date:           parsed.Date,
-			CreatedBy:      parsed.CreatedBy,
-			IdempotencyKey: parsed.IdempotencyKey,
-		}); err != nil {
-			return nil, err
-		}
-		if parsed.From == "damaged" {
-			state.Damaged -= removed
-		} else {
-			state.Retired -= removed
-		}
-	}
-	state.TotalOwned += parsed.Quantity
-	return equipStateSnapshot(state), nil
-}
-
 // POST /equipment/stock/{id}/adjust {quantity, reason, notes?, date?, from?}
 // A signed correction to what is owned. Negative adjustments may draw from the
 // damaged or retired pools (`from`), which is how written-off equipment finally
@@ -304,82 +203,6 @@ func (s *Server) equipAdjustStock(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- damaged / repaired / retired ---
-
-// equipMoveState validates and records a movement between condition states.
-func equipMoveState(
-	ctx context.Context,
-	tx pgx.Tx,
-	parsed equipParsedRequest,
-	to string,
-) (map[string]any, error) {
-	state, err := equipLockStock(ctx, tx, parsed.StockID)
-	if err != nil {
-		return nil, err
-	}
-	if _, found, err := equipLookupIdempotent(ctx, tx, "equipment_state_changes", parsed.IdempotencyKey, "stock_id", parsed.StockID); err != nil {
-		return nil, err
-	} else if found {
-		return equipStateSnapshot(state), nil
-	}
-	if parsed.From == to {
-		return nil, equipBadRequest("Equipment is already %s", to)
-	}
-	switch parsed.From {
-	case "serviceable":
-		if parsed.Quantity > state.Available() {
-			return nil, equipBadRequest(
-				"Only %d %s available: cannot mark %d as %s",
-				state.Available(), state.TypeName, parsed.Quantity, to)
-		}
-	case "damaged":
-		if parsed.Quantity > state.Damaged {
-			return nil, equipBadRequest(
-				"Only %d %s are marked damaged", state.Damaged, state.TypeName)
-		}
-	case "retired":
-		if parsed.Quantity > state.Retired {
-			return nil, equipBadRequest(
-				"Only %d %s are retired", state.Retired, state.TypeName)
-		}
-	}
-
-	cost := parsed.Cost
-	if cost == nil {
-		cost = state.UnitCostCents
-	}
-	replayed, err := equipInsertStateChange(ctx, tx, equipStateEntry{
-		StockID:        state.ID,
-		From:           parsed.From,
-		To:             to,
-		Quantity:       parsed.Quantity,
-		Reason:         parsed.Reason,
-		Notes:          parsed.Notes,
-		UnitCostCents:  cost,
-		Date:           parsed.Date,
-		CreatedBy:      parsed.CreatedBy,
-		IdempotencyKey: parsed.IdempotencyKey,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if replayed {
-		return equipStateSnapshot(state), nil
-	}
-
-	switch parsed.From {
-	case "damaged":
-		state.Damaged -= parsed.Quantity
-	case "retired":
-		state.Retired -= parsed.Quantity
-	}
-	switch to {
-	case "damaged":
-		state.Damaged += parsed.Quantity
-	case "retired":
-		state.Retired += parsed.Quantity
-	}
-	return equipStateSnapshot(state), nil
-}
 
 // POST /equipment/stock/{id}/damage {quantity, reason, notes?, date?}
 func (s *Server) equipMarkDamaged(w http.ResponseWriter, r *http.Request) {
@@ -482,134 +305,6 @@ type equipCountInput struct {
 	IdempotencyKey *string
 }
 
-// equipPhysicalCountTx applies a physical count. It returns per-line results,
-// or the list of lines that could not be resolved — in which case it has
-// written nothing and the caller must abandon the transaction. Unresolvable
-// lines are never skipped in silence, which was the bug in bulk-adjust.
-func equipPhysicalCountTx(
-	ctx context.Context,
-	tx pgx.Tx,
-	in equipCountInput,
-) ([]equipCountLineResult, []equipCountLineError, error) {
-	lines := make([]equipCountLine, 0, len(in.Lines))
-	lineErrors := make([]equipCountLineError, 0)
-	seen := make(map[uuid.UUID]int, len(in.Lines))
-
-	for index, raw := range in.Lines {
-		fail := func(message string) {
-			lineErrors = append(lineErrors, equipCountLineError{
-				Index: index, StockID: raw.StockID, TypeID: raw.TypeID, Message: message,
-			})
-		}
-		if raw.CountedQuantity == nil {
-			fail("Counted quantity is required")
-			continue
-		}
-		if *raw.CountedQuantity < 0 {
-			fail("Counted quantity cannot be negative")
-			continue
-		}
-
-		var stockID uuid.UUID
-		switch {
-		case raw.StockID != nil && *raw.StockID != "":
-			parsed, err := uuid.Parse(*raw.StockID)
-			if err != nil {
-				fail("Unrecognised stock row")
-				continue
-			}
-			var exists bool
-			if err := tx.QueryRow(ctx,
-				`SELECT true FROM equipment_stock WHERE id = $1`, parsed).Scan(&exists); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					fail("This stock row no longer exists")
-					continue
-				}
-				return nil, nil, err
-			}
-			stockID = parsed
-		case raw.TypeID != nil && *raw.TypeID != "":
-			parsed, err := uuid.Parse(*raw.TypeID)
-			if err != nil {
-				fail("Unrecognised equipment type")
-				continue
-			}
-			if err := tx.QueryRow(ctx,
-				`SELECT id FROM equipment_stock WHERE type_id = $1`, parsed).Scan(&stockID); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					fail("This equipment type has no stock row to count")
-					continue
-				}
-				return nil, nil, err
-			}
-		default:
-			fail("A stock row or equipment type is required")
-			continue
-		}
-
-		if first, duplicate := seen[stockID]; duplicate {
-			fail("Counted twice (also on line " + strconv.Itoa(first+1) + ")")
-			continue
-		}
-		seen[stockID] = index
-		lines = append(lines, equipCountLine{
-			StockID:         stockID,
-			CountedQuantity: *raw.CountedQuantity,
-			Index:           index,
-		})
-	}
-
-	if len(lineErrors) > 0 {
-		return nil, lineErrors, nil
-	}
-
-	// Lock in a stable order so two counts running at once cannot deadlock.
-	sort.Slice(lines, func(i, j int) bool {
-		return lines[i].StockID.String() < lines[j].StockID.String()
-	})
-
-	results := make([]equipCountLineResult, 0, len(lines))
-	for _, line := range lines {
-		state, err := equipLockStock(ctx, tx, line.StockID)
-		if err != nil {
-			return nil, nil, err
-		}
-		delta := line.CountedQuantity - state.Available()
-		if delta != 0 {
-			var lineKey *string
-			if in.IdempotencyKey != nil {
-				key := *in.IdempotencyKey + ":" + line.StockID.String()
-				lineKey = &key
-			}
-			replayed, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-				StockID:        state.ID,
-				Quantity:       delta,
-				Reason:         "physical_count",
-				Notes:          in.Notes,
-				Date:           in.Date,
-				CreatedBy:      in.CreatedBy,
-				IdempotencyKey: lineKey,
-			})
-			if err != nil {
-				return nil, nil, err
-			}
-			if replayed {
-				delta = 0
-			}
-		}
-		results = append(results, equipCountLineResult{
-			StockID:           state.ID,
-			TypeID:            state.TypeID,
-			TypeName:          state.TypeName,
-			PreviousAvailable: state.Available(),
-			CountedQuantity:   line.CountedQuantity,
-			Delta:             delta,
-			TotalOwned:        state.TotalOwned + delta,
-		})
-	}
-	return results, nil, nil
-}
-
 // POST /equipment/physical-count
 // {date?, notes?, lines: [{stockId? | typeId?, countedQuantity}]}
 //
@@ -697,8 +392,10 @@ func (s *Server) equipPhysicalCount(w http.ResponseWriter, r *http.Request) {
 // --- loss report ---
 
 // GET /equipment/loss-report?from=&to=
-// Damaged, retired, and written-off equipment with its cost, from the single
-// equipment_loss_events view so the totals and the event list cannot disagree.
+// Damaged, retired, and written-off equipment with its cost. Both halves — the
+// per-type totals and the event list — read the same condition_change and
+// shrink operations out of the ledger, so they cannot disagree. This replaces
+// the equipment_loss_events view, which Phase B drops with the tables under it.
 func (s *Server) equipLossReport(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	fromParam := query.Get("from")
