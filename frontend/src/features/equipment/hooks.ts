@@ -11,18 +11,27 @@ import {
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import type {
-  ActiveDeployment,
-  EquipmentComponentLine,
-  EquipmentStockRow,
-  EquipmentType,
-  FrameSummary,
-  HiveOption,
-  LossReport,
-  PhysicalCountResult,
-  StockAdjustment,
-  StockStateChange,
+import {
+  ledgerItemId,
+  type ActiveDeployment,
+  type AssembleResult,
+  type EquipmentComponentLine,
+  type EquipmentStockRow,
+  type EquipmentType,
+  type FrameSummary,
+  type HiveOption,
+  type LossReport,
+  type PhysicalCountLine,
+  type PhysicalCountResult,
+  type StockAdjustment,
+  type StockStateChange,
 } from "./types";
+
+type WireItem = { itemId?: string; stockId?: string };
+
+function withItemId<T extends WireItem>(row: T): T & { itemId: string } {
+  return { ...row, itemId: ledgerItemId(row) };
+}
 
 // --- queries ---
 
@@ -50,24 +59,37 @@ export function useFrameSummary() {
 export function useActiveDeployments() {
   return useQuery({
     queryKey: ["equipment", "deployments", "active"],
-    queryFn: () => api.get<ActiveDeployment[]>("/equipment/deployments/active"),
+    queryFn: async () => {
+      const rows = await api.get<ActiveDeployment[]>(
+        "/equipment/deployments/active",
+      );
+      return rows.map(withItemId);
+    },
   });
 }
 
-export function useStockAdjustments(stockId: string, enabled: boolean) {
+export function useStockAdjustments(itemId: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["equipment", "adjustments", stockId],
-    queryFn: () =>
-      api.get<StockAdjustment[]>(`/equipment/stock/${stockId}/adjustments`),
+    queryKey: ["equipment", "adjustments", itemId],
+    queryFn: async () => {
+      const rows = await api.get<StockAdjustment[]>(
+        `/equipment/stock/${itemId}/adjustments`,
+      );
+      return rows.map(withItemId);
+    },
     enabled,
   });
 }
 
-export function useStockStateChanges(stockId: string, enabled: boolean) {
+export function useStockStateChanges(itemId: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["equipment", "state-changes", stockId],
-    queryFn: () =>
-      api.get<StockStateChange[]>(`/equipment/stock/${stockId}/state-changes`),
+    queryKey: ["equipment", "state-changes", itemId],
+    queryFn: async () => {
+      const rows = await api.get<StockStateChange[]>(
+        `/equipment/stock/${itemId}/state-changes`,
+      );
+      return rows.map(withItemId);
+    },
     enabled,
   });
 }
@@ -75,10 +97,15 @@ export function useStockStateChanges(stockId: string, enabled: boolean) {
 export function useLossReport(range: { from?: string; to?: string } = {}) {
   return useQuery({
     queryKey: ["equipment", "loss-report", range.from ?? "", range.to ?? ""],
-    queryFn: () =>
-      api.get<LossReport>("/equipment/loss-report", {
+    queryFn: async () => {
+      const report = await api.get<LossReport>("/equipment/loss-report", {
         params: { from: range.from || undefined, to: range.to || undefined },
-      }),
+      });
+      return {
+        ...report,
+        events: report.events.map(withItemId),
+      };
+    },
   });
 }
 
@@ -126,7 +153,7 @@ function useEquipmentMutation<TVars, TData = unknown>(
 // --- deployments ---
 
 export interface DeployBody {
-  stockId: string;
+  itemId: string;
   hiveId: string;
   quantity: number;
   notes?: string;
@@ -134,7 +161,9 @@ export interface DeployBody {
 
 export function useDeployEquipment() {
   return useEquipmentMutation({
-    mutationFn: (body: DeployBody) => api.post("/equipment/deployments", body),
+    mutationFn: ({ itemId, ...body }: DeployBody) =>
+      // Handlers still decode the item as stockId on POST /equipment/deployments.
+      api.post("/equipment/deployments", { ...body, stockId: itemId }),
     successMessage: "Equipment deployed",
     // The hive detail Equipment tab caches deployments under the hives key.
     invalidate: [["hives"]],
@@ -142,7 +171,8 @@ export function useDeployEquipment() {
 }
 
 export interface ReturnDeploymentBody {
-  deploymentId: string;
+  /** Deploy inventory_operations.id (path /equipment/deployments/{id}). */
+  operationId: string;
   /** Omit to return everything still out. */
   quantity?: number;
   reason: string;
@@ -153,11 +183,15 @@ export interface ReturnDeploymentBody {
 
 export function useReturnDeployment() {
   return useEquipmentMutation({
-    mutationFn: ({ deploymentId, ...body }: ReturnDeploymentBody) =>
-      api.post<{ quantityReturned: number; outstanding: number }>(
-        `/equipment/deployments/${deploymentId}/return`,
-        body,
-      ),
+    mutationFn: ({ operationId, ...body }: ReturnDeploymentBody) =>
+      api.post<{
+        id: string;
+        quantityReturned: number;
+        totalReturned: number;
+        outstanding: number;
+        fullyReturned: boolean;
+        replayed?: boolean;
+      }>(`/equipment/deployments/${operationId}/return`, body),
     successMessage: (data) =>
       data.outstanding > 0
         ? `Returned ${data.quantityReturned} — ${data.outstanding} still on the hive`
@@ -182,7 +216,7 @@ export function useRemoveDeployment() {
 // --- ledger actions ---
 
 export interface ReceiveStockBody {
-  stockId: string;
+  itemId: string;
   quantity: number;
   reason: string;
   unitCostCents?: number | null;
@@ -193,14 +227,14 @@ export interface ReceiveStockBody {
 
 export function useReceiveStock() {
   return useEquipmentMutation({
-    mutationFn: ({ stockId, ...body }: ReceiveStockBody) =>
-      api.post(`/equipment/stock/${stockId}/receive`, body),
+    mutationFn: ({ itemId, ...body }: ReceiveStockBody) =>
+      api.post(`/equipment/stock/${itemId}/receive`, body),
     successMessage: "Stock received",
   });
 }
 
 export interface AdjustStockBody {
-  stockId: string;
+  itemId: string;
   quantity: number;
   reason: string;
   from?: "serviceable" | "damaged" | "retired";
@@ -210,14 +244,14 @@ export interface AdjustStockBody {
 
 export function useAdjustStock() {
   return useEquipmentMutation({
-    mutationFn: ({ stockId, ...body }: AdjustStockBody) =>
-      api.post(`/equipment/stock/${stockId}/adjust`, body),
+    mutationFn: ({ itemId, ...body }: AdjustStockBody) =>
+      api.post(`/equipment/stock/${itemId}/adjust`, body),
     successMessage: "Stock adjusted",
   });
 }
 
 export interface StateChangeBody {
-  stockId: string;
+  itemId: string;
   quantity: number;
   reason: string;
   from?: "serviceable" | "damaged" | "retired";
@@ -227,24 +261,24 @@ export interface StateChangeBody {
 
 export function useMarkDamaged() {
   return useEquipmentMutation({
-    mutationFn: ({ stockId, ...body }: StateChangeBody) =>
-      api.post(`/equipment/stock/${stockId}/damage`, body),
+    mutationFn: ({ itemId, ...body }: StateChangeBody) =>
+      api.post(`/equipment/stock/${itemId}/damage`, body),
     successMessage: "Marked damaged",
   });
 }
 
 export function useRepairStock() {
   return useEquipmentMutation({
-    mutationFn: ({ stockId, ...body }: StateChangeBody) =>
-      api.post(`/equipment/stock/${stockId}/repair`, body),
+    mutationFn: ({ itemId, ...body }: StateChangeBody) =>
+      api.post(`/equipment/stock/${itemId}/repair`, body),
     successMessage: "Back in service",
   });
 }
 
 export function useRetireStock() {
   return useEquipmentMutation({
-    mutationFn: ({ stockId, ...body }: StateChangeBody) =>
-      api.post(`/equipment/stock/${stockId}/retire`, body),
+    mutationFn: ({ itemId, ...body }: StateChangeBody) =>
+      api.post(`/equipment/stock/${itemId}/retire`, body),
     successMessage: "Retired from service",
   });
 }
@@ -254,7 +288,7 @@ export function useRetireStock() {
 export interface PhysicalCountBody {
   date?: string;
   notes?: string;
-  lines: { stockId: string; countedQuantity: number }[];
+  lines: { itemId: string; countedQuantity: number }[];
 }
 
 /**
@@ -264,8 +298,25 @@ export interface PhysicalCountBody {
  */
 export function usePhysicalCount() {
   return useEquipmentMutation({
-    mutationFn: (body: PhysicalCountBody) =>
-      api.post<PhysicalCountResult>("/equipment/physical-count", body),
+    mutationFn: async (body: PhysicalCountBody) => {
+      const result = await api.post<PhysicalCountResult>(
+        "/equipment/physical-count",
+        {
+          ...body,
+          // Handlers still decode each counted line as stockId.
+          lines: body.lines.map((line) => ({
+            stockId: line.itemId,
+            countedQuantity: line.countedQuantity,
+          })),
+        },
+      );
+      return {
+        ...result,
+        lines: (result.lines ?? []).map((line: PhysicalCountLine) =>
+          withItemId(line),
+        ),
+      };
+    },
     successMessage: (data) =>
       data.adjusted === 0
         ? `Counted ${data.counted} — everything already matched`
@@ -277,7 +328,7 @@ export function usePhysicalCount() {
 // --- stock rows ---
 
 export interface UpdateStockBody {
-  stockId: string;
+  itemId: string;
   storageLocation?: string | null;
   notes?: string | null;
   neededQuantity?: number;
@@ -287,8 +338,8 @@ export interface UpdateStockBody {
 
 export function useUpdateStock() {
   return useEquipmentMutation({
-    mutationFn: ({ stockId, ...body }: UpdateStockBody) =>
-      api.patch(`/equipment/stock/${stockId}`, body),
+    mutationFn: ({ itemId, ...body }: UpdateStockBody) =>
+      api.patch(`/equipment/stock/${itemId}`, body),
     successMessage: "Stock updated",
   });
 }
@@ -383,14 +434,13 @@ export interface AssembleBody {
 export function useAssemble() {
   return useEquipmentMutation({
     mutationFn: (body: AssembleBody) =>
-      api.post<{ typeName: string; action: string; quantity: number }>(
-        "/equipment/assemblies",
-        body,
-      ),
+      api.post<AssembleResult>("/equipment/assemblies", body),
     successMessage: (data) =>
-      data.action === "assemble"
-        ? `Assembled ${data.quantity} × ${data.typeName}`
-        : `Disassembled ${data.quantity} × ${data.typeName}`,
+      data.replayed
+        ? "Already recorded"
+        : data.action === "assemble"
+          ? `Assembled ${data.quantity} × ${data.typeName}`
+          : `Disassembled ${data.quantity} × ${data.typeName}`,
   });
 }
 

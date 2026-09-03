@@ -104,7 +104,7 @@ export function ReturnDeploymentDialog({
     }
     mutation.mutate(
       {
-        deploymentId: deployment.id,
+        operationId: deployment.id,
         quantity: returning,
         reason: values.reason,
         condition: values.condition,

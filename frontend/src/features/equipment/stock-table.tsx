@@ -141,7 +141,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
         date: todayISO(),
         notes: notes.trim() || undefined,
         lines: countedRows.map((row) => ({
-          stockId: row.id,
+          itemId: row.id,
           countedQuantity: parseNum(drafts[row.id])!,
         })),
       },

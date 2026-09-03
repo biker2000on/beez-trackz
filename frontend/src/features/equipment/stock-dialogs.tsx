@@ -111,7 +111,7 @@ const wholeNumber = (min: number, message: string) =>
 
 const deploySchema = z.object({
   hiveId: z.string(),
-  stockId: z.string(),
+  itemId: z.string(),
   quantity: wholeNumber(1, "Quantity must be at least 1"),
   notes: z.string(),
 });
@@ -141,7 +141,7 @@ export function DeployDialog({
     resolver: zodResolver(deploySchema),
     defaultValues: {
       hiveId: hiveId ?? "",
-      stockId: stock?.id ?? "",
+      itemId: stock?.id ?? "",
       quantity: "1",
       notes: "",
     },
@@ -151,7 +151,7 @@ export function DeployDialog({
     if (!open) return;
     form.reset({
       hiveId: hiveId ?? "",
-      stockId: stock?.id ?? "",
+      itemId: stock?.id ?? "",
       quantity: "1",
       notes: "",
     });
@@ -163,11 +163,11 @@ export function DeployDialog({
   );
   const selectedStock =
     stock ??
-    availableStock.find((row) => row.id === form.watch("stockId"));
+    availableStock.find((row) => row.id === form.watch("itemId"));
 
   const resetDeploy = () => form.reset({
     hiveId: hiveId ?? "",
-    stockId: stock?.id ?? "",
+    itemId: stock?.id ?? "",
     quantity: "1",
     notes: "",
   });
@@ -176,8 +176,8 @@ export function DeployDialog({
       form.setError("hiveId", { message: "Hive is required" });
       return;
     }
-    if (!values.stockId) {
-      form.setError("stockId", { message: "Choose equipment to deploy" });
+    if (!values.itemId) {
+      form.setError("itemId", { message: "Choose equipment to deploy" });
       return;
     }
     const quantity = parseNum(values.quantity)!;
@@ -188,7 +188,7 @@ export function DeployDialog({
     }
     mutation.mutate(
       {
-        stockId: values.stockId,
+        itemId: values.itemId,
         hiveId: values.hiveId,
         quantity,
         notes: values.notes.trim() || undefined,
@@ -222,9 +222,9 @@ export function DeployDialog({
             <div className="grid gap-1.5">
               <Label>Equipment</Label>
               <Select
-                value={form.watch("stockId")}
+                value={form.watch("itemId")}
                 onValueChange={(value) =>
-                  form.setValue("stockId", value, { shouldValidate: true })
+                  form.setValue("itemId", value, { shouldValidate: true })
                 }
               >
                 <SelectTrigger>
@@ -248,7 +248,7 @@ export function DeployDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <FieldError message={errors.stockId?.message} />
+              <FieldError message={errors.itemId?.message} />
             </div>
           )}
           {!hiveId && (
@@ -362,7 +362,7 @@ export function ReceiveDialog({ stock, open, onOpenChange }: StockDialogProps) {
     }
     mutation.mutate(
       {
-        stockId: stock.id,
+        itemId: stock.id,
         quantity: parseNum(values.quantity)!,
         reason: values.reason,
         unitCostCents: unitCostCents ?? undefined,
@@ -530,7 +530,7 @@ export function AdjustStockDialog({
     }
     mutation.mutate(
       {
-        stockId: stock.id,
+        itemId: stock.id,
         quantity,
         reason: values.reason,
         from: quantity < 0 ? (values.from as StockPool) : undefined,
@@ -752,7 +752,7 @@ export function StateChangeDialog({
     }
     mutation.mutate(
       {
-        stockId: stock.id,
+        itemId: stock.id,
         quantity,
         reason: values.reason,
         from: values.from as StockPool,
@@ -912,7 +912,7 @@ export function EditDetailsDialog({
     }
     mutation.mutate(
       {
-        stockId: stock.id,
+        itemId: stock.id,
         storageLocation: values.storageLocation.trim() || null,
         neededQuantity: parseNum(values.needed)!,
         unitCostCents,

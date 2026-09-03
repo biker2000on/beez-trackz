@@ -95,8 +95,11 @@ export interface HiveSplit {
 }
 
 export interface HiveDeployment {
+  /** Deploy inventory_operations.id */
   id: string;
-  stockId: string;
+  itemId: string;
+  /** @deprecated handlers still serialize the item as stockId. */
+  stockId?: string;
   quantity: number;
   /** Quantity still on the hive after partial returns. */
   outstanding?: number;
@@ -205,7 +208,13 @@ export function useHiveSplits(id: string) {
 export function useHiveDeployments(id: string) {
   return useQuery({
     queryKey: ["hives", "detail", id, "deployments"],
-    queryFn: () => api.get<HiveDeployment[]>(`/hives/${id}/deployments`),
+    queryFn: async () => {
+      const rows = await api.get<HiveDeployment[]>(`/hives/${id}/deployments`);
+      return rows.map((row) => ({
+        ...row,
+        itemId: row.itemId || row.stockId || "",
+      }));
+    },
   });
 }
 
@@ -410,9 +419,9 @@ export function useCreateQueen() {
 export function useRemoveDeployment() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (deploymentId: string) =>
+    mutationFn: (operationId: string) =>
       api.post<{ success: boolean }>(
-        `/equipment/deployments/${deploymentId}/remove`,
+        `/equipment/deployments/${operationId}/remove`,
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["hives"] });

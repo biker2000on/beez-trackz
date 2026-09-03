@@ -1,4 +1,18 @@
-/** Response shapes for the equipment API (routes_equipment.go). */
+/** Response shapes for the equipment API (routes_equipment.go).
+
+Identity fields follow the ledger: stock rows are keyed by inventory item
+id, history/deploy/loss rows by operation id, and assembly returns
+`operationId`. Handlers still serialize some item ids as `stockId` on the
+wire; `ledgerItemId` accepts either key.
+*/
+
+/** Item identity from a handler that may still tag it `stockId`. */
+export function ledgerItemId(row: {
+  itemId?: string | null;
+  stockId?: string | null;
+}): string {
+  return row.itemId || row.stockId || "";
+}
 
 export type EquipmentCategory =
   | "box"
@@ -131,6 +145,7 @@ export interface EquipmentComponentLine {
 }
 
 export interface EquipmentStockRow {
+  /** inventory_items.id (GET /equipment/stock still keys the row as `id`). */
   id: string;
   typeId: string;
   typeName: string;
@@ -159,8 +174,11 @@ export interface EquipmentStockRow {
 }
 
 export interface StockAdjustment {
+  /** inventory_operations.id */
   id: string;
-  stockId: string;
+  itemId: string;
+  /** @deprecated handlers still serialize the item as stockId. */
+  stockId?: string;
   quantity: number;
   reason: string;
   notes: string | null;
@@ -170,8 +188,11 @@ export interface StockAdjustment {
 }
 
 export interface StockStateChange {
+  /** inventory_operations.id */
   id: string;
-  stockId: string;
+  itemId: string;
+  /** @deprecated handlers still serialize the item as stockId. */
+  stockId?: string;
   fromState: "serviceable" | "damaged" | "retired";
   toState: "serviceable" | "damaged" | "retired";
   quantity: number;
@@ -183,8 +204,11 @@ export interface StockStateChange {
 }
 
 export interface ActiveDeployment {
+  /** First deploy inventory_operations.id for this item×hive balance. */
   id: string;
-  stockId: string;
+  itemId: string;
+  /** @deprecated handlers still serialize the item as stockId. */
+  stockId?: string;
   quantity: number;
   quantityReturned: number;
   /** Still on the hive. */
@@ -214,7 +238,9 @@ export interface FrameSummary {
 
 /** One line of a submitted physical count, as the server resolved it. */
 export interface PhysicalCountLine {
-  stockId: string;
+  itemId: string;
+  /** @deprecated handlers still serialize the item as stockId. */
+  stockId?: string;
   typeId: string;
   typeName: string;
   previousAvailable: number;
@@ -258,8 +284,11 @@ export interface LossReport {
     valueCents: number;
   }[];
   events: {
+    /** inventory_operations.id */
     id: string;
-    stockId: string;
+    itemId: string;
+    /** @deprecated handlers still serialize the item as stockId. */
+    stockId?: string;
     typeName: string;
     typeCategory: EquipmentCategory;
     kind: LossKind;
@@ -269,6 +298,17 @@ export interface LossReport {
     valueCents: number;
     date: string;
   }[];
+}
+
+/** POST /equipment/assemblies success body. */
+export interface AssembleResult {
+  operationId?: string;
+  typeId?: string;
+  typeName: string;
+  action: "assemble" | "disassemble";
+  quantity: number;
+  replayed?: boolean;
+  components?: { typeId: string; typeName: string; quantity: number }[];
 }
 
 /** Minimal hive shape used for the deploy-to-hive select (GET /hives). */
