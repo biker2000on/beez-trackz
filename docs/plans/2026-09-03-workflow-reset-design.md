@@ -1253,6 +1253,23 @@ legacy-chain twin (`f5b0843`).
 
 ### Wave 4 — Production and Sales workbenches — **frontend half landed 2026-09-03, with deviations**
 
+**Backend half landed 2026-09-03 (`8398aa1`).** Named commands for sale
+create/update/cancel and settlement (`app/sales`), lot create/update, jarring,
+bottling runs, product batches and jar-size updates (`app/production`) — the
+wave-3 leftovers included; `GET /api/v1/production/workbench` and
+`GET /api/v1/sales/workbench`, each one application query over
+`inventory_available` / `inventory_balances` with lockout and shortfall
+explanations in the payload and row-level `commands[]` in the `app/work`
+command shape; the dead `POSTExclusions` prefix fixed and
+`offline-routes.generated.ts` regenerated (harvest-session create stays
+`online_only`, its child entries queueable); first outbox consumers in
+`cmd/worker` (ntfy for `sale.recorded` / `harvest_entry.added`,
+recommendation regeneration for `feeding.refilled`) with durable
+per-consumer claims by event id. No migration was needed. Lead note: the
+worker's report carried a mistyped attempt id, so the harness marked the
+attempt failed; the lead verified the worktree directly (build, vet, gofmt,
+focused suites) before integrating.
+
 **Frontend half landed.** `frontend/src/features/workbench/` and the two
 canonical pages `/production/workbench` and `/sales/workbench`. Each renders
 from exactly one §4.8 read model call — five panels on Production in the
