@@ -16,7 +16,9 @@ The reset policy is the roadmap paragraph **Reset policy after the gate** in
 and freeze) is section 6; its binding spec is
 `docs/plans/2026-09-01-inventory-ledger-design.md` §9, and the exact writer /
 reader / freeze-set checklist is
-`docs/plans/2026-09-02-ledger-read-path-migration.md`.
+`docs/plans/2026-09-02-ledger-read-path-migration.md`. Phase B (squash to
+`00001_baseline.sql`, drop the frozen tables, recreate every database, restore)
+is section 7; its binding spec is the same §9, steps 6-9.
 
 Run every Go command with `TZ=UTC`. Do not restore into the compose working
 database `beeztrackz` on volume `postgres_data`.
@@ -30,10 +32,11 @@ database `beeztrackz` on volume `postgres_data`.
 | GnuCash guarded restore HTTP + `SyncEnabled` write refusal | Wave 1, in this tree | `backend/internal/httpapi/routes_gnucash_sync.go` |
 | `import-snapshot` CLI | **Landing in this wave** | Shared CLI contract below; implementation `backend/cmd/import-snapshot/` |
 | `roundtrip-gate` CLI | **Landing in this wave** | Assignment flags below; implementation `backend/cmd/roundtrip-gate/`; procedure `docs/plans/2026-09-01-roundtrip-gate-design.md` sections 2 and 5 |
-| `gnucash_sync_settings.restore_state` and mark-reconciled | **Landing in this wave** | `backend/internal/db/migrations/00049_gnucash_restore_state.sql` and `backend/internal/httpapi/routes_gnucash_sync.go` |
-| Ledger tables, views, seeded locations (incl. virtual `deployed`), nullable item/lot links, `equipment_types` catalog attributes | Wave 1, in this tree (2026-09-02) | `backend/internal/db/migrations/00050_inventory_ledger.sql` |
-| `schema_generation` stamp + generation guard | Wave 1, in this tree (2026-09-02) | `backend/internal/db/migrations/00051_schema_generation.sql`, `backend/internal/db/generation.go`, `db.ConnectWithOptions` |
+| `gnucash_sync_settings.restore_state` and mark-reconciled | **Landing in this wave** | `backend/internal/db/legacy-00001-00052/00049_gnucash_restore_state.sql` and `backend/internal/httpapi/routes_gnucash_sync.go` |
+| Ledger tables, views, seeded locations (incl. virtual `deployed`), nullable item/lot links, `equipment_types` catalog attributes | Wave 1, in this tree (2026-09-02) | `backend/internal/db/legacy-00001-00052/00050_inventory_ledger.sql` |
+| `schema_generation` stamp + generation guard | Wave 1, in this tree (2026-09-02) | `backend/internal/db/legacy-00001-00052/00051_schema_generation.sql`, `backend/internal/db/generation.go`, `db.ConnectWithOptions` |
 | `app/inventory` (`Record` / `Reverse` / `CheckAvailable`, builders, queries, checkpoints) | Wave 1, in this tree (2026-09-02) | `backend/internal/app/inventory/` (`doc.go`, `build/build.go`, `service.go`, `types.go`) |
+| Phase B baseline `00001_baseline.sql`, the `BEEZ_SCHEMA_BASELINE` profile switch, and the dropped-by-baseline declaration | In this tree (2026-09-03), **not yet applied to any database** | `backend/internal/db/migrations/00001_baseline.sql`, `backend/internal/db/schema_profile.go`, `backend/internal/db/baseline_domains.go`; procedure section 7 |
 | `import-snapshot -backfill-ledger` (Phase A in-place translation, residual splits, freeze) | **Landing in this wave** | `backend/cmd/import-snapshot/main.go` for the authoritative flags; spec §9 Phase A; tests named in spec §12 |
 
 Where a flag, report field, or refusal is not yet in this tree, this runbook
@@ -1056,9 +1059,9 @@ squash.
 
 Phase B (squash to `00001_baseline.sql`, drop the frozen tables, stamp
 `schema_generation = 'ledger-v1-baseline'`, recreate every database,
-ordinary P0 gate against the new schema) starts only after the ledger
-has run alone for a real period **and** the physical count above has
-landed. That is a later act. This wave does not do it.
+ordinary P0 gate against the new schema) is **section 7**. It starts only
+after the ledger has run alone for a real period **and** the physical
+count above has landed. That is a later act. This wave does not do it.
 
 ### STOP — do not freeze / do not squash
 
@@ -1085,7 +1088,234 @@ is true:
 
 ---
 
-## 7. Troubleshooting
+## 7. Phase B — squash to the baseline, reset, restore
+
+Phase B is spec §9 steps 6–9: replace the 00001–00052 chain with one
+`00001_baseline.sql`, drop the ten frozen legacy tables and the five
+views over them, stamp a new generation, recreate every database, and
+restore the final snapshot through the ordinary P0 gate. Translation
+already happened in Phase A, so nothing is translated here — this is a
+schema change proved by a plain round trip.
+
+**Do not start Phase B until all of section 6.6 is done:** committed
+freeze, physical count as `count_adjust` operations, post-adjustment
+snapshot with a passing gate, GnuCash re-key / rebaseline /
+mark-reconciled. Phase B is a later act.
+
+### 7.1 What the baseline is, and how it is selected
+
+`backend/internal/db/migrations/00001_baseline.sql` is the whole target
+schema in one migration. The old chain now lives, unembedded, at
+`backend/internal/db/legacy-00001-00052/` for reference; nothing runs it
+except the in-package migration tests and the default profile.
+
+Both chains ship in the binary and **the legacy chain is the default**.
+The baseline is selected explicitly, by environment variable:
+
+```text
+BEEZ_SCHEMA_BASELINE=1     # 1 | true | yes | on (case-insensitive)
+```
+
+| `BEEZ_SCHEMA_BASELINE` | Chain applied | Generation expected | goose head |
+|---|---|---|---|
+| unset, empty, `0`, `false`, anything else | `legacy-00001-00052` | `ledger-v1` | 52 |
+| `1` / `true` / `yes` / `on` | `migrations` (the baseline) | `ledger-v1-baseline` | 1 |
+
+An unconfigured binary therefore behaves exactly as it did before the
+squash landed in the tree. Set the variable on the process, not on a
+single command: `server`, `worker`, `set-password`, `export-snapshot`,
+`import-snapshot`, and `roundtrip-gate` each read it at connect time,
+and a mixed pair (one process on each profile) refuses to share a
+database — which is the guard doing its job, not a bug.
+
+The baseline is **generated, never hand-written**. The procedure is in
+the header comment of `00001_baseline.sql`: migrate a scratch database
+through the legacy chain, copy it, drop the ten tables / five views /
+seven dead functions / four dead enums, `pg_dump --schema-only`, strip
+the psql preamble, and re-attach the seeds. `TestBaselineMatchesTheLegacyChain`
+in `backend/internal/db` proves the result equals a chain-migrated
+database, column for column and index for index, minus the declared
+drops. Re-run it whenever the legacy chain moves before the reset lands:
+
+```bash
+cd backend
+TZ=UTC TEST_DATABASE_URL=postgres://... go test ./internal/db -run Baseline -p 1 -count=1
+```
+
+### 7.2 What the baseline drops
+
+Ten tables and five views, and nothing else (spec decision 10 and §8).
+The list is declared once, in
+`backend/internal/db/baseline_domains.go`, and every reader that has to
+explain a difference reads it from there.
+
+| Dropped tables (also snapshot domains) | Dropped views |
+|---|---|
+| `honey_movements`, `stock_movements`, `product_adjustments`, `equipment_stock`, `equipment_stock_adjustments`, `equipment_deployments`, `equipment_deployment_returns`, `equipment_state_changes`, `stock_locations`, `equipment_type_components` | `honey_lot_balances`, `honey_varietal_balances`, `equipment_stock_status`, `equipment_stock_reconciliation`, `equipment_loss_events` |
+
+Retained tables keep **every column they had after 00052**, so a Phase A
+snapshot restores without a column-level transform. Four foreign keys
+that pointed into the dropped set went with it, leaving their columns as
+unconstrained uuids: `consignment_settlements.location_id`,
+`sales.stock_location_id`, `external_sync.location_id`, and
+`sale_items.equipment_stock_id`. Re-keying those to
+`inventory_locations` / `inventory_items` is application work (spec §8,
+open items 2 and 3), not schema work, and must be finished before the
+columns are retired in a later migration.
+
+`external_sync.entity_type`'s CHECK is likewise still the seventeen values
+00041 wrote, six of them dissolved (`honey_movement`, `stock_movement`,
+`equipment_stock`, `equipment_stock_adjustment`, `product_adjustment`,
+`stock_location`). Narrowing it to eleven is the same app-side re-key
+(spec §8, section 6.6 step 3) and lands as a second migration on top of the
+baseline — or by regenerating the baseline afterwards. Keeping it verbatim
+here is deliberate: a Phase A artifact that still carries rows of those types
+must restore, and the re-key rewrites them afterwards.
+
+Seven trigger functions and four enum types lost their only tables and
+are dropped with them: `equipment_component_cycle_guard`,
+`equipment_ledger_sync`, `equipment_merge_duplicate_stock`,
+`equipment_stock_ledger_totals`, `equipment_stock_reconcile_guard`,
+`equipment_stock_sync`, `honey_movement_lot_matches_run`; enums
+`equipment_state`, `frame_condition`, `honey_movement_kind`,
+`stock_adjustment_reason`.
+
+### 7.3 A Phase A snapshot restored into a baseline database
+
+The final snapshot is taken from a Phase A database whose legacy tables
+are present and frozen, so the artifact carries all ten dropped domains.
+The baseline target has nowhere to put them. That is a **declared
+`formatVersion` 1 transform**, not a loss:
+
+- name: `domains-dropped-by-baseline`
+- version: `ledger-v1-baseline-drop-v1`
+- domains: the ten tables above, **listed by name** in the gate report
+
+"Zero unexplained differences" is still the bar. A difference is
+explained only if the report names the domain; a report that says "some
+domains are missing" fails the gate. The ledger domains
+(`inventory_*`) are the authority for those quantities and round-trip
+normally, which is what makes the drop safe.
+
+`TestPhaseBDroppedDomainsAreDeclaredByName` and
+`TestPhaseBRoundTripIntoABaselineDatabase` in
+`backend/cmd/roundtrip-gate/phase_b_test.go` rehearse exactly this on
+disposable databases.
+
+### 7.4 Recreate every database — the second generation change
+
+> **Recreate all databases, again.** Section 1.1 already required this
+> once, when the guard landed and the stamp became `ledger-v1`. The
+> squash changes the generation a second time, to
+> `ledger-v1-baseline`, and moves the goose head from 52 to 1. Every
+> developer, CI, and test database must be dropped and recreated from
+> the baseline — `DROP DATABASE x WITH (FORCE); CREATE DATABASE x;`,
+> then let a `BEEZ_SCHEMA_BASELINE=1` process migrate it. **Migrating
+> forward is not available this time.** There is no migration from 52
+> to the baseline: goose would see version 1 as unapplied and try to
+> create 72 tables that already exist. The generation guard turns that
+> into a clean refusal instead of a DDL error, and the only cure is to
+> recreate.
+
+The production working database is recreated by the reset in 7.5, not
+by hand.
+
+### 7.5 Ordered Phase B procedure
+
+Every step runs with `TZ=UTC`. Steps 1–4 do not touch the working
+database.
+
+1. **Final snapshot.** Export from the Phase A working database
+   (section 1). The legacy tables are frozen, so the exporter omits the
+   stale `legacy` aggregate family and fills `newLedger` — that is
+   expected, and it is why the parity oracle for this reset is the
+   ledger, not the legacy sums. Store the artifact and its wrapping
+   checksum off the database host (section 1, "Where to store it").
+
+2. **Gate the artifact against a baseline target.** The ordinary P0
+   gate, with the baseline profile selected for the run:
+
+   ```bash
+   cd backend
+   TZ=UTC BEEZ_SCHEMA_BASELINE=1 go run ./cmd/roundtrip-gate \
+     -admin  postgres://.../postgres \
+     -source postgres://.../beeztrackz \
+     -workdir ./gate-phase-b
+   ```
+
+   The source is the Phase A database and is read only; the disposable
+   target is created, migrated with the baseline, restored into,
+   re-exported, and dropped. Read the report per section 3: it must
+   pass, and its explained findings must be the ten dropped domains by
+   name and nothing else. **Retain `gate-report.json`,
+   `gate-summary.txt`, and `artifact.sha256`.**
+
+3. **STOP and check.** Work the "do not squash" table in 7.6. Any row
+   that is true stops the reset.
+
+4. **Deploy the baseline binary nowhere yet.** Confirm the image or
+   binary you are about to run carries `BEEZ_SCHEMA_BASELINE=1` in its
+   environment and that no other process (worker, cron, a stray local
+   `server`) is pointed at the working database on the old profile. A
+   mixed pair does not corrupt anything — the guard refuses — but it
+   does mean a silent outage while you are mid-reset.
+
+5. **Recreate every database.** Working database last:
+   - developer and CI databases (7.4);
+   - the scratch databases the test suite creates are dropped and
+     recreated by the tests themselves; nothing to do;
+   - the working database: stop `server` and `worker`, then
+     `DROP DATABASE beeztrackz WITH (FORCE); CREATE DATABASE beeztrackz;`
+     from the `postgres` maintenance database.
+
+     Take a `pg_dump` of the working database to independent storage
+     first. It is not the restore path — the artifact from step 1 is —
+     but it is the only thing that can answer "what did the old
+     database actually hold" if the restore surprises you.
+
+6. **Migrate and restore.** Bring up one process with
+   `BEEZ_SCHEMA_BASELINE=1` to migrate the empty database (it will
+   apply `00001_baseline.sql` and stamp `ledger-v1-baseline`), then
+   restore the step-1 artifact through `import-snapshot` with GnuCash
+   sync disabled, exactly as section 4 describes. The importer skips
+   the ten dropped domains as a declared transform and says so in the
+   restore report; any *other* skip is a failure.
+
+7. **Verify.** Re-run the verification of section 4: record counts per
+   domain, the `newLedger` aggregate family against the artifact's, and
+   a spot check of on-hand quantities through `inventory_available`.
+   Confirm `SELECT generation FROM schema_generation` reads
+   `ledger-v1-baseline` and that `goose_db_version` holds exactly one
+   applied row.
+
+8. **Reconfigure.** Section 5, unchanged: passwords and OIDC relink,
+   API tokens, ntfy token, AI credentials, then the GnuCash guarded
+   sequence (5.5). Sync stays disabled until mark-reconciled.
+
+9. **Retire the legacy chain.** Once the working database and every
+   developer database are on the baseline and have stayed there for a
+   release, delete `backend/internal/db/legacy-00001-00052/`, drop the
+   profile switch, and make the baseline unconditional. Until then the
+   switch is what lets one tree serve both.
+
+### 7.6 STOP — do not squash
+
+| STOP | Why |
+|---|---|
+| Section 6.6 is not finished (count, post-adjustment snapshot, GnuCash re-key + mark-reconciled) | Phase B is the last act, not a shortcut past the reconciliation. |
+| The step-2 gate did not pass, or its explained findings are not exactly the ten dropped domains by name | An unexplained difference is data you are about to lose. |
+| `TestBaselineMatchesTheLegacyChain` has not been run against this tree since the last migration landed | The baseline is generated; an unregenerated baseline is stale, and goose will not tell you. |
+| You were about to "migrate" a Phase A database to the baseline instead of recreating it | There is no such migration (7.4). The guard refuses; do not work around it. |
+| A developer, CI, or test database is still on `ledger-v1` | It will be refused at start-up, or a foreign schema gets served. Recreate it. |
+| No `pg_dump` of the working database on independent storage | The artifact is the restore path, but you still want the raw answer to "what was there". |
+| GnuCash `sync_enabled` is true | Restore with sync disabled; re-enable only after the guarded sequence (5.5). |
+| The target is compose `beeztrackz` / volume `postgres_data` and this is still a rehearsal | Rehearse on a disposable database (section 3 pattern) with `BEEZ_SCHEMA_BASELINE=1`. |
+| `sale_items.equipment_stock_id` / `sales.stock_location_id` still drive a live read path | Those FKs are gone in the baseline (7.2). Move the readers first. |
+| `TEST_DATABASE_URL` is unset, so the Phase B tests skipped and you read that as a pass | Nothing was proven. |
+
+---
+
+## 8. Troubleshooting
 
 Importer and gate failures are per-file / per-record. A silent partial restore
 is a bug. Kinds come from `backend/internal/app/errors.go`. Report outcomes
@@ -1184,8 +1414,13 @@ A run is not OK unless `conflicted` and `failed` are both zero
 - `external_sync` allowlist (re-key source): `backend/internal/httpapi/external_sync.go`
 - Importer CLI (P0 restore and, this wave, `-backfill-ledger`): `backend/cmd/import-snapshot/main.go`
 - Gate CLI (this wave): `backend/cmd/roundtrip-gate/`
-- Restore-state column: `backend/internal/db/migrations/00049_gnucash_restore_state.sql`
-- Ledger tables (wave 1): `backend/internal/db/migrations/00050_inventory_ledger.sql`
-- Generation stamp: `backend/internal/db/migrations/00051_schema_generation.sql`
+- Restore-state column: `backend/internal/db/legacy-00001-00052/00049_gnucash_restore_state.sql`
+- Ledger tables (wave 1): `backend/internal/db/legacy-00001-00052/00050_inventory_ledger.sql`
+- Generation stamp: `backend/internal/db/legacy-00001-00052/00051_schema_generation.sql`
 - Generation guard: `backend/internal/db/generation.go`, `backend/internal/db/db.go`
 - Guard decisions A6 and OV3: `docs/plans/2026-09-01-inventory-ledger-design.md` sections 2.1 and 9 step 7
+- Phase B baseline (section 7): `backend/internal/db/migrations/00001_baseline.sql` (its header comment is the regeneration procedure)
+- Legacy chain, kept for reference only: `backend/internal/db/legacy-00001-00052/`
+- Profile switch and the two chains: `backend/internal/db/schema_profile.go` (`BEEZ_SCHEMA_BASELINE`)
+- Dropped-by-baseline declaration: `backend/internal/db/baseline_domains.go`
+- Phase B tests: `backend/internal/db/schema_baseline_test.go`, `backend/cmd/roundtrip-gate/phase_b_test.go`

@@ -65,7 +65,7 @@ func requireGenerationError(t *testing.T, err error, reason string, actualSubstr
 // A hardcoded number is the exact failure the guard exists to catch: it would
 // keep passing after the next migration lands.
 func TestExpectedMaxMigrationIsDerivedFromTheEmbeddedChain(t *testing.T) {
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	entries, err := fs.ReadDir(legacyChainFS, LegacyChainDir)
 	if err != nil {
 		t.Fatalf("read embedded migrations: %v", err)
 	}

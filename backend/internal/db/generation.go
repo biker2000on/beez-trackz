@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,68 +12,29 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Generation is the schema generation this binary was built for. It is
-// stamped into schema_generation by migration 00051 and re-stamped by the
-// Phase B baseline; a database claiming anything else is a different schema
-// wearing the same goose chain (design review A6).
+// Generation is the schema generation of the legacy 00001-00052 chain — the
+// Phase A ledger, and the schema every database in service today carries. It
+// is stamped by migration 00051; a database claiming anything else is a
+// different schema wearing the same goose chain (design review A6).
 const Generation = "ledger-v1"
+
+// BaselineGeneration is the schema generation of the Phase B squash
+// (00001_baseline.sql). It is deliberately a different string from Generation:
+// the baseline is goose version 1, so without a distinct stamp a database still
+// sitting on the old chain would look "already migrated" to a baseline binary,
+// which is exactly the hole A6 describes.
+const BaselineGeneration = "ledger-v1-baseline"
 
 // LegacyGeneration is the classification of a database that predates the
 // stamp entirely — no schema_generation table. It is not a value any
 // migration writes; it is what "no answer" means.
 const LegacyGeneration = "legacy"
 
-// expectedMaxMigration is the highest version in the embedded migrations FS.
-// It is derived at init rather than hardcoded so adding a migration cannot
-// leave the guard behind, which is exactly the drift the guard exists to
-// catch.
-var expectedMaxMigration = mustMaxEmbeddedMigration()
-
 // ExpectedMaxMigration reports the goose version this binary expects a
-// database of Generation to be at. Exported for the guard's error messages
-// and for tests.
-func ExpectedMaxMigration() int64 { return expectedMaxMigration }
-
-func mustMaxEmbeddedMigration() int64 {
-	version, err := maxEmbeddedMigration()
-	if err != nil {
-		// An embedded FS that does not parse is a build-time defect; there is
-		// no runtime recovery and no safe default, because a wrong default
-		// disables the guard silently.
-		panic(err)
-	}
-	return version
-}
-
-func maxEmbeddedMigration() (int64, error) {
-	entries, err := fs.ReadDir(migrationsFS, "migrations")
-	if err != nil {
-		return 0, fmt.Errorf("read embedded migrations: %w", err)
-	}
-	var highest int64
-	var found bool
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".sql") {
-			continue
-		}
-		digits := name
-		if cut := strings.IndexByte(name, '_'); cut >= 0 {
-			digits = name[:cut]
-		}
-		version, err := strconv.ParseInt(digits, 10, 64)
-		if err != nil {
-			return 0, fmt.Errorf("embedded migration %q has no numeric version prefix", name)
-		}
-		if !found || version > highest {
-			highest, found = version, true
-		}
-	}
-	if !found {
-		return 0, errors.New("embedded migrations FS holds no .sql migrations")
-	}
-	return highest, nil
-}
+// database of ActiveGeneration to be at: 52 on the legacy chain, 1 on the
+// baseline. It is derived from the embedded FS rather than hardcoded, so
+// adding a migration cannot leave the guard behind.
+func ExpectedMaxMigration() int64 { return maxEmbeddedMigrationFor(ActiveProfile()) }
 
 // Generation guard failure reasons. They are stable strings so callers and
 // tests branch on the shape of the failure rather than on its prose.
@@ -146,8 +106,9 @@ func CheckGeneration(ctx context.Context, pool generationQuerier, opts Generatio
 		return err
 	}
 
+	expected := ActiveGeneration()
 	switch generation {
-	case Generation:
+	case expected:
 		// Right generation: the goose head must match too, or this database
 		// has been moved by some other build of the chain.
 		return checkMigrationVersion(ctx, pool)
@@ -155,7 +116,7 @@ func CheckGeneration(ctx context.Context, pool generationQuerier, opts Generatio
 	case LegacyGeneration:
 		if !opts.AllowLegacy {
 			return &GenerationError{
-				Reason: ReasonMissingTable, Actual: LegacyGeneration, Expected: Generation,
+				Reason: ReasonMissingTable, Actual: LegacyGeneration, Expected: expected,
 				Hint: "this database predates the schema_generation stamp; recreate it from the current migrations, " +
 					"or read it with export-snapshot --legacy-source",
 			}
@@ -165,7 +126,7 @@ func CheckGeneration(ctx context.Context, pool generationQuerier, opts Generatio
 
 	default:
 		return &GenerationError{
-			Reason: ReasonGenerationMismatch, Actual: generation, Expected: Generation,
+			Reason: ReasonGenerationMismatch, Actual: generation, Expected: expected,
 			Hint: "recreate the database from the current migrations, or run the binary built for that generation",
 		}
 	}
@@ -207,7 +168,7 @@ func detectGeneration(ctx context.Context, pool generationQuerier) (string, erro
 		// A table with no row is a rewritten stamp, not a legacy database:
 		// somebody deleted the row. Refusing is the whole point.
 		return "", &GenerationError{
-			Reason: ReasonGenerationMismatch, Actual: "no row in schema_generation", Expected: Generation,
+			Reason: ReasonGenerationMismatch, Actual: "no row in schema_generation", Expected: ActiveGeneration(),
 			Hint: "the generation stamp was deleted; recreate the database from the current migrations",
 		}
 	default:
@@ -215,7 +176,7 @@ func detectGeneration(ctx context.Context, pool generationQuerier) (string, erro
 		return "", &GenerationError{
 			Reason:   ReasonGenerationMismatch,
 			Actual:   fmt.Sprintf("%d rows in schema_generation (%s)", len(generations), strings.Join(generations, ", ")),
-			Expected: Generation,
+			Expected: ActiveGeneration(),
 			Hint:     "exactly one generation row is expected; recreate the database from the current migrations",
 		}
 	}
@@ -235,7 +196,7 @@ func checkMigrationVersion(ctx context.Context, pool generationQuerier) error {
 		// stamp is only ever written by a migration.
 		return &GenerationError{
 			Reason: ReasonMigrationMismatch, Actual: "no goose_db_version table",
-			Expected: strconv.FormatInt(expectedMaxMigration, 10),
+			Expected: strconv.FormatInt(ExpectedMaxMigration(), 10),
 			Hint:     "recreate the database from the current migrations",
 		}
 	}
@@ -243,11 +204,11 @@ func checkMigrationVersion(ctx context.Context, pool generationQuerier) error {
 	if actual != nil {
 		version = *actual
 	}
-	if version != expectedMaxMigration {
+	if version != ExpectedMaxMigration() {
 		return &GenerationError{
 			Reason:   ReasonMigrationMismatch,
 			Actual:   strconv.FormatInt(version, 10),
-			Expected: strconv.FormatInt(expectedMaxMigration, 10),
+			Expected: strconv.FormatInt(ExpectedMaxMigration(), 10),
 			Hint: "this database was migrated by a different build of the chain; " +
 				"deploy the matching binary or recreate the database",
 		}

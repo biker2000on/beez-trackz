@@ -60,12 +60,12 @@ func TestEquipmentLedgerMigrationOnLegacyData(t *testing.T) {
 	defer pool.Close()
 
 	// Stop at the last migration before the equipment ledger existed.
-	goose.SetBaseFS(migrationsFS)
+	goose.SetBaseFS(legacyChainFS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	if err := goose.UpTo(sqlDB, "migrations", 3); err != nil {
+	if err := goose.UpTo(sqlDB, LegacyChainDir, 3); err != nil {
 		sqlDB.Close()
 		t.Fatalf("migrate to the pre-equipment-ledger schema: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestEquipmentLedgerMigrationOnLegacyData(t *testing.T) {
 
 	// --- migrate forward ---
 
-	if err := goose.Up(sqlDB, "migrations"); err != nil {
+	if err := goose.Up(sqlDB, LegacyChainDir); err != nil {
 		sqlDB.Close()
 		t.Fatalf("apply the equipment ledger migration: %v", err)
 	}

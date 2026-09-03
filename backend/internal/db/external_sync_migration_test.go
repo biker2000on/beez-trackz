@@ -63,12 +63,12 @@ func TestExternalSyncMigrationRenamesHoneySaleRows(t *testing.T) {
 
 	// Down has the mirror CHECK problem: 'honey_sale' is not on the new
 	// allowlist, so the constraint must drop before the reverse UPDATEs.
-	goose.SetBaseFS(migrationsFS)
+	goose.SetBaseFS(legacyChainFS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		t.Fatalf("set dialect: %v", err)
 	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	if err := goose.DownTo(sqlDB, "migrations", 40); err != nil {
+	if err := goose.DownTo(sqlDB, LegacyChainDir, 40); err != nil {
 		sqlDB.Close()
 		t.Fatalf("migrate 00041 down: %v", err)
 	}

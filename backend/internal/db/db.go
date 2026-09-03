@@ -2,18 +2,12 @@ package db
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 )
-
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
 
 // ConnectOptions is the single knob set every entry point in the tree turns.
 // The zero value is the strict path: no migrations, current generation only,
@@ -123,46 +117,9 @@ const migrationLockID int64 = 8123471290347123
 // container never reports unhealthy (API-012).
 const migrationTimeout = 15 * time.Minute
 
+// migrate applies the chain this process was configured for. The two-chain
+// selection lives in schema_profile.go; everything else about a startup
+// migration (advisory lock, timeout, per-migration transactions) is shared.
 func migrate(parent context.Context, pool *pgxpool.Pool) error {
-	goose.SetBaseFS(migrationsFS)
-	if err := goose.SetDialect("postgres"); err != nil {
-		return err
-	}
-	sqlDB := stdlib.OpenDBFromPool(pool)
-	defer sqlDB.Close()
-
-	// parent is cancelled on SIGTERM/SIGINT, so an operator can abort a
-	// startup that is stuck waiting on the lock instead of having to kill
-	// the container.
-	ctx, cancel := context.WithTimeout(parent, migrationTimeout)
-	defer cancel()
-
-	// Serialise migrators behind one advisory lock. Two API processes coming
-	// up together during a rolling deploy (or two test packages sharing a
-	// database) otherwise race on the same DDL and one of them fails.
-	conn, err := sqlDB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire migration connection: %w", err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
-		return fmt.Errorf("acquire migration lock: %w", err)
-	}
-	defer func() {
-		// The unlock must not inherit a cancelled or expired ctx, or the
-		// session-scoped lock would only be released when the pooled
-		// connection is eventually closed — blocking the next deploy.
-		unlockCtx, unlockCancel := context.WithTimeout(
-			context.WithoutCancel(parent), 10*time.Second)
-		defer unlockCancel()
-		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, migrationLockID)
-	}()
-
-	// Each migration runs in its own transaction, so a cancel (SIGTERM) or
-	// the timeout rolls the in-flight one back rather than leaving a
-	// half-applied schema.
-	if err := goose.UpContext(ctx, sqlDB, "migrations"); err != nil {
-		return fmt.Errorf("run migrations: %w", err)
-	}
-	return nil
+	return migrateChain(parent, pool, activeChain())
 }

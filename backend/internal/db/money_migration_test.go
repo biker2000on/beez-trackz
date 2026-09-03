@@ -203,13 +203,13 @@ func replaceDatabase(databaseURL, name string) string {
 }
 
 func migrateTo(pool *pgxpool.Pool, version int64) error {
-	goose.SetBaseFS(migrationsFS)
+	goose.SetBaseFS(legacyChainFS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
 	defer sqlDB.Close()
-	return goose.UpTo(sqlDB, "migrations", version)
+	return goose.UpTo(sqlDB, LegacyChainDir, version)
 }
 
 func mustExec(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
