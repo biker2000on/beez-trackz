@@ -21,7 +21,10 @@ func TestExportImportReexportDigestEquality(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// Export, restore, re-import, and re-export of ~80 domain files over the
+	// remote test server takes several minutes; the budget is generous so a
+	// slow link fails on a real assertion, never on this deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
 	sourceURL, sourceCleanup := freshImportDatabase(ctx, t, adminURL, "beez_snapshot_src_"+suffix)
