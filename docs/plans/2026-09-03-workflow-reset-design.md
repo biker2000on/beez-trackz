@@ -1251,7 +1251,72 @@ legacy-chain twin (`f5b0843`).
 - **Acceptance.** For the six migrated routes a receipt exists **iff** the
   command committed, and `POST /api/v1/sales` cannot double-book under replay.
 
-### Wave 4 — Production and Sales workbenches
+### Wave 4 — Production and Sales workbenches — **frontend half landed 2026-09-03, with deviations**
+
+**Frontend half landed.** `frontend/src/features/workbench/` and the two
+canonical pages `/production/workbench` and `/sales/workbench`. Each renders
+from exactly one §4.8 read model call — five panels on Production in the
+§3.2 order (extraction in progress → bulk by lot → waiting on a bottling run
+→ finished stock → product batches), four on Sales in the §3.3 order
+(today's takings → drafts → consignment → sellable at home). Every mutation
+is the source command the read model named, run through
+`api.send(command.method, command.path, …)` with an `X-Offline-Mutation-ID`
+substituted into the command's own `idempotencyKeyTemplate` (§5.1); there is
+no `PUT /workbench`. Lockout and shortfall explanations are rendered *above*
+the command they would refuse, and pinned in that DOM order by
+`frontend/tests/e2e/workbench.spec.ts` (11 tests: one-call-per-workbench,
+journey order, explanation-before-refusal for both a locked-out lot and a
+short draft, forbidden command disabled with a visible reason, `start
+extraction` online-only while offline, command-bound mutation id, the
+`X-Beez-Cache: stale` marker, and an error state that is not an empty
+workbench).
+
+**Deviations and choices, for the lead to reconcile:**
+
+1. **The backend half is not in this change.** The pages were coded to the
+   §4.8 JSON verbatim while `routes_workbench.go` was written in parallel, so
+   the spec drives the real pages against `page.route`-mocked responses. Until
+   both land the pages 500-and-explain against a live server.
+2. **Row-level `commands[]` are an accepted extension of §4.8.** The section
+   shows `commands` on `openSessions[]` and at the response root only. The
+   pages also render an optional `commands?: WorkCommand[]` on bulk lots,
+   lots awaiting bottling, jar sizes, product batches, drafts, consignment
+   locations and sellable items. Absent means "no command on this row", so a
+   server that emits only the two documented positions is fully supported.
+3. **`BulkLot.lockoutReason` is an accepted optional field.** §4.8 gives
+   `lockedOut` and `lockoutUntil`; when the server can supply the lockout's
+   own words the row states them. Without it the row still says it is locked
+   out and until when.
+4. **Decimal quantities are rendered rounded and kept exact.** `availableLbs`
+   arrives as a string (`"42.250"`); it is displayed through
+   `features/honey/format.formatLbs` and the verbatim server value is kept on
+   `data-available-lbs`, so a rounded display never becomes the number an
+   operator copies into a count.
+5. **`useRunWorkbenchCommand` is a second copy of `useRunWorkCommand`.** The
+   field-slice hook takes a `WorkItem` it does not use and invalidates the
+   field caches; a bottling run has to invalidate honey, commerce,
+   stock-locations and harvest-session caches instead. `features/work` is
+   wave-2 code this wave does not own, so the two coexist. The same is true of
+   the `X-Beez-Cache` → `freshness` rewrite, which is restated in
+   `features/workbench/api.ts`. Both should collapse into one exported helper
+   when `features/work` is next opened — wave 5.
+6. **No keyboard action centre on the workbenches.** `WorkCommand.keyboard` is
+   carried in the type and ignored by these pages: `/sales/*` already binds
+   `j s u l v a` through `HoneyQuickActions`, and a second global key listener
+   would fight it. Today and the yard queue keep theirs (D8).
+7. **`/sales/workbench` inherits nine chrome fetches.** `sales/layout.tsx` →
+   `SalesSectionNav` → `HoneyQuickActions` mounts its six record dialogs
+   eagerly, prefetching their option lists on every `/sales/*` route. The
+   workbench itself reads nothing but `GET /sales/workbench`; the chrome reads
+   are listed by name in `workbench.spec.ts` so the assertion still fails if
+   the *page* grows a fetch. `features/honey` and the section nav are not
+   owned this wave — wave 5's nav rewrite is where this goes to zero.
+8. **Deep links point at today's routes.** The workbenches link to
+   `/honey/sessions/[id]`, `/honey/lots`, `/honey/jars`, `/sales/[id]`,
+   `/sales/consignment/[id]` and `/sales/market-day`. Nothing is renamed,
+   deleted or redirected here; wave 5 rewrites them in one change. The pages
+   are reachable by URL only — `NAV_ITEMS`, `MOBILE_PRIORITY`, `manifest.ts`
+   and `sw.js` are untouched.
 
 - **Depends on** wave 3 (commands own their transactions) and the landed
   ledger.
