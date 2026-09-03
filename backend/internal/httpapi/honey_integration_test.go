@@ -19,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
 )
@@ -71,12 +73,16 @@ func honeyTestServer(t *testing.T) *Server {
 // 00015 added hives/feedings/equipment_*.sale_id → sales. TRUNCATE sales
 // CASCADE follows that graph and would wipe hives (TRUNCATE ignores ON
 // DELETE SET NULL). Null the links first so the honey reset stays local.
+//
+// inventory_locations references wholesale_price_lists, so TRUNCATE ... CASCADE
+// would take the two seeded locations (home, deployed) with it. The price
+// lists are DELETEd instead, so migration 00050's seeds survive every reset.
 func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	// inventory_locations (migration 00050) references wholesale_price_lists,
-	// and TRUNCATE ... CASCADE follows that FK and wipes the seeded home /
-	// deployed / apiary locations the ledger depends on. Delete the price
-	// lists instead of truncating them so the seeds survive.
+	// The ledger is cleared too, and in FK order: movements before operations,
+	// lots before the items they belong to. The seeded singletons (honey_bulk,
+	// propolis_raw) and the seeded locations carry no source and stay, exactly
+	// as a fresh migration leaves them.
 	const reset = `
 		UPDATE hives SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		UPDATE feedings SET sale_id = NULL WHERE sale_id IS NOT NULL;
@@ -92,12 +98,15 @@ func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
 			external_sync, offline_mutation_receipts
 		RESTART IDENTITY CASCADE;
-		INSERT INTO inventory_locations (id, kind, name, is_home)
-			VALUES ('00000000-0000-0000-0000-000000000201', 'site', 'Home', true)
-			ON CONFLICT (id) DO NOTHING;
-		INSERT INTO inventory_locations (id, kind, name)
-			VALUES ('00000000-0000-0000-0000-000000000202', 'deployed', 'Deployed')
-			ON CONFLICT (id) DO NOTHING`
+		DELETE FROM inventory_balance_checkpoints;
+		DELETE FROM inventory_movements;
+		DELETE FROM inventory_operations;
+		DELETE FROM inventory_lots;
+		DELETE FROM inventory_bom_lines;
+		DELETE FROM inventory_boms;
+		UPDATE equipment_types SET item_id = NULL WHERE item_id IS NOT NULL;
+		DELETE FROM inventory_items WHERE source_type IS NOT NULL;
+		DELETE FROM inventory_locations WHERE source_type IS NOT NULL`
 	var err error
 	for attempt := 0; attempt < 8; attempt++ {
 		_, err = pool.Exec(context.Background(), reset)
@@ -187,16 +196,29 @@ func seedHarvest(t *testing.T, server *Server, pounds float64) {
 	}
 }
 
-// seedLot creates a harvest lot big enough to jar against. Bulk honey is
-// tracked per lot, so every draw names one.
+// seedLot creates a harvest lot big enough to jar against, and books its
+// ceiling into the ledger.
+//
+// The receipt is not optional decoration: since decision 6 a lot's weight IS
+// a receive into its bulk-honey lot, so a lot row inserted on its own holds
+// no pounds and every draw against it is refused. Creating the lot through
+// POST /harvest-lots does the same thing; this fixture takes the short path.
 func seedLot(t *testing.T, server *Server, weightLbs float64) uuid.UUID {
 	t.Helper()
 	var lotID uuid.UUID
 	code := "LOT-" + uuid.NewString()[:8]
-	if err := server.pool.QueryRow(context.Background(), `
-		INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs)
-		VALUES ($1, $2, CURRENT_DATE, $3) RETURNING id`,
-		code, "slug-"+code, weightLbs).Scan(&lotID); err != nil {
+	ctx := context.Background()
+	err := app.NewRunner(server.pool).Run(ctx, app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			if err := uow.QueryRow(ctx, `
+				INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs)
+				VALUES ($1, $2, CURRENT_DATE, $3) RETURNING id`,
+				code, "slug-"+code, weightLbs).Scan(&lotID); err != nil {
+				return err
+			}
+			return production.New().SetLotCeiling(ctx, uow, lotID, weightLbs, time.Now().UTC())
+		})
+	if err != nil {
 		t.Fatalf("seed lot: %v", err)
 	}
 	return lotID
@@ -618,6 +640,7 @@ func TestBottlingRunLinksMovementAndRequiresJarSize(t *testing.T) {
 		VALUES ('LOT-1','lot-1',CURRENT_DATE, 40) RETURNING id`).Scan(&lotID); err != nil {
 		t.Fatalf("seed lot: %v", err)
 	}
+	bookLotCeiling(t, server, lotID)
 
 	// A run with no jar size would create jars that exist on the lot page and
 	// nowhere in inventory.
@@ -739,14 +762,20 @@ func TestNegativeStockIsRejected(t *testing.T) {
 		}
 	})
 
-	t.Run("jar adjustment stays unbounded", func(t *testing.T) {
+	// Amended with the inventory ledger: a count correction can no longer
+	// drive a jar size below zero. The old honey_movements ledger let a
+	// jar_adjustment go anywhere, which is how a miscount could quietly
+	// invent negative stock; the ledger's nonnegative invariant refuses it
+	// and names how many are actually on hand. Correcting past that point
+	// needs a receipt first.
+	t.Run("jar adjustment cannot go below zero", func(t *testing.T) {
 		response, body := call(t, server.honeyAdjustJarCounts, adminRequest(
 			http.MethodPost, "/api/v1/honey/jar-adjustments", map[string]any{
 				"date":  time.Now().Format("2006-01-02"),
 				"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "delta": -50}},
 			}))
-		if response.Code != http.StatusOK {
-			t.Fatalf("jar_adjustment must stay unbounded: %d %v", response.Code, body)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("over-large jar_adjustment = %d %v, want 400", response.Code, body)
 		}
 	})
 }
@@ -1842,6 +1871,7 @@ func TestMixedSaleWithCatalogSKU(t *testing.T) {
 		VALUES ('LOT-CREAM','lot-cream',CURRENT_DATE, 40) RETURNING id`).Scan(&lotID); err != nil {
 		t.Fatalf("seed lot: %v", err)
 	}
+	bookLotCeiling(t, server, lotID)
 
 	createProduct, productBody := call(t, server.productCreate, adminRequest(
 		http.MethodPost, "/api/v1/products", map[string]any{
@@ -2045,6 +2075,7 @@ func TestJarringWithLotCreatesBottlingRunsAndRespectsLotWeight(t *testing.T) {
 		Scan(&lotID); err != nil {
 		t.Fatalf("seed lot: %v", err)
 	}
+	bookLotCeiling(t, server, lotID)
 	today := time.Now().Format("2006-01-02")
 
 	response, body := call(t, server.honeyRecordJarring, adminRequest(
@@ -2195,4 +2226,26 @@ func equipSeedStockForTest(
 		t.Fatalf("book opening count: %v", err)
 	}
 	return stockID
+}
+
+// bookLotCeiling books an already-inserted lot's stored weight into the
+// ledger. Fixtures that write harvest_lots directly need it for the same
+// reason seedLot does: since decision 6 a lot's pounds ARE a receive, so a
+// lot row on its own is an empty bucket.
+func bookLotCeiling(t *testing.T, server *Server, lotID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	err := app.NewRunner(server.pool).Run(ctx, app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			var weightLbs float64
+			if err := uow.QueryRow(ctx,
+				`SELECT honey_weight_lbs FROM harvest_lots WHERE id=$1`, lotID).
+				Scan(&weightLbs); err != nil {
+				return err
+			}
+			return production.New().SetLotCeiling(ctx, uow, lotID, weightLbs, time.Now().UTC())
+		})
+	if err != nil {
+		t.Fatalf("book lot ceiling: %v", err)
+	}
 }

@@ -7,19 +7,45 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Shared honey-ledger derivations. Every surface that reports a quantity of
-// honey reads it from here, so two endpoints can never disagree about the same
-// number. Inventory is always derived from the append-only ledger; reversing
-// entries carry negative quantities and therefore net out on their own.
+// Shared honey derivations. Every surface that reports a quantity reads it
+// from here, so two endpoints can never disagree about the same number.
+//
+// Since the inventory ledger landed (docs/plans/2026-09-01-inventory-ledger-design.md)
+// the numbers come from the ledger's projections — inventory_balances for what
+// physically stands somewhere, inventory_available for what can still be sold
+// — and never from honey_movements, stock_movements, or product_adjustments.
+// The breakdown columns (jarred, given away, adjusted) are history aggregates
+// over inventory_operations, classified through the operation a reversal
+// points at so a reversed movement nets out on its own.
 
-// honeyBulkLockKey serializes transactions that consume bulk honey. Bulk honey
-// has no row of its own to lock, so an advisory lock plays the part that
-// SELECT ... FOR UPDATE on jar_sizes plays for jars.
+// honeyBulkLockKey serializes the honey commands that used to derive bulk
+// on-hand by hand. Review A4 makes the inventory service the only quantity
+// locker; this advisory lock is SUBSUMED into the order documented in
+// app/inventory/doc.go rather than deleted, and is always taken before any
+// tuple lock.
 const honeyBulkLockKey int64 = 8_472_113_001
+
+// ledgerClassifiedCTE resolves every movement to the operation that gives it
+// meaning: itself, or — when it is a reversal — the operation it negates.
+// Without it a reversal would land in no bucket and the breakdowns would drift
+// away from the balances.
+const ledgerClassifiedCTE = `
+	classified AS (
+		SELECT m.item_id, m.lot_id, m.location_id, m.quantity,
+		       COALESCE(orig.kind, o.kind) AS kind,
+		       COALESCE(orig.reason, o.reason) AS reason,
+		       COALESCE(orig.source_type, o.source_type) AS source_type
+		FROM inventory_movements m
+		JOIN inventory_operations o ON o.id = m.operation_id
+		LEFT JOIN inventory_operations orig ON orig.id = o.reverses_operation_id
+	)`
 
 type honeyBulkTotals struct {
 	TotalHarvestedLbs float64 `json:"totalHarvestedLbs"`
@@ -32,18 +58,16 @@ type honeyBulkTotals struct {
 // honeyBulkOnHand is THE bulk-on-hand formula. /honey/overview and
 // /honey/production-plan both call it.
 //
-// Pounds jarred come from the stored amount_lbs on each jarring movement, not
-// from a live recomputation of quantity * honey_oz / 16: the ledger records
-// what was actually attributed at jarring time, so editing a jar size today
-// cannot rewrite last season's history. Migration 00005 backfilled the rows
-// that predate that rule.
-//
-// Per session, a trued-up extracted weight is authoritative when set; otherwise
-// the session falls back to the sum of its live entries. Harvests recorded
-// outside any session always count. Soft-deleted harvest entries never count.
+// Pounds harvested stay a domain sum over harvest sessions and session-less
+// harvests: a trued-up extracted weight is authoritative when set, otherwise
+// the session falls back to the sum of its live entries, and soft-deleted
+// entries never count. Everything else is the ledger: bulk on hand IS the
+// honey_bulk balance across its lots (decision 6), and the three draw columns
+// are what bottling runs, product batches, and shrink took out of it.
 func honeyBulkOnHand(ctx context.Context, q inspectionQuerier) (honeyBulkTotals, error) {
 	var totals honeyBulkTotals
 	err := q.QueryRow(ctx, `
+		WITH `+ledgerClassifiedCTE+`
 		SELECT
 			(SELECT COALESCE(SUM(session_lbs), 0) FROM (
 				SELECT COALESCE(NULLIF(hs.total_extracted_weight, 0),
@@ -53,15 +77,20 @@ func honeyBulkOnHand(ctx context.Context, q inspectionQuerier) (honeyBulkTotals,
 				FROM harvest_sessions hs) sessions) +
 			(SELECT COALESCE(SUM(calculated_honey_weight), 0)
 			 FROM honey_harvests WHERE session_id IS NULL AND deleted_at IS NULL),
-			COALESCE((SELECT SUM(amount_lbs) FROM honey_movements WHERE kind='jarring'), 0),
-			COALESCE((SELECT SUM(amount_lbs) FROM honey_movements WHERE kind='bulk_use'), 0),
-			COALESCE((SELECT SUM(amount_lbs) FROM honey_movements WHERE kind='loss'), 0)`).
-		Scan(&totals.TotalHarvestedLbs, &totals.JarredLbs, &totals.BulkUsedLbs, &totals.LossLbs)
+			COALESCE((SELECT SUM(-quantity) FROM classified
+			          WHERE item_id=$1 AND source_type='bottling_run'), 0)::float8,
+			COALESCE((SELECT SUM(-quantity) FROM classified
+			          WHERE item_id=$1 AND (source_type='product_batch'
+			            OR (kind='shrink' AND reason <> 'loss'))), 0)::float8,
+			COALESCE((SELECT SUM(-quantity) FROM classified
+			          WHERE item_id=$1 AND kind='shrink' AND reason='loss'), 0)::float8,
+			COALESCE((SELECT SUM(on_hand) FROM inventory_balances WHERE item_id=$1), 0)::float8`,
+		production.HoneyBulkItemID).
+		Scan(&totals.TotalHarvestedLbs, &totals.JarredLbs, &totals.BulkUsedLbs,
+			&totals.LossLbs, &totals.BulkOnHandLbs)
 	if err != nil {
 		return honeyBulkTotals{}, err
 	}
-	totals.BulkOnHandLbs = totals.TotalHarvestedLbs - totals.JarredLbs -
-		totals.BulkUsedLbs - totals.LossLbs
 	return totals, nil
 }
 
@@ -77,69 +106,67 @@ func actorID(r *http.Request) *uuid.UUID {
 	return &id
 }
 
-// honeyLockJarSizes takes the row locks that make an availability check
-// meaningful, then reports the derived on-hand count per size. Without the
-// locks two concurrent checkouts can both observe the same inventory and each
-// commit a sale the stock cannot cover.
+// appActor is the application-layer identity for a command started by this
+// request. Handlers are transport: they authorize, then hand the command an
+// actor. No HTTP session can produce the restore actor.
+func appActor(r *http.Request) app.Actor {
+	if user := principalFrom(r); user != nil && user.ID != uuid.Nil {
+		return app.UserActor(user.ID, user.DisplayName)
+	}
+	return app.SystemJobActor("httpapi")
+}
+
+// runInUnitOfWork runs fn as this request's actor inside one transaction.
+func (s *Server) runInUnitOfWork(
+	r *http.Request, fn func(context.Context, *app.UnitOfWork) error,
+) error {
+	return app.NewRunner(s.pool).Run(r.Context(), appActor(r), fn)
+}
+
+// honeyHomeJarAvailability reports what each jar size can still be sold at
+// HOME, from inventory_available.
 //
-// The count is HOME on-hand, not the global total: jars consigned to the bike
-// shop are still the operator's inventory but they are not on the table at
-// market day, and letting the guard count them lets you sell the same jar
-// twice. Every caller of this function is validating a withdrawal from home
-// (a sale, a give-away, a reversed jarring, a voided bottling run), so home is
-// the number all of them want. Stock standing at another location is only ever
-// withdrawn through routes_stock_locations.go, which locks the same jar_sizes
-// rows and checks that location instead.
+// It replaces honeyLockJarSizes. Review A4 removed the jar_sizes row locks it
+// used to take: quantity locking now belongs to the inventory service alone,
+// which takes tuple locks in a documented order inside Record and
+// CheckAvailable. The name and signature are kept while routes_jar_sizes.go
+// still calls it; that handler moves with the equipment wave.
 //
-// It returns an error message suitable for a 400 when a jar size id is unknown.
+// Home, not the global total: jars consigned to the bike shop are still the
+// operator's inventory but they are not on the table at market day, and
+// letting the guard count them lets you sell the same jar twice.
 func honeyLockJarSizes(
 	ctx context.Context,
 	tx inspectionQuerier,
 	jarSizeIDs []uuid.UUID,
 ) (onHand map[uuid.UUID]int, labels map[uuid.UUID]string, unknown bool, err error) {
-	sorted := append([]uuid.UUID(nil), jarSizeIDs...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
-	// Deduplicate so the "locked == requested" count stays meaningful.
-	unique := make([]uuid.UUID, 0, len(sorted))
-	for i, id := range sorted {
-		if i == 0 || sorted[i-1] != id {
-			unique = append(unique, id)
-		}
-	}
-
+	unique := stockUniqueIDs(jarSizeIDs)
 	rows, err := tx.Query(ctx, `
-		SELECT id FROM jar_sizes WHERE id = ANY($1) ORDER BY id FOR UPDATE`, unique)
+		SELECT js.id, js.label,
+		       COALESCE((SELECT SUM(a.available) FROM inventory_available a
+		                 JOIN inventory_locations l ON l.id = a.location_id
+		                 WHERE a.item_id = js.item_id AND l.is_home), 0)::int
+		FROM jar_sizes js WHERE js.id = ANY($1) ORDER BY js.id`, unique)
 	if err != nil {
 		return nil, nil, false, err
 	}
-	locked := 0
+	defer rows.Close()
+	onHand = make(map[uuid.UUID]int, len(unique))
+	labels = make(map[uuid.UUID]string, len(unique))
 	for rows.Next() {
-		locked++
+		var id uuid.UUID
+		var label string
+		var available int
+		if err := rows.Scan(&id, &label, &available); err != nil {
+			return nil, nil, false, err
+		}
+		onHand[id] = available
+		labels[id] = label
 	}
-	lockErr := rows.Err()
-	rows.Close()
-	if lockErr != nil {
-		return nil, nil, false, lockErr
-	}
-	if locked != len(unique) {
-		return nil, nil, true, nil
-	}
-
-	inventory, err := honeyJarInventoryWithQuerier(ctx, tx)
-	if err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, nil, false, err
 	}
-	away, err := stockAwayJarTotals(ctx, tx)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	onHand = make(map[uuid.UUID]int, len(inventory))
-	labels = make(map[uuid.UUID]string, len(inventory))
-	for _, row := range inventory {
-		onHand[row.JarSizeID] = row.OnHand - away[row.JarSizeID]
-		labels[row.JarSizeID] = row.Label
-	}
-	return onHand, labels, false, nil
+	return onHand, labels, len(onHand) != len(unique), nil
 }
 
 // honeyCheckJarAvailability reports the first line that would drive a jar size
@@ -167,9 +194,11 @@ func honeyCheckJarAvailability(
 	return ""
 }
 
-// honeyLockBulk takes the advisory lock guarding bulk honey and returns the
-// current totals, so a caller can validate a withdrawal against a value no
-// concurrent transaction can move underneath it.
+// honeyLockBulk takes the bulk-honey advisory lock and reports the current
+// totals. The lock is class 2 of the order in app/inventory/doc.go: it is
+// subsumed by the ledger's tuple locks rather than replaced (review A4,
+// outside voice finding 10), and is always taken before Record or
+// CheckAvailable so the two disciplines have one order.
 func honeyLockBulk(ctx context.Context, tx inspectionQuerier) (honeyBulkTotals, error) {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, honeyBulkLockKey); err != nil {
 		return honeyBulkTotals{}, err
@@ -177,39 +206,18 @@ func honeyLockBulk(ctx context.Context, tx inspectionQuerier) (honeyBulkTotals, 
 	return honeyBulkOnHand(ctx, tx)
 }
 
-// honeyBulkShortfall formats the 400 message for a withdrawal larger than the
-// bulk honey on hand. Pounds are compared with a small tolerance because they
-// are genuinely fractional measurements, unlike money and jar counts.
-const honeyPoundTolerance = 0.0001
+// honeyPoundTolerance is the mass comparison tolerance; pounds are genuinely
+// fractional measurements, unlike money and jar counts.
+const honeyPoundTolerance = production.PoundTolerance
 
+// honeyBulkShortfall formats the 400 message for a withdrawal larger than the
+// bulk honey on hand.
 func honeyBulkShortfall(requestedLbs, availableLbs float64) string {
 	if requestedLbs <= availableLbs+honeyPoundTolerance {
 		return ""
 	}
 	return fmt.Sprintf("Not enough bulk honey: need %.2f lbs, have %.2f lbs",
 		requestedLbs, availableLbs)
-}
-
-// honeyLockLot takes the lot row lock (lock class 2, always before the bulk
-// advisory lock) and reports what that lot still holds: its weight minus every
-// jarring, bulk use, and loss attributed to it. Bulk honey is one pool split
-// into labelled buckets, so a draw has to clear both this and the global pool.
-func honeyLockLot(
-	ctx context.Context,
-	tx inspectionQuerier,
-	lotID uuid.UUID,
-) (lotCode string, onHandLbs float64, err error) {
-	if err = tx.QueryRow(ctx,
-		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
-		Scan(&lotCode); err != nil {
-		return "", 0, err
-	}
-	if err = tx.QueryRow(ctx,
-		`SELECT on_hand_lbs FROM honey_lot_balances WHERE lot_id=$1`, lotID).
-		Scan(&onHandLbs); err != nil {
-		return "", 0, err
-	}
-	return lotCode, onHandLbs, nil
 }
 
 // honeyLotShortfall is honeyBulkShortfall for one lot's bucket.
@@ -221,24 +229,52 @@ func honeyLotShortfall(requestedLbs, availableLbs float64, lotCode string) strin
 		lotCode, availableLbs, requestedLbs)
 }
 
+// honeyLockLot takes the harvest lot's row lock — a DOMAIN lock on the lot's
+// identity, class 2 of honeyLockOrder, always before any tuple lock — and
+// reports what that lot still holds from inventory_balances.
+//
+// The row lock stays because two commands must not edit the same lot's
+// identity concurrently. The quantity it reports is the ledger's, not a
+// second derivation: the pounds a lot holds are its receipt minus everything
+// drawn from it.
+func honeyLockLot(
+	ctx context.Context,
+	tx inspectionQuerier,
+	lotID uuid.UUID,
+) (lotCode string, onHandLbs float64, err error) {
+	if err = tx.QueryRow(ctx,
+		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
+		Scan(&lotCode); err != nil {
+		return "", 0, err
+	}
+	if err = tx.QueryRow(ctx, `
+		SELECT COALESCE((SELECT SUM(b.on_hand) FROM inventory_balances b
+		                 JOIN harvest_lots hl ON hl.inventory_lot_id = b.lot_id
+		                 WHERE hl.id = $1 AND b.item_id = $2), 0)::float8`,
+		lotID, production.HoneyBulkItemID).Scan(&onHandLbs); err != nil {
+		return "", 0, err
+	}
+	return lotCode, onHandLbs, nil
+}
+
 // --- stock locations -------------------------------------------------------
 //
 // Finished goods (jar sizes and product_catalog SKUs) can stand somewhere
-// other than home — consigned to the bike shop, most of all. Home is the
-// RESIDUAL of the one ledger, never a second one:
+// other than home — consigned to the bike shop, most of all. Home is no
+// longer the residual of a second ledger: every location, home included, owns
+// its own movements, so "what is at the shop" and "what is at home" are two
+// reads of the same projection and cannot drift apart.
 //
-//	onHand(L)    = SUM(stock_movements at L) - sold on sales scoped to L
-//	onHand(home) = globalOnHand - SUM over every non-home L
-//
-// So nothing had to be backfilled when locations arrived, and the two numbers
-// cannot drift apart. See migration 00024 for the same statement in SQL.
+// During Phase A stock_locations is still the catalog the API exposes; each
+// row has an inventory_locations twin that carries the quantities, created on
+// demand by app/production.EnsureLocationForStockLocation.
 
 // stockHomeSlug names the one row that is is_home.
 const stockHomeSlug = "home"
 
-// stockHomeLocationID resolves the home location, creating it if a database
-// (a truncated test one, most likely) has lost the row seeded by 00024.
-// Everything not standing at another location is here by definition.
+// stockHomeLocationID resolves the home stock location, creating it if a
+// database (a truncated test one, most likely) has lost the row seeded by
+// 00024.
 func stockHomeLocationID(ctx context.Context, q inspectionQuerier) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := q.QueryRow(ctx, `SELECT id FROM stock_locations WHERE is_home`).Scan(&id)
@@ -264,33 +300,26 @@ type stockLocationQuantity struct {
 	Quantity   int
 }
 
-// stockAwayQuantities is THE away-from-home formula: every non-home location's
-// net count per SKU. Movements add and subtract; sales scoped to that location
-// take stock off its shelf.
+// stockAwayQuantities is THE away-from-home formula: every non-home
+// location's count per SKU, keyed by the stock_locations id the API exposes.
 //
-// Home never appears in the result even when a transfer wrote a row against it
-// (the -n half of "24 jars to the shop"): counting that row would subtract the
-// same 24 jars twice, once here and once as the residual.
+// It reads inventory_available rather than inventory_balances because a sale
+// scoped to a location takes stock off that shelf the moment the line is
+// saved, which is what every caller of this function is asking about.
 func stockAwayQuantities(
 	ctx context.Context,
 	q inspectionQuerier,
 ) ([]stockLocationQuantity, error) {
 	rows, err := q.Query(ctx, `
-		SELECT location_id, jar_size_id, product_id, SUM(qty)::int
-		FROM (
-			SELECT m.location_id, m.jar_size_id, m.product_id, m.quantity AS qty
-			FROM stock_movements m
-			UNION ALL
-			SELECT s.stock_location_id, si.jar_size_id, si.product_id, -si.quantity
-			FROM sale_items si
-			JOIN sales s ON s.id = si.sale_id
-			WHERE s.order_status <> 'cancelled'
-			  AND s.stock_location_id IS NOT NULL
-			  AND (si.jar_size_id IS NOT NULL OR si.product_id IS NOT NULL)
-		) movements
-		WHERE location_id NOT IN (SELECT id FROM stock_locations WHERE is_home)
+		SELECT l.source_id, js.id, pc.id, SUM(a.available)::int
+		FROM inventory_available a
+		JOIN inventory_locations l ON l.id = a.location_id
+		LEFT JOIN jar_sizes js ON js.item_id = a.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = a.item_id
+		WHERE l.source_type = 'stock_location' AND NOT l.is_home
+		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
 		GROUP BY 1, 2, 3
-		HAVING SUM(qty) <> 0`)
+		HAVING SUM(a.available) <> 0`)
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +336,7 @@ func stockAwayQuantities(
 	return out, rows.Err()
 }
 
-// stockAwayJarTotals sums away-from-home jars per size. Subtracting it from the
-// global ledger gives what is actually on the shelf at home.
+// stockAwayJarTotals sums away-from-home jars per size.
 func stockAwayJarTotals(
 	ctx context.Context,
 	q inspectionQuerier,
@@ -344,38 +372,8 @@ func stockAwayProductTotals(
 	return totals, nil
 }
 
-// stockLockProducts is honeyLockJarSizes' counterpart for catalog SKUs: it
-// takes the product_catalog row locks so a transfer and a sale of the same
-// product cannot both read the same on-hand count and both commit.
-func stockLockProducts(
-	ctx context.Context,
-	tx inspectionQuerier,
-	productIDs []uuid.UUID,
-) (unknown bool, err error) {
-	unique := stockUniqueIDs(productIDs)
-	if len(unique) == 0 {
-		return false, nil
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT id FROM product_catalog WHERE id = ANY($1) ORDER BY id FOR UPDATE`, unique)
-	if err != nil {
-		return false, err
-	}
-	locked := 0
-	for rows.Next() {
-		locked++
-	}
-	lockErr := rows.Err()
-	rows.Close()
-	if lockErr != nil {
-		return false, lockErr
-	}
-	return locked != len(unique), nil
-}
-
-// stockUniqueIDs sorts and deduplicates ids so lock order is deterministic
-// (no deadlock between two transactions taking the same rows) and a
-// "locked == requested" count stays meaningful.
+// stockUniqueIDs sorts and deduplicates ids so a "found == requested" count
+// stays meaningful.
 func stockUniqueIDs(ids []uuid.UUID) []uuid.UUID {
 	sorted := append([]uuid.UUID(nil), ids...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
@@ -386,4 +384,63 @@ func stockUniqueIDs(ids []uuid.UUID) []uuid.UUID {
 		}
 	}
 	return unique
+}
+
+// poolQuerier lets a handler pass either the pool or a unit of work to a read
+// helper without either one caring which it got.
+var _ inspectionQuerier = (*pgxpool.Pool)(nil)
+
+// writeCommandError maps an application-layer error onto the response. The
+// app package is transport-free on purpose (internal/app/doc.go): each edge
+// maps Kind to its own vocabulary, and this is the HTTP one. An equipError
+// raised by a handler's own guard keeps the status it chose.
+func writeCommandError(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	var known equipError
+	if errors.As(err, &known) {
+		writeError(w, known.status, known.message)
+		return
+	}
+	var typed *app.Error
+	if !errors.As(err, &typed) {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	message := typed.Message
+	if message == "" {
+		message = "database error"
+	}
+	switch typed.Kind {
+	case app.KindInvalid:
+		writeError(w, http.StatusBadRequest, message)
+	case app.KindNotFound:
+		writeError(w, http.StatusNotFound, message)
+	case app.KindConflict:
+		writeError(w, http.StatusConflict, message)
+	case app.KindForbidden:
+		writeError(w, http.StatusForbidden, message)
+	case app.KindPrecondition:
+		// A stock refusal: the request is well formed but the shelf cannot
+		// cover it, which every caller of these endpoints reads as a 400.
+		writeError(w, http.StatusBadRequest, message)
+	case app.KindUnsupported:
+		writeError(w, http.StatusUnprocessableEntity, message)
+	default:
+		writeError(w, http.StatusInternalServerError, "database error")
+	}
+}
+
+// dbCommandError is writeDBError for a command running inside a unit of work:
+// it classifies the driver error and returns it instead of writing a
+// response, so the caller's transaction can still roll back.
+func dbCommandError(err error, uniqueMsg, fkMsg string) error {
+	switch pgErrCode(err) {
+	case "23505":
+		return equipFail(http.StatusConflict, "%s", uniqueMsg)
+	case "23503":
+		return equipFail(http.StatusBadRequest, "%s", fkMsg)
+	}
+	return err
 }

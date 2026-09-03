@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/sales"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -18,20 +21,34 @@ const (
 	saleKindEquipment = "equipment"
 )
 
-// saleApplyPhysical moves the colony, feeders, and equipment that a mixed
-// sale takes with it. Jar stock is derived from sale_items, so it is not
-// written here. needed is mutated as hive deployments consume equipment qty.
+// saleApplyPhysical moves what a mixed sale takes with it. Jar, product, and
+// equipment quantities are one sale_consume operation; the colony's gear
+// leaves at the virtual deployed location carrying container_hive_id, and gear
+// the buyer does not take comes home as a return (review A5).
+//
+// The hive itself is not stock: the sales command marks it sold inside the
+// same unit of work, and this function closes its feeders and freezes the
+// cost basis afterwards.
 func saleApplyPhysical(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	saleID uuid.UUID,
 	date time.Time,
 	actor *uuid.UUID,
 	lines []honeySaleLine,
 ) error {
+	commands := sales.New()
+	location, err := commands.SaleLocation(ctx, uow, saleID)
+	if err != nil {
+		return err
+	}
+	if err := commands.LinkLines(ctx, uow, saleID, location); err != nil {
+		return err
+	}
+
 	needed := make(map[uuid.UUID]int)
-	var hiveIDs []uuid.UUID
 	seenHive := make(map[uuid.UUID]bool, len(lines))
+	hiveIDs := make([]uuid.UUID, 0, len(lines))
 	for _, line := range lines {
 		switch line.Kind {
 		case saleKindColony:
@@ -41,35 +58,67 @@ func saleApplyPhysical(
 			seenHive[line.HiveID] = true
 			hiveIDs = append(hiveIDs, line.HiveID)
 		case saleKindEquipment:
-			needed[line.EquipmentStockID] += line.Quantity
+			if line.ItemID == uuid.Nil {
+				return saleBadRequest("equipment lines require an inventory item")
+			}
+			needed[line.ItemID] += line.Quantity
 		}
 	}
+	// The hive rows are domain locks, taken before any tuple lock, in id order
+	// so two concurrent sales of the same pair cannot deadlock.
+	sort.Slice(hiveIDs, func(i, j int) bool { return hiveIDs[i].String() < hiveIDs[j].String() })
 	for _, hiveID := range hiveIDs {
-		if err := saleSellHive(ctx, tx, saleID, hiveID, date, actor, needed); err != nil {
+		if err := saleCheckHiveSellable(ctx, uow, hiveID); err != nil {
 			return err
 		}
 	}
-	for stockID, qty := range needed {
-		if qty <= 0 {
-			continue
+
+	if err := commands.Apply(ctx, uow, sales.ApplyInput{
+		SaleID: saleID, Date: date, LocationID: location, EquipmentByItem: needed,
+	}); err != nil {
+		return saleApplyError(err)
+	}
+
+	for _, hiveID := range hiveIDs {
+		if _, err := uow.Exec(ctx, `
+			UPDATE feedings
+			SET status='closed',
+			    closed_at=$2,
+			    closed_reason='sold_with_hive',
+			    sale_id=$3,
+			    status_changed_at=now(),
+			    status_changed_by=$4,
+			    date_empty=COALESCE(date_empty, $2)
+			WHERE hive_id=$1 AND status IN ('open','unverified')`,
+			hiveID, date, saleID, actor); err != nil {
+			return err
 		}
-		if err := saleSellFromStock(ctx, tx, saleID, stockID, qty, date, actor); err != nil {
+		if err := saleSnapshotColonyCost(ctx, uow, saleID, hiveID); err != nil {
 			return err
 		}
 	}
-	return nil
+	return saleSnapshotEquipmentCost(ctx, uow, saleID)
 }
 
-func saleSellHive(
-	ctx context.Context,
-	tx pgx.Tx,
-	saleID, hiveID uuid.UUID,
-	date time.Time,
-	actor *uuid.UUID,
-	needed map[uuid.UUID]int,
-) error {
+// saleApplyError turns the ledger's refusals into the sentences this endpoint
+// has always produced.
+func saleApplyError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case app.IsKind(err, app.KindPrecondition):
+		return equipFail(http.StatusConflict, "%s", messageOf(err))
+	default:
+		return err
+	}
+}
+
+// saleCheckHiveSellable refuses a colony line whose hive is already gone,
+// naming the sale that took it so the operator can find it. It locks the hive
+// row: a domain lock, before any inventory tuple lock.
+func saleCheckHiveSellable(ctx context.Context, uow *app.UnitOfWork, hiveID uuid.UUID) error {
 	var status string
-	err := tx.QueryRow(ctx,
+	err := uow.QueryRow(ctx,
 		`SELECT status::text FROM hives WHERE id=$1 FOR UPDATE`, hiveID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return saleBadRequest("invalid hiveId")
@@ -78,102 +127,21 @@ func saleSellHive(
 		return err
 	}
 	if status == "sold" {
-		// Another sale took this hive between the draft and the payment:
-		// name it so the operator can find it, and use 409 so the client
-		// does not treat it as a malformed request.
 		var orderNumber *string
-		if err := tx.QueryRow(ctx, `
+		if err := uow.QueryRow(ctx, `
 			SELECT s.order_number FROM hives h LEFT JOIN sales s ON s.id=h.sale_id
 			WHERE h.id=$1`, hiveID).Scan(&orderNumber); err != nil {
 			return err
 		}
 		if orderNumber != nil {
-			return equipFail(http.StatusConflict,
-				"hive was already sold on sale %s", *orderNumber)
+			return equipFail(http.StatusConflict, "hive was already sold on sale %s", *orderNumber)
 		}
 		return equipFail(http.StatusConflict, "hive was already sold on another sale")
 	}
 	if status == "dead" || status == "combined" {
 		return saleBadRequest("cannot sell a hive that is already %s", status)
 	}
-
-	type depRow struct {
-		ID          uuid.UUID
-		StockID     uuid.UUID
-		Outstanding int
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT id, stock_id, quantity - quantity_returned
-		FROM equipment_deployments
-		WHERE hive_id=$1 AND date_removed IS NULL AND quantity > quantity_returned
-		ORDER BY date_deployed, id
-		FOR UPDATE`, hiveID)
-	if err != nil {
-		return err
-	}
-	deps := make([]depRow, 0)
-	for rows.Next() {
-		var d depRow
-		if err := rows.Scan(&d.ID, &d.StockID, &d.Outstanding); err != nil {
-			rows.Close()
-			return err
-		}
-		deps = append(deps, d)
-	}
-	rows.Close()
-	if rows.Err() != nil {
-		return rows.Err()
-	}
-
-	for _, dep := range deps {
-		sellQty := needed[dep.StockID]
-		if sellQty > dep.Outstanding {
-			sellQty = dep.Outstanding
-		}
-		if sellQty > 0 {
-			if err := saleCloseDeployment(ctx, tx, dep.ID, sellQty, "sold_with_hive",
-				saleID, date, actor); err != nil {
-				return err
-			}
-			if err := saleInsertSoldAdjustment(ctx, tx, dep.StockID, sellQty, saleID,
-				date, actor, "sold with hive"); err != nil {
-				return err
-			}
-			needed[dep.StockID] -= sellQty
-		}
-		kept := dep.Outstanding - sellQty
-		if kept > 0 {
-			if err := saleCloseDeployment(ctx, tx, dep.ID, kept, "hive_removed",
-				saleID, date, actor); err != nil {
-				return err
-			}
-		}
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE feedings
-		SET status='closed',
-		    closed_at=$2,
-		    closed_reason='sold_with_hive',
-		    sale_id=$3,
-		    status_changed_at=now(),
-		    status_changed_by=$4,
-		    date_empty=COALESCE(date_empty, $2)
-		WHERE hive_id=$1 AND status IN ('open','unverified')`,
-		hiveID, date, saleID, actor); err != nil {
-		return err
-	}
-
-	tag, err := tx.Exec(ctx, `
-		UPDATE hives SET status='sold', sale_id=$2
-		WHERE id=$1 AND status NOT IN ('sold','dead','combined')`, hiveID, saleID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return saleBadRequest("cannot sell a hive that is already sold, dead, or combined")
-	}
-	return saleSnapshotColonyCost(ctx, tx, saleID, hiveID)
+	return nil
 }
 
 // saleSnapshotColonyCost freezes the hive's recorded acquisition cost onto
@@ -181,11 +149,11 @@ func saleSellHive(
 // basis), which is distinct from a basis of zero.
 func saleSnapshotColonyCost(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	saleID, hiveID uuid.UUID,
 ) error {
 	var basis *int64
-	if err := tx.QueryRow(ctx, `
+	if err := uow.QueryRow(ctx, `
 		SELECT SUM(amount_cents)::bigint
 		FROM expenses
 		WHERE hive_id = $1
@@ -193,7 +161,7 @@ func saleSnapshotColonyCost(
 		  AND deleted_at IS NULL`, hiveID).Scan(&basis); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `
+	_, err := uow.Exec(ctx, `
 		UPDATE sale_items
 		SET cost_basis_cents = $3
 		WHERE sale_id = $1 AND kind = 'colony' AND hive_id = $2`,
@@ -201,78 +169,22 @@ func saleSnapshotColonyCost(
 	return err
 }
 
-func saleCloseDeployment(
+// saleSnapshotEquipmentCost freezes each equipment line's cost basis from
+// equipment_types.unit_cost_cents. The cost moved onto the type when
+// equipment_stock dissolved (review OV2); the snapshot itself is unchanged, so
+// a later price edit still cannot rewrite a past sale's margin.
+func saleSnapshotEquipmentCost(
 	ctx context.Context,
-	tx pgx.Tx,
-	deploymentID uuid.UUID,
-	qty int,
-	reason string,
+	uow *app.UnitOfWork,
 	saleID uuid.UUID,
-	date time.Time,
-	actor *uuid.UUID,
 ) error {
-	_, err := equipReturnTx(ctx, tx, equipReturnInput{
-		DeploymentID: deploymentID,
-		Quantity:     &qty,
-		Reason:       reason,
-		Condition:    "good",
-		Date:         date,
-		CreatedBy:    actor,
-		SaleID:       &saleID,
-	})
-	return err
-}
-
-func saleSellFromStock(
-	ctx context.Context,
-	tx pgx.Tx,
-	saleID, stockID uuid.UUID,
-	qty int,
-	date time.Time,
-	actor *uuid.UUID,
-) error {
-	state, err := equipLockStock(ctx, tx, stockID)
-	if err != nil {
-		return err
-	}
-	if qty > state.Available() {
-		return saleBadRequest("Not enough %s available: need %d, have %d",
-			state.TypeName, qty, state.Available())
-	}
-	return saleInsertSoldAdjustment(ctx, tx, stockID, qty, saleID, date, actor, "sold from stock")
-}
-
-func saleInsertSoldAdjustment(
-	ctx context.Context,
-	tx pgx.Tx,
-	stockID uuid.UUID,
-	qty int,
-	saleID uuid.UUID,
-	date time.Time,
-	actor *uuid.UUID,
-	notes string,
-) error {
-	// equipment_types has no unit_cost_cents (00006 put cost on stock and
-	// on the adjustment itself). Snapshot the stock's current unit cost.
-	var snapshot *int
-	if err := tx.QueryRow(ctx, `
-		SELECT unit_cost_cents FROM equipment_stock WHERE id = $1`,
-		stockID).Scan(&snapshot); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO equipment_stock_adjustments
-			(stock_id, quantity, reason, notes, date, created_by, sale_id,
-			 unit_cost_cents_snapshot)
-		VALUES ($1, $2, 'sold', $3, $4, $5, $6, $7)`,
-		stockID, -qty, notes, date, actor, saleID, snapshot); err != nil {
-		return err
-	}
-	_, err := tx.Exec(ctx, `
-		UPDATE sale_items
-		SET cost_basis_cents = quantity::bigint * $3::bigint
-		WHERE sale_id = $1 AND kind = 'equipment' AND equipment_stock_id = $2`,
-		saleID, stockID, snapshot)
+	_, err := uow.Exec(ctx, `
+		UPDATE sale_items si
+		SET cost_basis_cents = si.quantity::bigint * et.unit_cost_cents::bigint
+		FROM inventory_items i
+		JOIN equipment_types et ON et.item_id = i.id
+		WHERE si.sale_id = $1 AND si.kind = 'equipment'
+		  AND i.id = si.item_id AND et.unit_cost_cents IS NOT NULL`, saleID)
 	return err
 }
 
@@ -280,7 +192,7 @@ func saleInsertSoldAdjustment(
 // dead, or combined without selling anything. Draft/pending sales run this
 // instead of saleApplyPhysical: the hive is not reserved (two open drafts may
 // name it) but a hive that is already gone cannot be drafted either.
-func saleCheckHivesSellable(ctx context.Context, tx pgx.Tx, lines []honeySaleLine) error {
+func saleCheckHivesSellable(ctx context.Context, q inspectionQuerier, lines []honeySaleLine) error {
 	seen := make(map[uuid.UUID]bool, len(lines))
 	for _, line := range lines {
 		if line.Kind != saleKindColony {
@@ -291,7 +203,7 @@ func saleCheckHivesSellable(ctx context.Context, tx pgx.Tx, lines []honeySaleLin
 		}
 		seen[line.HiveID] = true
 		var status string
-		err := tx.QueryRow(ctx,
+		err := q.QueryRow(ctx,
 			`SELECT status::text FROM hives WHERE id=$1`, line.HiveID).Scan(&status)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return saleBadRequest("invalid hiveId")
@@ -309,9 +221,9 @@ func saleCheckHivesSellable(ctx context.Context, tx pgx.Tx, lines []honeySaleLin
 // saleLoadLines reads a sale's stored line items back in the shape
 // saleApplyPhysical expects, for sales whose physical effects are applied
 // after creation (draft/pending -> paid).
-func saleLoadLines(ctx context.Context, tx pgx.Tx, saleID uuid.UUID) ([]honeySaleLine, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT kind, jar_size_id, hive_id, equipment_stock_id, product_id,
+func saleLoadLines(ctx context.Context, q inspectionQuerier, saleID uuid.UUID) ([]honeySaleLine, error) {
+	rows, err := q.Query(ctx, `
+		SELECT kind, jar_size_id, hive_id, item_id, product_id,
 		       quantity, unit_price_cents
 		FROM sale_items WHERE sale_id=$1 ORDER BY id`, saleID)
 	if err != nil {
@@ -321,8 +233,8 @@ func saleLoadLines(ctx context.Context, tx pgx.Tx, saleID uuid.UUID) ([]honeySal
 	lines := make([]honeySaleLine, 0)
 	for rows.Next() {
 		var line honeySaleLine
-		var jarSizeID, hiveID, stockID, productID *uuid.UUID
-		if err := rows.Scan(&line.Kind, &jarSizeID, &hiveID, &stockID, &productID,
+		var jarSizeID, hiveID, itemID, productID *uuid.UUID
+		if err := rows.Scan(&line.Kind, &jarSizeID, &hiveID, &itemID, &productID,
 			&line.Quantity, &line.UnitPrice); err != nil {
 			return nil, err
 		}
@@ -332,8 +244,8 @@ func saleLoadLines(ctx context.Context, tx pgx.Tx, saleID uuid.UUID) ([]honeySal
 		if hiveID != nil {
 			line.HiveID = *hiveID
 		}
-		if stockID != nil {
-			line.EquipmentStockID = *stockID
+		if itemID != nil {
+			line.ItemID = *itemID
 		}
 		if productID != nil {
 			line.ProductID = *productID
@@ -344,128 +256,44 @@ func saleLoadLines(ctx context.Context, tx pgx.Tx, saleID uuid.UUID) ([]honeySal
 }
 
 // saleRestorePhysical undoes the physical effects of a cancelled sale that
-// had them applied (physical_applied_at IS NOT NULL). Sold stock comes back
-// as a reversing 'other' adjustment so the ledger keeps both movements.
+// had them applied (physical_applied_at IS NOT NULL).
 func saleRestorePhysical(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	saleID uuid.UUID,
 	actor *uuid.UUID,
 ) error {
-	return saleRevertPhysical(ctx, tx, saleID, actor, false)
+	return saleRevertPhysical(ctx, uow, saleID, actor)
 }
 
 // saleUnapplyPhysical undoes the physical effects of a sale that moves from
-// paid/fulfilled back to draft/pending. Unlike a cancel it may be applied
-// again later, so the sold adjustments are removed outright rather than
-// reversed: a later apply writes fresh ones, and a later restore or unapply
-// only ever sees the rows from the most recent apply.
+// paid/fulfilled back to draft/pending. It is the same reversal a cancel
+// records: the ledger is append-only, so "remove the rows" is not an option
+// and is not needed — a later apply records a fresh consumption under its own
+// idempotency key.
 func saleUnapplyPhysical(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	saleID uuid.UUID,
 	actor *uuid.UUID,
 ) error {
-	return saleRevertPhysical(ctx, tx, saleID, actor, true)
+	return saleRevertPhysical(ctx, uow, saleID, actor)
 }
 
 func saleRevertPhysical(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	saleID uuid.UUID,
 	actor *uuid.UUID,
-	deleteSold bool,
 ) error {
-	// Reverse sold adjustments first so owned is restored before deployments
-	// go back on the hive (available never goes negative in between).
-	adjRows, err := tx.Query(ctx, `
-		SELECT stock_id, -quantity
-		FROM equipment_stock_adjustments
-		WHERE sale_id=$1 AND quantity < 0 AND reason='sold'
-		ORDER BY created_at`, saleID)
-	if err != nil {
+	// Reversing the sale's operations puts the gear back on its hive and the
+	// jars back on their shelf, in one sweep and in reverse order, so no
+	// intermediate balance goes negative.
+	if err := sales.New().Unapply(ctx, uow, saleID); err != nil {
 		return err
 	}
-	type adj struct {
-		StockID uuid.UUID
-		Qty     int
-	}
-	adjustments := make([]adj, 0)
-	for adjRows.Next() {
-		var a adj
-		if err := adjRows.Scan(&a.StockID, &a.Qty); err != nil {
-			adjRows.Close()
-			return err
-		}
-		adjustments = append(adjustments, a)
-	}
-	adjRows.Close()
-	if adjRows.Err() != nil {
-		return adjRows.Err()
-	}
-	for _, a := range adjustments {
-		if _, err := equipLockStock(ctx, tx, a.StockID); err != nil {
-			return err
-		}
-		if deleteSold {
-			continue
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO equipment_stock_adjustments
-				(stock_id, quantity, reason, notes, date, created_by)
-			VALUES ($1, $2, 'other', 'sale cancelled', now(), $3)`,
-			a.StockID, a.Qty, actor); err != nil {
-			return err
-		}
-	}
-	if deleteSold {
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM equipment_stock_adjustments
-			WHERE sale_id=$1 AND quantity < 0 AND reason='sold'`, saleID); err != nil {
-			return err
-		}
-	}
 
-	retRows, err := tx.Query(ctx, `
-		SELECT id, deployment_id, quantity
-		FROM equipment_deployment_returns
-		WHERE sale_id=$1
-		ORDER BY created_at DESC`, saleID)
-	if err != nil {
-		return err
-	}
-	type ret struct {
-		ID, DeploymentID uuid.UUID
-		Qty              int
-	}
-	returns := make([]ret, 0)
-	for retRows.Next() {
-		var r ret
-		if err := retRows.Scan(&r.ID, &r.DeploymentID, &r.Qty); err != nil {
-			retRows.Close()
-			return err
-		}
-		returns = append(returns, r)
-	}
-	retRows.Close()
-	if retRows.Err() != nil {
-		return retRows.Err()
-	}
-	for _, r := range returns {
-		if _, err := tx.Exec(ctx, `
-			UPDATE equipment_deployments
-			SET quantity_returned = quantity_returned - $2,
-			    date_removed = NULL
-			WHERE id=$1`, r.DeploymentID, r.Qty); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM equipment_deployment_returns WHERE id=$1`, r.ID); err != nil {
-			return err
-		}
-	}
-
-	if _, err := tx.Exec(ctx, `
+	if _, err := uow.Exec(ctx, `
 		UPDATE feedings
 		SET status='open',
 		    closed_at=NULL,
@@ -479,20 +307,17 @@ func saleRevertPhysical(
 		return err
 	}
 
-	if _, err := tx.Exec(ctx, `
+	if _, err := uow.Exec(ctx, `
 		UPDATE hives SET status='active', sale_id=NULL WHERE sale_id=$1`,
 		saleID); err != nil {
 		return err
 	}
 
-	// Clear frozen COGS so a later apply resnapshots from live stock
-	// prices and bees_queens expenses rather than keeping a stale basis.
-	if _, err := tx.Exec(ctx, `
-		UPDATE sale_items SET cost_basis_cents = NULL WHERE sale_id = $1`,
-		saleID); err != nil {
-		return err
-	}
-	return nil
+	// Clear frozen COGS so a later apply resnapshots from live type prices
+	// and bees_queens expenses rather than keeping a stale basis.
+	_, err := uow.Exec(ctx, `
+		UPDATE sale_items SET cost_basis_cents = NULL WHERE sale_id = $1`, saleID)
+	return err
 }
 
 func saleBadRequest(format string, args ...any) error {
@@ -551,7 +376,7 @@ type saleConsignmentInput struct {
 // through here, which is how "never recognise revenue on a transfer" is kept.
 func saleRecordConsignmentReport(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx inspectionQuerier,
 	input saleConsignmentInput,
 ) (*string, error) {
 	if len(input.Lines) == 0 {
@@ -646,14 +471,17 @@ func (s *Server) hiveSaleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Outstanding deployed gear IS the balance at the virtual deployed
+	// location for this hive's container (review A1/A5): there is no
+	// deployment row to read, and the unit cost comes from the equipment type
+	// now that equipment_stock has dissolved (review OV2).
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT ed.id, ed.stock_id, et.name, et.category::text,
-		       ed.quantity - ed.quantity_returned, es.unit_cost_cents
-		FROM equipment_deployments ed
-		JOIN equipment_stock es ON es.id = ed.stock_id
-		JOIN equipment_types et ON et.id = es.type_id
-		WHERE ed.hive_id=$1 AND ed.date_removed IS NULL
-		  AND ed.quantity > ed.quantity_returned
+		SELECT b.item_id, et.name, et.category::text, b.on_hand::int, et.unit_cost_cents
+		FROM inventory_balances b
+		JOIN inventory_locations loc ON loc.id = b.location_id AND loc.kind = 'deployed'
+		JOIN inventory_items i ON i.id = b.item_id
+		JOIN equipment_types et ON et.item_id = i.id
+		WHERE b.container_hive_id = $1 AND b.on_hand > 0
 		ORDER BY et.category, et.name`, hiveID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -662,8 +490,9 @@ func (s *Server) hiveSaleOffer(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type depOffer struct {
-		ID            uuid.UUID `json:"id"`
-		StockID       uuid.UUID `json:"stockId"`
+		// ItemID replaces the deployment and stock ids: the ledger has no
+		// deployment row, and an item is what a sale line consumes.
+		ItemID        uuid.UUID `json:"itemId"`
 		TypeName      string    `json:"typeName"`
 		TypeCategory  string    `json:"typeCategory"`
 		Outstanding   int       `json:"outstanding"`
@@ -672,7 +501,7 @@ func (s *Server) hiveSaleOffer(w http.ResponseWriter, r *http.Request) {
 	deployments := make([]depOffer, 0)
 	for rows.Next() {
 		var d depOffer
-		if err := rows.Scan(&d.ID, &d.StockID, &d.TypeName, &d.TypeCategory,
+		if err := rows.Scan(&d.ItemID, &d.TypeName, &d.TypeCategory,
 			&d.Outstanding, &d.UnitCostCents); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return

@@ -146,12 +146,16 @@ func seedProductBatch(
 	expenseIDs ...uuid.UUID,
 ) uuid.UUID {
 	t.Helper()
+	// The batch names the lot its honey came out of. Bulk honey lives in lots
+	// since decision 6, so a batch that names none draws the
+	// legacy-unassigned bucket, which is empty in a fresh test database.
 	payload := map[string]any{
-		"kind":        "hot_honey",
-		"productId":   productID.String(),
-		"startedAt":   time.Now().Format("2006-01-02"),
-		"honeyLbs":    honeyLbs,
-		"quantityOut": quantityOut,
+		"kind":         "hot_honey",
+		"productId":    productID.String(),
+		"harvestLotId": seedLot(t, server, honeyLbs*10).String(),
+		"startedAt":    time.Now().Format("2006-01-02"),
+		"honeyLbs":     honeyLbs,
+		"quantityOut":  quantityOut,
 	}
 	if len(expenseIDs) > 0 {
 		ids := make([]string, 0, len(expenseIDs))

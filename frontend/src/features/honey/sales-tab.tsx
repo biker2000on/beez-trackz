@@ -96,7 +96,7 @@ export function SalesTab() {
                 <ul className="grid gap-0.5">
                   {sale.lineItems.map((item) => (
                     <li
-                      key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
+                      key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.itemId ?? item.productId}-${item.bottlingRunId ?? ""}`}
                       className="text-sm"
                     >
                       {item.quantity} × {item.label}

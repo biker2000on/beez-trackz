@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/sales"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -856,25 +858,50 @@ type stockMovementRow struct {
 	SettlementID *uuid.UUID `json:"settlementId"`
 }
 
+// stockMovementHistory is one location's operation history. The row id is
+// inventory_operations.id since the ledger landed (spec 8.1, R10), and "is
+// this reversed" is an EXISTS over reverses_operation_id rather than a stored
+// back-pointer (review Q3).
 func (s *Server) stockMovementHistory(
 	ctx context.Context,
 	locationID uuid.UUID,
 	limit int,
 ) ([]stockMovementRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT m.id, m.date, m.kind,
-		       COALESCE(js.label, p.name, 'unknown'),
-		       m.quantity, c.name, hl.lot_code, m.reason, m.notes,
-		       m.reverses_movement_id IS NOT NULL,
-		       (SELECT r.id FROM stock_movements r WHERE r.reverses_movement_id = m.id),
-		       m.settlement_id
-		FROM stock_movements m
-		LEFT JOIN jar_sizes js ON js.id = m.jar_size_id
-		LEFT JOIN product_catalog p ON p.id = m.product_id
-		LEFT JOIN stock_locations c ON c.id = m.counterparty_location_id
-		LEFT JOIN harvest_lots hl ON hl.id = m.harvest_lot_id
-		WHERE m.location_id=$1
-		ORDER BY m.date DESC, m.created_at DESC
+		SELECT o.id, o.occurred_at,
+		       CASE
+		         WHEN o.kind = 'transfer' AND SUM(m.quantity) > 0 THEN 'transfer'
+		         WHEN o.kind = 'transfer' THEN 'transfer'
+		         WHEN o.kind = 'return' THEN 'return'
+		         WHEN o.kind IN ('shrink', 'count_adjust') THEN 'adjustment'
+		         WHEN o.kind = 'sale_consume' THEN 'sale'
+		         ELSE o.kind
+		       END,
+		       COALESCE(MIN(js.label), MIN(pc.name), 'unknown'),
+		       SUM(m.quantity)::int,
+		       MIN(counterparty.name),
+		       MIN(hl.lot_code),
+		       NULLIF(o.details ->> 'reason_text', ''),
+		       NULLIF(o.details ->> 'notes', ''),
+		       o.reverses_operation_id IS NOT NULL,
+		       (SELECT rev.id FROM inventory_operations rev
+		        WHERE rev.reverses_operation_id = o.id),
+		       NULLIF(o.details ->> 'settlement_id', '')::uuid
+		FROM inventory_operations o
+		JOIN inventory_movements m ON m.operation_id = o.id
+		JOIN inventory_locations loc ON loc.id = m.location_id
+		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
+		LEFT JOIN inventory_lots lot ON lot.id = m.lot_id
+		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN inventory_locations counterparty
+		       ON counterparty.id <> loc.id
+		      AND counterparty.id IN (
+			SELECT other.location_id FROM inventory_movements other
+			WHERE other.operation_id = o.id AND other.location_id <> loc.id)
+		WHERE loc.source_type = 'stock_location' AND loc.source_id = $1
+		GROUP BY o.id
+		ORDER BY o.occurred_at DESC, o.created_at DESC
 		LIMIT $2`, locationID, limit)
 	if err != nil {
 		return nil, err
@@ -951,63 +978,50 @@ func (s *Server) stockMoveStock(w http.ResponseWriter, r *http.Request, kind str
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	homeID, err := stockHomeLocationID(ctx, tx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	// A transfer sends stock TO the named location; a return sends it back.
-	// Either way the counterparty defaults to home, and shop-to-shop is a
-	// plain transfer with an explicit fromLocationId.
-	source, destination := homeID, locationID
-	if req.FromLocationID != nil {
-		source = *req.FromLocationID
-	}
-	if kind == "return" {
-		source, destination = locationID, homeID
-		if req.FromLocationID != nil {
-			destination = *req.FromLocationID
-		}
-	}
-	if source == destination {
-		writeError(w, http.StatusBadRequest, "a transfer needs two different locations")
-		return
-	}
-	if err := stockRequireLive(ctx, tx, source); err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if err := stockRequireLive(ctx, tx, destination); err != nil {
-		equipWriteError(w, err)
-		return
-	}
-
 	transferID := uuid.New()
-	if err := s.stockWriteMovements(ctx, tx, stockWriteInput{
-		Kind:           kind,
-		TransferID:     &transferID,
-		Source:         source,
-		Destination:    destination,
-		Date:           date,
-		Lines:          req.Lines,
-		Reason:         inspectionTrimPtr(req.Reason),
-		Notes:          inspectionTrimPtr(req.Notes),
-		IdempotencyKey: inspectionTrimPtr(req.IdempotencyKey),
-		Actor:          actorID(r),
-	}); err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+	var source, destination uuid.UUID
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		homeID, err := stockHomeLocationID(ctx, uow)
+		if err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		// A transfer sends stock TO the named location; a return sends it back.
+		// Either way the counterparty defaults to home, and shop-to-shop is a
+		// plain transfer with an explicit fromLocationId.
+		source, destination = homeID, locationID
+		if req.FromLocationID != nil {
+			source = *req.FromLocationID
+		}
+		if kind == "return" {
+			source, destination = locationID, homeID
+			if req.FromLocationID != nil {
+				destination = *req.FromLocationID
+			}
+		}
+		if source == destination {
+			return equipFail(http.StatusBadRequest, "a transfer needs two different locations")
+		}
+		if err := stockRequireLive(ctx, uow, source); err != nil {
+			return err
+		}
+		if err := stockRequireLive(ctx, uow, destination); err != nil {
+			return err
+		}
+		return s.stockWriteMovements(ctx, uow, stockWriteInput{
+			Kind:           kind,
+			TransferID:     &transferID,
+			Source:         source,
+			Destination:    destination,
+			Date:           date,
+			Lines:          req.Lines,
+			Reason:         inspectionTrimPtr(req.Reason),
+			Notes:          inspectionTrimPtr(req.Notes),
+			IdempotencyKey: inspectionTrimPtr(req.IdempotencyKey),
+			Actor:          actorID(r),
+		})
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -1030,16 +1044,19 @@ type stockWriteInput struct {
 	Actor          *uuid.UUID
 }
 
-// stockWriteMovements validates a move against what is actually standing at
-// the source and writes the two halves. It is the only place a transfer or a
-// return is created, so the "-n here, +n there" invariant lives in one spot.
+// stockWriteMovements moves stock between two locations as ONE transfer
+// operation whose lines net to zero per (item, lot, condition, container).
+//
+// It takes no SKU row locks any more. Review A4 made the inventory service the
+// only quantity locker: it takes the tuple advisory locks in a documented
+// order inside Record, which is the same guarantee honeyLockJarSizes and
+// stockLockProducts used to give and one discipline instead of two.
 func (s *Server) stockWriteMovements(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	input stockWriteInput,
 ) error {
-	jarIDs := make([]uuid.UUID, 0, len(input.Lines))
-	productIDs := make([]uuid.UUID, 0, len(input.Lines))
+	lines := make([]sales.TransferLine, 0, len(input.Lines))
 	for _, line := range input.Lines {
 		if line.Quantity <= 0 {
 			return stockBadRequest("quantity must be greater than zero")
@@ -1047,86 +1064,86 @@ func (s *Server) stockWriteMovements(
 		if (line.JarSizeID == nil) == (line.ProductID == nil) {
 			return stockBadRequest("each line needs exactly one of jarSizeId or productId")
 		}
+		var itemID uuid.UUID
+		var err error
 		if line.JarSizeID != nil {
-			jarIDs = append(jarIDs, *line.JarSizeID)
+			itemID, err = production.EnsureJarItem(ctx, uow, *line.JarSizeID)
+			if app.IsKind(err, app.KindNotFound) {
+				return stockBadRequest("invalid jarSizeId")
+			}
 		} else {
-			productIDs = append(productIDs, *line.ProductID)
+			itemID, err = production.EnsureProductItem(ctx, uow, *line.ProductID)
+			if app.IsKind(err, app.KindNotFound) {
+				return stockBadRequest("invalid productId")
+			}
 		}
-	}
-	// Lock the SKU rows before reading availability, exactly as a sale does,
-	// so a concurrent checkout and a concurrent transfer cannot both spend the
-	// same jars.
-	if len(jarIDs) > 0 {
-		_, _, unknown, err := honeyLockJarSizes(ctx, tx, jarIDs)
 		if err != nil {
 			return err
 		}
-		if unknown {
-			return stockBadRequest("invalid jarSizeId")
+		// A line that names a bottling run travels on that run's lot, so
+		// Honey Story still answers after the jars have moved.
+		var lotID *uuid.UUID
+		if line.BottlingRunID != nil && line.JarSizeID != nil {
+			var harvestLotID uuid.UUID
+			if err := uow.QueryRow(ctx,
+				`SELECT lot_id FROM bottling_runs WHERE id=$1`, line.BottlingRunID).
+				Scan(&harvestLotID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return stockBadRequest("invalid bottlingRunId")
+				}
+				return err
+			}
+			resolved, err := production.EnsureJarLotForHarvestLot(ctx, uow, itemID, harvestLotID)
+			if err != nil {
+				return err
+			}
+			lotID = &resolved
 		}
-	}
-	if len(productIDs) > 0 {
-		unknown, err := stockLockProducts(ctx, tx, productIDs)
-		if err != nil {
-			return err
-		}
-		if unknown {
-			return stockBadRequest("invalid productId")
-		}
+		lines = append(lines, sales.TransferLine{
+			ItemID: itemID, LotID: lotID, Quantity: line.Quantity,
+		})
 	}
 
-	shelf, _, err := s.stockLocationShelf(ctx, tx, input.Source)
+	sourceType := "stock_transfer"
+	sourceID := uuid.New()
+	if input.TransferID != nil {
+		sourceID = *input.TransferID
+	}
+	if input.SettlementID != nil {
+		sourceType = "consignment_settlement_" + input.Kind
+		sourceID = *input.SettlementID
+	}
+	sourceLocation, err := production.EnsureLocationForStockLocation(ctx, uow, input.Source)
 	if err != nil {
 		return err
 	}
-	available := make(map[string]int, len(shelf))
-	labels := make(map[string]string, len(shelf))
-	for _, row := range shelf {
-		available[row.key()] = row.OnHand
-		labels[row.key()] = row.Label
+	destination, err := production.EnsureLocationForStockLocation(ctx, uow, input.Destination)
+	if err != nil {
+		return err
 	}
-	needed := make(map[string]int, len(input.Lines))
-	for _, line := range input.Lines {
-		needed[stockLineKey(line)] += line.Quantity
+	_, err = sales.New().Transfer(ctx, uow, sales.TransferInput{
+		TransferID: sourceID, SourceType: sourceType, Returning: input.Kind == "return",
+		From: sourceLocation, To: destination, Date: input.Date,
+		Lines: lines, Reason: input.Reason, Notes: input.Notes,
+	})
+	if app.IsKind(err, app.KindPrecondition) {
+		// The shelf could not cover the move. Name the SKU the way the
+		// operator sees it rather than by tuple identity.
+		return stockBadRequest("Not enough stock at the source location: %s", messageOf(err))
 	}
-	keys := make([]string, 0, len(needed))
-	for key := range needed {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if needed[key] > available[key] {
-			label, ok := labels[key]
-			if !ok {
-				label = "units"
-			}
-			return stockBadRequest("Not enough %s at the source location: need %d, have %d",
-				label, needed[key], available[key])
-		}
-	}
+	return err
+}
 
-	for index, line := range input.Lines {
-		var key *string
-		if input.IdempotencyKey != nil {
-			// One key per side per line: replaying the request hits the unique
-			// index instead of moving the stock a second time.
-			out := fmt.Sprintf("%s:%d:out", *input.IdempotencyKey, index)
-			key = &out
-		}
-		if err := stockInsertMovement(ctx, tx, input, line, input.Source,
-			input.Destination, -line.Quantity, key); err != nil {
-			return err
-		}
-		if input.IdempotencyKey != nil {
-			in := fmt.Sprintf("%s:%d:in", *input.IdempotencyKey, index)
-			key = &in
-		}
-		if err := stockInsertMovement(ctx, tx, input, line, input.Destination,
-			input.Source, line.Quantity, key); err != nil {
-			return err
-		}
+// messageOf reports an application error's operator-facing sentence.
+func messageOf(err error) string {
+	var typed *app.Error
+	if errors.As(err, &typed) && typed.Message != "" {
+		return typed.Message
 	}
-	return nil
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func stockLineKey(line stockTransferLine) string {
@@ -1137,42 +1154,6 @@ func stockLineKey(line stockTransferLine) string {
 		return "product:" + line.ProductID.String()
 	}
 	return ""
-}
-
-func stockInsertMovement(
-	ctx context.Context,
-	tx pgx.Tx,
-	input stockWriteInput,
-	line stockTransferLine,
-	locationID, counterparty uuid.UUID,
-	quantity int,
-	idempotencyKey *string,
-) error {
-	_, err := tx.Exec(ctx, `
-		INSERT INTO stock_movements
-			(date, kind, location_id, counterparty_location_id, transfer_id,
-			 jar_size_id, product_id, quantity, harvest_lot_id, bottling_run_id,
-			 product_batch_id, settlement_id, idempotency_key, reason, notes, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-		input.Date, input.Kind, locationID, counterparty, input.TransferID,
-		line.JarSizeID, line.ProductID, quantity, line.HarvestLotID, line.BottlingRunID,
-		line.ProductBatchID, input.SettlementID, idempotencyKey, input.Reason,
-		input.Notes, input.Actor)
-	if err != nil {
-		var already bool
-		if pgErrCode(err) == "23505" {
-			already = true
-		}
-		if already {
-			return equipFail(http.StatusConflict,
-				"this movement was already recorded (idempotency key reused)")
-		}
-		if pgErrCode(err) == "23503" {
-			return stockBadRequest("invalid jar size, product, lot, or batch")
-		}
-		return err
-	}
-	return nil
 }
 
 func stockRequireLive(ctx context.Context, q inspectionQuerier, id uuid.UUID) error {
@@ -1192,8 +1173,13 @@ func stockRequireLive(ctx context.Context, q inspectionQuerier, id uuid.UUID) er
 }
 
 // DELETE /stock-movements/{id} — reverse a transfer. Reversal, never deletion:
-// both halves of the transfer get a negating row so the pair nets to zero and
-// the history keeps both. Reversing twice is a 409, not a second reversal.
+// the transfer's operation is negated line for line, so the pair still nets to
+// zero and the history keeps both. Reversing twice is refused by the ledger's
+// partial unique index on reverses_operation_id (review Q3), not by a race in
+// application code.
+//
+// The {id} is an inventory_operations id since the ledger landed; the
+// stock_movements table it used to name is being retired (spec 8.1, R10).
 func (s *Server) stockMovementReverse(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -1205,113 +1191,53 @@ func (s *Server) stockMovementReverse(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r, &req)
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var transferID *uuid.UUID
-	var settlementID *uuid.UUID
-	err = tx.QueryRow(ctx, `
-		SELECT transfer_id, settlement_id FROM stock_movements WHERE id=$1 FOR UPDATE`, id).
-		Scan(&transferID, &settlementID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "movement not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if settlementID != nil {
-		// A settlement's movements move with its sale; unwinding one half
-		// would leave revenue recognised against stock that came back.
-		writeError(w, http.StatusConflict,
-			"this movement belongs to a settlement; void the settlement instead")
-		return
-	}
-
-	// Reverse the whole transfer, not one leg: a half-reversed transfer leaves
-	// the two locations disagreeing about where the jars are.
-	ids := []uuid.UUID{id}
-	if transferID != nil {
-		ids = nil
-		rows, err := tx.Query(ctx, `
-			SELECT id FROM stock_movements
-			WHERE transfer_id=$1 AND reverses_movement_id IS NULL
-			ORDER BY id FOR UPDATE`, *transferID)
+	commands := sales.New()
+	var reversed int
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var sourceType string
+		var sourceID uuid.UUID
+		var reverses *uuid.UUID
+		err := uow.QueryRow(ctx, `
+			SELECT source_type, source_id, reverses_operation_id
+			FROM inventory_operations WHERE id=$1`, id).
+			Scan(&sourceType, &sourceID, &reverses)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return equipFail(http.StatusNotFound, "movement not found")
+		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return err
 		}
-		for rows.Next() {
-			var movementID uuid.UUID
-			if err := rows.Scan(&movementID); err != nil {
-				rows.Close()
-				writeError(w, http.StatusInternalServerError, "database error")
-				return
-			}
-			ids = append(ids, movementID)
+		if reverses != nil {
+			return equipFail(http.StatusConflict, "already reversed")
 		}
-		rowsErr := rows.Err()
-		rows.Close()
-		if rowsErr != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+		if strings.HasPrefix(sourceType, "consignment_settlement") {
+			// A settlement's movements move with its sale; unwinding one half
+			// would leave revenue recognised against stock that came back.
+			return equipFail(http.StatusConflict,
+				"this movement belongs to a settlement; void the settlement instead")
 		}
-	}
-
-	reversed, err := stockReverseMovements(ctx, tx, ids, inspectionTrimPtr(req.Reason), actorID(r))
+		if sourceType != "stock_transfer" {
+			return equipFail(http.StatusConflict,
+				"this movement is not a stock transfer; undo it where it was recorded")
+		}
+		// Reverse the whole transfer, not one leg: both halves are lines of
+		// one operation, so there is no half-reversed state to reach.
+		reversed, err = commands.ReverseSource(ctx, uow, sourceType, sourceID)
+		if err != nil {
+			return err
+		}
+		if reversed == 0 {
+			return equipFail(http.StatusConflict, "already reversed")
+		}
+		return nil
+	})
 	if err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "reversed": reversed, "id": id,
 	})
-}
-
-// stockReverseMovements writes the negation of each named movement. The unique
-// index on reverses_movement_id is what makes it idempotent: a second attempt
-// conflicts instead of double-reversing.
-func stockReverseMovements(
-	ctx context.Context,
-	tx pgx.Tx,
-	ids []uuid.UUID,
-	reason *string,
-	actor *uuid.UUID,
-) (int, error) {
-	reversed := 0
-	for _, id := range ids {
-		tag, err := tx.Exec(ctx, `
-			INSERT INTO stock_movements
-				(date, kind, location_id, counterparty_location_id, transfer_id,
-				 jar_size_id, product_id, quantity, harvest_lot_id, bottling_run_id,
-				 product_batch_id, sale_id, settlement_id, reverses_movement_id,
-				 reason, notes, created_by)
-			SELECT now(), m.kind, m.location_id, m.counterparty_location_id, m.transfer_id,
-			       m.jar_size_id, m.product_id, -m.quantity, m.harvest_lot_id,
-			       m.bottling_run_id, m.product_batch_id, m.sale_id, m.settlement_id,
-			       m.id, COALESCE($2, 'reversed'), m.notes, $3
-			FROM stock_movements m
-			WHERE m.id=$1 AND m.reverses_movement_id IS NULL
-			ON CONFLICT DO NOTHING`, id, reason, actor)
-		if err != nil {
-			return reversed, err
-		}
-		reversed += int(tag.RowsAffected())
-	}
-	if reversed == 0 {
-		return 0, equipFail(http.StatusConflict, "already reversed")
-	}
-	return reversed, nil
 }
 
 func pgErrCode(err error) string {
@@ -1437,16 +1363,19 @@ func (s *Server) stockBuildStatement(
 		return line
 	}
 
-	// Opening: everything that had happened at this location before the period.
+	// Opening: the location's balance before the period. Every location owns
+	// its movements now, so this is one read of the ledger rather than
+	// "movements here minus sales scoped here".
 	openingRows, err := q.Query(ctx, `
-		SELECT jar_size_id, product_id, SUM(qty)::int FROM (
-			SELECT jar_size_id, product_id, quantity AS qty
-			FROM stock_movements WHERE location_id=$1 AND date < $2
-			UNION ALL
-			SELECT si.jar_size_id, si.product_id, -si.quantity
-			FROM sale_items si JOIN sales s ON s.id = si.sale_id
-			WHERE s.stock_location_id=$1 AND s.order_status <> 'cancelled' AND s.date < $2
-		) opening
+		SELECT js.id, pc.id, SUM(m.quantity)::int
+		FROM inventory_movements m
+		JOIN inventory_operations o ON o.id = m.operation_id
+		JOIN inventory_locations loc ON loc.id = m.location_id
+		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
+		WHERE loc.source_type = 'stock_location' AND loc.source_id = $1
+		  AND o.occurred_at < $2
+		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
 		GROUP BY 1, 2`, location.ID, start)
 	if err != nil {
 		return stockStatement{}, err
@@ -1466,15 +1395,25 @@ func (s *Server) stockBuildStatement(
 		return stockStatement{}, openingErr
 	}
 
-	// Movements inside the period, split by what they mean to the shop.
+	// Movements inside the period, split by what they mean to the shop. A
+	// reversal is classified through the operation it negates, so a reversed
+	// transfer nets out of both columns instead of appearing as its own move.
 	movementRows, err := q.Query(ctx, `
-		SELECT jar_size_id, product_id,
-		       COALESCE(SUM(quantity) FILTER (WHERE kind='transfer' AND quantity > 0), 0)::int,
-		       COALESCE(SUM(-quantity) FILTER (WHERE kind='transfer' AND quantity < 0), 0)::int,
-		       COALESCE(SUM(-quantity) FILTER (WHERE kind='return'), 0)::int,
-		       COALESCE(SUM(-quantity) FILTER (WHERE kind='adjustment'), 0)::int
-		FROM stock_movements
-		WHERE location_id=$1 AND date >= $2 AND date < $3
+		SELECT js.id, pc.id,
+		       COALESCE(SUM(m.quantity) FILTER (WHERE k.kind='transfer' AND m.quantity > 0), 0)::int,
+		       COALESCE(SUM(-m.quantity) FILTER (WHERE k.kind='transfer' AND m.quantity < 0), 0)::int,
+		       COALESCE(SUM(-m.quantity) FILTER (WHERE k.kind='return'), 0)::int,
+		       COALESCE(SUM(-m.quantity) FILTER (WHERE k.kind IN ('shrink','count_adjust')), 0)::int
+		FROM inventory_movements m
+		JOIN inventory_operations o ON o.id = m.operation_id
+		LEFT JOIN inventory_operations orig ON orig.id = o.reverses_operation_id
+		CROSS JOIN LATERAL (SELECT COALESCE(orig.kind, o.kind) AS kind) k
+		JOIN inventory_locations loc ON loc.id = m.location_id
+		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
+		WHERE loc.source_type = 'stock_location' AND loc.source_id = $1
+		  AND o.occurred_at >= $2 AND o.occurred_at < $3
+		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
 		GROUP BY 1, 2`, location.ID, start, end)
 	if err != nil {
 		return stockStatement{}, err
@@ -1792,37 +1731,26 @@ func (s *Server) stockSettlementCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
+	var result stockSettlementResult
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		locations, err := s.stockLoadLocationsTx(ctx, uow, locationID)
+		if err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		if len(locations) == 0 {
+			return equipFail(http.StatusNotFound, "location not found")
+		}
+		location := locations[0]
+		if location.IsHome {
+			return equipFail(http.StatusBadRequest, "home does not settle with itself")
+		}
 
-	locations, err := s.stockLoadLocationsTx(ctx, tx, locationID)
+		result, err = s.stockApplySettlement(ctx, uow, location, req,
+			periodStart, periodEnd, reportedAt, actorID(r))
+		return err
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if len(locations) == 0 {
-		writeError(w, http.StatusNotFound, "location not found")
-		return
-	}
-	location := locations[0]
-	if location.IsHome {
-		writeError(w, http.StatusBadRequest, "home does not settle with itself")
-		return
-	}
-
-	result, err := s.stockApplySettlement(ctx, tx, location, req,
-		periodStart, periodEnd, reportedAt, actorID(r))
-	if err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, result)
@@ -1832,7 +1760,7 @@ func (s *Server) stockSettlementCreate(w http.ResponseWriter, r *http.Request) {
 // use inside a transaction that is about to change them anyway.
 func (s *Server) stockLoadLocationsTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx inspectionQuerier,
 	id uuid.UUID,
 ) ([]stockLocationRow, error) {
 	rows, err := tx.Query(ctx, stockLocationSelect+
@@ -1859,7 +1787,7 @@ type stockSettlementResult struct {
 
 func (s *Server) stockApplySettlement(
 	ctx context.Context,
-	tx pgx.Tx,
+	uow *app.UnitOfWork,
 	location stockLocationRow,
 	req stockSettlementRequest,
 	periodStart, periodEnd, reportedAt time.Time,
@@ -1885,24 +1813,18 @@ func (s *Server) stockApplySettlement(
 			productIDs = append(productIDs, *line.ProductID)
 		}
 	}
+	// No SKU row locks: the inventory service takes the tuple locks inside
+	// Record and CheckAvailable, in the order app/inventory/doc.go documents
+	// (review A4). The shelf read below is the ledger's projection.
 	if len(jarIDs) > 0 {
-		if _, _, unknown, err := honeyLockJarSizes(ctx, tx, jarIDs); err != nil {
+		if _, _, unknown, err := honeyLockJarSizes(ctx, uow, jarIDs); err != nil {
 			return result, err
 		} else if unknown {
 			return result, stockBadRequest("invalid jarSizeId")
 		}
 	}
-	if len(productIDs) > 0 {
-		unknown, err := stockLockProducts(ctx, tx, productIDs)
-		if err != nil {
-			return result, err
-		}
-		if unknown {
-			return result, stockBadRequest("invalid productId")
-		}
-	}
 
-	shelf, catalog, err := s.stockLocationShelf(ctx, tx, location.ID)
+	shelf, catalog, err := s.stockLocationShelf(ctx, uow, location.ID)
 	if err != nil {
 		return result, err
 	}
@@ -1913,7 +1835,7 @@ func (s *Server) stockApplySettlement(
 		labels[row.key()] = row.Label
 	}
 
-	wholesale, err := stockWholesalePrices(ctx, tx, location.WholesalePriceListID)
+	wholesale, err := stockWholesalePrices(ctx, uow, location.WholesalePriceListID)
 	if err != nil {
 		return result, err
 	}
@@ -2026,7 +1948,7 @@ func (s *Server) stockApplySettlement(
 			"the payment is larger than the $%.2f this report owes", owed.Dollars())
 	}
 
-	if _, err := tx.Exec(ctx, `
+	if _, err := uow.Exec(ctx, `
 		INSERT INTO consignment_settlements
 			(id, location_id, period_start, period_end, reported_at,
 			 amount_owed_cents, amount_paid_cents, commission_cents, notes, created_by)
@@ -2042,7 +1964,7 @@ func (s *Server) stockApplySettlement(
 	result.ID = settlementID
 
 	if len(saleLines) > 0 {
-		orderNumber, err := saleRecordConsignmentReport(ctx, tx, saleConsignmentInput{
+		orderNumber, err := saleRecordConsignmentReport(ctx, uow, saleConsignmentInput{
 			SaleID:        saleID,
 			LocationID:    location.ID,
 			LocationName:  location.Name,
@@ -2059,9 +1981,25 @@ func (s *Server) stockApplySettlement(
 		if err != nil {
 			return result, err
 		}
-		if _, err := tx.Exec(ctx,
+		if _, err := uow.Exec(ctx,
 			`UPDATE consignment_settlements SET sale_id=$2 WHERE id=$1`,
 			settlementID, saleID); err != nil {
+			return result, err
+		}
+		// The report's sale is applied the moment it is recorded, so its lines
+		// consume the shop's shelf rather than reserving it: the units are
+		// already gone, which is what the report is telling us.
+		reportLocation, err := production.EnsureLocationForStockLocation(ctx, uow, location.ID)
+		if err != nil {
+			return result, err
+		}
+		reportCommands := sales.New()
+		if err := reportCommands.LinkLines(ctx, uow, saleID, reportLocation); err != nil {
+			return result, err
+		}
+		if err := reportCommands.Apply(ctx, uow, sales.ApplyInput{
+			SaleID: saleID, Date: reportedAt, LocationID: reportLocation,
+		}); err != nil {
 			return result, err
 		}
 		result.SaleID = &saleID
@@ -2069,13 +2007,13 @@ func (s *Server) stockApplySettlement(
 	}
 
 	if len(returns) > 0 {
-		homeID, err := stockHomeLocationID(ctx, tx)
+		homeID, err := stockHomeLocationID(ctx, uow)
 		if err != nil {
 			return result, err
 		}
 		reason := "returned on settlement"
 		key := "settlement:" + settlementID.String()
-		if err := s.stockWriteMovements(ctx, tx, stockWriteInput{
+		if err := s.stockWriteMovements(ctx, uow, stockWriteInput{
 			Kind: "return", TransferID: ptrUUID(uuid.New()),
 			Source: location.ID, Destination: homeID, Date: reportedAt,
 			Lines: returns, Reason: &reason, IdempotencyKey: &key,
@@ -2085,40 +2023,33 @@ func (s *Server) stockApplySettlement(
 		}
 	}
 
+	// Shrink is written once, at the consignee. Under the ledger a
+	// consignee's shelf IS the stock — home is not a residual of a second
+	// ledger — so the old "global half" (a jar_adjustment or a product
+	// adjustment beside the location row) would double-count the loss.
+	commands := sales.New()
+	consignee, err := production.EnsureLocationForStockLocation(ctx, uow, location.ID)
+	if err != nil {
+		return result, err
+	}
 	for index, shrink := range shrinks {
 		reason := "shrink at " + location.Name
 		if shrink.Quantity < 0 {
 			reason = "extra stock counted at " + location.Name
 		}
-		key := fmt.Sprintf("settlement:%s:shrink:%d", settlementID, index)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO stock_movements
-				(date, kind, location_id, jar_size_id, product_id, quantity,
-				 settlement_id, idempotency_key, reason, created_by)
-			VALUES ($1,'adjustment',$2,$3,$4,$5,$6,$7,$8,$9)`,
-			reportedAt, location.ID, shrink.JarSizeID, shrink.ProductID,
-			-shrink.Quantity, settlementID, key, reason, actor); err != nil {
+		var itemID uuid.UUID
+		if shrink.JarSizeID != nil {
+			itemID, err = production.EnsureJarItem(ctx, uow, *shrink.JarSizeID)
+		} else {
+			itemID, err = production.EnsureProductItem(ctx, uow, *shrink.ProductID)
+		}
+		if err != nil {
 			return result, err
 		}
-		// The global half. Without it the missing unit would come back to home
-		// as the residual and the shrink would cost nothing. Jars write the
-		// honey ledger's jar_adjustment; catalog SKUs write the product
-		// adjustment ledger, which is the same statement in the other table.
-		if shrink.JarSizeID != nil {
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO honey_movements
-					(date, kind, jar_size_id, quantity, reason, settlement_id)
-				VALUES ($1, 'jar_adjustment', $2, $3, $4, $5)`,
-				reportedAt, shrink.JarSizeID, -shrink.Quantity, reason,
-				settlementID); err != nil {
-				return result, err
-			}
-			continue
-		}
-		globalKey := fmt.Sprintf("settlement:%s:product-shrink:%d", settlementID, index)
-		if _, err := productInsertAdjustment(ctx, tx, *shrink.ProductID, reportedAt,
-			-shrink.Quantity, &reason, nil, &location.ID, &settlementID, &globalKey,
-			actor); err != nil {
+		if _, err := commands.RecordSettlementShrink(ctx, uow, sales.SettlementShrinkInput{
+			SettlementID: settlementID, LocationID: consignee, ItemID: itemID,
+			Quantity: shrink.Quantity, Date: reportedAt, Reason: &reason, Index: index,
+		}); err != nil {
 			return result, err
 		}
 	}
@@ -2178,118 +2109,69 @@ func (s *Server) stockSettlementVoid(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r, &req)
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var saleID *uuid.UUID
-	var voidedAt *time.Time
-	err = tx.QueryRow(ctx, `
-		SELECT sale_id, voided_at FROM consignment_settlements WHERE id=$1 FOR UPDATE`, id).
-		Scan(&saleID, &voidedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "settlement not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if voidedAt != nil {
-		writeError(w, http.StatusConflict, "this settlement is already voided")
-		return
-	}
-
-	actor := actorID(r)
-	reason := inspectionTrimPtr(req.Reason)
-	movementIDs, err := stockSettlementMovementIDs(ctx, tx, id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if len(movementIDs) > 0 {
-		if _, err := stockReverseMovements(ctx, tx, movementIDs, reason, actor); err != nil {
-			equipWriteError(w, err)
-			return
+	commands := sales.New()
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var saleID *uuid.UUID
+		var voidedAt *time.Time
+		err := uow.QueryRow(ctx, `
+			SELECT sale_id, voided_at FROM consignment_settlements WHERE id=$1 FOR UPDATE`, id).
+			Scan(&saleID, &voidedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return equipFail(http.StatusNotFound, "settlement not found")
 		}
-	}
-	// The global half of any shrink, reversed the same way honey movements are
-	// reversed everywhere else: a negating row that points at the original.
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO honey_movements
-			(date, kind, jar_size_id, quantity, reason, reverses_movement_id, settlement_id)
-		SELECT now(), m.kind, m.jar_size_id, -m.quantity,
-		       COALESCE($2, 'settlement voided'), m.id, m.settlement_id
-		FROM honey_movements m
-		WHERE m.settlement_id=$1 AND m.reverses_movement_id IS NULL
-		ON CONFLICT DO NOTHING`, id, reason); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	// The product ledger's half. It carries a soft delete rather than a
-	// negating row, so undoing it is the same idempotent UPDATE: a second void
-	// matches nothing.
-	if _, err := tx.Exec(ctx, `
-		UPDATE product_adjustments
-		SET deleted_at=now(), deleted_by=$2
-		WHERE settlement_id=$1 AND deleted_at IS NULL`, id, actor); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if saleID != nil {
-		if _, err := tx.Exec(ctx, `
-			UPDATE sales
-			SET order_status='cancelled',
-			    physical_applied_at=NULL,
-			    cancelled_at=COALESCE(cancelled_at, now()),
-			    cancelled_by=COALESCE(cancelled_by, $2),
-			    cancellation_reason=COALESCE($3, cancellation_reason)
-			WHERE id=$1`, *saleID, actor, reason); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+		if err != nil {
+			return err
 		}
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE consignment_settlements
-		SET voided_at=now(), voided_by=$2, void_reason=$3
-		WHERE id=$1`, id, actor, reason); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		if voidedAt != nil {
+			return equipFail(http.StatusConflict, "this settlement is already voided")
+		}
+
+		actor := actorID(r)
+		reason := inspectionTrimPtr(req.Reason)
+		// Everything the settlement wrote is reversed rather than deleted: the
+		// return transfer, the shrink at the consignee, and the sale that
+		// recognised the revenue. Each is an operation this settlement is the
+		// source of, so the undo is one sweep rather than four table-specific
+		// unwinds.
+		for _, sourceType := range []string{
+			"consignment_settlement_return",
+			"consignment_settlement",
+		} {
+			if _, err := commands.ReverseSource(ctx, uow, sourceType, id); err != nil {
+				return err
+			}
+		}
+		if saleID != nil {
+			if err := commands.Unapply(ctx, uow, *saleID); err != nil {
+				return err
+			}
+			if _, err := uow.Exec(ctx, `
+				UPDATE sales
+				SET order_status='cancelled',
+				    physical_applied_at=NULL,
+				    cancelled_at=COALESCE(cancelled_at, now()),
+				    cancelled_by=COALESCE(cancelled_by, $2),
+				    cancellation_reason=COALESCE($3, cancellation_reason)
+				WHERE id=$1`, *saleID, actor, reason); err != nil {
+				return err
+			}
+		}
+		_, err = uow.Exec(ctx, `
+			UPDATE consignment_settlements
+			SET voided_at=now(), voided_by=$2, void_reason=$3
+			WHERE id=$1`, id, actor, reason)
+		return err
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": id, "voided": true})
 }
 
-func stockSettlementMovementIDs(
-	ctx context.Context,
-	tx pgx.Tx,
-	settlementID uuid.UUID,
-) ([]uuid.UUID, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT id FROM stock_movements
-		WHERE settlement_id=$1 AND reverses_movement_id IS NULL
-		ORDER BY id FOR UPDATE`, settlementID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	ids := make([]uuid.UUID, 0)
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
+// A settlement's movements are inventory operations whose source is the
+// settlement, so undoing them is sales.Service.ReverseSource rather than a
+// hand-rolled list of stock_movements ids.
 
 // --- selling from a location other than home -------------------------------
 //

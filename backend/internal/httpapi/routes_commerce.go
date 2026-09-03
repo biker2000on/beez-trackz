@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -277,7 +279,7 @@ const honeyLockOrder = "harvest rows, then lot rows, then the bulk advisory lock
 // do not exist at all are left to the link insert's foreign key.
 func lockRequestedHarvests(
 	ctx context.Context,
-	tx pgx.Tx,
+	tx inspectionQuerier,
 	harvestIDs []uuid.UUID,
 ) (string, error) {
 	if len(harvestIDs) == 0 {
@@ -799,46 +801,36 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
 		return
 	}
-	tx, err := s.pool.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	// Lock the requested harvests FIRST — class 1 of honeyLockOrder — before
-	// their weights are read and before any lot row is touched. This is what
-	// stops a concurrent hsDeleteEntry from soft-deleting a harvest between
-	// the weight read below and the link inserts at the end of this handler.
-	if msg, err := lockRequestedHarvests(r.Context(), tx, req.HarvestIDs); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	} else if msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
-		return
-	}
-	claimElevation, err = fillClaimElevation(r.Context(), tx, claimApiaryID, claimElevation)
-	if err != nil {
-		if err.Error() == "invalid claimApiaryId" {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(r.Context(), tx, req.HarvestIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
-		req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
-		derivedLbs, linkedHarvests)
-	if weightMsg != "" {
-		writeError(w, http.StatusBadRequest, weightMsg)
-		return
-	}
+	commands := production.New()
 	var id uuid.UUID
-	err = tx.QueryRow(r.Context(), `
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		// Lock the requested harvests FIRST — class 1 of honeyLockOrder — before
+		// their weights are read and before any lot row is touched. This is what
+		// stops a concurrent hsDeleteEntry from soft-deleting a harvest between
+		// the weight read below and the link inserts at the end of this handler.
+		if msg, err := lockRequestedHarvests(ctx, uow, req.HarvestIDs); err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		} else if msg != "" {
+			return equipFail(http.StatusUnprocessableEntity, "%s", msg)
+		}
+		claimElevation, err = fillClaimElevation(ctx, uow, claimApiaryID, claimElevation)
+		if err != nil {
+			if err.Error() == "invalid claimApiaryId" {
+				return equipFail(http.StatusBadRequest, "%s", err.Error())
+			}
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(ctx, uow, req.HarvestIDs)
+		if err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
+			req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
+			derivedLbs, linkedHarvests)
+		if weightMsg != "" {
+			return equipFail(http.StatusBadRequest, "%s", weightMsg)
+		}
+		err = uow.QueryRow(ctx, `
 		INSERT INTO harvest_lots
 			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_weight_entered,
 			 honey_weight_source,
@@ -847,41 +839,42 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 			 claim_species, claim_year, claim_apiary_id, claim_elevation_m, varietal_id,
 			 created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
-		strings.TrimSpace(req.LotCode), slug, date, weightLbs,
-		weightEntered, weightSource,
-		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
-		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
-		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-		claimSpecies, claimYear, claimApiaryID, claimElevation, req.VarietalID,
-		actorID(r)).Scan(&id)
-	if err != nil {
-		writeDBError(w, err, "lot code or public slug already exists",
-			"invalid reference")
-		return
-	}
-	if err := stampMoistureOverride(r.Context(), tx, id, overrideReason, actorID(r)); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	for _, harvestID := range req.HarvestIDs {
-		if _, err := tx.Exec(r.Context(), `
+			strings.TrimSpace(req.LotCode), slug, date, weightLbs,
+			weightEntered, weightSource,
+			honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
+			honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
+			honeyTrimPtr(req.BeekeeperStory), req.TestingData,
+			reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
+			claimSpecies, claimYear, claimApiaryID, claimElevation, req.VarietalID,
+			actorID(r)).Scan(&id)
+		if err != nil {
+			return dbCommandError(err, "lot code or public slug already exists",
+				"invalid reference")
+		}
+		if err := stampMoistureOverride(ctx, uow, id, overrideReason, actorID(r)); err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		for _, harvestID := range req.HarvestIDs {
+			if _, err := uow.Exec(ctx, `
 			INSERT INTO harvest_lot_harvests (lot_id, harvest_id) VALUES ($1, $2)`,
-			id, harvestID); err != nil {
-			writeDBError(w, err, "duplicate harvestId", "invalid harvestId")
-			return
+				id, harvestID); err != nil {
+				return dbCommandError(err, "duplicate harvestId", "invalid harvestId")
+			}
 		}
-	}
-	for i, photoID := range req.PhotoIDs {
-		if _, err := tx.Exec(r.Context(), `
+		for i, photoID := range req.PhotoIDs {
+			if _, err := uow.Exec(ctx, `
 			INSERT INTO harvest_lot_photos (lot_id, photo_id, sort_order) VALUES ($1, $2, $3)`,
-			id, photoID, i); err != nil {
-			writeDBError(w, err, "duplicate photoId", "invalid photoId")
-			return
+				id, photoID, i); err != nil {
+				return dbCommandError(err, "duplicate photoId", "invalid photoId")
+			}
 		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		// The lot's weight IS a receipt into its bulk-honey lot (decision 6):
+		// honey_weight_lbs stays the domain fact, and the pounds that can
+		// actually be drawn are this operation's balance.
+		return commands.SetLotCeiling(ctx, uow, id, weightLbs, date)
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -889,7 +882,6 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		"storyUrl": s.cfg.StoryBaseURL() + "/honey/" + slug,
 	})
 }
-
 func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -940,95 +932,80 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
 		return
 	}
-	tx, err := s.pool.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	// Lock the requested harvests first — class 1 of honeyLockOrder. The link
-	// inserts at the bottom of this handler take an FK key-share lock on each
-	// of these rows, so taking them here, before the lot row, is what keeps
-	// this path from reaching backwards into class 1 while holding class 2
-	// and deadlocking against hsDeleteEntry. It also re-validates under the
-	// lock that none of them has been deleted.
-	if msg, err := lockRequestedHarvests(r.Context(), tx, req.HarvestIDs); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	} else if msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
-		return
-	}
-	// Then the lot row, before anything is read off it. The bottled total
-	// below and the UPDATE that acts on it have to be one atomic step:
-	// without this, a bottling run committing between the two stores a derived
-	// weight lower than the pounds live runs have already taken out of the lot,
-	// and every later run 400s on a ceiling that was never really there.
-	// bottlingRunCreate takes the same lock on the same row, so both paths
-	// order their locks identically and neither can deadlock the other.
-	var lockedLotCode string
-	if err := tx.QueryRow(r.Context(),
-		`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, id).
-		Scan(&lockedLotCode); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "harvest lot not found")
-			return
+	commands := production.New()
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		// Lock the requested harvests first — class 1 of honeyLockOrder. The link
+		// inserts at the bottom of this handler take an FK key-share lock on each
+		// of these rows, so taking them here, before the lot row, is what keeps
+		// this path from reaching backwards into class 1 while holding class 2
+		// and deadlocking against hsDeleteEntry. It also re-validates under the
+		// lock that none of them has been deleted.
+		if msg, err := lockRequestedHarvests(ctx, uow, req.HarvestIDs); err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		} else if msg != "" {
+			return equipFail(http.StatusUnprocessableEntity, "%s", msg)
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	claimElevation, err = fillClaimElevation(r.Context(), tx, claimApiaryID, claimElevation)
-	if err != nil {
-		if err.Error() == "invalid claimApiaryId" {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
+		// Then the lot row, before anything is read off it. The bottled total
+		// below and the UPDATE that acts on it have to be one atomic step:
+		// without this, a bottling run committing between the two stores a derived
+		// weight lower than the pounds live runs have already taken out of the lot,
+		// and every later run 400s on a ceiling that was never really there.
+		// bottlingRunCreate takes the same lock on the same row, so both paths
+		// order their locks identically and neither can deadlock the other.
+		var lockedLotCode string
+		if err := uow.QueryRow(ctx,
+			`SELECT lot_code FROM harvest_lots WHERE id=$1 FOR UPDATE`, id).
+			Scan(&lockedLotCode); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return equipFail(http.StatusNotFound, "harvest lot not found")
+			}
+			return equipFail(http.StatusInternalServerError, "database error")
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(r.Context(), tx, req.HarvestIDs)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	// req.HarvestIDs replaces the link set wholesale below, so a derived lot
-	// whose harvests were added, dropped, or soft-deleted picks up the new sum
-	// on this same update — the weight can never drift from its sources.
-	weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
-		req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
-		derivedLbs, linkedHarvests)
-	if weightMsg != "" {
-		writeError(w, http.StatusBadRequest, weightMsg)
-		return
-	}
-	// The lot's weight cannot drop below what its runs already bottled —
-	// existing runs would exceed capacity and every future run would 400.
-	var alreadyBottledLbs float64
-	if err := tx.QueryRow(r.Context(), `
+		claimElevation, err = fillClaimElevation(ctx, uow, claimApiaryID, claimElevation)
+		if err != nil {
+			if err.Error() == "invalid claimApiaryId" {
+				return equipFail(http.StatusBadRequest, "%s", err.Error())
+			}
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		derivedLbs, linkedHarvests, err := harvestLotDerivedWeight(ctx, uow, req.HarvestIDs)
+		if err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		// req.HarvestIDs replaces the link set wholesale below, so a derived lot
+		// whose harvests were added, dropped, or soft-deleted picks up the new sum
+		// on this same update — the weight can never drift from its sources.
+		weightLbs, weightSource, weightEntered, weightMsg := resolveLotWeight(
+			req.HoneyWeightLbs, req.HoneyWeightSource, honeyTrimPtr(req.HoneyWeightEntered),
+			derivedLbs, linkedHarvests)
+		if weightMsg != "" {
+			return equipFail(http.StatusBadRequest, "%s", weightMsg)
+		}
+		// The lot's weight cannot drop below what its runs already bottled —
+		// existing runs would exceed capacity and every future run would 400.
+		var alreadyBottledLbs float64
+		if err := uow.QueryRow(ctx, `
 		SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
 			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
 		FROM bottling_runs run
 		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
 		WHERE run.lot_id = $1 AND run.voided_at IS NULL`, id).Scan(&alreadyBottledLbs); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if weightLbs < alreadyBottledLbs-honeyPoundTolerance {
-		if weightSource == lotWeightSourceDerived {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"The linked harvests total %.2f lbs but this lot's bottling runs already used %.2f lbs; "+
-					"fix the harvests or type a manual weight",
-				weightLbs, alreadyBottledLbs))
-			return
+			return equipFail(http.StatusInternalServerError, "database error")
 		}
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"Lot weight cannot be below the %.2f lbs its bottling runs already used",
-			alreadyBottledLbs))
-		return
-	}
-	// The row has been held FOR UPDATE since the top of this transaction, so
-	// the bottled total read above is still current and the row still exists.
-	_, err = tx.Exec(r.Context(), `
+		if weightLbs < alreadyBottledLbs-honeyPoundTolerance {
+			if weightSource == lotWeightSourceDerived {
+				return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
+					"The linked harvests total %.2f lbs but this lot's bottling runs already used %.2f lbs; "+
+						"fix the harvests or type a manual weight",
+					weightLbs, alreadyBottledLbs))
+			}
+			return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
+				"Lot weight cannot be below the %.2f lbs its bottling runs already used",
+				alreadyBottledLbs))
+		}
+		// The row has been held FOR UPDATE since the top of this transaction, so
+		// the bottled total read above is still current and the row still exists.
+		_, err = uow.Exec(ctx, `
 		UPDATE harvest_lots SET lot_code=$1, public_slug=$2, extraction_date=$3,
 			honey_weight_lbs=$4, honey_weight_entered=$5, honey_variety=$6, season=$7,
 			apiary_region=$8, bloom_notes=$9, beekeeper_story=$10, testing_data=$11,
@@ -1036,52 +1013,52 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 			claim_species=$16, claim_year=$17, claim_apiary_id=$18, claim_elevation_m=$19,
 			honey_weight_source=$21, varietal_id=$22
 		WHERE id=$20`,
-		strings.TrimSpace(req.LotCode), slug, date, weightLbs,
-		weightEntered,
-		honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
-		honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
-		honeyTrimPtr(req.BeekeeperStory), req.TestingData,
-		reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
-		claimSpecies, claimYear, claimApiaryID, claimElevation, id, weightSource,
-		req.VarietalID)
+			strings.TrimSpace(req.LotCode), slug, date, weightLbs,
+			weightEntered,
+			honeyTrimPtr(req.HoneyVariety), honeyTrimPtr(req.Season),
+			honeyTrimPtr(req.ApiaryRegion), honeyTrimPtr(req.BloomNotes),
+			honeyTrimPtr(req.BeekeeperStory), req.TestingData,
+			reorderURL, public, req.MoisturePct, req.BottlingMoisturePct,
+			claimSpecies, claimYear, claimApiaryID, claimElevation, id, weightSource,
+			req.VarietalID)
+		if err != nil {
+			return dbCommandError(err, "lot code or public slug already exists",
+				"invalid reference")
+		}
+		// nil reason (reading within threshold) clears any previous override, so a
+		// corrected reading does not leave a stale justification behind.
+		if err := stampMoistureOverride(ctx, uow, id, overrideReason, actorID(r)); err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		if _, err := uow.Exec(ctx, `DELETE FROM harvest_lot_harvests WHERE lot_id=$1`, id); err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		if _, err := uow.Exec(ctx, `DELETE FROM harvest_lot_photos WHERE lot_id=$1`, id); err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		for _, harvestID := range req.HarvestIDs {
+			if _, err := uow.Exec(ctx, `INSERT INTO harvest_lot_harvests VALUES ($1,$2)`, id, harvestID); err != nil {
+				return dbCommandError(err, "duplicate harvestId", "invalid harvestId")
+			}
+		}
+		for i, photoID := range req.PhotoIDs {
+			if _, err := uow.Exec(ctx, `INSERT INTO harvest_lot_photos VALUES ($1,$2,$3)`, id, photoID, i); err != nil {
+				return dbCommandError(err, "duplicate photoId", "invalid photoId")
+			}
+		}
+		// Re-linking or re-weighing a lot is a new receipt for the new
+		// ceiling followed by a reversal of the old one (decision 6). The
+		// order keeps the lot's balance nonnegative at every step, and a
+		// ceiling below what has already been drawn is refused by the ledger
+		// as well as by the bottled-pounds check above.
+		return commands.SetLotCeiling(ctx, uow, id, weightLbs, date)
+	})
 	if err != nil {
-		writeDBError(w, err, "lot code or public slug already exists",
-			"invalid reference")
-		return
-	}
-	// nil reason (reading within threshold) clears any previous override, so a
-	// corrected reading does not leave a stale justification behind.
-	if err := stampMoistureOverride(r.Context(), tx, id, overrideReason, actorID(r)); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `DELETE FROM harvest_lot_harvests WHERE lot_id=$1`, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `DELETE FROM harvest_lot_photos WHERE lot_id=$1`, id); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	for _, harvestID := range req.HarvestIDs {
-		if _, err := tx.Exec(r.Context(), `INSERT INTO harvest_lot_harvests VALUES ($1,$2)`, id, harvestID); err != nil {
-			writeDBError(w, err, "duplicate harvestId", "invalid harvestId")
-			return
-		}
-	}
-	for i, photoID := range req.PhotoIDs {
-		if _, err := tx.Exec(r.Context(), `INSERT INTO harvest_lot_photos VALUES ($1,$2,$3)`, id, photoID, i); err != nil {
-			writeDBError(w, err, "duplicate photoId", "invalid photoId")
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
-
 func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 	lotID, err := uuidParam(r, "id")
 	if err != nil {
@@ -1119,9 +1096,9 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 			"serialized quantity cannot exceed %d", maxSerializedBottlingQuantity))
 		return
 	}
-	// A run with no jar size used to create no inventory movement at all: the
-	// jars showed on the lot page and nowhere in inventory. Rejecting is the
-	// only honest option — the jars have to land in a size to be counted.
+	// A run with no jar size would create no inventory at all: the jars would
+	// show on the lot page and nowhere in inventory. Rejecting is the only
+	// honest option — the jars have to land in a size to be counted.
 	if req.JarSizeID == nil {
 		writeError(w, http.StatusBadRequest,
 			"jarSizeId is required so the bottled jars enter inventory")
@@ -1132,142 +1109,136 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	// The lot row (class 2 of honeyLockOrder), then the bulk advisory lock
-	// (class 3) further down. This path takes no harvest row locks, so it is a
-	// suffix of the global order and cannot deadlock against the paths that do.
-	var lotCode string
-	var lotWeightLbs float64
-	if err := tx.QueryRow(ctx,
-		`SELECT lot_code, honey_weight_lbs FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
-		Scan(&lotCode, &lotWeightLbs); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusBadRequest, "invalid harvest lot")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	// Jar lines are not traced back to a lot, so the bottling run is the last
-	// point where a withdrawal window can still be enforced. Same rule
-	// refuseLotSale applies to sales.
-	if msg, err := refuseLotBottling(ctx, tx, lotID, lotCode, date); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	} else if msg != "" {
-		writeError(w, http.StatusConflict, msg)
-		return
-	}
-
-	// Pounds this run consumes. When honeyLbs is omitted it is derived from the
-	// jar size, using the same oz/16 rule as jarring.
-	var honeyOz *float64
-	if err := tx.QueryRow(ctx, `SELECT honey_oz FROM jar_sizes WHERE id=$1`, *req.JarSizeID).
-		Scan(&honeyOz); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusBadRequest, "invalid jar size")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	runLbs := 0.0
-	switch {
-	case req.HoneyLbs != nil:
-		runLbs = *req.HoneyLbs
-	case honeyOz != nil:
-		runLbs = *honeyOz * float64(req.Quantity) / 16
-	}
-
-	// A run cannot bottle more than its lot yielded, and cannot bottle honey
-	// that is not in the bulk pool.
-	var alreadyBottledLbs float64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
-			run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
-		FROM bottling_runs run
-		LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-		WHERE run.lot_id = $1 AND run.voided_at IS NULL`, lotID).Scan(&alreadyBottledLbs); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if alreadyBottledLbs+runLbs > lotWeightLbs+honeyPoundTolerance {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf(
-			"Lot %s holds %.2f lbs; %.2f lbs are already bottled and this run needs %.2f lbs",
-			lotCode, lotWeightLbs, alreadyBottledLbs, runLbs))
-		return
-	}
-	bulk, err := honeyLockBulk(ctx, tx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if message := honeyBulkShortfall(runLbs, bulk.BulkOnHandLbs); message != "" {
-		writeError(w, http.StatusBadRequest, message)
-		return
-	}
-
-	actor := actorID(r)
-	var runID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO bottling_runs (lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id`, lotID, date, req.JarSizeID, req.Quantity, req.HoneyLbs,
-		honeyTrimPtr(req.Notes), actor).Scan(&runID)
-	if err != nil {
-		writeDBError(w, err, "duplicate bottling run",
-			"invalid harvest lot or jar size")
-		return
-	}
-	// bottling_run_id is a real foreign key now. The old link was the text
-	// reason "bottling run LOT-CODE", which nothing enforced.
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO honey_movements
-			(date, kind, jar_size_id, quantity, amount_lbs, reason, notes,
-			 bottling_run_id, lot_id, created_by)
-		VALUES ($1, 'jarring', $2, $3, $4, $5, $6, $7, $8, $9)`,
-		date, req.JarSizeID, req.Quantity, runLbs,
-		"bottling run "+lotCode, honeyTrimPtr(req.Notes), runID, lotID, actor); err != nil {
-		writeDBError(w, err, "duplicate movement", "invalid jar size")
-		return
-	}
+	commands := production.New()
+	runID := uuid.New()
 	serials := make([]string, 0)
-	if req.Serialize {
-		for i := 1; i <= req.Quantity; i++ {
-			serial := fmt.Sprintf(
-				"%s-%s-%s-%04d",
-				lotCode,
-				date.Format("20060102"),
-				strings.ToUpper(strings.ReplaceAll(runID.String()[:6], "-", "")),
-				i,
-			)
-			if _, err := tx.Exec(r.Context(), `
-				INSERT INTO jar_serials (bottling_run_id, serial_number) VALUES ($1,$2)`,
-				runID, serial); err != nil {
-				writeError(w, http.StatusConflict, "serial numbers already exist for this lot and date")
-				return
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		// The lot row (class 2 of honeyLockOrder), then the bulk advisory lock
+		// (class 3), then the ledger's tuple locks inside Record. This path
+		// takes no harvest row locks, so it is a suffix of the global order
+		// and cannot deadlock against the paths that do.
+		var lotCode string
+		var lotWeightLbs float64
+		if err := uow.QueryRow(ctx,
+			`SELECT lot_code, honey_weight_lbs FROM harvest_lots WHERE id=$1 FOR UPDATE`, lotID).
+			Scan(&lotCode, &lotWeightLbs); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return equipBadRequest("invalid harvest lot")
 			}
-			serials = append(serials, serial)
+			return err
 		}
-	}
-	if req.MoisturePct != nil {
-		if _, err := tx.Exec(ctx, `
-			UPDATE harvest_lots SET bottling_moisture_pct = $2 WHERE id = $1`,
-			lotID, req.MoisturePct); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+
+		// Jar lines are not traced back to a lot, so the bottling run is the
+		// last point where a withdrawal window can still be enforced. Same
+		// rule refuseLotSale applies to sales, and it runs before any builder.
+		if msg, err := refuseLotBottling(ctx, uow, lotID, lotCode, date); err != nil {
+			return err
+		} else if msg != "" {
+			return equipFail(http.StatusConflict, "%s", msg)
 		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+
+		// Pounds this run consumes. When honeyLbs is omitted it is derived
+		// from the jar size, using the same oz/16 rule as jarring.
+		var honeyOz *float64
+		var packagingTypeID *uuid.UUID
+		if err := uow.QueryRow(ctx,
+			`SELECT honey_oz, packaging_type_id FROM jar_sizes WHERE id=$1`, *req.JarSizeID).
+			Scan(&honeyOz, &packagingTypeID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return equipBadRequest("invalid jar size")
+			}
+			return err
+		}
+		runLbs := 0.0
+		switch {
+		case req.HoneyLbs != nil:
+			runLbs = *req.HoneyLbs
+		case honeyOz != nil:
+			runLbs = *honeyOz * float64(req.Quantity) / 16
+		}
+
+		// A run cannot bottle more than its lot yielded. The ledger enforces
+		// it too — the lot's receipt is its ceiling (decision 6) — but the
+		// operator gets the sentence naming both numbers.
+		var alreadyBottledLbs float64
+		if err := uow.QueryRow(ctx, `
+			SELECT COALESCE(SUM(COALESCE(run.honey_lbs,
+				run.quantity * COALESCE(size.honey_oz, 0) / 16.0)), 0)
+			FROM bottling_runs run
+			LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
+			WHERE run.lot_id = $1 AND run.voided_at IS NULL`, lotID).
+			Scan(&alreadyBottledLbs); err != nil {
+			return err
+		}
+		if alreadyBottledLbs+runLbs > lotWeightLbs+honeyPoundTolerance {
+			return equipBadRequest(
+				"Lot %s holds %.2f lbs; %.2f lbs are already bottled and this run needs %.2f lbs",
+				lotCode, lotWeightLbs, alreadyBottledLbs, runLbs)
+		}
+		bulk, err := honeyLockBulk(ctx, uow)
+		if err != nil {
+			return err
+		}
+		if message := honeyBulkShortfall(runLbs, bulk.BulkOnHandLbs); message != "" {
+			return equipBadRequest("%s", message)
+		}
+
+		actor := actorID(r)
+		if _, err := uow.Exec(ctx, `
+			INSERT INTO bottling_runs
+				(id, lot_id, bottled_date, jar_size_id, quantity, honey_lbs, notes, created_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			runID, lotID, date, req.JarSizeID, req.Quantity, req.HoneyLbs,
+			honeyTrimPtr(req.Notes), actor); err != nil {
+			if pgErrCode(err) == "23505" {
+				return equipFail(http.StatusConflict, "duplicate bottling run")
+			}
+			if pgErrCode(err) == "23503" {
+				return equipBadRequest("invalid harvest lot or jar size")
+			}
+			return err
+		}
+		packaging := map[uuid.UUID]int{}
+		if packagingTypeID != nil {
+			packaging[*packagingTypeID] = req.Quantity
+		}
+		if _, err := commands.RecordBottling(ctx, uow, production.BottlingInput{
+			RunID: runID, HarvestLotID: lotID, JarSizeID: *req.JarSizeID,
+			Quantity: req.Quantity, HoneyLbs: runLbs, Date: date,
+			PackagingTypes: packaging, Notes: honeyTrimPtr(req.Notes),
+		}); err != nil {
+			return err
+		}
+
+		if req.Serialize {
+			for i := 1; i <= req.Quantity; i++ {
+				serial := fmt.Sprintf(
+					"%s-%s-%s-%04d",
+					lotCode,
+					date.Format("20060102"),
+					strings.ToUpper(strings.ReplaceAll(runID.String()[:6], "-", "")),
+					i,
+				)
+				if _, err := uow.Exec(ctx, `
+					INSERT INTO jar_serials (bottling_run_id, serial_number) VALUES ($1,$2)`,
+					runID, serial); err != nil {
+					return equipFail(http.StatusConflict,
+						"serial numbers already exist for this lot and date")
+				}
+				serials = append(serials, serial)
+			}
+		}
+		if req.MoisturePct != nil {
+			if _, err := uow.Exec(ctx, `
+				UPDATE harvest_lots SET bottling_moisture_pct = $2 WHERE id = $1`,
+				lotID, req.MoisturePct); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": runID, "serialNumbers": serials})
@@ -1275,12 +1246,12 @@ func (s *Server) bottlingRunCreate(w http.ResponseWriter, r *http.Request) {
 
 // POST /bottling-runs/{id}/void — undo a bottling run.
 //
-// A run-linked honey_movement refuses reversal on its own (409): reversing it
-// alone would leave the run, its serials, and the lot's bottled total claiming
-// jars the ledger no longer has. Voiding is the whole-unit operation — it
-// reverses every movement the run created, drops the run's serials, and marks
-// the run voided in one transaction, so the ledger and the lot agree at every
-// commit boundary.
+// A run's operation cannot be reversed on its own (409 from
+// /honey/movements/{id}): reversing it alone would leave the run, its
+// serials, and the lot's bottled total claiming jars the ledger no longer
+// has. Voiding is the whole-unit operation — it reverses the run's transform,
+// drops the run's serials, and marks the run voided in one transaction, so
+// the ledger and the lot agree at every commit boundary (spec 5.3).
 func (s *Server) bottlingRunVoid(w http.ResponseWriter, r *http.Request) {
 	runID, err := uuidParam(r, "id")
 	if err != nil {
@@ -1292,169 +1263,83 @@ func (s *Server) bottlingRunVoid(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSON(r, &req)
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
+	commands := production.New()
+	var reversed int
+	var removedSerials int64
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var voidedAt *time.Time
+		var jarSizeID *uuid.UUID
+		var quantity int
+		if err := uow.QueryRow(ctx,
+			`SELECT voided_at, jar_size_id, quantity FROM bottling_runs WHERE id=$1 FOR UPDATE`,
+			runID).Scan(&voidedAt, &jarSizeID, &quantity); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return equipFail(http.StatusNotFound, "bottling run not found")
+			}
+			return err
+		}
+		if voidedAt != nil {
+			return equipFail(http.StatusConflict, "this bottling run is already voided")
+		}
+
+		// A serial that reached a customer is provenance, not inventory:
+		// voiding the run that produced it would erase the jar's chain of
+		// custody.
+		var soldSerials int
+		if err := uow.QueryRow(ctx, `
+			SELECT COUNT(*) FROM jar_serials
+			WHERE bottling_run_id=$1 AND sale_id IS NOT NULL`, runID).Scan(&soldSerials); err != nil {
+			return err
+		}
+		if soldSerials > 0 {
+			return equipFail(http.StatusConflict,
+				"jars from this run have already been sold; cancel those sales first")
+		}
+
+		// Reversing the run takes its jars back off the shelf, so the removal
+		// has to clear the same availability bar as any other withdrawal. The
+		// ledger refuses it either way; this is the sentence the operator
+		// reads instead of a tuple identity.
+		if jarSizeID != nil && quantity > 0 {
+			onHand, labels, unknown, err := honeyLockJarSizes(ctx, uow, []uuid.UUID{*jarSizeID})
+			if err != nil {
+				return err
+			}
+			if unknown {
+				return equipBadRequest("invalid jarSizeId")
+			}
+			if message := honeyCheckJarAvailability(onHand, labels,
+				map[uuid.UUID]int{*jarSizeID: quantity}); message != "" {
+				return equipFail(http.StatusConflict, "%s", message)
+			}
+		}
+
+		reversed, err = commands.VoidBottling(ctx, uow, runID, "void of bottling run")
+		if err != nil {
+			return err
+		}
+
+		// Every remaining serial is unsold (sold ones refused the void above);
+		// a voided run's serials must stop resolving or a scan would tell a
+		// customer about jars that were never bottled.
+		tag, err := uow.Exec(ctx, `DELETE FROM jar_serials WHERE bottling_run_id=$1`, runID)
+		if err != nil {
+			return err
+		}
+		removedSerials = tag.RowsAffected()
+		_, err = uow.Exec(ctx, `
+			UPDATE bottling_runs SET voided_at=now(), voided_by=$2, void_reason=$3
+			WHERE id=$1`, runID, actorID(r), honeyTrimPtr(req.Reason))
+		return err
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var voidedAt *time.Time
-	if err := tx.QueryRow(ctx,
-		`SELECT voided_at FROM bottling_runs WHERE id=$1 FOR UPDATE`, runID).
-		Scan(&voidedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "bottling run not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if voidedAt != nil {
-		writeError(w, http.StatusConflict, "this bottling run is already voided")
-		return
-	}
-
-	// A serial that reached a customer is provenance, not inventory: voiding
-	// the run that produced it would erase the jar's chain of custody.
-	var soldSerials int
-	if err := tx.QueryRow(ctx, `
-		SELECT COUNT(*) FROM jar_serials
-		WHERE bottling_run_id=$1 AND sale_id IS NOT NULL`, runID).Scan(&soldSerials); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if soldSerials > 0 {
-		writeError(w, http.StatusConflict,
-			"jars from this run have already been sold; cancel those sales first")
-		return
-	}
-
-	// Only the run's own entries, never a reversal of one, and never one that
-	// somehow already carries a reversal.
-	rows, err := tx.Query(ctx, `
-		SELECT m.id, m.kind, m.amount_lbs, m.quantity, m.jar_size_id, m.reason,
-		       m.notes, m.lot_id
-		FROM honey_movements m
-		WHERE m.bottling_run_id=$1 AND m.reverses_movement_id IS NULL
-			AND NOT EXISTS (
-				SELECT 1 FROM honey_movements rev WHERE rev.reverses_movement_id = m.id)
-		ORDER BY m.id
-		FOR UPDATE OF m`, runID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	type runMovement struct {
-		id        uuid.UUID
-		kind      string
-		amountLbs *float64
-		quantity  *int
-		jarSizeID *uuid.UUID
-		reason    *string
-		notes     *string
-		lotID     *uuid.UUID
-	}
-	movements := make([]runMovement, 0, 1)
-	for rows.Next() {
-		var m runMovement
-		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.quantity,
-			&m.jarSizeID, &m.reason, &m.notes, &m.lotID); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		movements = append(movements, m)
-	}
-	rowsErr := rows.Err()
-	rows.Close()
-	if rowsErr != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	// Reversing a jarring entry takes those jars back off the shelf, so the
-	// removal has to clear the same availability bar as any other withdrawal.
-	needed := make(map[uuid.UUID]int)
-	for _, m := range movements {
-		if m.jarSizeID != nil && m.quantity != nil && *m.quantity > 0 {
-			needed[*m.jarSizeID] += *m.quantity
-		}
-	}
-	if len(needed) > 0 {
-		ids := make([]uuid.UUID, 0, len(needed))
-		for id := range needed {
-			ids = append(ids, id)
-		}
-		onHand, labels, unknown, lockErr := honeyLockJarSizes(ctx, tx, ids)
-		if lockErr != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if unknown {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if message := honeyCheckJarAvailability(onHand, labels, needed); message != "" {
-			writeError(w, http.StatusConflict, message)
-			return
-		}
-	}
-
-	actor := actorID(r)
-	reason := honeyTrimPtr(req.Reason)
-	for _, m := range movements {
-		reversalReason := "void of bottling run"
-		if reason != nil {
-			reversalReason = *reason
-		} else if m.reason != nil && *m.reason != "" {
-			reversalReason += " (" + *m.reason + ")"
-		}
-		var negatedLbs *float64
-		if m.amountLbs != nil {
-			v := -*m.amountLbs
-			negatedLbs = &v
-		}
-		var negatedQuantity *int
-		if m.quantity != nil {
-			v := -*m.quantity
-			negatedQuantity = &v
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO honey_movements
-				(date, kind, amount_lbs, jar_size_id, quantity, reason, notes,
-				 reverses_movement_id, bottling_run_id, lot_id, created_by)
-			VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-			m.kind, negatedLbs, m.jarSizeID, negatedQuantity, reversalReason,
-			m.notes, m.id, runID, m.lotID, actor); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-	}
-
-	// Every remaining serial is unsold (sold ones refused the void above); a
-	// voided run's serials must stop resolving or a scan would tell a customer
-	// about jars that were never bottled.
-	serials, err := tx.Exec(ctx, `DELETE FROM jar_serials WHERE bottling_run_id=$1`, runID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE bottling_runs SET voided_at=now(), voided_by=$2, void_reason=$3
-		WHERE id=$1`, runID, actor, reason); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "voided": true, "id": runID,
-		"reversedMovements": len(movements),
-		"removedSerials":    serials.RowsAffected(),
+		"reversedMovements": reversed,
+		"removedSerials":    removedSerials,
 	})
 }
 

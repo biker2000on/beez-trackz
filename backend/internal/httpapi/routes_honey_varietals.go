@@ -1,16 +1,13 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
-	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
 // Per-lot bulk balances and the varietal rollup over them. Bulk honey is one
@@ -35,12 +32,33 @@ type honeyLotBalanceRow struct {
 // GET /honey/lot-balances
 func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// Per-lot balances come from the one ledger: a lot holds its receipt
+	// (decision 6) minus everything drawn from it. The columns keep their
+	// names — the jars tab and the varietal view read them unchanged — but
+	// they are operation history now, not honey_movements sums, and a
+	// reversal nets out through the operation it negates.
 	rows, err := s.pool.Query(ctx, `
-		SELECT lot_id, lot_code, honey_variety, varietal_id, varietal_name,
-		       to_char(extraction_date, 'YYYY-MM-DD'),
-		       lot_lbs, jarred_lbs, bulk_used_lbs, loss_lbs, on_hand_lbs
-		FROM honey_lot_balances
-		ORDER BY extraction_date DESC, lot_code`)
+		WITH `+ledgerClassifiedCTE+`,
+		per_lot AS (
+			SELECT lot_id,
+			       COALESCE(SUM(quantity) FILTER (WHERE kind IN ('receive','opening_balance')), 0)::float8 AS lot_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='bottling_run'), 0)::float8 AS jarred_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='product_batch'
+			                 OR (kind='shrink' AND reason <> 'loss')), 0)::float8 AS bulk_used_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE kind='shrink' AND reason='loss'), 0)::float8 AS loss_lbs,
+			       COALESCE(SUM(quantity), 0)::float8 AS on_hand_lbs
+			FROM classified WHERE item_id = $1 AND lot_id IS NOT NULL
+			GROUP BY lot_id
+		)
+		SELECT hl.id, hl.lot_code, hl.honey_variety, hl.varietal_id, v.name,
+		       to_char(hl.extraction_date, 'YYYY-MM-DD'),
+		       COALESCE(b.lot_lbs, 0), COALESCE(b.jarred_lbs, 0),
+		       COALESCE(b.bulk_used_lbs, 0), COALESCE(b.loss_lbs, 0),
+		       COALESCE(b.on_hand_lbs, 0)
+		FROM harvest_lots hl
+		LEFT JOIN honey_varietals v ON v.id = hl.varietal_id
+		LEFT JOIN per_lot b ON b.lot_id = hl.inventory_lot_id
+		ORDER BY hl.extraction_date DESC, hl.lot_code`, production.HoneyBulkItemID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -70,14 +88,26 @@ func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	var lotLbs, unattributedDraws float64
+	// The unassigned bucket is a real lot after the ledger landed, not a
+	// computed residual: whatever the legacy tables could not attribute sits
+	// in honey_bulk's legacy-unassigned lot, and only history can land there.
+	var lotLbs, unassignedLbs, unattributedDraws float64
 	if err := s.pool.QueryRow(ctx, `
+		WITH `+ledgerClassifiedCTE+`
 		SELECT
-			COALESCE((SELECT SUM(honey_weight_lbs) FROM harvest_lots), 0),
-			COALESCE((SELECT SUM(amount_lbs) FROM honey_movements
-			          WHERE lot_id IS NULL
-			            AND kind IN ('jarring','bulk_use','loss')), 0)`).
-		Scan(&lotLbs, &unattributedDraws); err != nil {
+			COALESCE((SELECT SUM(c.quantity) FROM classified c
+			          JOIN inventory_lots l ON l.id = c.lot_id
+			          WHERE c.item_id=$1 AND NOT l.is_legacy_unassigned), 0)::float8,
+			COALESCE((SELECT SUM(c.quantity) FROM classified c
+			          JOIN inventory_lots l ON l.id = c.lot_id
+			          WHERE c.item_id=$1 AND l.is_legacy_unassigned), 0)::float8,
+			COALESCE((SELECT SUM(-c.quantity) FROM classified c
+			          JOIN inventory_lots l ON l.id = c.lot_id
+			          WHERE c.item_id=$1 AND l.is_legacy_unassigned
+			            AND (c.source_type IN ('bottling_run','product_batch')
+			                 OR c.kind='shrink')), 0)::float8`,
+		production.HoneyBulkItemID).
+		Scan(&lotLbs, &unassignedLbs, &unattributedDraws); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -85,7 +115,7 @@ func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"lots": lots,
 		"unassigned": map[string]any{
-			"lbs":       totals.TotalHarvestedLbs - lotLbs - unattributedDraws,
+			"lbs":       unassignedLbs,
 			"drawnLbs":  unattributedDraws,
 			"inLotsLbs": lotLbs,
 		},
@@ -107,12 +137,40 @@ type honeyVarietalRow struct {
 
 // GET /honey/varietals — the canonical list, with each one's bulk balance.
 func (s *Server) honeyListVarietals(w http.ResponseWriter, r *http.Request) {
+	// The varietal rollup is the same per-lot balances grouped by
+	// harvest_lots.varietal_id; honey_varietals stays the canonical list.
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT v.id, v.name, v.notes, b.lot_count, b.lot_lbs, b.jarred_lbs,
-		       b.bulk_used_lbs, b.loss_lbs, b.on_hand_lbs
+		WITH `+ledgerClassifiedCTE+`,
+		per_lot AS (
+			SELECT lot_id,
+			       COALESCE(SUM(quantity) FILTER (WHERE kind IN ('receive','opening_balance')), 0) AS lot_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='bottling_run'), 0) AS jarred_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='product_batch'
+			                 OR (kind='shrink' AND reason <> 'loss')), 0) AS bulk_used_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE kind='shrink' AND reason='loss'), 0) AS loss_lbs,
+			       COALESCE(SUM(quantity), 0) AS on_hand_lbs
+			FROM classified WHERE item_id = $1 AND lot_id IS NOT NULL
+			GROUP BY lot_id
+		),
+		per_varietal AS (
+			SELECT hl.varietal_id,
+			       COUNT(*)::int AS lot_count,
+			       COALESCE(SUM(b.lot_lbs), 0)::float8 AS lot_lbs,
+			       COALESCE(SUM(b.jarred_lbs), 0)::float8 AS jarred_lbs,
+			       COALESCE(SUM(b.bulk_used_lbs), 0)::float8 AS bulk_used_lbs,
+			       COALESCE(SUM(b.loss_lbs), 0)::float8 AS loss_lbs,
+			       COALESCE(SUM(b.on_hand_lbs), 0)::float8 AS on_hand_lbs
+			FROM harvest_lots hl
+			LEFT JOIN per_lot b ON b.lot_id = hl.inventory_lot_id
+			WHERE hl.varietal_id IS NOT NULL
+			GROUP BY hl.varietal_id
+		)
+		SELECT v.id, v.name, v.notes,
+		       COALESCE(b.lot_count, 0), COALESCE(b.lot_lbs, 0), COALESCE(b.jarred_lbs, 0),
+		       COALESCE(b.bulk_used_lbs, 0), COALESCE(b.loss_lbs, 0), COALESCE(b.on_hand_lbs, 0)
 		FROM honey_varietals v
-		JOIN honey_varietal_balances b ON b.varietal_id = v.id
-		ORDER BY v.name`)
+		LEFT JOIN per_varietal b ON b.varietal_id = v.id
+		ORDER BY v.name`, production.HoneyBulkItemID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -225,114 +283,7 @@ func (s *Server) honeyUpdateVarietal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
-// --- packaging consumption ------------------------------------------------
-
-// honeyConsumePackaging draws down the empty containers a jarring filled.
-// Packaging lives on the equipment ledger (migration 00048), so each linked
-// jar size writes one negative 'consumed' adjustment against its packaging
-// type. Rows are locked in id order, the same discipline the assembly path
-// uses, so concurrent jarring cannot deadlock or double-spend.
-//
-// Running short is reported, not refused: the jars have already been filled,
-// so the honest record is a negative count plus a warning to go and correct
-// the empties.
-func honeyConsumePackaging(
-	ctx context.Context,
-	tx pgx.Tx,
-	lines []honeyParsedJarLine,
-	packagingBySize map[uuid.UUID]uuid.UUID,
-	date time.Time,
-	actor *uuid.UUID,
-) ([]string, error) {
-	warnings := make([]string, 0)
-	if len(packagingBySize) == 0 {
-		return warnings, nil
-	}
-	// One jar size may appear on several lines; consume the total once.
-	needed := make(map[uuid.UUID]int)
-	for _, line := range lines {
-		typeID, ok := packagingBySize[line.JarSizeID]
-		if !ok {
-			continue
-		}
-		needed[typeID] += line.Quantity
-	}
-	if len(needed) == 0 {
-		return warnings, nil
-	}
-
-	typeIDs := make([]uuid.UUID, 0, len(needed))
-	for typeID := range needed {
-		typeIDs = append(typeIDs, typeID)
-	}
-	// A packaging type that has never been stocked still gets a row, so the
-	// consumption lands somewhere and the shortfall is visible.
-	for _, typeID := range typeIDs {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO equipment_stock (type_id, total_owned, created_by)
-			VALUES ($1, 0, $2)
-			ON CONFLICT (type_id) DO NOTHING`, typeID, actor); err != nil {
-			return nil, err
-		}
-	}
-
-	rows, err := tx.Query(ctx, `
-		SELECT id, type_id FROM equipment_stock
-		WHERE type_id = ANY($1) ORDER BY id`, typeIDs)
-	if err != nil {
-		return nil, err
-	}
-	stockByType := make(map[uuid.UUID]uuid.UUID, len(typeIDs))
-	lockOrder := make([]uuid.UUID, 0, len(typeIDs))
-	for rows.Next() {
-		var stockID, typeID uuid.UUID
-		if err := rows.Scan(&stockID, &typeID); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		stockByType[typeID] = stockID
-		lockOrder = append(lockOrder, stockID)
-	}
-	rows.Close()
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-	sort.Slice(lockOrder, func(i, j int) bool {
-		return lockOrder[i].String() < lockOrder[j].String()
-	})
-	states := make(map[uuid.UUID]equipStockState, len(lockOrder))
-	for _, stockID := range lockOrder {
-		state, err := equipLockStock(ctx, tx, stockID)
-		if err != nil {
-			return nil, err
-		}
-		states[stockID] = state
-	}
-
-	for _, typeID := range typeIDs {
-		stockID, ok := stockByType[typeID]
-		if !ok {
-			continue
-		}
-		state := states[stockID]
-		quantity := needed[typeID]
-		if state.Available() < quantity {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s: filled %d but only %d were on hand",
-				state.TypeName, quantity, state.Available()))
-		}
-		note := "consumed by jarring"
-		if _, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-			StockID:       stockID,
-			Quantity:      -quantity,
-			Reason:        "consumed",
-			Notes:         &note,
-			UnitCostCents: state.UnitCostCents,
-			Date:          date,
-			CreatedBy:     actor,
-		}); err != nil {
-			return nil, err
-		}
-	}
-	return warnings, nil
-}
+// Packaging consumption moved into the bottling transform: the empties a run
+// used up are input lines on the same operation that produced its jars (spec
+// 6.1), so there is no second ledger and no separate equipment adjustment to
+// keep in step. See app/production.RecordBottling.

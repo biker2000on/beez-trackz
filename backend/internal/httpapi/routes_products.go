@@ -11,9 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -93,39 +96,49 @@ type productInventoryRow struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// productInventoryQuery is THE per-SKU on-hand formula:
+// productInventoryQuery is THE per-SKU on-hand formula, read from the
+// inventory ledger:
 //
-//	onHand = made by live batches + adjustments - sold
+//	onHand = inventory_available for the SKU's item, across every location
 //
-// A voided batch produced nothing, so it drops out of "made" the moment it is
-// voided rather than needing a compensating row. Adjustments are the ledger
-// that lets a unit leave the world without a sale — shrink counted at a
-// consignment shop, or a bottle broken at home.
+// It equals made + adjusted - sold exactly, because a non-cancelled sale line
+// is either an applied consumption (already out of the balance) or a
+// reservation the view subtracts, never both (review OV1). "Made" stays a
+// domain sum over live product_batches - a voided batch produced nothing, so
+// it drops out the moment it is voided - and "adjusted" is the count_adjust
+// and shrink history that lets a unit leave the world without a sale.
 func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productInventoryRow, error) {
 	rows, err := q.Query(ctx, `
+		WITH `+ledgerClassifiedCTE+`,
+		adjusted AS (
+			SELECT item_id, COALESCE(SUM(quantity) FILTER (
+			           WHERE kind IN ('count_adjust','shrink')), 0)::int AS adjusted
+			FROM classified GROUP BY item_id
+		),
+		available AS (
+			SELECT item_id, COALESCE(SUM(available), 0)::int AS available
+			FROM inventory_available GROUP BY item_id
+		)
 		SELECT p.id, p.name, p.kind, p.unit, p.default_price_cents, p.size_label, p.net_grams,
 		       p.is_active, p.created_at, p.updated_at,
-		       COALESCE(b.made, 0), COALESCE(s.sold, 0), COALESCE(a.adjusted, 0)
+		       COALESCE(b.made, 0), COALESCE(s.sold, 0), COALESCE(a.adjusted, 0),
+		       COALESCE(av.available, 0)
 		FROM product_catalog p
 		LEFT JOIN (
-			SELECT product_id, SUM(quantity_out) AS made
+			SELECT product_id, SUM(quantity_out)::int AS made
 			FROM product_batches
 			WHERE voided_at IS NULL
 			GROUP BY product_id
 		) b ON b.product_id = p.id
 		LEFT JOIN (
-			SELECT si.product_id, SUM(si.quantity) AS sold
+			SELECT si.product_id, SUM(si.quantity)::int AS sold
 			FROM sale_items si
 			JOIN sales sale ON sale.id = si.sale_id
 			WHERE sale.order_status <> 'cancelled' AND si.product_id IS NOT NULL
 			GROUP BY si.product_id
 		) s ON s.product_id = p.id
-		LEFT JOIN (
-			SELECT product_id, SUM(delta) AS adjusted
-			FROM product_adjustments
-			WHERE deleted_at IS NULL
-			GROUP BY product_id
-		) a ON a.product_id = p.id
+		LEFT JOIN adjusted a ON a.item_id = p.item_id
+		LEFT JOIN available av ON av.item_id = p.item_id
 		ORDER BY p.kind, p.name, p.size_label NULLS FIRST`)
 	if err != nil {
 		return nil, err
@@ -136,10 +149,9 @@ func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productI
 		var row productInventoryRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.Kind, &row.Unit, &row.DefaultPrice,
 			&row.SizeLabel, &row.NetGrams, &row.IsActive, &row.CreatedAt, &row.UpdatedAt,
-			&row.Made, &row.Sold, &row.Adjusted); err != nil {
+			&row.Made, &row.Sold, &row.Adjusted, &row.OnHand); err != nil {
 			return nil, err
 		}
-		row.OnHand = row.Made + row.Adjusted - row.Sold
 		row.InStock = row.OnHand > 0
 		out = append(out, row)
 	}
@@ -168,34 +180,26 @@ func productLockCatalog(
 	return info.OnHand, info.Labels, info.Kinds, false, nil
 }
 
+// productLockCatalogInfo reads per-SKU inventory and the propolis net weight
+// each SKU carries.
+//
+// It no longer takes product_catalog row locks. Review A4 made the inventory
+// service the only quantity locker: it takes tuple advisory locks in a
+// documented order inside Record and CheckAvailable, so a catalog row lock
+// taken here would be a second discipline with no global order between them.
+// The name is unchanged because every caller reads it as "catalog info".
 func productLockCatalogInfo(
 	ctx context.Context,
 	tx inspectionQuerier,
 	ids []uuid.UUID,
 ) (info productCatalogLock, unknown bool, err error) {
-	sorted := append([]uuid.UUID(nil), ids...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].String() < sorted[j].String() })
-	unique := make([]uuid.UUID, 0, len(sorted))
-	for i, id := range sorted {
-		if i == 0 || sorted[i-1] != id {
-			unique = append(unique, id)
-		}
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT id FROM product_catalog WHERE id = ANY($1) ORDER BY id FOR UPDATE`, unique)
-	if err != nil {
+	unique := stockUniqueIDs(ids)
+	var found int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM product_catalog WHERE id = ANY($1)`, unique).Scan(&found); err != nil {
 		return info, false, err
 	}
-	locked := 0
-	for rows.Next() {
-		locked++
-	}
-	lockErr := rows.Err()
-	rows.Close()
-	if lockErr != nil {
-		return info, false, lockErr
-	}
-	if locked != len(unique) {
+	if found != len(unique) {
 		return info, true, nil
 	}
 	inventory, err := productInventoryQuery(ctx, tx)
@@ -531,33 +535,31 @@ func propolisToGrams(amount float64, unit string) float64 {
 	return amount
 }
 
-// propolisOnHandGrams is harvested propolis minus what tincture batches
-// consumed minus raw propolis sold (sale_items kind=propolis on non-cancelled
-// sales, quantity × product_catalog.net_grams).
+// propolisOnHandGrams is harvested propolis minus what tincture batches and
+// applied sales consumed, minus what unapplied sale lines have reserved.
+//
+// The first two are the ledger: a propolis harvest is a receipt into its own
+// lot, a tincture batch is a transform that consumes it, and an applied sale
+// is a sale_consume of quantity x net_grams. The third is this SKU family's
+// reservation: raw-propolis lines carry no item_id, because their stock is
+// measured in harvested grams rather than in units of the SKU, so
+// inventory_reservations cannot express them and they are subtracted here.
 func propolisOnHandGrams(ctx context.Context, q inspectionQuerier) (float64, error) {
-	var harvested, consumed, sold float64
+	var grams float64
 	err := q.QueryRow(ctx, `
-		SELECT
-			COALESCE((
-				SELECT SUM(CASE WHEN unit='ounces' THEN amount * $1 ELSE amount END)
-				FROM propolis_harvests WHERE deleted_at IS NULL
-			), 0),
-			COALESCE((
-				SELECT SUM(CASE WHEN propolis_unit='ounces' THEN propolis_amount * $1 ELSE propolis_amount END)
-				FROM product_batches WHERE kind='tincture' AND voided_at IS NULL
-			), 0),
-			COALESCE((
-				SELECT SUM(si.quantity * p.net_grams)
-				FROM sale_items si
-				JOIN sales sale ON sale.id = si.sale_id
-				JOIN product_catalog p ON p.id = si.product_id
-				WHERE si.kind = 'propolis' AND p.net_grams IS NOT NULL
-				  AND sale.order_status <> 'cancelled'
-			), 0)`, gramsPerOunce).Scan(&harvested, &consumed, &sold)
+		SELECT COALESCE((SELECT SUM(on_hand) FROM inventory_balances WHERE item_id=$1), 0)::float8
+		     - COALESCE((
+			SELECT SUM(si.quantity * p.net_grams)
+			FROM sale_items si
+			JOIN sales sale ON sale.id = si.sale_id
+			JOIN product_catalog p ON p.id = si.product_id
+			WHERE si.kind = 'propolis' AND p.net_grams IS NOT NULL
+			  AND sale.order_status <> 'cancelled' AND sale.physical_applied_at IS NULL
+		), 0)::float8`, production.PropolisItemID).Scan(&grams)
 	if err != nil {
 		return 0, err
 	}
-	return harvested - consumed - sold, nil
+	return grams, nil
 }
 
 func propolisHarvestRemainingGrams(ctx context.Context, q inspectionQuerier, harvestID uuid.UUID) (float64, error) {
@@ -654,19 +656,28 @@ func (s *Server) propolisHarvestCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// If both are set, keep both. A hive harvest still names the yard for
 	// listings even when the operator picked the hive.
-	var id uuid.UUID
-	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO propolis_harvests
-			(hive_id, apiary_id, date, amount, unit, notes, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-		req.HiveID, req.ApiaryID, date, req.Amount, unit, honeyTrimPtr(req.Notes), actorID(r)).
-		Scan(&id)
-	if err != nil {
-		if honeyIsFKViolation(err) {
-			writeError(w, http.StatusBadRequest, "invalid hive or yard")
-			return
+	commands := production.New()
+	id := uuid.New()
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		if _, err := uow.Exec(ctx, `
+			INSERT INTO propolis_harvests
+				(id, hive_id, apiary_id, date, amount, unit, notes, created_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			id, req.HiveID, req.ApiaryID, date, req.Amount, unit,
+			honeyTrimPtr(req.Notes), actorID(r)); err != nil {
+			if honeyIsFKViolation(err) {
+				return equipBadRequest("invalid hive or yard")
+			}
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
+		// The harvest IS a receipt of raw propolis into its own lot (spec 6.2).
+		// Grams are the canonical unit, so ounces are converted here and the
+		// ledger never carries two units for one item.
+		_, err := commands.ReceivePropolis(ctx, uow, id, propolisToGrams(req.Amount, unit), date)
+		return err
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
@@ -678,24 +689,37 @@ func (s *Server) propolisHarvestDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var used int
-	if err := s.pool.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM product_batches
-		 WHERE propolis_harvest_id=$1 AND voided_at IS NULL`, id).
-		Scan(&used); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if used > 0 {
-		writeError(w, http.StatusConflict, "this harvest was used in a tincture batch")
-		return
-	}
-	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE propolis_harvests
-		SET deleted_at=now(), deleted_by=$2
-		WHERE id=$1 AND deleted_at IS NULL`, id, actorID(r))
+	commands := production.New()
+	var tag pgconn.CommandTag
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var used int
+		if err := uow.QueryRow(ctx,
+			`SELECT COUNT(*) FROM product_batches
+			 WHERE propolis_harvest_id=$1 AND voided_at IS NULL`, id).
+			Scan(&used); err != nil {
+			return err
+		}
+		if used > 0 {
+			return equipFail(http.StatusConflict, "this harvest was used in a tincture batch")
+		}
+		var err error
+		tag, err = uow.Exec(ctx, `
+			UPDATE propolis_harvests
+			SET deleted_at=now(), deleted_by=$2
+			WHERE id=$1 AND deleted_at IS NULL`, id, actorID(r))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
+		// Deleting the harvest reverses its receipt; the ledger refuses the
+		// reversal if the grams have already been drawn, which is the same
+		// rule the tincture-batch check above states in domain terms.
+		return commands.ReleasePropolis(ctx, uow, id)
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
@@ -978,131 +1002,117 @@ func (s *Server) productBatchCreate(w http.ResponseWriter, r *http.Request) {
 		req.HoneyLbs = nil
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var productKind, productName string
-	if err := tx.QueryRow(ctx, `
-		SELECT kind, name FROM product_catalog WHERE id=$1 FOR UPDATE`, productID).
-		Scan(&productKind, &productName); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusBadRequest, "invalid productId")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if productKind != kind {
-		writeError(w, http.StatusBadRequest, "batch kind must match the catalog product")
-		return
-	}
-
-	if honeyConsuming {
-		bulk, err := honeyLockBulk(ctx, tx)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if message := honeyBulkShortfall(*req.HoneyLbs, bulk.BulkOnHandLbs); message != "" {
-			writeError(w, http.StatusBadRequest, message)
-			return
-		}
-	} else {
-		remaining, err := propolisHarvestRemainingGrams(ctx, tx, *req.PropolisHarvestID)
-		if err != nil {
-			equipWriteError(w, err)
-			return
-		}
-		need := propolisToGrams(*req.PropolisAmount, *req.PropolisUnit)
-		if need > remaining+honeyPoundTolerance {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"Not enough propolis: need %.1f g, have %.1f g", need, remaining))
-			return
-		}
-	}
-
-	if err := productValidateExpenses(ctx, tx, req.ExpenseIDs); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	var lotCode *string
-	if req.HarvestLotID != nil {
-		if err := tx.QueryRow(ctx, `SELECT lot_code FROM harvest_lots WHERE id=$1`,
-			*req.HarvestLotID).Scan(&lotCode); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				writeError(w, http.StatusBadRequest, "invalid harvestLotId")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		// Same treatment lockout as a jar sale off the lot: honey from a lot
-		// still inside a withdrawal window cannot be converted either.
-		if msg, err := refuseLotSale(ctx, tx, *req.HarvestLotID, startedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		} else if msg != "" {
-			writeError(w, http.StatusConflict, msg)
-			return
-		}
-	}
-
+	commands := production.New()
 	batchID := uuid.New()
-	actor := actorID(r)
-	if _, err := tx.Exec(ctx, `
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var productKind, productName string
+		if err := uow.QueryRow(ctx, `
+		SELECT kind, name FROM product_catalog WHERE id=$1 FOR UPDATE`, productID).
+			Scan(&productKind, &productName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return equipFail(http.StatusBadRequest, "invalid productId")
+			}
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		if productKind != kind {
+			return equipFail(http.StatusBadRequest, "batch kind must match the catalog product")
+		}
+
+		if honeyConsuming {
+			bulk, err := honeyLockBulk(ctx, uow)
+			if err != nil {
+				return equipFail(http.StatusInternalServerError, "database error")
+			}
+			if message := honeyBulkShortfall(*req.HoneyLbs, bulk.BulkOnHandLbs); message != "" {
+				return equipFail(http.StatusBadRequest, "%s", message)
+			}
+		} else {
+			remaining, err := propolisHarvestRemainingGrams(ctx, uow, *req.PropolisHarvestID)
+			if err != nil {
+				return err
+			}
+			need := propolisToGrams(*req.PropolisAmount, *req.PropolisUnit)
+			if need > remaining+honeyPoundTolerance {
+				return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
+					"Not enough propolis: need %.1f g, have %.1f g", need, remaining))
+			}
+		}
+
+		if err := productValidateExpenses(ctx, uow, req.ExpenseIDs); err != nil {
+			return equipFail(http.StatusBadRequest, "%s", err.Error())
+		}
+
+		var lotCode *string
+		if req.HarvestLotID != nil {
+			if err := uow.QueryRow(ctx, `SELECT lot_code FROM harvest_lots WHERE id=$1`,
+				*req.HarvestLotID).Scan(&lotCode); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return equipFail(http.StatusBadRequest, "invalid harvestLotId")
+				}
+				return equipFail(http.StatusInternalServerError, "database error")
+			}
+			// Same treatment lockout as a jar sale off the lot: honey from a lot
+			// still inside a withdrawal window cannot be converted either.
+			if msg, err := refuseLotSale(ctx, uow, *req.HarvestLotID, startedAt); err != nil {
+				return equipFail(http.StatusInternalServerError, "database error")
+			} else if msg != "" {
+				return equipFail(http.StatusConflict, "%s", msg)
+			}
+		}
+
+		actor := actorID(r)
+		if _, err := uow.Exec(ctx, `
 		INSERT INTO product_batches
 			(id, kind, product_id, harvest_lot_id, started_at, finished_at,
 			 honey_lbs, water_liters, yeast, vessel,
 			 propolis_harvest_id, propolis_amount, propolis_unit,
 			 quantity_out, notes, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-		batchID, kind, productID, req.HarvestLotID, startedAt, finishedAt,
-		req.HoneyLbs, req.WaterLiters, honeyTrimPtr(req.Yeast), honeyTrimPtr(req.Vessel),
-		req.PropolisHarvestID, req.PropolisAmount, req.PropolisUnit,
-		req.QuantityOut, honeyTrimPtr(req.Notes), actor); err != nil {
-		if honeyIsFKViolation(err) {
-			writeError(w, http.StatusBadRequest, "invalid product, harvest lot, or propolis harvest")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	for _, expenseID := range req.ExpenseIDs {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO product_batch_expenses (batch_id, expense_id) VALUES ($1,$2)`,
-			batchID, expenseID); err != nil {
+			batchID, kind, productID, req.HarvestLotID, startedAt, finishedAt,
+			req.HoneyLbs, req.WaterLiters, honeyTrimPtr(req.Yeast), honeyTrimPtr(req.Vessel),
+			req.PropolisHarvestID, req.PropolisAmount, req.PropolisUnit,
+			req.QuantityOut, honeyTrimPtr(req.Notes), actor); err != nil {
 			if honeyIsFKViolation(err) {
-				writeError(w, http.StatusBadRequest, "invalid expenseId")
-				return
+				return equipFail(http.StatusBadRequest, "invalid product, harvest lot, or propolis harvest")
 			}
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return equipFail(http.StatusInternalServerError, "database error")
 		}
-	}
-
-	if honeyConsuming {
-		reason := productBatchHoneyReason(kind, productName, lotCode)
-		// A batch made from a named lot draws that lot's bucket, not the
-		// unassigned pool.
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO honey_movements
-				(date, kind, amount_lbs, reason, notes, product_batch_id, lot_id, created_by)
-			VALUES ($1, 'bulk_use', $2, $3, $4, $5, $6, $7)`,
-			startedAt, *req.HoneyLbs, reason, honeyTrimPtr(req.Notes), batchID,
-			req.HarvestLotID, actor); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+		for _, expenseID := range req.ExpenseIDs {
+			if _, err := uow.Exec(ctx, `
+			INSERT INTO product_batch_expenses (batch_id, expense_id) VALUES ($1,$2)`,
+				batchID, expenseID); err != nil {
+				if honeyIsFKViolation(err) {
+					return equipFail(http.StatusBadRequest, "invalid expenseId")
+				}
+				return equipFail(http.StatusInternalServerError, "database error")
+			}
 		}
-	}
 
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		// The batch is a transform (spec 6.2): the honey or propolis it drew
+		// are input lines and its finished units are the output, into the
+		// batch's own lot. A batch made from a named harvest lot draws that
+		// lot's bucket; one that names none draws the legacy-unassigned lot
+		// and the operation records the allocation as inferred.
+		honeyLbs := 0.0
+		if honeyConsuming && req.HoneyLbs != nil {
+			honeyLbs = *req.HoneyLbs
+		}
+		propolisGrams := 0.0
+		if !honeyConsuming && req.PropolisAmount != nil && req.PropolisUnit != nil {
+			propolisGrams = propolisToGrams(*req.PropolisAmount, *req.PropolisUnit)
+		}
+		_ = productName
+		_ = lotCode
+		_, err := commands.RecordBatch(ctx, uow, production.BatchInput{
+			BatchID: batchID, ProductID: productID, HarvestLotID: req.HarvestLotID,
+			HoneyLbs: honeyLbs, PropolisHarvestID: req.PropolisHarvestID,
+			PropolisGrams: propolisGrams, QuantityOut: req.QuantityOut,
+			Date: startedAt, Notes: honeyTrimPtr(req.Notes),
+		})
+		return err
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": batchID})
@@ -1164,56 +1174,37 @@ type productAdjustmentRow struct {
 	CreatedAt    time.Time  `json:"createdAt"`
 }
 
-// productInsertAdjustment is the only place a product_adjustments row is
-// written. Replaying a request with the same idempotency key conflicts on the
-// unique index instead of shrinking the stock twice.
-func productInsertAdjustment(
-	ctx context.Context,
-	q inspectionQuerier,
-	productID uuid.UUID,
-	date time.Time,
-	delta int,
-	reason *string,
-	notes *string,
-	locationID *uuid.UUID,
-	settlementID *uuid.UUID,
-	idempotencyKey *string,
-	actor *uuid.UUID,
-) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := q.QueryRow(ctx, `
-		INSERT INTO product_adjustments
-			(product_id, date, delta, reason, notes, location_id, settlement_id,
-			 idempotency_key, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		RETURNING id`,
-		productID, date, delta, reason, notes, locationID, settlementID,
-		idempotencyKey, actor).Scan(&id)
-	if err != nil {
-		if pgErrCode(err) == "23505" {
-			return uuid.Nil, equipFail(http.StatusConflict,
-				"this adjustment was already recorded (idempotency key reused)")
-		}
-		if honeyIsFKViolation(err) {
-			return uuid.Nil, equipBadRequest("invalid product or location")
-		}
-		return uuid.Nil, err
-	}
-	return id, nil
-}
+// A product adjustment is an inventory operation: app/production owns the
+// builder and the tuple locks, and this file no longer writes a row of its
+// own. See production.Service.AdjustProductCount.
 
 // GET /product-adjustments
+//
+// Adjustments are inventory operations now, not rows in a second ledger, so
+// the row id is inventory_operations.id and the location is the
+// inventory_locations row the correction applied to (spec 8.1, R9). A shrink
+// a settlement discovered still shows here, carrying its settlement id in the
+// operation's details.
 func (s *Server) productAdjustmentList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT a.id, a.product_id,
+		SELECT o.id, p.id,
 		       COALESCE(NULLIF(CONCAT_WS(' · ', p.name, p.size_label), ''), p.name),
-		       a.date, a.delta, a.reason, a.notes, a.location_id, l.name,
-		       a.settlement_id, a.created_at
-		FROM product_adjustments a
-		JOIN product_catalog p ON p.id = a.product_id
-		LEFT JOIN stock_locations l ON l.id = a.location_id
-		WHERE a.deleted_at IS NULL
-		ORDER BY a.date DESC, a.created_at DESC
+		       o.occurred_at, COALESCE(SUM(m.quantity), 0)::int,
+		       NULLIF(o.details ->> 'reason_text', ''),
+		       NULLIF(o.details ->> 'notes', ''),
+		       loc.source_id, loc.name,
+		       NULLIF(o.details ->> 'settlement_id', '')::uuid,
+		       o.created_at
+		FROM inventory_operations o
+		JOIN inventory_movements m ON m.operation_id = o.id
+		JOIN product_catalog p ON p.item_id = m.item_id
+		JOIN inventory_locations loc ON loc.id = m.location_id
+		WHERE o.kind IN ('count_adjust', 'shrink')
+		  AND o.reverses_operation_id IS NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM inventory_operations rev WHERE rev.reverses_operation_id = o.id)
+		GROUP BY o.id, p.id, loc.source_id, loc.name
+		ORDER BY o.occurred_at DESC, o.created_at DESC
 		LIMIT 200`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -1279,69 +1270,65 @@ func (s *Server) productAdjustmentCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	info, unknown, err := productLockCatalogInfo(ctx, tx, []uuid.UUID{productID})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if unknown {
-		writeError(w, http.StatusBadRequest, "invalid productId")
-		return
-	}
-	if info.Kinds[productID] == saleKindPropolis {
-		// Propolis stock is measured in harvested grams; a unit-count
-		// adjustment here would move a number no availability check reads.
-		writeError(w, http.StatusBadRequest,
-			"propolis is tracked in grams; correct the propolis harvest instead")
-		return
-	}
-	if req.LocationID != nil {
-		homeID, err := stockHomeLocationID(ctx, tx)
+	commands := production.New()
+	var id uuid.UUID
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		info, unknown, err := productLockCatalogInfo(ctx, uow, []uuid.UUID{productID})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return equipFail(http.StatusInternalServerError, "database error")
 		}
-		if *req.LocationID != homeID {
-			// This endpoint writes only the global half; a loss on another
-			// location's shelf needs both halves, which the settlement writes.
-			writeError(w, http.StatusBadRequest,
-				"shrink at a consignment location is recorded by its settlement")
-			return
+		if unknown {
+			return equipFail(http.StatusBadRequest, "invalid productId")
 		}
-	}
-	if req.Delta < 0 {
-		home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+		if info.Kinds[productID] == saleKindPropolis {
+			// Propolis stock is measured in harvested grams; a unit-count
+			// adjustment here would move a number no availability check reads.
+			return equipFail(http.StatusBadRequest, "propolis is tracked in grams; correct the propolis harvest instead")
 		}
-		if -req.Delta > home {
-			label := info.Labels[productID]
-			if label == "" {
-				label = "product"
+		if req.LocationID != nil {
+			homeID, err := stockHomeLocationID(ctx, uow)
+			if err != nil {
+				return equipFail(http.StatusInternalServerError, "database error")
 			}
-			writeError(w, http.StatusBadRequest, fmt.Sprintf(
-				"Not enough %s at home: need %d, have %d", label, -req.Delta, home))
-			return
+			if *req.LocationID != homeID {
+				// This endpoint writes only the global half; a loss on another
+				// location's shelf needs both halves, which the settlement writes.
+				return equipFail(http.StatusBadRequest, "shrink at a consignment location is recorded by its settlement")
+			}
 		}
-	}
-	id, err := productInsertAdjustment(ctx, tx, productID, date, req.Delta,
-		honeyTrimPtr(req.Reason), honeyTrimPtr(req.Notes), req.LocationID, nil,
-		honeyTrimPtr(req.IdempotencyKey), actorID(r))
+		if req.Delta < 0 {
+			home, err := productHomeOnHand(ctx, uow, productID, info.OnHand[productID])
+			if err != nil {
+				return equipFail(http.StatusInternalServerError, "database error")
+			}
+			if -req.Delta > home {
+				label := info.Labels[productID]
+				if label == "" {
+					label = "product"
+				}
+				return equipFail(http.StatusBadRequest, "%s", fmt.Sprintf(
+					"Not enough %s at home: need %d, have %d", label, -req.Delta, home))
+			}
+		}
+		home, err := production.HomeLocationID(ctx, uow)
+		if err != nil {
+			return err
+		}
+		notes := honeyTrimPtr(req.Notes)
+		if text := honeyTrimPtr(req.Reason); text != nil && notes == nil {
+			notes = text
+		}
+		// The adjustment IS the operation now: there is no product_adjustments
+		// row to soft-delete, and undoing one is a reversal like every other
+		// undo in the ledger.
+		id, err = commands.AdjustProductCount(ctx, uow, production.ProductAdjustInput{
+			ProductID: productID, LocationID: home, Delta: req.Delta,
+			Reason: production.ReasonCount, Date: date, Notes: notes,
+		})
+		return err
+	})
 	if err != nil {
-		equipWriteError(w, err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "id": id})
@@ -1359,92 +1346,105 @@ func (s *Server) productAdjustmentDelete(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
+	commands := production.New()
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
 
-	var settlementID *uuid.UUID
-	var productID uuid.UUID
-	var delta int
-	err = tx.QueryRow(ctx,
-		`SELECT settlement_id, product_id, delta FROM product_adjustments
-		 WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, id).
-		Scan(&settlementID, &productID, &delta)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "adjustment not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if settlementID != nil {
-		writeError(w, http.StatusConflict,
-			"this adjustment belongs to a settlement; void the settlement instead")
-		return
-	}
-	// Undoing a positive ("stock found") adjustment is a withdrawal of that
-	// many units, so it clears the same home-availability bar a shrink does —
-	// the units may have been transferred away since.
-	if delta > 0 {
-		info, unknown, err := productLockCatalogInfo(ctx, tx, []uuid.UUID{productID})
-		if err != nil || unknown {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+		var (
+			sourceType string
+			reason     string
+			reverses   *uuid.UUID
+			delta      int
+			itemID     uuid.UUID
+			productID  uuid.UUID
+		)
+		err = uow.QueryRow(ctx, `
+			SELECT o.source_type, o.reason, o.reverses_operation_id,
+			       COALESCE(SUM(m.quantity), 0)::int, MIN(m.item_id::text)::uuid,
+			       MIN(p.id::text)::uuid
+			FROM inventory_operations o
+			JOIN inventory_movements m ON m.operation_id = o.id
+			LEFT JOIN product_catalog p ON p.item_id = m.item_id
+			WHERE o.id = $1
+			GROUP BY o.id`, id).
+			Scan(&sourceType, &reason, &reverses, &delta, &itemID, &productID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return equipFail(http.StatusNotFound, "adjustment not found")
 		}
-		home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return err
 		}
-		if delta > home {
-			label := info.Labels[productID]
-			if label == "" {
-				label = "product"
+		if reverses != nil {
+			return equipFail(http.StatusNotFound, "adjustment not found")
+		}
+		if sourceType == "consignment_settlement" {
+			return equipFail(http.StatusConflict,
+				"this adjustment belongs to a settlement; void the settlement instead")
+		}
+		if sourceType != "product_adjustment" {
+			return equipFail(http.StatusNotFound, "adjustment not found")
+		}
+		var alreadyReversed bool
+		if err := uow.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM inventory_operations WHERE reverses_operation_id=$1)`, id).
+			Scan(&alreadyReversed); err != nil {
+			return err
+		}
+		if alreadyReversed {
+			return equipFail(http.StatusNotFound, "adjustment not found")
+		}
+		// Undoing a positive ("stock found") adjustment is a withdrawal of
+		// that many units, so it clears the same home-availability bar a
+		// shrink does - the units may have been transferred away since. The
+		// ledger refuses it either way; this is the sentence the operator
+		// reads instead of a tuple identity.
+		if delta > 0 {
+			info, unknown, err := productLockCatalogInfo(ctx, uow, []uuid.UUID{productID})
+			if err != nil || unknown {
+				return equipFail(http.StatusInternalServerError, "database error")
 			}
-			writeError(w, http.StatusConflict, fmt.Sprintf(
-				"undoing this adjustment removes %d %s but only %d remain at home; "+
-					"return or un-transfer the stock first", delta, label, home))
-			return
+			home, err := productHomeOnHand(ctx, uow, productID, info.OnHand[productID])
+			if err != nil {
+				return err
+			}
+			if delta > home {
+				label := info.Labels[productID]
+				if label == "" {
+					label = "product"
+				}
+				return equipFail(http.StatusConflict,
+					"undoing this adjustment removes %d %s but only %d remain at home; "+
+						"return or un-transfer the stock first", delta, label, home)
+			}
 		}
-	}
-	tag, err := tx.Exec(ctx, `
-		UPDATE product_adjustments SET deleted_at=now(), deleted_by=$2
-		WHERE id=$1 AND deleted_at IS NULL`, id, actorID(r))
+		_, err = commands.Reverse(ctx, uow, id, id.String()+":undo", production.ReasonNone)
+		return err
+	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "adjustment not found")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": id})
 }
 
-// productHomeOnHand is a SKU's count at home: the global figure minus whatever
-// is standing at another location. It is the number every home-side withdrawal
-// (a market-day sale, shrink, a voided batch) has to clear, for the same
-// reason honeyLockJarSizes reports home rather than the world.
+// productHomeOnHand is a SKU's available count at home. Home is a location
+// with its own movements now, not the residual of a second ledger, so this is
+// one read rather than "global minus everything standing away". Every
+// home-side withdrawal - a market-day sale, shrink, a voided batch - has to
+// clear it, for the same reason a jar withdrawal clears home rather than the
+// world.
 func productHomeOnHand(
 	ctx context.Context,
 	q inspectionQuerier,
 	productID uuid.UUID,
 	globalOnHand int,
 ) (int, error) {
-	away, err := stockAwayProductTotals(ctx, q)
-	if err != nil {
-		return 0, err
-	}
-	return globalOnHand - away[productID], nil
+	var home int
+	err := q.QueryRow(ctx, `
+		SELECT COALESCE((SELECT SUM(a.available) FROM inventory_available a
+		                 JOIN inventory_locations l ON l.id = a.location_id
+		                 JOIN product_catalog p ON p.item_id = a.item_id
+		                 WHERE p.id = $1 AND l.is_home), 0)::int`, productID).Scan(&home)
+	return home, err
 }
 
 // --- batch void ------------------------------------------------------------
@@ -1473,140 +1473,71 @@ func (s *Server) productBatchVoid(w http.ResponseWriter, r *http.Request) {
 	// A void may legitimately carry no body.
 	_ = decodeJSON(r, &req)
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var productID uuid.UUID
-	var quantityOut int
-	var voidedAt *time.Time
-	if err := tx.QueryRow(ctx, `
+	commands := production.New()
+	var reversed int
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var productID uuid.UUID
+		var quantityOut int
+		var voidedAt *time.Time
+		if err := uow.QueryRow(ctx, `
 		SELECT product_id, quantity_out, voided_at
 		FROM product_batches WHERE id=$1 FOR UPDATE`, batchID).
-		Scan(&productID, &quantityOut, &voidedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "batch not found")
-			return
+			Scan(&productID, &quantityOut, &voidedAt); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return equipFail(http.StatusNotFound, "batch not found")
+			}
+			return equipFail(http.StatusInternalServerError, "database error")
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if voidedAt != nil {
-		writeError(w, http.StatusConflict, "this batch is already voided")
-		return
-	}
+		if voidedAt != nil {
+			return equipFail(http.StatusConflict, "this batch is already voided")
+		}
 
-	// Take the catalog row lock before reading availability, so a concurrent
-	// checkout cannot sell the batch's output between the check and the void.
-	info, unknown, err := productLockCatalogInfo(ctx, tx, []uuid.UUID{productID})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if unknown {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	home, err := productHomeOnHand(ctx, tx, productID, info.OnHand[productID])
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if quantityOut > home {
-		label := info.Labels[productID]
-		if label == "" {
-			label = "this product"
+		// Take the catalog row lock before reading availability, so a concurrent
+		// checkout cannot sell the batch's output between the check and the void.
+		info, unknown, err := productLockCatalogInfo(ctx, uow, []uuid.UUID{productID})
+		if err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
 		}
-		writeError(w, http.StatusConflict, fmt.Sprintf(
-			"%s: %d of the %d units from this batch have already been sold or "+
-				"consigned; cancel those sales or return the stock first",
-			label, quantityOut-home, quantityOut))
-		return
-	}
+		if unknown {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		home, err := productHomeOnHand(ctx, uow, productID, info.OnHand[productID])
+		if err != nil {
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		if quantityOut > home {
+			label := info.Labels[productID]
+			if label == "" {
+				label = "this product"
+			}
+			return equipFail(http.StatusConflict, "%s", fmt.Sprintf(
+				"%s: %d of the %d units from this batch have already been sold or "+
+					"consigned; cancel those sales or return the stock first",
+				label, quantityOut-home, quantityOut))
+		}
 
-	// Reverse only the batch's own entries, never a reversal of one, and never
-	// one that somehow already carries a reversal. Propolis needs no reversing
-	// row: consumption is a sum over live batches, so voiding releases it.
-	rows, err := tx.Query(ctx, `
-		SELECT m.id, m.kind, m.amount_lbs, m.reason, m.notes, m.lot_id
-		FROM honey_movements m
-		WHERE m.product_batch_id=$1 AND m.reverses_movement_id IS NULL
-			AND NOT EXISTS (
-				SELECT 1 FROM honey_movements rev WHERE rev.reverses_movement_id = m.id)
-		ORDER BY m.id
-		FOR UPDATE OF m`, batchID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	type batchMovement struct {
-		id        uuid.UUID
-		kind      string
-		amountLbs *float64
-		reason    *string
-		notes     *string
-		lotID     *uuid.UUID
-	}
-	movements := make([]batchMovement, 0, 1)
-	for rows.Next() {
-		var m batchMovement
-		if err := rows.Scan(&m.id, &m.kind, &m.amountLbs, &m.reason, &m.notes,
-			&m.lotID); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+		// Reverse the batch's transform. Its output is un-made and its inputs
+		// come back to the lots they were drawn from, all inside this unit of
+		// work, so no commit boundary sees the batch and the ledger disagree.
+		actor := actorID(r)
+		reason := honeyTrimPtr(req.Reason)
+		reversed, err = commands.VoidBatch(ctx, uow, batchID)
+		if err != nil {
+			return err
 		}
-		movements = append(movements, m)
-	}
-	rowsErr := rows.Err()
-	rows.Close()
-	if rowsErr != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	actor := actorID(r)
-	reason := honeyTrimPtr(req.Reason)
-	for _, m := range movements {
-		reversalReason := "void of product batch"
-		if reason != nil {
-			reversalReason = *reason
-		} else if m.reason != nil && *m.reason != "" {
-			reversalReason += " (" + *m.reason + ")"
-		}
-		var negatedLbs *float64
-		if m.amountLbs != nil {
-			v := -*m.amountLbs
-			negatedLbs = &v
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO honey_movements
-				(date, kind, amount_lbs, reason, notes, reverses_movement_id,
-				 product_batch_id, lot_id, created_by)
-			VALUES (now(), $1, $2, $3, $4, $5, $6, $7, $8)`,
-			m.kind, negatedLbs, reversalReason, m.notes, m.id, batchID, m.lotID,
-			actor); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-	}
-
-	if _, err := tx.Exec(ctx, `
+		if _, err := uow.Exec(ctx, `
 		UPDATE product_batches SET voided_at=now(), voided_by=$2, void_reason=$3
 		WHERE id=$1`, batchID, actor, reason); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+			return equipFail(http.StatusInternalServerError, "database error")
+		}
+		return nil
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "voided": true, "id": batchID,
-		"reversedMovements": len(movements),
+		"reversedMovements": reversed,
 	})
 }

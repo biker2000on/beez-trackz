@@ -172,8 +172,8 @@ export function RecordSaleDialog({
     const offer = offers[colony.hiveId];
     if (!offer) return sum;
     return sum + offer.deployments.reduce((inner, dep) => {
-      if (!colony.include[dep.id]) return inner;
-      const price = parseNum(colony.equipmentPrice[dep.id] ?? "") ?? 0;
+      if (!colony.include[dep.itemId]) return inner;
+      const price = parseNum(colony.equipmentPrice[dep.itemId] ?? "") ?? 0;
       return inner + dep.outstanding * price;
     }, 0);
   }, 0);
@@ -213,7 +213,7 @@ export function RecordSaleDialog({
       if (!offer) continue;
       feeders += offer.openFeeders;
       for (const dep of offer.deployments) {
-        if (colony.include[dep.id]) soldBoxes += dep.outstanding;
+        if (colony.include[dep.itemId]) soldBoxes += dep.outstanding;
         else returnedBoxes += dep.outstanding;
       }
     }
@@ -253,25 +253,28 @@ export function RecordSaleDialog({
       if (!offer) continue;
       const byStock = new Map<string, { qty: number; unitPrice: number }>();
       for (const dep of offer.deployments) {
-        if (!colony.include[dep.id]) continue;
-        const unitPrice = parseNum(colony.equipmentPrice[dep.id] ?? "");
+        if (!colony.include[dep.itemId]) continue;
+        const unitPrice = parseNum(colony.equipmentPrice[dep.itemId] ?? "");
         if (unitPrice === null || unitPrice < 0) {
           return "Every sold equipment line needs a price — enter 0 for a gift.";
         }
-        const current = byStock.get(dep.stockId);
+        const current = byStock.get(dep.itemId);
         if (current) {
           if (current.unitPrice !== unitPrice) {
             return "Same equipment sold from one hive must share a unit price.";
           }
           current.qty += dep.outstanding;
         } else {
-          byStock.set(dep.stockId, { qty: dep.outstanding, unitPrice });
+          byStock.set(dep.itemId, { qty: dep.outstanding, unitPrice });
         }
       }
-      for (const [stockId, row] of byStock) {
+      for (const [itemId, row] of byStock) {
+        // Gear leaving with the colony is named by its inventory item: the
+        // sale consumes it at the deployed location, carrying the hive as the
+        // container.
         saleLines.push({
           kind: "equipment",
-          equipmentStockId: stockId,
+          itemId,
           quantity: row.qty,
           unitPrice: row.unitPrice,
         });
@@ -754,8 +757,8 @@ function ColonyEquipmentFields({
                     const include: Record<string, boolean> = {};
                     const equipmentPrice: Record<string, string> = {};
                     for (const dep of offer.deployments) {
-                      include[dep.id] = true;
-                      equipmentPrice[dep.id] =
+                      include[dep.itemId] = true;
+                      equipmentPrice[dep.itemId] =
                         dep.unitCostCents != null
                           ? String(dep.unitCostCents / 100)
                           : "";
@@ -766,16 +769,16 @@ function ColonyEquipmentFields({
               }}
             />
             {(offers[colony.hiveId]?.deployments ?? []).map((dep) => (
-              <label key={dep.id} className="flex items-start gap-2 text-sm">
+              <label key={dep.itemId} className="flex items-start gap-2 text-sm">
                 <Checkbox
-                  checked={colony.include[dep.id] ?? false}
+                  checked={colony.include[dep.itemId] ?? false}
                   onCheckedChange={(checked) =>
                     setColonies((current) =>
                       current.map((item) =>
                         item.hiveId === colony.hiveId
                           ? {
                               ...item,
-                              include: { ...item.include, [dep.id]: checked === true },
+                              include: { ...item.include, [dep.itemId]: checked === true },
                             }
                           : item,
                       ),
@@ -789,13 +792,13 @@ function ColonyEquipmentFields({
                       (sold with hive)
                     </span>
                   </span>
-                  {colony.include[dep.id] && (
+                  {colony.include[dep.itemId] && (
                     <Input
                       type="number"
                       min="0"
                       step="0.01"
                       placeholder="Unit price"
-                      value={colony.equipmentPrice[dep.id] ?? ""}
+                      value={colony.equipmentPrice[dep.itemId] ?? ""}
                       onChange={(event) =>
                         setColonies((current) =>
                           current.map((item) =>
@@ -804,7 +807,7 @@ function ColonyEquipmentFields({
                                   ...item,
                                   equipmentPrice: {
                                     ...item.equipmentPrice,
-                                    [dep.id]: event.target.value,
+                                    [dep.itemId]: event.target.value,
                                   },
                                 }
                               : item,

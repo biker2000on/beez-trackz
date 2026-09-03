@@ -80,7 +80,12 @@ export interface SaleLineItem {
   kind?: SaleLineKind;
   jarSizeId: string | null;
   hiveId: string | null;
-  equipmentStockId: string | null;
+  // itemId replaces equipmentStockId on equipment lines: equipment_stock
+  // dissolves into the inventory ledger's items, and an item is what a sale
+  // line consumes.
+  itemId: string | null;
+  /** @deprecated the API stopped sending this when the ledger landed. */
+  equipmentStockId?: string | null;
   productId?: string | null;
   quantity: number;
   unitPrice: number;

@@ -308,6 +308,10 @@ export interface SaleLineBody {
   jarSizeId?: string;
   bottlingRunId?: string;
   hiveId?: string;
+  // itemId is the ledger identity of an equipment line. equipmentStockId is
+  // the pre-ledger one and is still accepted by the API while equipment_stock
+  // exists; the equipment picker sends it until /equipment/stock reports items.
+  itemId?: string;
   equipmentStockId?: string;
   productId?: string;
   quantity: number;
@@ -445,8 +449,10 @@ export interface HiveSaleOffer {
   reason: string;
   openFeeders: number;
   deployments: {
-    id: string;
-    stockId: string;
+    // The ledger has no deployment row: outstanding gear IS the balance at the
+    // virtual deployed location for this hive, so an inventory item is the
+    // only identity a colony-sale line needs.
+    itemId: string;
     typeName: string;
     typeCategory: string;
     outstanding: number;
