@@ -1244,6 +1244,62 @@ func TestOfflineIdempotencyCoversHoneyMutations(t *testing.T) {
 	}
 }
 
+func TestOfflineSaleReceiptIsTransactionalAndReplaysIdentically(t *testing.T) {
+	server := honeyTestServer(t)
+	jarSizeID := seedJarSize(t, server, "Offline sale pint", 16, 1200)
+	seedHarvest(t, server, 100)
+	jarStock(t, server, jarSizeID, 10)
+	mutationID := uuid.New().String()
+	handler := server.offlineMutations(http.HandlerFunc(server.honeyRecordSale))
+
+	send := func(quantity int) *httptest.ResponseRecorder {
+		request := adminRequest(http.MethodPost, "/api/v1/honey/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{{
+				"jarSizeId": jarSizeID.String(), "quantity": quantity, "unitPrice": 12,
+			}},
+		})
+		request.Header.Set("X-Offline-Mutation-ID", mutationID)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	first := send(2)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first sale = %d %s", first.Code, first.Body.String())
+	}
+	second := send(2)
+	if second.Code != http.StatusCreated || second.Header().Get("X-Offline-Replayed") != "true" {
+		t.Fatalf("replay = %d headers=%v body=%s", second.Code, second.Header(), second.Body.String())
+	}
+	if first.Body.String() != second.Body.String() {
+		t.Fatalf("replay body differs:\nfirst %s\nsecond %s", first.Body.String(), second.Body.String())
+	}
+	var decoded struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode first result: %v", err)
+	}
+	saleID := decoded.ID
+	var sales, receipts int
+	if err := server.pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM sales WHERE id=$1`, saleID).Scan(&sales); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM offline_mutation_receipts
+		WHERE mutation_id=$1 AND state='complete'`, mutationID).Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if sales != 1 || receipts != 1 {
+		t.Fatalf("sales=%d complete receipts=%d, want one of each", sales, receipts)
+	}
+	if mismatch := send(3); mismatch.Code != http.StatusConflict {
+		t.Fatalf("payload mismatch = %d %s, want 409", mismatch.Code, mismatch.Body.String())
+	}
+}
+
 func TestExpenseDeleteSoftDeletesAndLeavesAggregates(t *testing.T) {
 	server := honeyTestServer(t)
 	response, body := call(t, server.expenseCreate, adminRequest(

@@ -670,7 +670,7 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	commands := production.New()
 	var id uuid.UUID
-	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+	result, err := s.runApplicationMutation(r, http.StatusCreated, func(ctx context.Context, uow *app.UnitOfWork) error {
 		// Lock the requested harvests FIRST — class 1 of honeyLockOrder — before
 		// their weights are read and before any lot row is touched. This is what
 		// stops a concurrent hsDeleteEntry from soft-deleting a harvest between
@@ -738,16 +738,24 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		// The lot's weight IS a receipt into its bulk-honey lot (decision 6):
 		// honey_weight_lbs stays the domain fact, and the pounds that can
 		// actually be drawn are this operation's balance.
-		return commands.SetLotCeiling(ctx, uow, id, weightLbs, date)
+		if err := commands.SetLotCeiling(ctx, uow, id, weightLbs, date); err != nil {
+			return err
+		}
+		return uow.Emit(ctx, app.Event{
+			AggregateType: "harvest_lot", AggregateID: id, Type: "harvest_lot.created",
+			Payload: map[string]any{"publicSlug": slug},
+		})
+	}, func() any {
+		return map[string]any{
+			"id": id, "publicSlug": slug,
+			"storyUrl": s.cfg.StoryBaseURL() + "/honey/" + slug,
+		}
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"id": id, "publicSlug": slug,
-		"storyUrl": s.cfg.StoryBaseURL() + "/honey/" + slug,
-	})
+	writeApplicationResult(w, result)
 }
 func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")

@@ -83,6 +83,32 @@ func TestOfflineMutationSupported(t *testing.T) {
 	}
 }
 
+func TestMigratedOfflineCommandsUseTransactionalReceipts(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		method string
+		path   string
+		want   bool
+	}{
+		{http.MethodPost, "/api/v1/honey/jarring", true},
+		{http.MethodPost, "/api/v1/honey/sales", true},
+		{http.MethodPost, "/api/v1/sales", true},
+		{http.MethodPatch, "/api/v1/honey/sales/abc", true},
+		{http.MethodPatch, "/api/v1/sales/abc", true},
+		{http.MethodPost, "/api/v1/harvest-sessions/abc/entries", true},
+		{http.MethodPost, "/api/v1/harvest-lots", true},
+		{http.MethodPost, "/api/v1/feedings/abc/refill", true},
+		{http.MethodDelete, "/api/v1/sales/abc", false},
+		{http.MethodPost, "/api/v1/expenses", false},
+	}
+	for _, test := range tests {
+		if got := migratedOfflineCommand(test.method, test.path); got != test.want {
+			t.Errorf("migratedOfflineCommand(%q, %q) = %v, want %v",
+				test.method, test.path, got, test.want)
+		}
+	}
+}
+
 func TestOfflineCaptureWriterDoesNotWriteThrough(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()

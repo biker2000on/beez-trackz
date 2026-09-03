@@ -58,6 +58,10 @@ func main() {
 		slog.Error("redis", "err", err)
 		os.Exit(1)
 	}
+	eventClient := asynq.NewClient(redisOpt)
+	defer eventClient.Close()
+	mux.HandleFunc(domainEventTaskType, handleDomainEvent)
+	go runDomainEventDrain(ctx, pool, eventClient)
 	scheduler := asynq.NewScheduler(redisOpt, nil)
 	if err := jobs.RegisterPeriodic(scheduler); err != nil {
 		slog.Error("scheduler", "err", err)

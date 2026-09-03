@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/field"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -532,84 +534,19 @@ func (s *Server) handleFeedingRefill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
+	result, err := s.runApplicationCommand(r, http.StatusCreated,
+		func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+			return field.RefillFeeder(ctx, uow, field.RefillFeederInput{
+				FeedingID: id, DateFed: dateFed, Type: req.Type, Quantity: req.Quantity,
+				QuantityUnit: req.QuantityUnit, FeederType: req.FeederType,
+				Notes: inspectionTrimPtr(req.Notes),
+			})
+		})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		writeCommandError(w, err)
 		return
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	source, err := feedingLock(ctx, tx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "Feeding not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if source.Status == feedingStatusClosed {
-		writeError(w, http.StatusConflict,
-			"This feeder is already closed — record a new feeding instead")
-		return
-	}
-	if err := feedingCloseExec(ctx, tx, id, dateFed, feedingCloseReasonRefilled,
-		principalID(r), nil); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	next := feedingFields{
-		HiveID:       source.HiveID,
-		DateFed:      dateFed,
-		Type:         source.Type,
-		Quantity:     source.Quantity,
-		QuantityUnit: source.QuantityUnit,
-		FeederType:   source.FeederType,
-		Notes:        inspectionTrimPtr(req.Notes),
-	}
-	if req.Type != nil && *req.Type != "" {
-		next.Type = *req.Type
-	}
-	if req.Quantity != nil {
-		next.Quantity = *req.Quantity
-	}
-	if req.QuantityUnit != nil && *req.QuantityUnit != "" {
-		next.QuantityUnit = *req.QuantityUnit
-	}
-	if req.FeederType != nil {
-		next.FeederType = feedingFeederPtr(req.FeederType)
-	}
-
-	var newID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO feedings
-			(hive_id, date_fed, type, quantity, quantity_unit, feeder_type, notes,
-			 status, refill_of_id, status_changed_at, status_changed_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,now(),$9)
-		RETURNING id`,
-		next.HiveID, next.DateFed, next.Type, next.Quantity, next.QuantityUnit,
-		next.FeederType, next.Notes, id, principalID(r)).Scan(&newID)
-	if feedingIsUniqueViolation(err) {
-		writeError(w, http.StatusConflict, "This feeder has already been refilled")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	created, err := feedingScan(tx.QueryRow(ctx,
-		`SELECT `+feedingSelectCols+` FROM feedings WHERE id = $1`, newID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	writeJSON(w, http.StatusCreated, created)
+	writeApplicationResult(w, result)
 }
 
 // feedingIsUniqueViolation reports a Postgres unique violation (23505).

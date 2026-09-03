@@ -13,11 +13,103 @@ import (
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 const offlineResponseLimit = 2 << 20
+
+type offlineIdentityContextKey struct{}
+
+func offlineCommandIdentity(r *http.Request) (app.Identity, bool) {
+	id, ok := r.Context().Value(offlineIdentityContextKey{}).(app.Identity)
+	return id, ok
+}
+
+// runApplicationCommand is the transport adapter shared by migrated routes.
+// With an offline identity the runner owns both domain writes and the receipt;
+// ordinary online requests use the same command and transaction without a
+// receipt. The returned bytes are what the idempotent runner persisted.
+func (s *Server) runApplicationCommand(
+	r *http.Request,
+	status int,
+	fn func(context.Context, *app.UnitOfWork) (any, error),
+) (app.Result, error) {
+	runner := app.NewRunner(s.pool)
+	if identity, ok := offlineCommandIdentity(r); ok {
+		identity.ResponseStatus = status
+		return runner.RunIdempotent(r.Context(), appActor(r), identity, fn)
+	}
+	var value any
+	err := runner.Run(r.Context(), appActor(r), func(ctx context.Context, uow *app.UnitOfWork) error {
+		var err error
+		value, err = fn(ctx, uow)
+		return err
+	})
+	if err != nil {
+		return app.Result{}, err
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return app.Result{}, app.Internal("marshal command result", err)
+	}
+	return app.Result{Status: status, Body: body}, nil
+}
+
+func (s *Server) runApplicationMutation(
+	r *http.Request,
+	status int,
+	fn func(context.Context, *app.UnitOfWork) error,
+	result func() any,
+) (app.Result, error) {
+	return s.runApplicationCommand(r, status, func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+		if err := fn(ctx, uow); err != nil {
+			return nil, err
+		}
+		return result(), nil
+	})
+}
+
+func writeApplicationResult(w http.ResponseWriter, result app.Result) {
+	w.Header().Set("Content-Type", "application/json")
+	if result.Replayed {
+		w.Header().Set("X-Offline-Replayed", "true")
+	}
+	w.WriteHeader(result.Status)
+	_, _ = w.Write(result.Body)
+}
+
+// migratedOfflineCommand is the opt-in seam between transport-only receipt
+// parsing and the legacy two-step receipt middleware. These six command
+// families write their result receipt inside their application transaction.
+func migratedOfflineCommand(method, path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "v1" {
+		return false
+	}
+	resource := parts[2]
+	switch {
+	case method == http.MethodPost && len(parts) == 4 && resource == "honey" && parts[3] == "jarring":
+		return true
+	case method == http.MethodPost && len(parts) == 3 && resource == "sales":
+		return true
+	case method == http.MethodPost && len(parts) == 4 && resource == "honey" && parts[3] == "sales":
+		return true
+	case method == http.MethodPatch && len(parts) == 4 && resource == "sales":
+		return true
+	case method == http.MethodPatch && len(parts) == 5 && resource == "honey" && parts[3] == "sales":
+		return true
+	case method == http.MethodPost && len(parts) == 5 && resource == "harvest-sessions" && parts[4] == "entries":
+		return true
+	case method == http.MethodPost && len(parts) == 3 && resource == "harvest-lots":
+		return true
+	case method == http.MethodPost && len(parts) == 5 && resource == "feedings" && parts[4] == "refill":
+		return true
+	default:
+		return false
+	}
+}
 
 type offlineCaptureWriter struct {
 	http.ResponseWriter
@@ -206,6 +298,58 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 		digest := sha256.Sum256(append(
 			[]byte(r.Method+"\n"+r.URL.Path+"\n"), bodyBytes...))
 		requestHash := hex.EncodeToString(digest[:])
+
+		if migratedOfflineCommand(r.Method, r.URL.Path) {
+			var state string
+			var status *int
+			var body []byte
+			var storedHash *string
+			err := s.pool.QueryRow(r.Context(), `
+				SELECT state,response_status,response_body,request_hash
+				FROM offline_mutation_receipts
+				WHERE user_id=$1 AND mutation_id=$2`, user.ID, mutationID).
+				Scan(&state, &status, &body, &storedHash)
+			if err == nil {
+				if storedHash == nil || *storedHash != requestHash {
+					writeError(w, http.StatusConflict,
+						"offline mutation id was reused for a different request")
+					return
+				}
+				if state != "complete" || status == nil {
+					writeError(w, http.StatusConflict,
+						"offline mutation has no committed result")
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Offline-Replayed", "true")
+				w.WriteHeader(*status)
+				if len(body) > 0 {
+					_, _ = w.Write(body)
+				}
+				return
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			conflict, err := s.offlineMutationConflicts(r, queuedAt)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "database error")
+				return
+			}
+			if conflict {
+				w.Header().Set("X-Offline-Conflict", "newer-server-version")
+				writeError(w, http.StatusConflict,
+					"this record changed after the offline edit was queued")
+				return
+			}
+			identity := app.Identity{
+				UserID: user.ID, MutationID: mutationID, RequestHash: requestHash,
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(
+				r.Context(), offlineIdentityContextKey{}, identity)))
+			return
+		}
 
 		tag, err := s.pool.Exec(r.Context(), `
 			INSERT INTO offline_mutation_receipts (user_id,mutation_id,request_hash)

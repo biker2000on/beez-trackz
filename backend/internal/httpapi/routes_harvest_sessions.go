@@ -490,55 +490,26 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-	actor := actorID(r)
-	created := make([]map[string]any, 0, len(resolved))
+	commandEntries := make([]production.HarvestEntryInput, 0, len(resolved))
 	for _, entry := range resolved {
-		var id uuid.UUID
-		err = tx.QueryRow(ctx, `
-			INSERT INTO honey_harvests
-				(session_id, hive_id, date, super_weight_before, super_weight_after,
-				 calculated_honey_weight, direct_weight, notes, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			RETURNING id`,
-			sessionID, entry.hiveID, sessionDate, entry.before, entry.after,
-			entry.honey, entry.direct, entry.notes, actor).Scan(&id)
-		if err != nil {
-			if hsIsFKViolation(err) {
-				writeError(w, http.StatusBadRequest, "invalid hiveId")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		created = append(created, map[string]any{
-			"id":                    id,
-			"sessionId":             sessionID,
-			"hiveId":                entry.hiveID,
-			"date":                  sessionDate,
-			"superWeightBefore":     entry.before,
-			"superWeightAfter":      entry.after,
-			"calculatedHoneyWeight": entry.honey,
-			"directWeight":          entry.direct,
-			"notes":                 entry.notes,
+		commandEntries = append(commandEntries, production.HarvestEntryInput{
+			HiveID: entry.hiveID, SuperWeightBefore: entry.before,
+			SuperWeightAfter: entry.after, HoneyWeight: entry.honey,
+			DirectWeight: entry.direct, Notes: entry.notes,
 		})
 	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+	result, err := s.runApplicationCommand(r, http.StatusCreated,
+		func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+			return production.AddHarvestEntry(ctx, uow, production.AddHarvestEntryInput{
+				SessionID: sessionID, SessionDate: sessionDate,
+				Entries: commandEntries, Batch: batch,
+			})
+		})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
-	if !batch {
-		writeJSON(w, http.StatusCreated, created[0])
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"entries": created, "count": len(created),
-	})
+	writeApplicationResult(w, result)
 }
 
 // POST /harvest-sessions/{id}/true-up {totalExtractedWeight, reason?}

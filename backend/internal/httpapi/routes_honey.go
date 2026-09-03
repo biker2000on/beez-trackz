@@ -301,7 +301,7 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 
 	commands := production.New()
 	var warnings []string
-	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+	result, err := s.runApplicationMutation(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) error {
 		// Honey per jar size, read inside the transaction: a read on the pool
 		// before it began could see a jar-size edit the transaction then would
 		// not, deriving pounds from stale ounces.
@@ -415,21 +415,23 @@ func (s *Server) honeyRecordJarring(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		return uow.Emit(ctx, app.Event{
+			AggregateType: "harvest_lot", AggregateID: lotID, Type: "bottling.recorded",
+			Payload: map[string]any{"lines": len(lines), "lossRecorded": hasLoss},
+		})
+	}, func() any {
+		if warnings == nil {
+			warnings = []string{}
+		}
+		return map[string]any{
+			"success": true, "packagingWarnings": warnings,
+		}
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	if warnings == nil {
-		warnings = []string{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true,
-		// Non-blocking: the jars were filled either way, but the operator is
-		// told which empties are now short.
-		"packagingWarnings": warnings,
-	})
+	writeApplicationResult(w, result)
 }
 
 // POST /honey/bulk-movements {date, kind, amountLbs, reason?, notes?}
@@ -1357,7 +1359,7 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	}
 	var subtotal, totalAmount, amountPaid money
 	saleCommands := sales.New()
-	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+	result, err := s.runApplicationMutation(r, http.StatusCreated, func(ctx context.Context, uow *app.UnitOfWork) error {
 		saleLocationID, saleLocation, err := s.honeyResolveSaleLocation(ctx, uow, req.StockLocationID)
 		if err != nil {
 			return err
@@ -1673,18 +1675,23 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		return uow.Emit(ctx, app.Event{
+			AggregateType: "sale", AggregateID: saleID, Type: "sale.recorded",
+			Payload: map[string]any{"orderNumber": orderNumber, "status": req.OrderStatus},
+		})
+	}, func() any {
+		return map[string]any{
+			"success": true, "id": saleID, "orderNumber": orderNumber,
+			"subtotal": subtotal, "discountAmount": req.DiscountAmount,
+			"totalAmount": totalAmount, "amountPaid": amountPaid,
+			"balanceDue": totalAmount - amountPaid,
+		}
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"success": true, "id": saleID, "orderNumber": orderNumber,
-		"subtotal": subtotal, "discountAmount": req.DiscountAmount,
-		"totalAmount": totalAmount, "amountPaid": amountPaid,
-		"balanceDue": totalAmount - amountPaid,
-	})
+	writeApplicationResult(w, result)
 }
 
 // PATCH /honey/sales/{id} advances an invoice/order through payment and
@@ -1740,7 +1747,7 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var totalAmount, amountPaid money
-	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+	result, err := s.runApplicationMutation(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) error {
 		var currentPaid money
 		var currentPayment string
 		var saleDate time.Time
@@ -1807,16 +1814,21 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		return uow.Emit(ctx, app.Event{
+			AggregateType: "sale", AggregateID: id, Type: "sale.updated",
+			Payload: map[string]any{"status": req.OrderStatus},
+		})
+	}, func() any {
+		return map[string]any{
+			"success": true, "orderStatus": req.OrderStatus,
+			"amountPaid": amountPaid, "balanceDue": totalAmount - amountPaid,
+		}
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true, "orderStatus": req.OrderStatus,
-		"amountPaid": amountPaid, "balanceDue": totalAmount - amountPaid,
-	})
+	writeApplicationResult(w, result)
 }
 
 // DELETE /honey/sales/{id} CANCELS the sale. The route, the method, and the
@@ -1870,7 +1882,7 @@ func (s *Server) honeyCancelSaleByID(
 		return
 	}
 	var totalAmount, amountPaid money
-	err := s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+	result, err := s.runApplicationMutation(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) error {
 		var prevStatus string
 		var physicalAppliedAt *time.Time
 		err := uow.QueryRow(ctx, `
@@ -1915,16 +1927,21 @@ func (s *Server) honeyCancelSaleByID(
 		WHERE sale_id=$1`, id); err != nil {
 			return equipFail(http.StatusInternalServerError, "database error")
 		}
-		return nil
+		return uow.Emit(ctx, app.Event{
+			AggregateType: "sale", AggregateID: id, Type: "sale.cancelled",
+			Payload: map[string]any{"reason": reason},
+		})
+	}, func() any {
+		return map[string]any{
+			"success": true, "cancelled": true, "orderStatus": "cancelled", "id": id,
+			"amountPaid": amountPaid, "balanceDue": totalAmount - amountPaid,
+		}
 	})
 	if err != nil {
 		writeCommandError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true, "cancelled": true, "orderStatus": "cancelled", "id": id,
-		"amountPaid": amountPaid, "balanceDue": totalAmount - amountPaid,
-	})
+	writeApplicationResult(w, result)
 }
 
 // GET /honey/sale-locations — distinct non-null locations for autocomplete.
