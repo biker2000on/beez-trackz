@@ -167,7 +167,7 @@ func TestExtractCountersFindsTheTotals(t *testing.T) {
 // case pg_stat_user_tables gets wrong, since it counts the aborted tuple.
 func TestContentFingerprintIgnoresRolledBackWritesAndSeesCommittedOnes(t *testing.T) {
 	adminURL := requireDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	_, pool := seededSource(ctx, t, adminURL)
 

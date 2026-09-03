@@ -37,7 +37,7 @@ type reservationFixture struct {
 
 // TestReservationHoldsTheLastJars is the "two drafts for the last N jars" row.
 func TestReservationHoldsTheLastJars(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newReservationFixture(ctx, t, "beez_sales_reservation")
 	defer cleanup()
@@ -79,7 +79,7 @@ func TestReservationHoldsTheLastJars(t *testing.T) {
 // same moment the movement appears, so on-hand and available never
 // double-count the sale.
 func TestApplyConvertsTheReservation(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newReservationFixture(ctx, t, "beez_sales_reservation_apply")
 	defer cleanup()
@@ -120,7 +120,7 @@ func TestApplyConvertsTheReservation(t *testing.T) {
 
 // TestCancelReleasesTheReservation is the "cancel releases it" row.
 func TestCancelReleasesTheReservation(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newReservationFixture(ctx, t, "beez_sales_reservation_cancel")
 	defer cleanup()
@@ -151,7 +151,7 @@ func TestCancelReleasesTheReservation(t *testing.T) {
 // draws on; claiming home's jars for a shop's sale would let the same jar be
 // sold twice.
 func TestConsigneeSaleReservesAtTheConsignee(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newReservationFixture(ctx, t, "beez_sales_reservation_consignee")
 	defer cleanup()

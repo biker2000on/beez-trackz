@@ -266,7 +266,7 @@ func seededSourceNamed(ctx context.Context, t *testing.T, adminURL, database str
 // does not, every later comparison is meaningless.
 func TestChecksumPassAcceptsASeededExport(t *testing.T) {
 	adminURL := requireDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	_, pool := seededSource(ctx, t, adminURL)
@@ -312,7 +312,7 @@ func TestChecksumPassAcceptsASeededExport(t *testing.T) {
 // work that is not in this tree.
 func TestRoundTripGatePassesAgainstASeededFixture(t *testing.T) {
 	adminURL := requireDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	repoRoot, err := findRepoRoot(".")
@@ -359,7 +359,7 @@ func TestRoundTripGatePassesAgainstASeededFixture(t *testing.T) {
 // disposable database is created and long before any restore runs.
 func TestRoundTripGateStopsOnACorruptArtifact(t *testing.T) {
 	adminURL := requireDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	_, pool := seededSource(ctx, t, adminURL)

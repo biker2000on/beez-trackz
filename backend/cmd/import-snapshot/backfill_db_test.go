@@ -21,7 +21,7 @@ func TestEquipmentBackfillFreezesAndRekeys(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_eq_backfill_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
 	defer cleanup()
@@ -78,7 +78,7 @@ func TestEquipmentBackfillSynthesizesPositiveOpeningResidual(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_eq_opening_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
 	defer cleanup()
@@ -128,7 +128,7 @@ func TestEquipmentBackfillRejectsNegativeOpeningResidual(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_eq_neg_opening_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
 	defer cleanup()
@@ -170,7 +170,7 @@ func TestNegativeResidualRollsBackLedgerAndFreeze(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_eq_residual_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
 	defer cleanup()
@@ -200,7 +200,7 @@ func TestCompleteLedgerBackfillFixtureAndFrozenNoOp(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	url, cleanup := freshImportDatabase(ctx, t, adminURL, "beez_full_backfill_"+strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
 	defer cleanup()

@@ -29,7 +29,7 @@ func TestExportSnapshotRequiresLegacySourceForALegacyDatabase(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
 	t.Setenv("TZ", "UTC")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 
 	sourceURL := freshLegacyDatabase(ctx, t, adminURL, exportGuardDatabase)

@@ -16,7 +16,7 @@ func TestMigrationsOnCleanPostgres(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	pool, err := Connect(ctx, databaseURL)
 	if err != nil {

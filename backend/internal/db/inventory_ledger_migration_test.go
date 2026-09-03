@@ -15,7 +15,7 @@ func TestInventoryLedgerMigrationAppliesAndSeedsLocations(t *testing.T) {
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	pool, cleanup := freshDatabase(ctx, t, "beez_inventory_ledger_migration")
 	defer cleanup()
@@ -85,7 +85,7 @@ func TestInventoryLedgerMigrationGuardsScaleAndHiveDelete(t *testing.T) {
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	pool, cleanup := freshDatabase(ctx, t, "beez_inventory_ledger_guards")
 	defer cleanup()

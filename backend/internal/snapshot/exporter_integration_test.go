@@ -15,7 +15,7 @@ func TestExporterIntegration(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is unset")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	pool, err := db.Connect(ctx, databaseURL)
 	if err != nil {

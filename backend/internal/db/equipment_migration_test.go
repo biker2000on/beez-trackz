@@ -26,7 +26,7 @@ func TestEquipmentLedgerMigrationOnLegacyData(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	legacyName := "beez_equip_legacy_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")

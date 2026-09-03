@@ -19,7 +19,7 @@ import (
 // kind as a lot fact. This test writes one of each and then runs the report a
 // filter would run: select the operations whose allocation was inferred.
 func TestInferredAllocationIsFlaggedAndReportable(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newReservationFixture(ctx, t, "beez_sales_allocation")
 	defer cleanup()

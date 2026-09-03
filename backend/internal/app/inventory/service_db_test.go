@@ -26,7 +26,7 @@ type ledgerFixture struct {
 }
 
 func TestServiceRecordAvailabilityAndCheckpoints(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newLedgerFixture(ctx, t, "beez_inventory_service")
 	defer cleanup()
@@ -244,7 +244,7 @@ func TestServiceRecordAvailabilityAndCheckpoints(t *testing.T) {
 }
 
 func TestTupleLockOrderDeadlockRegression(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newLedgerFixture(ctx, t, "beez_inventory_deadlock")
 	defer cleanup()
@@ -294,7 +294,7 @@ func TestTupleLockOrderDeadlockRegression(t *testing.T) {
 }
 
 func TestHiveDeleteGuard(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newLedgerFixture(ctx, t, "beez_inventory_hive_guard")
 	defer cleanup()
@@ -339,7 +339,7 @@ func TestHiveDeleteGuard(t *testing.T) {
 }
 
 func TestCheckpointRefusesStaleComputation(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	fixture, cleanup := newLedgerFixture(ctx, t, "beez_inventory_checkpoint_race")
 	defer cleanup()

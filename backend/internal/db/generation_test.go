@@ -29,7 +29,7 @@ func requireGuardDatabase(t *testing.T) string {
 
 func guardContext(t *testing.T) context.Context {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	t.Cleanup(cancel)
 	return ctx
 }

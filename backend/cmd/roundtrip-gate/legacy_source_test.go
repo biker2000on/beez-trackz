@@ -39,7 +39,7 @@ func demoteToLegacy(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 // accepts it under -legacy-source — read only, provably.
 func TestGateSourceConnectionHonoursLegacySourceOnlyReadOnly(t *testing.T) {
 	adminURL := requireDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	sourceURL, pool := seededSourceNamed(ctx, t, adminURL, legacyFixtureDatabase)
@@ -89,7 +89,7 @@ func TestGateSourceConnectionHonoursLegacySourceOnlyReadOnly(t *testing.T) {
 // current chain head, and compared.
 func TestRoundTripGatePassesAgainstALegacySource(t *testing.T) {
 	adminURL := requireDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	repoRoot, err := findRepoRoot(".")

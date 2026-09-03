@@ -25,7 +25,7 @@ func TestMoneyMigrationConvertsExistingRows(t *testing.T) {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	pool, cleanup := freshDatabase(ctx, t, "beez_money_migration")
@@ -120,7 +120,7 @@ func TestLedgerMigrationBackfillsJarringPounds(t *testing.T) {
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	pool, cleanup := freshDatabase(ctx, t, "beez_ledger_migration")

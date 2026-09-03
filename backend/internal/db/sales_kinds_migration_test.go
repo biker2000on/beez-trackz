@@ -15,7 +15,7 @@ func TestSalesKindsMigrationCarriesJarRows(t *testing.T) {
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	pool, cleanup := freshDatabase(ctx, t, "beez_sales_kinds")

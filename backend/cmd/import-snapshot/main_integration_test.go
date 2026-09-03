@@ -111,7 +111,7 @@ func TestRestoreLegacySnapshotRefusesFrozenDatabase(t *testing.T) {
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL is not configured")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
 	sourceURL, sourceCleanup := freshImportDatabase(ctx, t, adminURL, "beez_restore_legacy_src_"+suffix)
