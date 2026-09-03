@@ -22,6 +22,8 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
+	inventoryledger "github.com/biker2000on/beez-trackz/backend/internal/app/inventory"
+	inventorybuild "github.com/biker2000on/beez-trackz/backend/internal/app/inventory/build"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
@@ -517,6 +519,178 @@ func TestMoneyMarshalsAsTwoDecimalDollars(t *testing.T) {
 		if string(encoded) != want {
 			t.Errorf("money(%d) marshaled as %s, want %s", int64(value), encoded, want)
 		}
+	}
+}
+
+func TestHoneyInventoryClassifiesBackfilledHistoryByLedgerSemantics(t *testing.T) {
+	server := honeyTestServer(t)
+	ctx := context.Background()
+	pintID := seedJarSize(t, server, "Pint", 16, 1200)
+	quartID := seedJarSize(t, server, "Quart", 32, 2000)
+	seedHarvest(t, server, 20)
+	harvestLotID := seedFixtureLot(t, server, 20)
+
+	// Reproduce the three shapes emitted by the legacy translator: jarring is
+	// a transform sourced by honey_movement, a draw-before-receipt injection is
+	// an opening balance, and its cleanup is a legacy_reconcile count adjust.
+	err := app.NewRunner(server.pool).Run(ctx, app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			home, err := production.HomeLocationID(ctx, uow)
+			if err != nil {
+				return err
+			}
+			jarItem, err := production.EnsureJarItem(ctx, uow, pintID)
+			if err != nil {
+				return err
+			}
+			bulkLot, err := production.EnsureHarvestLot(ctx, uow, harvestLotID)
+			if err != nil {
+				return err
+			}
+			jarLot, err := production.EnsureJarLotForHarvestLot(ctx, uow, jarItem, harvestLotID)
+			if err != nil {
+				return err
+			}
+			unassigned, err := production.LegacyUnassignedLot(ctx, uow, jarItem)
+			if err != nil {
+				return err
+			}
+
+			ledger := inventoryledger.NewService()
+			at := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+			movementID := uuid.New()
+			legacyType := "honey_movement"
+			transform, err := inventorybuild.Transform(inventorybuild.TransformParams{
+				Base: inventorybuild.Base{
+					ID: movementID, OccurredAt: at,
+					IdempotencyKey: "test:legacy-honey-movement:" + movementID.String(),
+					SourceType:     "honey_movement", SourceID: movementID,
+					Reason: production.ReasonNone, Actor: uow.Actor(), Provenance: "legacy-import",
+					LegacyRefType: &legacyType, LegacyRefID: &movementID,
+				},
+				Inputs: []inventoryledger.Movement{{
+					Tuple: inventoryledger.Tuple{
+						ItemID: production.HoneyBulkItemID, LocationID: home, LotID: &bulkLot,
+					},
+					Quantity: production.Negate(production.Pounds(10)), QuantityScale: production.MassScale,
+				}},
+				Outputs: []inventoryledger.Movement{{
+					Tuple:    inventoryledger.Tuple{ItemID: jarItem, LocationID: home, LotID: &jarLot},
+					Quantity: production.Quantity(10), QuantityScale: production.CountScale,
+				}},
+			})
+			if err != nil {
+				return err
+			}
+			if _, err = ledger.Record(ctx, uow, transform); err != nil {
+				return err
+			}
+
+			openingID := uuid.New()
+			opening, err := inventorybuild.OpeningBalance(inventorybuild.SingleParams{
+				Base: inventorybuild.Base{
+					ID: openingID, OccurredAt: at.Add(time.Minute),
+					IdempotencyKey: "test:legacy-draw-before-receipt:" + openingID.String(),
+					SourceType:     "legacy_draw_before_receipt", SourceID: openingID,
+					Reason: production.ReasonNone, Actor: uow.Actor(), Provenance: "legacy-import",
+					Details: map[string]any{"reason": "draw-before-receipt"},
+				},
+				Line: inventoryledger.Movement{
+					Tuple:    inventoryledger.Tuple{ItemID: jarItem, LocationID: home, LotID: &unassigned},
+					Quantity: production.Quantity(3), QuantityScale: production.CountScale,
+				},
+			})
+			if err != nil {
+				return err
+			}
+			if _, err = ledger.Record(ctx, uow, opening); err != nil {
+				return err
+			}
+
+			reconcileID := uuid.New()
+			reconcile, err := inventorybuild.CountAdjust(inventorybuild.SingleParams{
+				Base: inventorybuild.Base{
+					ID: reconcileID, OccurredAt: at.Add(2 * time.Minute),
+					IdempotencyKey: "test:legacy-reconcile:" + reconcileID.String(),
+					SourceType:     "legacy_reconcile", SourceID: jarItem,
+					Reason: production.ReasonCount, Actor: uow.Actor(), Provenance: "legacy-import",
+					Details: map[string]any{"reason": "draw-before-receipt-reconcile"},
+				},
+				Line: inventoryledger.Movement{
+					Tuple:    inventoryledger.Tuple{ItemID: jarItem, LocationID: home, LotID: &unassigned},
+					Quantity: production.Negate(production.Quantity(2)), QuantityScale: production.CountScale,
+				},
+			})
+			if err != nil {
+				return err
+			}
+			_, err = ledger.Record(ctx, uow, reconcile)
+			return err
+		})
+	if err != nil {
+		t.Fatalf("record legacy-shaped history: %v", err)
+	}
+
+	response, body := call(t, server.honeyRecordGiveAway, adminRequest(
+		http.MethodPost, "/api/v1/honey/give-away", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{{
+				"jarSizeId": pintID.String(), "quantity": 1,
+			}},
+		}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("record give-away = %d %v", response.Code, body)
+	}
+	response, body = call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+			"date": time.Now().Format("2006-01-02"),
+			"lines": []map[string]any{{
+				"jarSizeId": pintID.String(), "quantity": 4, "unitPrice": 12,
+			}},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("record sale = %d %v", response.Code, body)
+	}
+
+	rows := mustJarInventory(t, server)
+	tests := []struct {
+		id                                      uuid.UUID
+		label                                   string
+		jarred, sold, givenAway, adjusted, hand int
+	}{
+		{id: pintID, label: "Pint", jarred: 10, sold: 4, givenAway: 1, adjusted: 1, hand: 6},
+		{id: quartID, label: "Quart"},
+	}
+	byID := make(map[uuid.UUID]honeyInventoryRow, len(rows))
+	for _, row := range rows {
+		byID[row.JarSizeID] = row
+		if row.OnHand != row.Jarred+row.Adjusted-row.Sold-row.GivenAway {
+			t.Errorf("%s identity: onHand=%d, jarred=%d adjusted=%d sold=%d givenAway=%d",
+				row.Label, row.OnHand, row.Jarred, row.Adjusted, row.Sold, row.GivenAway)
+		}
+	}
+	for _, test := range tests {
+		row, ok := byID[test.id]
+		if !ok {
+			t.Errorf("%s was not returned", test.label)
+			continue
+		}
+		if row.Jarred != test.jarred || row.Sold != test.sold ||
+			row.GivenAway != test.givenAway || row.Adjusted != test.adjusted ||
+			row.OnHand != test.hand {
+			t.Errorf("%s breakdown = jarred %d sold %d givenAway %d adjusted %d onHand %d; want %d/%d/%d/%d/%d",
+				test.label, row.Jarred, row.Sold, row.GivenAway, row.Adjusted, row.OnHand,
+				test.jarred, test.sold, test.givenAway, test.adjusted, test.hand)
+		}
+	}
+
+	bulk, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk totals: %v", err)
+	}
+	if bulk.JarredLbs != 10 || bulk.BulkUsedLbs != 0 {
+		t.Errorf("legacy transform bulk classification = jarred %.1f used %.1f, want 10/0",
+			bulk.JarredLbs, bulk.BulkUsedLbs)
 	}
 }
 

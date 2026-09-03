@@ -86,9 +86,9 @@ type productInventoryRow struct {
 	IsActive     bool      `json:"isActive"`
 	Made         int       `json:"made"`
 	Sold         int       `json:"sold"`
-	// Adjusted is the net of the product adjustment ledger: shrink is negative,
-	// found stock positive. Reported on its own so a SKU whose count moved
-	// outside a batch or a sale can say why.
+	// Adjusted is the net of count adjustments, opening balances, and shrink:
+	// shrink is negative, found/imported stock positive. Reported on its own so
+	// a SKU whose count moved outside a batch or a sale can say why.
 	Adjusted  int       `json:"adjusted"`
 	OnHand    int       `json:"onHand"`
 	InStock   bool      `json:"inStock"`
@@ -105,14 +105,15 @@ type productInventoryRow struct {
 // is either an applied consumption (already out of the balance) or a
 // reservation the view subtracts, never both (review OV1). "Made" stays a
 // domain sum over live product_batches - a voided batch produced nothing, so
-// it drops out the moment it is voided - and "adjusted" is the count_adjust
-// and shrink history that lets a unit leave the world without a sale.
+// it drops out the moment it is voided - and "adjusted" is the count_adjust,
+// opening_balance, and shrink history that lets imported/found stock enter or
+// a unit leave the world without a sale.
 func productInventoryQuery(ctx context.Context, q inspectionQuerier) ([]productInventoryRow, error) {
 	rows, err := q.Query(ctx, `
 		WITH `+ledgerClassifiedCTE+`,
 		adjusted AS (
 			SELECT item_id, COALESCE(SUM(quantity) FILTER (
-			           WHERE kind IN ('count_adjust','shrink')), 0)::int AS adjusted
+			           WHERE kind IN ('count_adjust','opening_balance','shrink')), 0)::int AS adjusted
 			FROM classified GROUP BY item_id
 		),
 		available AS (

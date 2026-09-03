@@ -39,6 +39,7 @@ const honeyBulkLockKey int64 = 8_472_113_001
 const ledgerClassifiedCTE = `
 	classified AS (
 		SELECT m.item_id, m.lot_id, m.location_id, m.quantity,
+		       COALESCE(orig.id, o.id) AS classified_operation_id,
 		       COALESCE(orig.kind, o.kind) AS kind,
 		       COALESCE(orig.reason, o.reason) AS reason,
 		       COALESCE(orig.source_type, o.source_type) AS source_type
@@ -63,7 +64,9 @@ type honeyBulkTotals struct {
 // the session falls back to the sum of its live entries, and soft-deleted
 // entries never count. Everything else is the ledger: bulk on hand IS the
 // honey_bulk balance across its lots (decision 6), and the three draw columns
-// are what bottling runs, product batches, and shrink took out of it.
+// are what transforms into jars, transforms into catalog products, and shrink
+// took out of it. The output-item classification deliberately ignores
+// source_type so imported and live transforms report the same history.
 func honeyBulkOnHand(ctx context.Context, q inspectionQuerier) (honeyBulkTotals, error) {
 	var totals honeyBulkTotals
 	err := q.QueryRow(ctx, `
@@ -77,11 +80,23 @@ func honeyBulkOnHand(ctx context.Context, q inspectionQuerier) (honeyBulkTotals,
 				FROM harvest_sessions hs) sessions) +
 			(SELECT COALESCE(SUM(calculated_honey_weight), 0)
 			 FROM honey_harvests WHERE session_id IS NULL AND deleted_at IS NULL),
-			COALESCE((SELECT SUM(-quantity) FROM classified
-			          WHERE item_id=$1 AND source_type='bottling_run'), 0)::float8,
-			COALESCE((SELECT SUM(-quantity) FROM classified
-			          WHERE item_id=$1 AND (source_type='product_batch'
-			            OR (kind='shrink' AND reason <> 'loss'))), 0)::float8,
+			COALESCE((SELECT SUM(-c.quantity) FROM classified c
+			          WHERE c.item_id=$1 AND c.kind='transform'
+			            AND EXISTS (
+			              SELECT 1 FROM inventory_movements output
+			              JOIN inventory_items output_item ON output_item.id=output.item_id
+			              WHERE output.operation_id=c.classified_operation_id
+			                AND output.quantity > 0 AND output_item.kind='jar'
+			            )), 0)::float8,
+			COALESCE((SELECT SUM(-c.quantity) FROM classified c
+			          WHERE c.item_id=$1 AND (
+			            (c.kind='transform' AND EXISTS (
+			              SELECT 1 FROM inventory_movements output
+			              JOIN inventory_items output_item ON output_item.id=output.item_id
+			              WHERE output.operation_id=c.classified_operation_id
+			                AND output.quantity > 0 AND output_item.kind='catalog_product'
+			            )) OR (c.kind='shrink' AND c.reason <> 'loss')
+			          )), 0)::float8,
 			COALESCE((SELECT SUM(-quantity) FROM classified
 			          WHERE item_id=$1 AND kind='shrink' AND reason='loss'), 0)::float8,
 			COALESCE((SELECT SUM(on_hand) FROM inventory_balances WHERE item_id=$1), 0)::float8`,

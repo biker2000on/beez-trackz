@@ -1977,10 +1977,14 @@ func (s *Server) honeyJarInventory(ctx context.Context) ([]honeyInventoryRow, er
 
 func honeyJarInventoryWithQuerier(ctx context.Context, queryer inspectionQuerier) ([]honeyInventoryRow, error) {
 	// onHand is inventory_available summed across every location: what the
-	// operator could still sell anywhere. It equals jarred + adjusted - sold -
-	// givenAway exactly, because a non-cancelled sale line is either an
-	// applied consumption (in the balance) or a reservation (subtracted by
-	// the view), never both and never neither (review OV1).
+	// operator could still sell anywhere. The history buckets are classified
+	// by ledger semantics, never live-only provenance: jarred is every net
+	// transform output for a jar item, adjusted is net count_adjust plus
+	// opening_balance, and givenAway is shrink reason give_away. Therefore
+	// onHand = jarred + adjusted - sold - givenAway exactly, because a
+	// non-cancelled sale line is either an applied consumption (in the balance)
+	// or a reservation (subtracted by the view), never both and never neither
+	// (review OV1).
 	//
 	// Inactive sizes are listed only while they still hold stock. Filtering on
 	// is_active alone turned deactivating a size into an invisible inventory
@@ -1990,9 +1994,9 @@ func honeyJarInventoryWithQuerier(ctx context.Context, queryer inspectionQuerier
 		WITH `+ledgerClassifiedCTE+`,
 		history AS (
 			SELECT item_id,
-			       COALESCE(SUM(quantity) FILTER (WHERE source_type='bottling_run'), 0)::int AS jarred,
+			       COALESCE(SUM(quantity) FILTER (WHERE kind='transform'), 0)::int AS jarred,
 			       COALESCE(SUM(-quantity) FILTER (WHERE kind='shrink' AND reason='give_away'), 0)::int AS given_away,
-			       COALESCE(SUM(quantity) FILTER (WHERE kind='count_adjust'), 0)::int AS adjusted
+			       COALESCE(SUM(quantity) FILTER (WHERE kind IN ('count_adjust','opening_balance')), 0)::int AS adjusted
 			FROM classified GROUP BY item_id
 		),
 		available AS (
@@ -2143,18 +2147,20 @@ func (s *Server) honeyTimelineHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT o.id, o.occurred_at, o.kind, o.reason, o.source_type,
+		SELECT o.id, o.occurred_at,
+		       COALESCE(original.kind, o.kind), COALESCE(original.reason, o.reason),
 		       o.reverses_operation_id,
 		       COALESCE(SUM(m.quantity) FILTER (WHERE m.item_id = $2), 0)::float8 AS bulk_lbs,
 		       COALESCE(SUM(m.quantity) FILTER (WHERE i.kind = 'jar'), 0)::int AS jars,
 		       MIN(js.label) FILTER (WHERE i.kind = 'jar') AS jar_label,
 		       o.details ->> 'notes'
 		FROM inventory_operations o
+		LEFT JOIN inventory_operations original ON original.id = o.reverses_operation_id
 		JOIN inventory_movements m ON m.operation_id = o.id
 		JOIN inventory_items i ON i.id = m.item_id
 		LEFT JOIN jar_sizes js ON js.item_id = i.id
 		WHERE i.id = $2 OR i.kind = 'jar'
-		GROUP BY o.id
+		GROUP BY o.id, original.id
 		ORDER BY o.occurred_at DESC, o.created_at DESC
 		LIMIT $1`, limit, production.HoneyBulkItemID)
 	if err != nil {
@@ -2164,15 +2170,15 @@ func (s *Server) honeyTimelineHandler(w http.ResponseWriter, r *http.Request) {
 	entries := make([]honeyTimelineEntry, 0)
 	for rows.Next() {
 		var (
-			id                   uuid.UUID
-			occurredAt           time.Time
-			kind, reason, source string
-			reversesID           *uuid.UUID
-			bulkLbs              float64
-			jars                 int
-			jarLabel, notes      *string
+			id              uuid.UUID
+			occurredAt      time.Time
+			kind, reason    string
+			reversesID      *uuid.UUID
+			bulkLbs         float64
+			jars            int
+			jarLabel, notes *string
 		)
-		if err := rows.Scan(&id, &occurredAt, &kind, &reason, &source, &reversesID,
+		if err := rows.Scan(&id, &occurredAt, &kind, &reason, &reversesID,
 			&bulkLbs, &jars, &jarLabel, &notes); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")
@@ -2182,7 +2188,7 @@ func (s *Server) honeyTimelineHandler(w http.ResponseWriter, r *http.Request) {
 		if jarLabel != nil {
 			label = *jarLabel
 		}
-		entryType, description := honeyTimelineDescribe(kind, reason, source, label, jars, bulkLbs)
+		entryType, description := honeyTimelineDescribe(kind, reason, label, jars, bulkLbs)
 		if reversesID != nil {
 			description = "Reversed: " + description
 		}
@@ -2256,13 +2262,13 @@ func (s *Server) honeyTimelineHandler(w http.ResponseWriter, r *http.Request) {
 // honeyTimelineDescribe turns one operation into the timeline's type and its
 // sentence. The legacy kinds are preserved on the wire — jarring, give_away,
 // jar_adjustment, bulk_use, loss — so the activity tab keeps working; they are
-// now derived from the operation kind, its registry reason, and the domain
-// record that commanded it rather than from a honey_movements column.
+// now derived from the operation kind, its registry reason, and its movement
+// shape rather than live-only source provenance.
 func honeyTimelineDescribe(
-	kind, reason, sourceType, label string, jars int, bulkLbs float64,
+	kind, reason, label string, jars int, bulkLbs float64,
 ) (string, string) {
 	switch {
-	case sourceType == "bottling_run":
+	case kind == "transform" && jars != 0:
 		return "jarring", fmt.Sprintf("Jarred %d × %s", jars, label)
 	case kind == "shrink" && reason == "give_away":
 		return "give_away", fmt.Sprintf("Gave away %d × %s", -jars, label)
@@ -2272,7 +2278,7 @@ func honeyTimelineDescribe(
 		return "loss", fmt.Sprintf("Loss %.1f lbs", -bulkLbs)
 	case kind == "shrink":
 		return "bulk_use", fmt.Sprintf("Used %.1f lbs bulk", -bulkLbs)
-	case sourceType == "product_batch":
+	case kind == "transform":
 		return "bulk_use", fmt.Sprintf("Used %.1f lbs bulk", -bulkLbs)
 	case kind == "sale_consume":
 		return "sale", fmt.Sprintf("Sold %d × %s", -jars, label)

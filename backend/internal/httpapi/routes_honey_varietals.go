@@ -40,15 +40,25 @@ func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(ctx, `
 		WITH `+ledgerClassifiedCTE+`,
 		per_lot AS (
-			SELECT lot_id,
+			SELECT c.lot_id,
 			       COALESCE(SUM(quantity) FILTER (WHERE kind IN ('receive','opening_balance')), 0)::float8 AS lot_lbs,
-			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='bottling_run'), 0)::float8 AS jarred_lbs,
-			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='product_batch'
-			                 OR (kind='shrink' AND reason <> 'loss')), 0)::float8 AS bulk_used_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE kind='transform' AND EXISTS (
+			         SELECT 1 FROM inventory_movements output
+			         JOIN inventory_items output_item ON output_item.id=output.item_id
+			         WHERE output.operation_id=c.classified_operation_id
+			           AND output.quantity > 0 AND output_item.kind='jar'
+			       )), 0)::float8 AS jarred_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE
+			         (kind='transform' AND EXISTS (
+			           SELECT 1 FROM inventory_movements output
+			           JOIN inventory_items output_item ON output_item.id=output.item_id
+			           WHERE output.operation_id=c.classified_operation_id
+			             AND output.quantity > 0 AND output_item.kind='catalog_product'
+			         )) OR (kind='shrink' AND reason <> 'loss')), 0)::float8 AS bulk_used_lbs,
 			       COALESCE(SUM(-quantity) FILTER (WHERE kind='shrink' AND reason='loss'), 0)::float8 AS loss_lbs,
 			       COALESCE(SUM(quantity), 0)::float8 AS on_hand_lbs
-			FROM classified WHERE item_id = $1 AND lot_id IS NOT NULL
-			GROUP BY lot_id
+			FROM classified c WHERE item_id = $1 AND lot_id IS NOT NULL
+			GROUP BY c.lot_id
 		)
 		SELECT hl.id, hl.lot_code, hl.honey_variety, hl.varietal_id, v.name,
 		       to_char(hl.extraction_date, 'YYYY-MM-DD'),
@@ -104,8 +114,7 @@ func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 			COALESCE((SELECT SUM(-c.quantity) FROM classified c
 			          JOIN inventory_lots l ON l.id = c.lot_id
 			          WHERE c.item_id=$1 AND l.is_legacy_unassigned
-			            AND (c.source_type IN ('bottling_run','product_batch')
-			                 OR c.kind='shrink')), 0)::float8`,
+			            AND c.kind IN ('transform','shrink')), 0)::float8`,
 		production.HoneyBulkItemID).
 		Scan(&lotLbs, &unassignedLbs, &unattributedDraws); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -142,15 +151,25 @@ func (s *Server) honeyListVarietals(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
 		WITH `+ledgerClassifiedCTE+`,
 		per_lot AS (
-			SELECT lot_id,
+			SELECT c.lot_id,
 			       COALESCE(SUM(quantity) FILTER (WHERE kind IN ('receive','opening_balance')), 0) AS lot_lbs,
-			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='bottling_run'), 0) AS jarred_lbs,
-			       COALESCE(SUM(-quantity) FILTER (WHERE source_type='product_batch'
-			                 OR (kind='shrink' AND reason <> 'loss')), 0) AS bulk_used_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE kind='transform' AND EXISTS (
+			         SELECT 1 FROM inventory_movements output
+			         JOIN inventory_items output_item ON output_item.id=output.item_id
+			         WHERE output.operation_id=c.classified_operation_id
+			           AND output.quantity > 0 AND output_item.kind='jar'
+			       )), 0) AS jarred_lbs,
+			       COALESCE(SUM(-quantity) FILTER (WHERE
+			         (kind='transform' AND EXISTS (
+			           SELECT 1 FROM inventory_movements output
+			           JOIN inventory_items output_item ON output_item.id=output.item_id
+			           WHERE output.operation_id=c.classified_operation_id
+			             AND output.quantity > 0 AND output_item.kind='catalog_product'
+			         )) OR (kind='shrink' AND reason <> 'loss')), 0) AS bulk_used_lbs,
 			       COALESCE(SUM(-quantity) FILTER (WHERE kind='shrink' AND reason='loss'), 0) AS loss_lbs,
 			       COALESCE(SUM(quantity), 0) AS on_hand_lbs
-			FROM classified WHERE item_id = $1 AND lot_id IS NOT NULL
-			GROUP BY lot_id
+			FROM classified c WHERE item_id = $1 AND lot_id IS NOT NULL
+			GROUP BY c.lot_id
 		),
 		per_varietal AS (
 			SELECT hl.varietal_id,
