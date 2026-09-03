@@ -787,6 +787,18 @@ translation and gate tests extend the P0 suites.
   equipment opening residual, seeded-row yield for the P0 importer. No
   production writer of the eight legacy tables remains.
 
+- **Wave 3b (2026-09-03):** the full cross-domain Phase A backfill with §7.2
+  parity and §7.4 residual splits (`import-snapshot -backfill-ledger`, freeze
+  triggers arm only on parity success); the frontend equipment UI on ledger
+  identities; and Phase B's generated `00001_baseline.sql` (chain moved to
+  `internal/db/legacy-00001-00052/`, `BEEZ_SCHEMA_BASELINE` selects the
+  baseline, unset keeps the legacy chain) proven equal to the chain minus the
+  dropped set. Test hardening for the remote server: scratch-DB budgets,
+  `DROP DATABASE … WITH (FORCE)`, `-timeout 45m` in CI, `*.go`/`*.sql` pinned
+  to LF.
+- **Wave 3c (in progress):** the Phase B reader/importer/gate transform (the
+  baseline round trip now passes end to end) and the open items below.
+
 **Open items carried into wave 3b/3c** (found by the wave-3a workers):
 
 1. `routes_harvest_sessions.go:735` — the harvest-entry soft-delete guard is
