@@ -269,8 +269,8 @@ func loadHiveLockouts(ctx context.Context, q queryRower, hiveIDs []uuid.UUID, as
 // lotLockoutAsOf walks a lot back to the hives its honey came from and reports
 // the worst withdrawal window covering them.
 //
-// deleted_at IS NULL below is what makes reconcileLotsForHarvestDelete refuse
-// to soft-delete a harvest behind a bottled lot: a deleted harvest drops out of
+// deleted_at IS NULL below is what makes production.RebaseDerivedLotCeilings
+// refuse to soft-delete a harvest behind a bottled lot: a deleted harvest drops out of
 // this walk, and with it the treatment that justified or blocked the jars
 // already on the shelf. The refusal, not this filter, is what keeps the
 // provenance of bottled honey reconstructable.
