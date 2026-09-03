@@ -977,6 +977,27 @@ Phase A blocker**:
    **Phase A blocker**. The pre-Phase-A snapshot export via `--legacy-source`
    worked (65 domains at migration 48).
 
+10. **Open (found on production 2026-09-03 20:10Z, four hours after Phase
+    B).** Five readers still named the dropped `stock_locations`:
+    `routes_stock_locations.go` (list/detail/`stockRequireLive`),
+    `honey_ledger.go` `stockHomeLocationID`, `app/production/catalog.go`,
+    `app/sales/commands.go` (settlement, `resolveSaleLocation`) and
+    `app/sales/workbench.go` — so the stock-locations screens, a
+    location-scoped sale, settlement and the sales workbench 500 on the
+    baseline. Root cause of the miss: open item 3's proof
+    (`TestEquipmentEndpointsServeABaselineDatabase`) covered equipment only,
+    and the wave-3c audit's "must move before Phase B" list for
+    `stock_locations` was closed on the write side, not the read side. Also
+    lost at the reset: the consignee attributes `slug`, `customer_id`,
+    `address`, `notes`, `deleted_at` (not carried by 00050; production held
+    one consignee with a `notes` value, kept aside for carry-over). Fix in
+    flight (run `20260903-baseline-readers-bz01`): readers onto
+    `inventory_locations` consignee rows, twin migration re-adding the
+    attributes, `inventory_reservations` resolving a sale's location by
+    either id, a repo-wide guard test that fails on any production SQL naming
+    a `db.BaselineDroppedTables()`/`Views()` member outside an annotated
+    legacy-only branch, and baseline-profile tests for the affected routes.
+
 ### Phase A rehearsal on a prod copy — PASSED 2026-09-03 (post wave 3e)
 
 Phase A code is complete and Phase B is built and rehearsed against the seeded
