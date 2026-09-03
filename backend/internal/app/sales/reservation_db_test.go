@@ -10,6 +10,7 @@ import (
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -322,7 +323,9 @@ func newReservationFixture(
 		t.Fatal(err)
 	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	if err := goose.Up(sqlDB, "migrations"); err != nil {
+	// The legacy chain, explicitly: this fixture seeds stock_locations, which
+	// the Phase B baseline drops.
+	if err := goose.Up(sqlDB, db.LegacyChainDir); err != nil {
 		sqlDB.Close()
 		pool.Close()
 		admin.Close()

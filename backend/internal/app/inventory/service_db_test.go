@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -430,7 +431,9 @@ func newLedgerFixture(ctx context.Context, t *testing.T, name string) (ledgerFix
 		t.Fatal(err)
 	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	if err := goose.Up(sqlDB, "migrations"); err != nil {
+	// The legacy chain, explicitly, so this suite never drifts onto the Phase B
+	// baseline by accident.
+	if err := goose.Up(sqlDB, db.LegacyChainDir); err != nil {
 		sqlDB.Close()
 		pool.Close()
 		admin.Close()
