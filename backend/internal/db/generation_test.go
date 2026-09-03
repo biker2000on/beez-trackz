@@ -216,9 +216,12 @@ func TestLegacyDatabaseIsRefusedExceptAsAReadOnlySource(t *testing.T) {
 	defer cleanup()
 	url := replaceDatabase(adminURL, name)
 
-	// Everything up to but not including the stamp migration: no
+	// Everything up to but not including the stamp migration (00051): no
 	// schema_generation table at all, which is the definition of 'legacy'.
-	if err := migrateTo(scratch, ExpectedMaxMigration()-1); err != nil {
+	// Named rather than derived from the chain head so later migrations
+	// (00052 onward) cannot silently move the fixture past the stamp.
+	const stampMigration int64 = 51
+	if err := migrateTo(scratch, stampMigration-1); err != nil {
 		t.Fatalf("migrate to the pre-stamp schema: %v", err)
 	}
 	var stamped *string
