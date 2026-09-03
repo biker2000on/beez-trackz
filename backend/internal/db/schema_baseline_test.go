@@ -304,15 +304,18 @@ func mentionsDropped(row string) bool {
 // The baseline stamps its own generation and sits at goose version 1. Both
 // halves matter: the stamp is what stops a Phase A database from being served
 // by a baseline binary that would otherwise see "version 1, already applied".
-func TestBaselineDatabaseIsStampedAndAtVersionOne(t *testing.T) {
+func TestBaselineDatabaseIsStampedAndAtBaselineHead(t *testing.T) {
 	t.Setenv(BaselineEnvVar, "1")
 	ctx := guardContext(t)
 
 	if ActiveProfile() != ProfileBaseline {
 		t.Fatalf("ActiveProfile() = %s, want %s", ActiveProfile(), ProfileBaseline)
 	}
-	if got := ExpectedMaxMigration(); got != 1 {
-		t.Fatalf("ExpectedMaxMigration() under the baseline = %d, want 1", got)
+	// The baseline directory is 00001_baseline.sql plus every migration added
+	// after the Phase B reset (00002_domain_events.sql, ...), so the head is
+	// derived from the embedded FS rather than pinned.
+	if got, want := ExpectedMaxMigration(), maxEmbeddedMigrationFor(ProfileBaseline); got != want || got < 1 {
+		t.Fatalf("ExpectedMaxMigration() under the baseline = %d, want the baseline FS head %d", got, want)
 	}
 
 	adminURL := requireGuardDatabase(t)
@@ -339,8 +342,8 @@ func TestBaselineDatabaseIsStampedAndAtVersionOne(t *testing.T) {
 		`SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied), 0) FROM goose_db_version`).Scan(&gooseMax); err != nil {
 		t.Fatalf("read goose head: %v", err)
 	}
-	if gooseMax != 1 {
-		t.Fatalf("goose head = %d, want 1", gooseMax)
+	if want := maxEmbeddedMigrationFor(ProfileBaseline); gooseMax != want {
+		t.Fatalf("goose head = %d, want the baseline FS head %d", gooseMax, want)
 	}
 
 	worker, err := ConnectWithoutMigrations(ctx, url)
@@ -406,8 +409,8 @@ func TestDefaultProfileIsTheLegacyChain(t *testing.T) {
 		t.Fatalf("ExpectedMaxMigration() = %d, want the legacy chain head %d",
 			got, maxEmbeddedMigrationFor(ProfileLegacyChain))
 	}
-	if got := maxEmbeddedMigrationFor(ProfileBaseline); got != 1 {
-		t.Fatalf("the baseline FS holds goose head %d, want exactly 1", got)
+	if got := maxEmbeddedMigrationFor(ProfileBaseline); got < 1 {
+		t.Fatalf("the baseline FS holds goose head %d, want 00001_baseline.sql plus post-reset migrations", got)
 	}
 	for _, value := range []string{"", "0", "false", "no", "off", "maybe"} {
 		t.Setenv(BaselineEnvVar, value)
@@ -424,19 +427,36 @@ func TestDefaultProfileIsTheLegacyChain(t *testing.T) {
 	}
 }
 
-// A guard rail for the file itself: the baseline directory holds exactly one
-// migration, and the legacy directory holds the chain it replaces. If someone
-// adds 00054 to the legacy chain after the baseline is generated, the baseline
-// is stale and TestBaselineMatchesTheLegacyChain will say so — but this names
-// the layout mistake directly.
+// A guard rail for the file itself: the baseline directory starts with the
+// generated 00001_baseline.sql (the legacy chain through 00054 squashed at
+// the Phase B reset, 2026-09-03) followed by every migration added since —
+// each of which must also exist on the legacy chain with identical SQL so
+// TestBaselineMatchesTheLegacyChain keeps proving the two chains agree. The
+// legacy directory holds the chain it replaces. Until runbook 7.5 step 9
+// retires the legacy chain, a post-reset migration lands in BOTH directories.
 func TestEmbeddedLayout(t *testing.T) {
 	baseline := catalogNames(t, ProfileBaseline)
-	if len(baseline) != 1 || baseline[0] != "00001_baseline.sql" {
-		t.Fatalf("baseline directory holds %v, want exactly [00001_baseline.sql]", baseline)
+	if len(baseline) < 1 || baseline[0] != "00001_baseline.sql" {
+		t.Fatalf("baseline directory holds %v, want 00001_baseline.sql first", baseline)
 	}
 	legacy := catalogNames(t, ProfileLegacyChain)
 	if len(legacy) < 54 {
 		t.Fatalf("legacy chain holds %d migrations, want the full 00001-00054", len(legacy))
+	}
+	// Every post-reset baseline migration (00002...) has a legacy twin with
+	// the same suffix, e.g. 00002_domain_events.sql <-> 00055_domain_events.sql.
+	for _, name := range baseline[1:] {
+		suffix := name[len("00002"):]
+		found := false
+		for _, twin := range legacy {
+			if len(twin) > len("00055") && twin[len("00055"):] == suffix {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("baseline migration %s has no legacy-chain twin (…%s); post-reset migrations land in both directories", name, suffix)
+		}
 	}
 	if legacy[0] != "00001_init.sql" {
 		t.Fatalf("legacy chain starts at %s, want 00001_init.sql", legacy[0])
