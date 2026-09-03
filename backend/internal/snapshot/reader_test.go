@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 )
 
 func TestOpenArtifactRejectsCorruptHash(t *testing.T) {
@@ -59,6 +61,29 @@ func TestOpenArtifactRejectsUnsupportedFormatVersion(t *testing.T) {
 	writeJSON(t, filepath.Join(root, "manifest.json"), manifest)
 	_, err := OpenArtifact(root)
 	if err == nil || !strings.Contains(err.Error(), "unsupported formatVersion") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestOpenArtifactRecordsDomainsDroppedByBaseline(t *testing.T) {
+	root, manifest := readerFixture(t, nil)
+	omitFixtureDomains(t, root, manifest, db.BaselineDroppedTables())
+
+	artifact, err := OpenArtifact(root)
+	if err != nil {
+		t.Fatalf("open baseline artifact: %v", err)
+	}
+	if strings.Join(artifact.DroppedDomains, ",") != strings.Join(db.BaselineDroppedTables(), ",") {
+		t.Fatalf("dropped domains = %v, want %v", artifact.DroppedDomains, db.BaselineDroppedTables())
+	}
+}
+
+func TestOpenArtifactStillRejectsUndeclaredMissingDomain(t *testing.T) {
+	root, manifest := readerFixture(t, nil)
+	omitFixtureDomains(t, root, manifest, []string{"hives"})
+
+	_, err := OpenArtifact(root)
+	if err == nil || !strings.Contains(err.Error(), `required domain "hives" is absent`) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -164,6 +189,47 @@ func updateFixtureFile(t *testing.T, root string, manifest *Manifest, domain str
 			manifest.Files[i].SHA256 = SHA256Hex(content)
 		}
 	}
+	writeJSON(t, filepath.Join(root, "manifest.json"), manifest)
+}
+
+func omitFixtureDomains(t *testing.T, root string, manifest *Manifest, domains []string) {
+	t.Helper()
+	omit := make(map[string]bool, len(domains))
+	for _, domain := range domains {
+		omit[domain] = true
+	}
+	files := manifest.Files[:0]
+	for _, file := range manifest.Files {
+		if !omit[file.Domain] {
+			files = append(files, file)
+		}
+	}
+	manifest.Files = files
+
+	verificationBytes, err := os.ReadFile(filepath.Join(root, manifest.Verification.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var verification Verification
+	if err := decodeOne(verificationBytes, &verification); err != nil {
+		t.Fatal(err)
+	}
+	for domain := range omit {
+		delete(verification.RecordCounts, domain)
+	}
+	digests := verification.RecordDigests[:0]
+	for _, digest := range verification.RecordDigests {
+		if !omit[digest.Domain] {
+			digests = append(digests, digest)
+		}
+	}
+	verification.RecordDigests = digests
+	verificationBytes = canonicalDocument(t, verification)
+	if err := os.WriteFile(filepath.Join(root, manifest.Verification.Path), verificationBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Verification.Bytes = int64(len(verificationBytes))
+	manifest.Verification.SHA256 = SHA256Hex(verificationBytes)
 	writeJSON(t, filepath.Join(root, "manifest.json"), manifest)
 }
 

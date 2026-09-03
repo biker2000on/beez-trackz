@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 )
 
 // Artifact is a completely verified snapshot. OpenArtifact does not return a
@@ -20,6 +22,10 @@ type Artifact struct {
 	Verification Verification
 	Media        MediaManifest
 	Records      map[string][]RecordEnvelope
+	// DroppedDomains names required format-v1 domains that the Phase B
+	// baseline intentionally omits. An undeclared missing domain is still a
+	// reader error.
+	DroppedDomains []string
 }
 
 // OpenArtifact reads and independently verifies a format-v1 snapshot.
@@ -66,6 +72,10 @@ func OpenArtifact(directory string) (*Artifact, error) {
 	}
 	for _, domain := range RegisteredDomains() {
 		if !seenDomains[domain.Name] {
+			if db.BaselineDrops(domain.Name) {
+				artifact.DroppedDomains = append(artifact.DroppedDomains, domain.Name)
+				continue
+			}
 			return nil, fmt.Errorf("snapshot reader: required domain %q is absent", domain.Name)
 		}
 	}

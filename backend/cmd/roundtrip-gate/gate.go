@@ -34,7 +34,7 @@ type options struct {
 // emptyProbes are tables no goose seed writes. "Empty" after migration means
 // these are zero — stock_locations and treatment_products legitimately carry
 // seed rows at that point (design section 5.6).
-var emptyProbes = []string{"apiaries", "hives", "sales", "honey_movements", "photos"}
+var emptyProbes = []string{"apiaries", "hives", "sales", "photos"}
 
 type gate struct {
 	options  options
@@ -93,10 +93,14 @@ func run(ctx context.Context, opts options) (*gateReport, error) {
 	started := time.Now().UTC()
 	sourceArtifact := filepath.Join(opts.Workdir, "artifact")
 	restoredArtifact := filepath.Join(opts.Workdir, "artifact.restored")
+	aggregateFamily := "legacy"
+	if db.ActiveProfile() == db.ProfileBaseline {
+		aggregateFamily = "newLedger"
+	}
 	g := &gate{options: opts, report: &gateReport{
 		Version:         1,
 		StartedAt:       started,
-		AggregateFamily: "legacy",
+		AggregateFamily: aggregateFamily,
 		SourceDatabase:  redactURL(opts.SourceURL),
 		GateDatabase:    opts.GateDatabase,
 		Workdir:         opts.Workdir,
@@ -209,6 +213,9 @@ func run(ctx context.Context, opts options) (*gateReport, error) {
 	}
 	defer targetPool.Close()
 	for _, table := range emptyProbes {
+		if db.BaselineDrops(table) && db.ActiveProfile() == db.ProfileBaseline {
+			continue
+		}
 		count, err := countRows(ctx, targetPool, table)
 		if err != nil {
 			return nil, fmt.Errorf("probe %s: %w", table, err)
@@ -393,7 +400,7 @@ func run(ctx context.Context, opts options) (*gateReport, error) {
 	// --- step 9: compare --------------------------------------------------
 	g.begin(9, "compare the source artifact with the re-export")
 	g.record(compareArtifacts(source, restoredLoaded, compareOptions{SkipMedia: opts.SkipMedia})...)
-	g.note("compared %d domains against the legacy aggregate family", len(source.Records))
+	g.note("compared %d domains against the %s aggregate family", len(source.Records), aggregateFamily)
 	g.end()
 
 	return g.report, nil

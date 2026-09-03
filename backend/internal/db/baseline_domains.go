@@ -1,6 +1,13 @@
 package db
 
-import "sort"
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strconv"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
 
 // The Phase B baseline drops ten tables that a Phase A database still carries
 // (frozen and read-only). A snapshot taken from a Phase A database therefore
@@ -82,3 +89,57 @@ func BaselineDroppedViews() []string {
 // database asks this: true means "declared", false means "unexplained", which
 // is the difference between a passing and a failing round trip.
 func BaselineDrops(name string) bool { return baselineDroppedSet[name] }
+
+// ConnectPhaseASource opens the previous ledger-v1 profile read only while a
+// baseline-profile process rehearses Phase B. It is intentionally narrower
+// than the general legacy-source exception: only the exact Phase A generation
+// and migration head are accepted, and the pool is forced read only before
+// either is inspected.
+func ConnectPhaseASource(ctx context.Context, databaseURL string, runtimeParams map[string]string) (*pgxpool.Pool, error) {
+	if ActiveProfile() != ProfileBaseline {
+		return nil, fmt.Errorf("Phase A source connection requires the %s profile", ProfileBaseline)
+	}
+	pool, err := openPoolWithOptions(ctx, databaseURL, ConnectOptions{
+		AllowLegacy: true, RuntimeParams: runtimeParams,
+	})
+	if err != nil {
+		return nil, err
+	}
+	closeWith := func(err error) (*pgxpool.Pool, error) {
+		pool.Close()
+		return nil, err
+	}
+	if err := requireReadOnly(ctx, pool); err != nil {
+		return closeWith(err)
+	}
+	actualGeneration, err := detectGeneration(ctx, pool)
+	if err != nil {
+		return closeWith(err)
+	}
+	expectedGeneration := GenerationFor(ProfileLegacyChain)
+	if actualGeneration != expectedGeneration {
+		return closeWith(&GenerationError{
+			Reason: ReasonGenerationMismatch, Actual: actualGeneration, Expected: expectedGeneration,
+			Hint: "the Phase B source must be a Phase A ledger-v1 database at the legacy-chain head",
+		})
+	}
+	var actualMigration int64
+	if err := pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied), 0)
+		FROM public.goose_db_version`).Scan(&actualMigration); err != nil {
+		return closeWith(&GenerationError{
+			Reason: ReasonMigrationMismatch, Actual: "unreadable goose_db_version",
+			Expected: strconv.FormatInt(maxEmbeddedMigrationFor(ProfileLegacyChain), 10),
+			Hint:     "the Phase B source must be recreated or migrated by the Phase A binary",
+		})
+	}
+	expectedMigration := maxEmbeddedMigrationFor(ProfileLegacyChain)
+	if actualMigration != expectedMigration {
+		return closeWith(&GenerationError{
+			Reason: ReasonMigrationMismatch, Actual: strconv.FormatInt(actualMigration, 10),
+			Expected: strconv.FormatInt(expectedMigration, 10),
+			Hint:     "the Phase B source must be at the Phase A migration head",
+		})
+	}
+	return pool, nil
+}

@@ -26,11 +26,13 @@ type options struct {
 }
 
 type reportRecord struct {
-	Domain  string          `json:"domain"`
-	ID      json.RawMessage `json:"id"`
-	Outcome app.Outcome     `json:"outcome"`
-	Kind    app.Kind        `json:"kind,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	Domain           string          `json:"domain"`
+	ID               json.RawMessage `json:"id"`
+	Outcome          app.Outcome     `json:"outcome"`
+	Transform        string          `json:"transform,omitempty"`
+	TransformVersion string          `json:"transformVersion,omitempty"`
+	Kind             app.Kind        `json:"kind,omitempty"`
+	Error            string          `json:"error,omitempty"`
 }
 
 type restoreReport struct {
@@ -62,6 +64,14 @@ func (r *restoreReport) add(domain string, id json.RawMessage, outcome app.Outco
 	}
 	r.Counts[outcome]++
 	r.Records = append(r.Records, item)
+}
+
+func (r *restoreReport) addBaselineDrop(domain string) {
+	r.Counts[app.OutcomeSkipped]++
+	r.Records = append(r.Records, reportRecord{
+		Domain: domain, Outcome: app.OutcomeSkipped,
+		Transform: db.BaselineTransform, TransformVersion: db.BaselineTransformVersion,
+	})
 }
 
 func main() { os.Exit(run(os.Args[1:])) }
@@ -217,15 +227,23 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 			// DryRun rolls this transaction back. Performing the same seed
 			// deletions is necessary for the validation pass to see the same
 			// empty logical target as the real restore.
-			if err := app.SeededRowsYieldToSnapshot(ctx, uow); err != nil {
+			if err := seededRowsYieldToSnapshot(ctx, uow); err != nil {
 				return err
 			}
+		}
+		presentTables := make(map[string]bool, len(snapshot.Domains))
+		for _, domain := range snapshot.RegisteredDomains() {
+			present, err := targetTablePresent(ctx, uow, domain.Table)
+			if err != nil {
+				return err
+			}
+			presentTables[domain.Table] = present
 		}
 		if !opts.dryRun {
 			// Ledger replay updates a newly restored materialized stock row.
 			// Suppress only its audit trigger on that first population; an
 			// idempotent second import performs no DDL and no record writes.
-			if len(artifact.Records["equipment_stock"]) > 0 {
+			if presentTables["equipment_stock"] && len(artifact.Records["equipment_stock"]) > 0 {
 				var stockEmpty bool
 				if err := uow.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM equipment_stock)`).Scan(&stockEmpty); err != nil {
 					return err
@@ -243,6 +261,10 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 		byName := make(map[string]snapshot.Domain, len(snapshot.Domains))
 		for _, domain := range snapshot.RegisteredDomains() {
 			byName[domain.Name] = domain
+			if !presentTables[domain.Table] && db.BaselineDrops(domain.Name) {
+				report.addBaselineDrop(domain.Name)
+				continue
+			}
 			repo, err := app.NewPortableRepository(ctx, uow, domain.Name, domain.Table, domain.ExcludedColumns, domain.RenameColumns)
 			if err != nil {
 				return err
@@ -252,6 +274,9 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 		var recordErrors []error
 		for _, domainName := range domainOrder(artifact) {
 			domain := byName[domainName]
+			if repositories[domainName] == nil {
+				continue
+			}
 			records := recordOrder(domainName, artifact.Records[domainName], artifact.Verification.ReferenceChecks)
 			for _, envelope := range records {
 				outcome := app.OutcomeFailed
@@ -333,6 +358,13 @@ func databaseNonempty(ctx context.Context, uow *app.UnitOfWork) (bool, error) {
 		"terramycin", "tylan", "lincomix", "fumagilin-b", "thymovar", "varroxsan", "bayvarol", "para-moth", "certan",
 	}
 	for _, domain := range snapshot.RegisteredDomains() {
+		present, err := targetTablePresent(ctx, uow, domain.Table)
+		if err != nil {
+			return false, err
+		}
+		if !present && db.BaselineDrops(domain.Name) {
+			continue
+		}
 		table := quoteIdent(domain.Table)
 		predicate := "TRUE"
 		switch domain.Name {
@@ -363,6 +395,37 @@ func databaseNonempty(ctx context.Context, uow *app.UnitOfWork) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func targetTablePresent(ctx context.Context, uow *app.UnitOfWork, table string) (bool, error) {
+	var present bool
+	if err := uow.QueryRow(ctx, `SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&present); err != nil {
+		return false, err
+	}
+	return present, nil
+}
+
+func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork) error {
+	stockLocationsPresent, err := targetTablePresent(ctx, uow, "stock_locations")
+	if err != nil {
+		return err
+	}
+	if stockLocationsPresent {
+		return app.SeededRowsYieldToSnapshot(ctx, uow)
+	}
+	if !db.BaselineDrops("stock_locations") {
+		return fmt.Errorf("restore seeds: stock_locations is absent from an undeclared target schema")
+	}
+	for _, statement := range []string{
+		`DELETE FROM treatment_products`,
+		`DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`,
+		`DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`,
+	} {
+		if _, err := uow.Exec(ctx, statement); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func quoteIdent(value string) string { return `"` + strings.ReplaceAll(value, `"`, `""`) + `"` }

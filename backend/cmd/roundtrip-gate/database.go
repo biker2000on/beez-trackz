@@ -114,6 +114,9 @@ func openUTCPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error)
 // connection (design review OV3). The disposable target never takes this
 // path — see openUTCPool.
 func openSourcePool(ctx context.Context, databaseURL string, legacySource bool) (*pgxpool.Pool, error) {
+	if db.ActiveProfile() == db.ProfileBaseline && !legacySource {
+		return db.ConnectPhaseASource(ctx, databaseURL, utcParams)
+	}
 	return db.ConnectWithOptions(ctx, databaseURL, db.ConnectOptions{
 		AllowLegacy:   legacySource,
 		RuntimeParams: utcParams,

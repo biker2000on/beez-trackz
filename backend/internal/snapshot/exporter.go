@@ -501,6 +501,17 @@ func semanticReferenceChecks(ctx context.Context, tx pgx.Tx) ([]ReferenceCheck, 
 	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
 	out := make([]ReferenceCheck, 0, len(items))
 	for _, item := range items {
+		fromPresent, err := tablePresent(ctx, tx, item.from)
+		if err != nil {
+			return nil, fmt.Errorf("semantic reference %s source: %w", item.name, err)
+		}
+		toPresent, err := tablePresent(ctx, tx, item.to)
+		if err != nil {
+			return nil, fmt.Errorf("semantic reference %s target: %w", item.name, err)
+		}
+		if !fromPresent || !toPresent {
+			continue
+		}
 		predicate := item.predicate
 		if predicate == "" {
 			predicate = "TRUE"
@@ -513,6 +524,12 @@ func semanticReferenceChecks(ctx context.Context, tx pgx.Tx) ([]ReferenceCheck, 
 		out = append(out, ReferenceCheck{Name: item.name, FromDomain: item.from, FromFields: []string{item.field}, ToDomain: item.to, ToFields: []string{item.toField}, Required: item.required, PopulatedCount: populated, ResolvedCount: resolved, DanglingCount: populated - resolved})
 	}
 	return out, nil
+}
+
+func tablePresent(ctx context.Context, tx pgx.Tx, table string) (bool, error) {
+	var present bool
+	err := tx.QueryRow(ctx, `SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&present)
+	return present, err
 }
 
 func quoteLiteral(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }

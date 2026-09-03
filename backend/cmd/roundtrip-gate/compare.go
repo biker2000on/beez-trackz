@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
 )
 
@@ -59,6 +60,11 @@ func compareManifests(source, restored *artifact) []finding {
 			findings = append(findings, explained(stepCompare, "schema-migration-ahead",
 				"source schema migration %d, disposable target %d (importer migrates to head; record digests prove equivalence)",
 				source.Manifest.SchemaMigration, restored.Manifest.SchemaMigration))
+		} else if db.ActiveProfile() == db.ProfileBaseline {
+			findings = append(findings, explained(stepCompare, "schema-migration-baseline",
+				"source schema migration %d, disposable target %d under the %s profile (%s)",
+				source.Manifest.SchemaMigration, restored.Manifest.SchemaMigration,
+				db.ProfileBaseline, db.BaselineGeneration))
 		} else {
 			findings = append(findings, fail(stepCompare, "schema-migration-drift",
 				"source schema migration %d, disposable target %d — the rehearsal restores into the same chain",
@@ -100,6 +106,11 @@ func compareRecords(source, restored *artifact) []finding {
 			continue
 		}
 		if !inRestored {
+			if db.ActiveProfile() == db.ProfileBaseline && db.BaselineDrops(domain) {
+				findings = append(findings, explained(stepCompare, db.BaselineTransform,
+					"domain %s is absent from the re-export under %s", domain, db.BaselineTransformVersion))
+				continue
+			}
 			findings = append(findings, fail(stepCompare, "missing-domain",
 				"the re-export is missing domain %s", domain))
 			continue
@@ -183,6 +194,13 @@ func compareReferences(source, restored *artifact) []finding {
 		want := sourceChecks[name]
 		got, present := restoredChecks[name]
 		if !present {
+			if db.ActiveProfile() == db.ProfileBaseline &&
+				(db.BaselineDrops(want.FromDomain) || db.BaselineDrops(want.ToDomain)) {
+				findings = append(findings, explained(stepCompare, "reference-"+db.BaselineTransform,
+					"reference check %s is absent because baseline transform %s drops %s or %s",
+					name, db.BaselineTransformVersion, want.FromDomain, want.ToDomain))
+				continue
+			}
 			findings = append(findings, fail(stepCompare, "reference-check-missing",
 				"the re-export does not carry reference check %s", name))
 			continue
@@ -294,7 +312,13 @@ func indexMedia(objects []snapshot.MediaObject) map[string]snapshot.MediaObject 
 // value here would mean somebody filled it in on one side only.
 func compareAggregates(source, restored *artifact) []finding {
 	var findings []finding
-	for _, family := range []string{"legacy", "newLedger"} {
+	families := []string{"newLedger"}
+	if db.ActiveProfile() != db.ProfileBaseline {
+		if _, sourceHasLegacy := source.Verification.AggregateFamilies["legacy"]; sourceHasLegacy {
+			families = append([]string{"legacy"}, families...)
+		}
+	}
+	for _, family := range families {
 		want, hasWant := source.Verification.AggregateFamilies[family]
 		got, hasGot := restored.Verification.AggregateFamilies[family]
 		if !hasWant || !hasGot {

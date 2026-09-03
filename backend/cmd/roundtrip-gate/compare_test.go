@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
 )
 
@@ -236,6 +237,43 @@ func TestComparatorRejectsCanonicalizationDrift(t *testing.T) {
 	restoredLoaded.Manifest.SchemaMigration = snapshot.FormatVersion
 	if !hasCode(compareManifests(sourceLoaded, restoredLoaded), "schema-migration-drift") {
 		t.Fatal("a different migration ceiling compared equal")
+	}
+}
+
+func TestBaselineComparatorExplainsLowerMigrationAndDroppedDomain(t *testing.T) {
+	t.Setenv(db.BaselineEnvVar, "1")
+	source, _ := loadArtifact(baselineFixture().write(t, t.TempDir()))
+	restored, _ := loadArtifact(baselineFixture().write(t, t.TempDir()))
+	source.Manifest.SchemaMigration = 52
+	restored.Manifest.SchemaMigration = 1
+	if findings := compareManifests(source, restored); detailFor(findings, "schema-migration-baseline") == "" {
+		t.Fatalf("lower baseline migration was not explained: %v", findings)
+	}
+
+	source.Records["honey_movements"] = []artifactRecord{}
+	source.ByID["honey_movements"] = map[string]artifactRecord{}
+	findings := compareRecords(source, restored)
+	if detailFor(findings, db.BaselineTransform) == "" || !contains(detailFor(findings, db.BaselineTransform), "honey_movements") {
+		t.Fatalf("dropped domain was not explained by name: %v", findings)
+	}
+
+	source.Verification.ReferenceChecks = []snapshot.ReferenceCheck{{
+		Name: "honey_movements_created_by_fkey", FromDomain: "honey_movements", ToDomain: "app_users",
+	}}
+	restored.Verification.ReferenceChecks = nil
+	findings = compareReferences(source, restored)
+	if detailFor(findings, "reference-"+db.BaselineTransform) == "" {
+		t.Fatalf("reference on dropped domain was not explained: %v", findings)
+	}
+}
+
+func TestCompareAggregatesAcceptsAbsentOptionalLegacyFamily(t *testing.T) {
+	source, _ := loadArtifact(baselineFixture().write(t, t.TempDir()))
+	restored, _ := loadArtifact(baselineFixture().write(t, t.TempDir()))
+	delete(source.Verification.AggregateFamilies, "legacy")
+	delete(restored.Verification.AggregateFamilies, "legacy")
+	if got := failures(compareAggregates(source, restored)); len(got) != 0 {
+		t.Fatalf("optional legacy family failed comparison: %v", got)
 	}
 }
 
