@@ -30,12 +30,8 @@ func (s *Server) productionWorkbench(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid year")
 		return
 	}
-	scoped, err := s.withMemberships(r)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	view, err := production.Workbench(scoped.Context(), s.pool, appActor(scoped), year, time.Now().UTC(), offlineRoutes.supports)
+	// Memberships already ride on the principal (requireSession loads them once).
+	view, err := production.Workbench(r.Context(), s.pool, appActor(r), year, time.Now().UTC(), offlineRoutes.supports)
 	if err != nil {
 		writeCommandError(w, err)
 		return
