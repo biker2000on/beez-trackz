@@ -222,7 +222,12 @@ inventory_movements (
 CREATE INDEX inventory_movements_tuple_idx
   ON inventory_movements (item_id, location_id, lot_id, condition, container_hive_id);  -- review P1
 -- Deleting a hive is refused while any (item, lot, condition) with
--- container_hive_id = that hive has a nonzero balance (review OV4).
+-- container_hive_id = that hive has a nonzero balance (review OV4). The FK
+-- is ON DELETE SET NULL (wave 1 implementation): once the guard passes, the
+-- hive may be deleted and its historical movement rows keep everything
+-- except the container pointer. Today's equipment_deployments FK blocks
+-- deleting any hive that ever held gear; this is deliberately more
+-- permissive, and the guard is what protects live balances.
 -- BEFORE INSERT trigger inventory_movement_scale_guard: refuses a quantity whose
 -- fractional digits exceed inventory_items.quantity_scale (review Q2).
 ```
@@ -566,7 +571,9 @@ post-reset. The mapping is recorded in the restore report.
 `equipment_state_changes`, `stock_locations` (→ `inventory_locations`),
 `equipment_type_components` (→ BOMs), and the views `honey_lot_balances`,
 `honey_varietal_balances`, `equipment_stock_status`,
-`equipment_stock_reconciliation`.
+`equipment_stock_reconciliation`, and `equipment_loss_events` (a view over
+`equipment_state_changes` ∪ `equipment_stock_adjustments` that
+`/equipment/loss-report` reads — found by the wave-1 audit; T4 moves it).
 
 **Retained, with declared transforms** (review OV2/OV1 — "verbatim" was
 wrong for four tables; every change below is a named `formatVersion` 1
@@ -598,8 +605,13 @@ replacement projection in the same change — none is left to be discovered:
 | compliance packet, Honey Story lot facts | lot weight / balances | `inventory_lots` + balances; Honey Story never surfaces an inferred allocation as fact (review A3) |
 
 **GnuCash re-key (roadmap B2, deferred to here by design).** The
-`external_sync.entity_type` allowlist drops the nine dissolved types and
-gains `inventory_operation`; `entity_id` for a dissolved row is re-keyed
+`external_sync.entity_type` allowlist drops the **six** dissolved types —
+`honey_movement`, `stock_movement`, `equipment_stock`,
+`equipment_stock_adjustment`, `product_adjustment` (→ `inventory_operation`)
+and `stock_location` (→ `inventory_location`) — per the wave-1 audit
+(`docs/plans/2026-09-02-ledger-read-path-migration.md`; the Go list matches
+00041, so OV6's "wider than 00041" did not hold at `bd05aa2`); `entity_id`
+for a dissolved row is re-keyed
 through `inventory_operations.legacy_ref_*` by the translation, and
 `content_hash` is rebaselined from the new body composition before the
 pull-first reconciliation (`docs/restore-runbook.md` §5). Production
