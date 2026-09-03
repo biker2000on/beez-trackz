@@ -38,7 +38,22 @@ type Actor struct {
 	userID uuid.UUID
 	// label is what a report or a log line shows.
 	label string
+	// isAdmin is the END-USER admin flag, carried so a command can answer
+	// "may this actor do this?" itself. It is deliberately unrelated to
+	// MayWritePreservedAudit: admin is an authorization level that still
+	// may not forge audit history.
+	isAdmin bool
+	// memberships is apiary id -> "viewer" | "editor", loaded once per
+	// request at the edge. A command never queries it: authorization inputs
+	// travel with the actor, decisions are made from them.
+	memberships map[uuid.UUID]string
 }
+
+// Apiary membership roles, as stored in apiary_memberships.role.
+const (
+	RoleViewer = "viewer"
+	RoleEditor = "editor"
+)
 
 // UserActor is an ordinary signed-in principal.
 func UserActor(userID uuid.UUID, label string) Actor {
@@ -59,6 +74,53 @@ func SystemRestoreActor(fallbackUserID uuid.UUID) Actor {
 // SystemJobActor is a background worker.
 func SystemJobActor(name string) Actor {
 	return Actor{kind: ActorSystemJob, label: "system:job:" + name}
+}
+
+// WithAccess returns a copy of a user actor carrying its authorization
+// inputs (design section 5.3). It is a no-op for every other kind: a
+// background job and the restore actor never acquire end-user admin, and the
+// restore privilege is never reachable from a membership.
+//
+// The map is copied, so a caller that keeps a per-request cache cannot have
+// an actor mutated out from under it.
+func (a Actor) WithAccess(isAdmin bool, memberships map[uuid.UUID]string) Actor {
+	if a.kind != ActorUser {
+		return a
+	}
+	out := a
+	out.isAdmin = isAdmin
+	if len(memberships) > 0 {
+		out.memberships = make(map[uuid.UUID]string, len(memberships))
+		for apiaryID, role := range memberships {
+			out.memberships[apiaryID] = role
+		}
+	} else {
+		out.memberships = nil
+	}
+	return out
+}
+
+// MayAdminister is the end-user admin level the chi requireAdmin middleware
+// checks. It is NOT MayWritePreservedAudit and never implies it.
+func (a Actor) MayAdminister() bool { return a.kind == ActorUser && a.isAdmin }
+
+// ApiaryRole is this actor's role on one apiary, or "" for none. An admin
+// reads as editor everywhere, matching Server.apiaryRole.
+func (a Actor) ApiaryRole(apiaryID uuid.UUID) string {
+	if a.MayAdminister() {
+		return RoleEditor
+	}
+	return a.memberships[apiaryID]
+}
+
+// MayViewApiary reports read access to one apiary.
+func (a Actor) MayViewApiary(apiaryID uuid.UUID) bool {
+	return a.ApiaryRole(apiaryID) != ""
+}
+
+// MayEditApiary reports write access to one apiary.
+func (a Actor) MayEditApiary(apiaryID uuid.UUID) bool {
+	return a.ApiaryRole(apiaryID) == RoleEditor
 }
 
 func (a Actor) Kind() ActorKind { return a.kind }

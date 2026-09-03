@@ -960,7 +960,7 @@ paths, tests, acceptance. Waves 1 to 3 touch no routes; wave 5 is the single
 coordinated rewrite the roadmap requires. The field Today and Yard slice is
 first and does not depend on any Production or Sales work.
 
-### Wave 1 — WorkItem projection (backend), field slice only
+### Wave 1 — WorkItem projection (backend), field slice only — **landed**
 
 - **Scope.** A new `backend/internal/app/work` package: the `WorkItem` type,
   the four sources (recommendation, feeding, lockout, harvest_ready), id
@@ -974,6 +974,7 @@ first and does not depend on any Production or Sales work.
 - **Owned paths.** `backend/internal/app/work/**`,
   `backend/internal/app/actor.go`,
   `backend/internal/httpapi/routes_work.go`,
+  `backend/internal/httpapi/routes.go` (the mount line only),
   `backend/internal/httpapi/honey_ledger.go` (`appActor` only).
 - **Tests.** Unit: id stability across two reads of the same source; the
   `feeder_check` rule in both directions (feeding present so suppressed,
@@ -985,6 +986,85 @@ first and does not depend on any Production or Sales work.
   `/operations/yard-queue` for the fixture; every item carries a stable id;
   `asOf` and `freshness` are present; no work item advertises a queueable
   command the SW manifest would refuse.
+- **Landed** 2026-09-03 (polyagent run `20260903-item10-runA-bz01`). All four
+  acceptance criteria hold. Green: `go build ./...`, `go vet ./...`,
+  `gofmt -l` clean; the `internal/app/work` unit suite;
+  `TestWorkCommandOfflineMatchesRouteManifest`; and the DB tests
+  `TestWorkYardMatchesYardQueue`, `TestWorkYardIDsAreStableAcrossReads`,
+  `TestWorkFeederCheckRuleAgainstTheDatabase`, `TestWorkTodayEndpoint`,
+  `TestWorkYardRespectsMembership`.
+
+  **Deviations from the scope above, all deliberate:**
+
+  1. **`app/work` is pure; the facts are read at the edge.** The package
+     takes an `Inputs` struct of already-read facts and returns the
+     projection; `httpapi/routes_work.go` reads them. Doing the reads inside
+     `app/work` would have meant duplicating the lockout walk
+     (`lockout.go:216-267`, `pickLockout`, `lockoutMessage`) and the feeding
+     status evaluation (`routes_feedings_status.go:115-190`), and two copies
+     of the lockout rule is exactly the failure mode this item exists to
+     remove. Every *rule* named in the scope — ids, `feeder_check`,
+     `sortRank`, permission, offline, `asOf`/`freshness` — is in `app/work`
+     and unit testable without a database. The cost is that `routes_work.go`
+     restates two of the SQL reads `yard_queue.go` does (visible hives,
+     harvest-ready); they converge when `yard_queue.go` is deleted.
+
+  2. **`appActor` reads memberships from the request context.** §5.3 wants
+     them loaded once at the edge, but the edge is `middleware.go`, which
+     wave 1 does not own. `routes_work.go` loads them and stashes them under
+     an unexported context key; every other handler gets an actor with
+     `isAdmin` set (it is free from the principal) and no memberships, which
+     can only under-report access. **Wave 3 must move the load into the auth
+     middleware** and delete `workMembershipsKey` / `loadApiaryMemberships`
+     from `routes_work.go`.
+
+  3. **`Actor.WithAccess` is a no-op for non-user actors,** so a background
+     job or the restore actor cannot acquire end-user admin through it, and
+     `MayWritePreservedAudit` stays independent of `isAdmin`
+     (`TestWorkAdminIsNotAuditPrivilege`). `fromAPIToken` from the §5.3
+     sketch was **not** added: nothing in the field slice needs it and
+     `principal.FromAPIToken` still gates credential changes at the edge. It
+     belongs to wave 3 with the middleware move.
+
+  4. **`feeder_check` recommendations now have a title** — "Check the
+     feeder". `yardQueueRecTitle` has no case for the type because neither
+     assembler ever emitted one; under the §4.6 rule they can be, so they
+     need one. Part of the deliberate behaviour change; asserted by
+     `TestWorkFeederCheckEmittedWithoutFeedingItem` and, end to end, by
+     `TestWorkFeederCheckRuleAgainstTheDatabase`.
+
+  5. **The DB parity fixture compares only its own hives.** Both endpoints
+     read every yard the principal belongs to, and
+     `ai_recommendations_active_unique` permits exactly one undismissed
+     hive-less row per type per database — which `TestYardQueueEndpoint`
+     already uses. The hive-less catch-all yard is covered by the unit test
+     `TestWorkYardViewCatchAll` instead.
+
+  6. **Two commands beyond the obvious triage set.** `harvest.start_session`
+     (`POST /harvest-sessions`) is emitted on harvest-ready items precisely
+     because it is an offline POST exclusion: it is the field slice's only
+     `online_only` command, and without it the "no item advertises a
+     queueable command the SW would refuse" check would only ever see
+     queueable commands and prove nothing. `recommendation.restore` is
+     emitted for dismissed rows so `/today/recommendations` has a
+     triage-history action.
+
+  7. **Today's groups carry every returned status.** `counts.snoozed` counts
+     snoozed items among the items returned, and snoozed or dismissed items
+     appear in the two rank groups rather than in a third group, so
+     `/today/recommendations` (which asks for all three statuses) renders
+     triage history from the same two groups. §4.8 shows only the two
+     groups; this is how they behave when the status filter is widened.
+
+- **Follow-up found while implementing (not fixed here — outside the owned
+  paths).** `requireEntityParamRole("recommendation", …)` resolves the apiary
+  through `JOIN hives` (`middleware.go:407-408`), so **dismiss, snooze and
+  restore on a hive-less recommendation 404 for everyone, admins included**:
+  the join yields no rows and `entityApiaryID` returns `pgx.ErrNoRows` before
+  any role is checked. The projection reports those commands as `permitted`
+  for an admin because that is the authorization answer; the transport is
+  what is wrong. Fix belongs with wave 3's authorization move or the wave 5
+  route rewrite.
 
 ### Wave 2 — Today and Yard Queue (frontend field slice)
 

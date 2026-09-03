@@ -124,9 +124,22 @@ func actorID(r *http.Request) *uuid.UUID {
 // appActor is the application-layer identity for a command started by this
 // request. Handlers are transport: they authorize, then hand the command an
 // actor. No HTTP session can produce the restore actor.
+//
+// The actor now also carries its authorization INPUTS — the end-user admin
+// flag and the apiary memberships (design 2026-09-03 section 5.3) — so a
+// command can answer "may this actor do this?" instead of relying on the chi
+// middleware being the only enforcement. MayWritePreservedAudit stays
+// independent of admin.
+//
+// Memberships come from the request context and are loaded once at the edge;
+// a handler that has not loaded them gets an actor with none, which is the
+// safe direction (it can only under-report access). Wave 1 loads them in
+// routes_work.go; wave 3 moves the load into the auth middleware so every
+// handler gets a complete actor.
 func appActor(r *http.Request) app.Actor {
 	if user := principalFrom(r); user != nil && user.ID != uuid.Nil {
-		return app.UserActor(user.ID, user.DisplayName)
+		return app.UserActor(user.ID, user.DisplayName).
+			WithAccess(user.IsAdmin, apiaryMembershipsFrom(r))
 	}
 	return app.SystemJobActor("httpapi")
 }
