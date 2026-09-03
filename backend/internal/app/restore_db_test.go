@@ -371,6 +371,26 @@ func TestRestoreRefusesAnEndUserActor(t *testing.T) {
 	}
 }
 
+func TestLegacyRestoreRefusesAFrozenDatabase(t *testing.T) {
+	runner := testRunner(t)
+	err := runner.DryRun(context.Background(), restoreActor(), func(ctx context.Context, uow *UnitOfWork) error {
+		if _, err := uow.Exec(ctx, `
+			CREATE OR REPLACE FUNCTION inventory_legacy_freeze_guard()
+			RETURNS trigger LANGUAGE plpgsql AS $$
+			BEGIN RETURN NULL; END
+			$$;
+			CREATE TRIGGER inventory_legacy_freeze
+			BEFORE INSERT OR UPDATE OR DELETE ON equipment_stock
+			FOR EACH ROW EXECUTE FUNCTION inventory_legacy_freeze_guard()`); err != nil {
+			return err
+		}
+		return EnsureLegacyRestoreTargetIsWritable(ctx, uow)
+	})
+	if !IsKind(err, KindPrecondition) {
+		t.Fatalf("legacy restore into frozen database returned %v, want precondition", err)
+	}
+}
+
 // refusingRefRepo stands in for a repository whose record points at something
 // the artifact does not contain. It proves the driver resolves references
 // before writing, which is the difference between an actionable error and a

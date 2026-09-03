@@ -75,6 +75,28 @@ func (s *Service) Receive(ctx context.Context, uow *app.UnitOfWork, c Command) (
 	return s.inventory.Record(ctx, uow, op)
 }
 
+// OpeningBalance records legacy quantity that predates reconstructable
+// equipment history. It is intentionally separate from Receive: the operation
+// kind and details make the import-only residual visible to reconciliation.
+func (s *Service) OpeningBalance(ctx context.Context, uow *app.UnitOfWork, c Command) (inventory.Recorded, error) {
+	item, err := resolveCommandItem(ctx, uow, c)
+	if err != nil {
+		return inventory.Recorded{}, err
+	}
+	if c.Quantity <= 0 {
+		return inventory.Recorded{}, app.Invalid("open equipment balance", "quantity must be positive")
+	}
+	b := base(uow, c, item.TypeID, "equipment_type")
+	b.Reason = "none"
+	delete(b.Details, "legacy_reason")
+	b.Details["reason"] = "equipment-opening-residual"
+	op, err := build.OpeningBalance(build.SingleParams{Base: b, Line: movement(item.ItemID, HomeLocation, "serviceable", nil, c.Quantity)})
+	if err != nil {
+		return inventory.Recorded{}, app.Invalid("open equipment balance", "%v", err)
+	}
+	return s.inventory.Record(ctx, uow, op)
+}
+
 // Adjust records an explicit count correction for positive deltas and a
 // shrink for negative deltas. The selected condition is part of the tuple,
 // so disposing damaged/retired units never routes through serviceable stock.
@@ -209,30 +231,40 @@ func (s *Service) Assembly(ctx context.Context, uow *app.UnitOfWork, c AssemblyC
 	if err != nil {
 		return inventory.Recorded{}, err
 	}
-	rows, err := uow.Query(ctx, `SELECT ct.id,x.quantity FROM equipment_type_components x JOIN equipment_types ct ON ct.id=x.component_type_id WHERE x.parent_type_id=$1 ORDER BY ct.id`, c.TypeID)
+	rows, err := uow.Query(ctx, `SELECT ct.id,x.quantity,ct.unit_cost_cents FROM equipment_type_components x JOIN equipment_types ct ON ct.id=x.component_type_id WHERE x.parent_type_id=$1 ORDER BY ct.id`, c.TypeID)
 	if err != nil {
 		return inventory.Recorded{}, app.Internal(action, err)
 	}
-	defer rows.Close()
+	type componentRow struct {
+		typeID uuid.UUID
+		qty    int
+		cost   *int
+	}
+	var componentRows []componentRow
+	for rows.Next() {
+		var row componentRow
+		if err := rows.Scan(&row.typeID, &row.qty, &row.cost); err != nil {
+			rows.Close()
+			return inventory.Recorded{}, app.Internal(action, err)
+		}
+		componentRows = append(componentRows, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return inventory.Recorded{}, app.Internal(action, err)
+	}
 	type component struct {
 		item Item
 		qty  int
+		cost *int
 	}
-	var components []component
-	for rows.Next() {
-		var typeID uuid.UUID
-		var qty int
-		if err := rows.Scan(&typeID, &qty); err != nil {
-			return inventory.Recorded{}, app.Internal(action, err)
-		}
-		item, err := EnsureItem(ctx, uow, typeID, "")
+	components := make([]component, 0, len(componentRows))
+	for _, row := range componentRows {
+		item, err := EnsureItem(ctx, uow, row.typeID, "")
 		if err != nil {
 			return inventory.Recorded{}, err
 		}
-		components = append(components, component{item, qty})
-	}
-	if err := rows.Err(); err != nil {
-		return inventory.Recorded{}, app.Internal(action, err)
+		components = append(components, component{item: item, qty: row.qty, cost: row.cost})
 	}
 	if len(components) == 0 {
 		return inventory.Recorded{}, app.Precondition(action, "equipment type has no BOM")
@@ -255,9 +287,33 @@ func (s *Service) Assembly(ctx context.Context, uow *app.UnitOfWork, c AssemblyC
 		}
 	}
 	cmd := Command{OccurredAt: c.OccurredAt, IdempotencyKey: c.IdempotencyKey, Reason: "none", Notes: c.Notes, LegacyRefType: c.LegacyRefType, LegacyRefID: c.LegacyRefID, Provenance: c.Provenance}
-	op, err := build.Assembly(build.TransformParams{Base: base(uow, cmd, c.TypeID, "equipment_type"), Inputs: inputs, Outputs: outputs})
+	b := base(uow, cmd, c.TypeID, "equipment_type")
+	var assembledCost *int
+	if !c.Disassemble {
+		total := 0
+		for _, line := range components {
+			if line.cost == nil {
+				total = 0
+				assembledCost = nil
+				break
+			}
+			total += *line.cost * line.qty
+			assembledCost = &total
+		}
+		if assembledCost != nil {
+			b.Details["assembled_unit_cost_cents"] = *assembledCost
+		}
+	}
+	op, err := build.Assembly(build.TransformParams{Base: b, Inputs: inputs, Outputs: outputs})
 	if err != nil {
 		return inventory.Recorded{}, app.Invalid(action, "%v", err)
+	}
+	// Catalog rows are domain state and must be written before Record takes
+	// inventory tuple locks (the global lock order documented in inventory).
+	if assembledCost != nil {
+		if _, err := uow.Exec(ctx, `UPDATE equipment_types SET unit_cost_cents=$2 WHERE id=$1`, c.TypeID, *assembledCost); err != nil {
+			return inventory.Recorded{}, app.Internal(action, err)
+		}
 	}
 	return s.inventory.Record(ctx, uow, op)
 }

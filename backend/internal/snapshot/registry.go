@@ -63,7 +63,7 @@ var LedgerDomains = []Domain{
 	domain("inventory_locations"), domain("inventory_lots"),
 	domain("inventory_operations"), domain("inventory_movements"),
 	domain("inventory_boms"), domain("inventory_bom_lines"),
-	domain("inventory_balance_checkpoints"), domain("schema_generation"),
+	domain("inventory_balance_checkpoints"),
 }
 
 var omittedDomains = []OmittedDomain{
@@ -74,6 +74,7 @@ var omittedDomains = []OmittedDomain{
 	{Domain: "payments", Reason: "No payments table exists; collected and invoiced money is preserved on sales and consignment_settlements."},
 	{Domain: "deletion_tombstones", Reason: "The sync engine stores only conflict projections; durable deletion tombstones do not exist."},
 	{Domain: "external_write_idempotency_keys", Reason: "Keys are derived at send time from externalID + contentHash and are not stored."},
+	{Domain: "schema_generation", Reason: "Schema generation is derived from the target migration chain; its applied_at timestamp is not portable domain data."},
 }
 
 func RegisteredDomains() []Domain {

@@ -36,10 +36,12 @@
 //
 // [Runner.DryRun] is the contract's no-write validation pass: the transaction
 // is rolled back even on success, and [UnitOfWork.DryRun] additionally tells
-// repositories to skip the write entirely, so "the dry run makes no writes"
-// holds without relying on the rollback alone. Anything that escapes the
-// transaction — object storage, outbound HTTP, notifications — must be
-// skipped by the caller when DryRun is set, because a rollback cannot undo it.
+// repositories to skip record inserts. Transactional target normalization
+// such as [SeededRowsYieldToSnapshot] still runs so validation sees the same
+// logical target as a real restore; the unconditional rollback removes it.
+// Anything that escapes the transaction — object storage, outbound HTTP,
+// notifications — must be skipped by the caller when DryRun is set, because a
+// rollback cannot undo it.
 //
 // # Errors
 //
@@ -111,6 +113,12 @@
 //     self-references) are a post-pass, equipment stock is inserted at zero
 //     and its adjustments replayed, and bottling runs precede their
 //     movements. A repository restores one record and says what happened.
+//
+//  11. Format-v1 legacy table replay targets an EMPTY, newly migrated
+//     database. It never restores legacy inventory domains into a Phase-A
+//     database carrying the inventory_legacy_freeze trigger: that database's
+//     immutable ledger is already authoritative. The importer checks this
+//     precondition before restoring any record.
 //
 // # What lives elsewhere
 //

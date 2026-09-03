@@ -412,20 +412,52 @@ func cloneObject(input map[string]any) map[string]any {
 	return out
 }
 
+// EnsureLegacyRestoreTargetIsWritable refuses the format-v1 table replay once
+// Phase A has frozen the legacy inventory tables. Portable legacy replay is
+// only valid against an empty, newly migrated target; a frozen database must
+// retain its ledger as the sole inventory authority.
+func EnsureLegacyRestoreTargetIsWritable(ctx context.Context, uow *UnitOfWork) error {
+	var frozen bool
+	if err := uow.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_trigger t
+			JOIN pg_class c ON c.oid = t.tgrelid
+			WHERE t.tgname = 'inventory_legacy_freeze'
+			  AND NOT t.tgisinternal
+			  AND c.relname = ANY($1)
+		)`, []string{
+		"honey_movements", "stock_movements", "product_adjustments", "equipment_stock",
+		"equipment_stock_adjustments", "equipment_deployments",
+		"equipment_deployment_returns", "equipment_state_changes",
+	}).Scan(&frozen); err != nil {
+		return classifyPg("check legacy restore target", err)
+	}
+	if frozen {
+		return Precondition("restore legacy inventory", "target database has inventory_legacy_freeze installed; restore legacy domains only into an empty, newly migrated database")
+	}
+	return nil
+}
+
 // SeededRowsYieldToSnapshot removes migration seed identities inside the
 // restore transaction. It must run before any snapshot row is inserted.
 func SeededRowsYieldToSnapshot(ctx context.Context, uow *UnitOfWork) error {
 	if err := uow.Actor().requirePreservedAudit("restore seeds"); err != nil {
 		return err
 	}
-	if uow.DryRun() {
-		return nil
+	statements := []struct {
+		op  string
+		sql string
+	}{
+		{"restore stock location seed", `DELETE FROM stock_locations WHERE slug='home'`},
+		{"restore treatment product seeds", `DELETE FROM treatment_products`},
+		{"restore inventory location seeds", `DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`},
+		{"restore inventory item seeds", `DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`},
 	}
-	if _, err := uow.Exec(ctx, `DELETE FROM stock_locations WHERE slug='home'`); err != nil {
-		return classifyPg("restore stock location seed", err)
-	}
-	if _, err := uow.Exec(ctx, `DELETE FROM treatment_products`); err != nil {
-		return classifyPg("restore treatment product seeds", err)
+	for _, statement := range statements {
+		if _, err := uow.Exec(ctx, statement.sql); err != nil {
+			return classifyPg(statement.op, err)
+		}
 	}
 	return nil
 }

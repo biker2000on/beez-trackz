@@ -35,6 +35,20 @@ func TestRegistryCoversFormatVersionOneDomains(t *testing.T) {
 	}
 }
 
+func TestSchemaGenerationIsDerivedRatherThanExported(t *testing.T) {
+	for _, domain := range RegisteredDomains() {
+		if domain.Name == "schema_generation" {
+			t.Fatal("schema_generation must not be exported: applied_at is target-derived")
+		}
+	}
+	for _, omitted := range OmittedDomains() {
+		if omitted.Domain == "schema_generation" {
+			return
+		}
+	}
+	t.Fatal("schema_generation omission is not documented in the registry")
+}
+
 func TestAggregateFamiliesAreDistinctAndVersioned(t *testing.T) {
 	legacy := legacySpecs("USD")
 	if len(legacy) < 15 {

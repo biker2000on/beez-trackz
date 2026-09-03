@@ -184,6 +184,9 @@ func translateEquipment(ctx context.Context, uow *app.UnitOfWork, report *Report
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if err := translateEquipmentOpeningResiduals(ctx, uow, service, report); err != nil {
+		return err
+	}
 	for _, r := range adjustments {
 		legacyType := "equipment_stock_adjustment"
 		cmd := equipment.Command{Reference: r.stock, Quantity: r.qty, OccurredAt: r.date, IdempotencyKey: legacyKey("equipment_stock_adjustments", r.id), Reason: r.reason, UnitCostCents: r.cost, LegacyRefType: &legacyType, LegacyRefID: &r.id, Provenance: "legacy-import"}
@@ -310,6 +313,56 @@ func translateEquipment(ctx context.Context, uow *app.UnitOfWork, report *Report
 		}
 		if _, err := service.Return(ctx, uow, opID, r.qty, cmd); err != nil {
 			return fmt.Errorf("translate equipment return %s: %w", r.id, err)
+		}
+		report.Operations++
+	}
+	return nil
+}
+
+func translateEquipmentOpeningResiduals(ctx context.Context, uow *app.UnitOfWork, service *equipment.Service, report *Report) error {
+	type residual struct {
+		stock      uuid.UUID
+		quantity   int
+		occurredAt time.Time
+	}
+	rows, err := uow.Query(ctx, `
+		SELECT es.id,
+		       es.total_owned-COALESCE(SUM(a.quantity),0)::int AS residual,
+		       es.created_at
+		FROM equipment_stock es
+		LEFT JOIN equipment_stock_adjustments a ON a.stock_id=es.id
+		GROUP BY es.id,es.total_owned,es.created_at
+		HAVING es.total_owned<>COALESCE(SUM(a.quantity),0)::int
+		ORDER BY es.id`)
+	if err != nil {
+		return app.Internal("translate equipment opening residual", err)
+	}
+	var residuals []residual
+	for rows.Next() {
+		var r residual
+		if err := rows.Scan(&r.stock, &r.quantity, &r.occurredAt); err != nil {
+			rows.Close()
+			return app.Internal("translate equipment opening residual", err)
+		}
+		residuals = append(residuals, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return app.Internal("translate equipment opening residual", err)
+	}
+	for _, r := range residuals {
+		if r.quantity < 0 {
+			return app.Precondition("translate equipment opening residual", "stock %s has negative opening residual %d", r.stock, r.quantity)
+		}
+	}
+	for _, r := range residuals {
+		legacyType := "equipment_stock"
+		if _, err := service.OpeningBalance(ctx, uow, equipment.Command{
+			Reference: r.stock, Quantity: r.quantity, OccurredAt: r.occurredAt,
+			IdempotencyKey: legacyKey("equipment_stock", r.stock) + ":opening-residual",
+			LegacyRefType:  &legacyType, LegacyRefID: &r.stock, Provenance: "legacy-import",
+		}); err != nil {
+			return fmt.Errorf("translate equipment opening residual %s: %w", r.stock, err)
 		}
 		report.Operations++
 	}

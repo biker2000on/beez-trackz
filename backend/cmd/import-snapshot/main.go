@@ -195,41 +195,33 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 	defer pool.Close()
 	runner := app.NewRunner(pool)
 	actor := app.SystemRestoreActor(uuid.Nil)
+	hasLegacyInventory := artifactHasLegacyInventory(artifact)
 	restoreFn := func(ctx context.Context, uow *app.UnitOfWork) error {
 		equipmentTriggerDisabled := false
 		if _, err := uow.Exec(ctx, `SET LOCAL TIME ZONE 'UTC'`); err != nil {
 			return err
 		}
-		if opts.dryRun {
-			if _, err := uow.Exec(ctx, `SET TRANSACTION READ ONLY`); err != nil {
+		if hasLegacyInventory {
+			if err := app.EnsureLegacyRestoreTargetIsWritable(ctx, uow); err != nil {
 				return err
 			}
-		} else {
-			nonempty, err := databaseNonempty(ctx, uow)
-			if err != nil {
+		}
+		nonempty, err := databaseNonempty(ctx, uow)
+		if err != nil {
+			return err
+		}
+		if !opts.dryRun && nonempty && policy == app.ConflictFail {
+			return app.Precondition("import snapshot", "target database is non-empty; choose -conflict-policy skip or overwrite")
+		}
+		if !nonempty {
+			// DryRun rolls this transaction back. Performing the same seed
+			// deletions is necessary for the validation pass to see the same
+			// empty logical target as the real restore.
+			if err := app.SeededRowsYieldToSnapshot(ctx, uow); err != nil {
 				return err
 			}
-			if nonempty && policy == app.ConflictFail {
-				return app.Precondition("import snapshot", "target database is non-empty; choose -conflict-policy skip or overwrite")
-			}
-			if !nonempty {
-				if err := app.SeededRowsYieldToSnapshot(ctx, uow); err != nil {
-					return err
-				}
-				// Ledger singleton rows carry migration timestamps. Let the
-				// snapshot supply those identities so a restore preserves exact
-				// content and re-export digests instead of conflicting with the
-				// target migration's later timestamps.
-				for _, statement := range []string{
-					`DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`,
-					`DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`,
-					`DELETE FROM schema_generation WHERE generation='ledger-v1'`,
-				} {
-					if _, err := uow.Exec(ctx, statement); err != nil {
-						return err
-					}
-				}
-			}
+		}
+		if !opts.dryRun {
 			// Ledger replay updates a newly restored materialized stock row.
 			// Suppress only its audit trigger on that first population; an
 			// idempotent second import performs no DDL and no record writes.
@@ -292,6 +284,19 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 		return runner.DryRun(ctx, actor, restoreFn)
 	}
 	return runner.Run(ctx, actor, restoreFn)
+}
+
+func artifactHasLegacyInventory(artifact *snapshot.Artifact) bool {
+	for _, domain := range []string{
+		"honey_movements", "stock_movements", "product_adjustments", "equipment_stock",
+		"equipment_stock_adjustments", "equipment_deployments",
+		"equipment_deployment_returns", "equipment_state_changes",
+	} {
+		if len(artifact.Records[domain]) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func parsePolicy(value string) (app.ConflictPolicy, error) {

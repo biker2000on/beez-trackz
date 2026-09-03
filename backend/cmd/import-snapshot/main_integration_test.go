@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
 	"github.com/google/uuid"
@@ -99,6 +100,55 @@ func TestExportImportReexportDigestEquality(t *testing.T) {
 	want, got := digestSet(exported.Verification.RecordDigests), digestSet(reexported.Verification.RecordDigests)
 	if strings.Join(want, "\n") != strings.Join(got, "\n") {
 		t.Fatalf("record digests differ\nsource-only/target-only comparison:\nsource=%s\ntarget=%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
+	}
+}
+
+func TestRestoreLegacySnapshotRefusesFrozenDatabase(t *testing.T) {
+	adminURL := os.Getenv("TEST_DATABASE_URL")
+	if adminURL == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	sourceURL, sourceCleanup := freshImportDatabase(ctx, t, adminURL, "beez_restore_legacy_src_"+suffix)
+	defer sourceCleanup()
+	targetURL, targetCleanup := freshImportDatabase(ctx, t, adminURL, "beez_restore_frozen_dst_"+suffix)
+	defer targetCleanup()
+
+	source, err := db.Connect(ctx, sourceURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var typeID uuid.UUID
+	if err := source.QueryRow(ctx, `INSERT INTO equipment_types(name,category) VALUES($1,'box') RETURNING id`, "Frozen restore "+suffix).Scan(&typeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Exec(ctx, `INSERT INTO equipment_stock(type_id,total_owned) VALUES($1,0)`, typeID); err != nil {
+		t.Fatal(err)
+	}
+	artifact := t.TempDir() + "-legacy"
+	if _, err := snapshot.Export(ctx, source, snapshot.ExportOptions{OutputDirectory: artifact, BusinessTimezone: "UTC", Currency: "USD"}); err != nil {
+		t.Fatal(err)
+	}
+	source.Close()
+
+	target, err := db.Connect(ctx, targetURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Exec(ctx, `CREATE OR REPLACE FUNCTION inventory_legacy_freeze_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Exec(ctx, `CREATE TRIGGER inventory_legacy_freeze BEFORE INSERT OR UPDATE OR DELETE ON equipment_stock FOR EACH ROW EXECUTE FUNCTION inventory_legacy_freeze_guard()`); err != nil {
+		t.Fatal(err)
+	}
+	target.Close()
+
+	report := newReport(true)
+	err = execute(ctx, options{input: artifact, database: targetURL, conflict: "fail", report: t.TempDir() + "/report.json", dryRun: true}, report)
+	if !app.IsKind(err, app.KindPrecondition) || !strings.Contains(err.Error(), "inventory_legacy_freeze") {
+		t.Fatalf("restore into frozen target returned %v, want named precondition", err)
 	}
 }
 

@@ -858,53 +858,6 @@ func (s *Server) equipListStateChanges(w http.ResponseWriter, r *http.Request) {
 // --- deployments ---
 
 // equipDeployInput is the validated form of a deploy request.
-type equipDeployInput struct {
-	StockID        uuid.UUID
-	HiveID         uuid.UUID
-	Quantity       int
-	Notes          *string
-	Date           time.Time
-	CreatedBy      *uuid.UUID
-	IdempotencyKey *string
-}
-
-// equipDeployTx locks the stock row, refuses to deploy more than is available,
-// and records the deployment. replayed is true when idempotencyKey matched an
-// existing row, in which case nothing is applied again. Serialization is the
-// stock row lock (FOR UPDATE), not a 23505 retry.
-func equipDeployTx(ctx context.Context, tx pgx.Tx, in equipDeployInput) (uuid.UUID, bool, error) {
-	state, err := equipLockStock(ctx, tx, in.StockID)
-	if err != nil {
-		return uuid.Nil, false, err
-	}
-	if id, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey, "stock_id", in.StockID); err != nil {
-		return uuid.Nil, false, err
-	} else if found {
-		return id, true, nil
-	}
-	if available := state.Available(); in.Quantity > available {
-		return uuid.Nil, false, equipBadRequest(
-			"Not enough %s available: need %d, have %d",
-			state.TypeName, in.Quantity, available)
-	}
-	var id uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO equipment_deployments
-			(stock_id, hive_id, quantity, date_deployed, notes, created_by,
-			 idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id`,
-		in.StockID, in.HiveID, in.Quantity, in.Date, in.Notes, in.CreatedBy,
-		in.IdempotencyKey).Scan(&id)
-	if err != nil {
-		if equipPgErrCode(err, "23503") {
-			return uuid.Nil, false, equipBadRequest("invalid stockId or hiveId")
-		}
-		return uuid.Nil, false, err
-	}
-	return id, false, nil
-}
-
 // POST /equipment/deployments {stockId, hiveId, quantity?, notes?, date?}
 func (s *Server) equipDeploy(w http.ResponseWriter, r *http.Request) {
 	var req struct {

@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	appequipment "github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -333,9 +334,8 @@ func (s *Server) equipSetComponents(w http.ResponseWriter, r *http.Request) {
 // {typeId, quantity, action: "assemble"|"disassemble", date?, notes?, idempotencyKey?}
 //
 // Assemble consumes `quantity × line.quantity` of every component and produces
-// `quantity` of the parent; disassemble is the exact inverse. All stock rows
-// are locked in id order, so two concurrent builds over shared components
-// serialize instead of deadlocking or double-spending.
+// `quantity` of the parent; disassemble is the exact inverse. The equipment
+// command delegates availability serialization to the inventory tuple locks.
 func (s *Server) equipAssemble(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		TypeID         string  `json:"typeId"`
@@ -369,14 +369,13 @@ func (s *Server) equipAssemble(w http.ResponseWriter, r *http.Request) {
 	} else if d != nil {
 		date = *d
 	}
-	s.equipInTx(w, r, func(ctx context.Context, tx pgx.Tx) (map[string]any, error) {
-		return equipApplyAssembly(ctx, tx, equipAssemblyRequest{
+	s.equipInUOW(w, r, func(ctx context.Context, uow *app.UnitOfWork) (map[string]any, error) {
+		return equipApplyAssembly(ctx, uow, equipAssemblyRequest{
 			TypeID:         typeID,
 			Quantity:       req.Quantity,
 			Action:         req.Action,
 			Date:           date,
 			Notes:          equipTrimPtr(req.Notes),
-			CreatedBy:      equipActor(r),
 			IdempotencyKey: equipTrimPtr(req.IdempotencyKey),
 		})
 	})
@@ -390,201 +389,62 @@ type equipAssemblyRequest struct {
 	Action         string
 	Date           time.Time
 	Notes          *string
-	CreatedBy      *uuid.UUID
 	IdempotencyKey *string
 }
 
 func equipApplyAssembly(
-	ctx context.Context, tx pgx.Tx, req equipAssemblyRequest,
+	ctx context.Context, uow *app.UnitOfWork, req equipAssemblyRequest,
 ) (map[string]any, error) {
-	typeID, date, notes, key, actor :=
-		req.TypeID, req.Date, req.Notes, req.IdempotencyKey, req.CreatedBy
-	type bomLine struct {
-		TypeID   uuid.UUID
-		Quantity int
+	typeID, date := req.TypeID, req.Date
+	notes, key := "", ""
+	if req.Notes != nil {
+		notes = *req.Notes
 	}
-	rows, err := tx.Query(ctx, `
-			SELECT component_type_id, quantity FROM equipment_type_components
-			WHERE parent_type_id = $1`, typeID)
-	if err != nil {
-		return nil, err
+	if req.IdempotencyKey != nil {
+		key = *req.IdempotencyKey
 	}
-	lines := make([]bomLine, 0, 4)
-	for rows.Next() {
-		var l bomLine
-		if err := rows.Scan(&l.TypeID, &l.Quantity); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		lines = append(lines, l)
-	}
-	rows.Close()
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-	if len(lines) == 0 {
-		return nil, equipBadRequest(
-			"This type has no bill of materials — add components on the types page first")
-	}
-
-	// Every participating type gets a stock row (created empty if missing)
-	// so disassembling can deposit components that were never stocked.
-	typeIDs := make([]uuid.UUID, 0, len(lines)+1)
-	typeIDs = append(typeIDs, typeID)
-	for _, l := range lines {
-		typeIDs = append(typeIDs, l.TypeID)
-	}
-	for _, tid := range typeIDs {
-		if _, err := tx.Exec(ctx, `
-				INSERT INTO equipment_stock (type_id, total_owned, created_by)
-				VALUES ($1, 0, $2)
-				ON CONFLICT (type_id) DO NOTHING`, tid, actor); err != nil {
-			return nil, err
-		}
-	}
-
-	// Lock all stock rows in id order to serialize concurrent assemblies.
-	stockRows, err := tx.Query(ctx, `
-			SELECT id, type_id FROM equipment_stock
-			WHERE type_id = ANY($1) ORDER BY id`, typeIDs)
-	if err != nil {
-		return nil, err
-	}
-	stockIDByType := make(map[uuid.UUID]uuid.UUID, len(typeIDs))
-	lockOrder := make([]uuid.UUID, 0, len(typeIDs))
-	for stockRows.Next() {
-		var stockID, tid uuid.UUID
-		if err := stockRows.Scan(&stockID, &tid); err != nil {
-			stockRows.Close()
-			return nil, err
-		}
-		stockIDByType[tid] = stockID
-		lockOrder = append(lockOrder, stockID)
-	}
-	stockRows.Close()
-	if stockRows.Err() != nil {
-		return nil, stockRows.Err()
-	}
-	sort.Slice(lockOrder, func(i, j int) bool {
-		return lockOrder[i].String() < lockOrder[j].String()
+	recorded, err := appequipment.NewService().Assembly(ctx, uow, appequipment.AssemblyCommand{
+		TypeID: typeID, Quantity: req.Quantity, Disassemble: req.Action == "disassemble",
+		OccurredAt: date, IdempotencyKey: key, Notes: notes,
 	})
-	stateByStock := make(map[uuid.UUID]equipStockState, len(lockOrder))
-	for _, stockID := range lockOrder {
-		state, err := equipLockStock(ctx, tx, stockID)
-		if err != nil {
-			return nil, err
-		}
-		stateByStock[stockID] = state
-	}
-	parentStockID := stockIDByType[typeID]
-	parent := stateByStock[parentStockID]
-
-	// Replay: the client key is bound to the parent's adjustment row.
-	if _, found, err := equipLookupIdempotent(ctx, tx,
-		"equipment_stock_adjustments", key, "stock_id", parentStockID); err != nil {
+	if err != nil {
 		return nil, err
-	} else if found {
+	}
+	if recorded.Existing {
 		return map[string]any{"replayed": true}, nil
 	}
-
-	// Validate availability on whichever side is being consumed.
-	if req.Action == "assemble" {
-		for _, l := range lines {
-			comp := stateByStock[stockIDByType[l.TypeID]]
-			need := l.Quantity * req.Quantity
-			if comp.Available() < need {
-				return nil, equipFail(http.StatusConflict,
-					"Not enough %s available: need %d, have %d",
-					comp.TypeName, need, comp.Available())
-			}
-		}
-	} else if parent.Available() < req.Quantity {
-		return nil, equipFail(http.StatusConflict,
-			"Not enough %s available to disassemble: need %d, have %d",
-			parent.TypeName, req.Quantity, parent.Available())
-	}
-
-	// An assembled unit is worth the sum of its parts, when every part has
-	// a known cost. That value rides on the parent's ledger entry and
-	// becomes the parent's unit cost, exactly like a priced receive.
-	var assembledCost *int
-	if req.Action == "assemble" {
-		total := 0
-		known := true
-		for _, l := range lines {
-			comp := stateByStock[stockIDByType[l.TypeID]]
-			if comp.UnitCostCents == nil {
-				known = false
-				break
-			}
-			total += *comp.UnitCostCents * l.Quantity
-		}
-		if known {
-			assembledCost = &total
-		}
-	}
-
-	reason := "assembled"
-	parentQty := req.Quantity
-	componentSign := -1
-	if req.Action == "disassemble" {
-		reason = "disassembled"
-		parentQty = -req.Quantity
-		componentSign = 1
-	}
-
-	parentCost := assembledCost
-	if req.Action == "disassemble" {
-		parentCost = parent.UnitCostCents
-	}
-	if _, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-		StockID:        parentStockID,
-		Quantity:       parentQty,
-		Reason:         reason,
-		Notes:          notes,
-		UnitCostCents:  parentCost,
-		Date:           date,
-		CreatedBy:      actor,
-		IdempotencyKey: key,
-	}); err != nil {
+	var parentName string
+	if err := uow.QueryRow(ctx, `SELECT name FROM equipment_types WHERE id=$1`, typeID).Scan(&parentName); err != nil {
 		return nil, err
 	}
-
-	components := make([]map[string]any, 0, len(lines))
-	for _, l := range lines {
-		comp := stateByStock[stockIDByType[l.TypeID]]
-		qty := componentSign * l.Quantity * req.Quantity
-		if _, err := equipInsertAdjustment(ctx, tx, equipAdjustmentEntry{
-			StockID:       comp.ID,
-			Quantity:      qty,
-			Reason:        reason,
-			Notes:         notes,
-			UnitCostCents: comp.UnitCostCents,
-			Date:          date,
-			CreatedBy:     actor,
-		}); err != nil {
+	rows, err := uow.Query(ctx, `SELECT c.component_type_id,ct.name,c.quantity FROM equipment_type_components c JOIN equipment_types ct ON ct.id=c.component_type_id WHERE c.parent_type_id=$1 ORDER BY ct.id`, typeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	components := make([]map[string]any, 0)
+	sign := -1
+	if req.Action == "disassemble" {
+		sign = 1
+	}
+	for rows.Next() {
+		var componentTypeID uuid.UUID
+		var componentName string
+		var componentQuantity int
+		if err := rows.Scan(&componentTypeID, &componentName, &componentQuantity); err != nil {
 			return nil, err
 		}
-		components = append(components, map[string]any{
-			"typeId":   l.TypeID,
-			"typeName": comp.TypeName,
-			"quantity": qty,
-		})
+		components = append(components, map[string]any{"typeId": componentTypeID, "typeName": componentName, "quantity": sign * componentQuantity * req.Quantity})
 	}
-
-	if assembledCost != nil {
-		if _, err := tx.Exec(ctx, `
-				UPDATE equipment_stock SET unit_cost_cents = $1 WHERE id = $2`,
-			*assembledCost, parentStockID); err != nil {
-			return nil, err
-		}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-
 	return map[string]any{
-		"typeId":     typeID,
-		"typeName":   parent.TypeName,
-		"action":     req.Action,
-		"quantity":   req.Quantity,
-		"components": components,
+		"operationId": recorded.Operation.ID,
+		"typeId":      typeID,
+		"typeName":    parentName,
+		"action":      req.Action,
+		"quantity":    req.Quantity,
+		"components":  components,
 	}, nil
 }

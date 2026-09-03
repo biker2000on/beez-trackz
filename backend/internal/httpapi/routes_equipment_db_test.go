@@ -138,6 +138,46 @@ func equipStatusFor(t *testing.T, ctx context.Context, tx pgx.Tx, stockID uuid.U
 	return deployed, available
 }
 
+type equipDeployInput struct {
+	StockID        uuid.UUID
+	HiveID         uuid.UUID
+	Quantity       int
+	Notes          *string
+	Date           time.Time
+	CreatedBy      *uuid.UUID
+	IdempotencyKey *string
+}
+
+// equipDeployTx retains the legacy deployment setup only for compatibility
+// tests. Production deployment commands write the inventory ledger.
+func equipDeployTx(ctx context.Context, tx pgx.Tx, in equipDeployInput) (uuid.UUID, bool, error) {
+	state, err := equipLockStock(ctx, tx, in.StockID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	if id, found, err := equipLookupIdempotent(ctx, tx, "equipment_deployments", in.IdempotencyKey, "stock_id", in.StockID); err != nil {
+		return uuid.Nil, false, err
+	} else if found {
+		return id, true, nil
+	}
+	if available := state.Available(); in.Quantity > available {
+		return uuid.Nil, false, equipBadRequest("Not enough %s available: need %d, have %d", state.TypeName, in.Quantity, available)
+	}
+	var id uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO equipment_deployments
+			(stock_id,hive_id,quantity,date_deployed,notes,created_by,idempotency_key)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+		in.StockID, in.HiveID, in.Quantity, in.Date, in.Notes, in.CreatedBy, in.IdempotencyKey).Scan(&id)
+	if err != nil {
+		if equipPgErrCode(err, "23503") {
+			return uuid.Nil, false, equipBadRequest("invalid stockId or hiveId")
+		}
+		return uuid.Nil, false, err
+	}
+	return id, false, nil
+}
+
 func equipHTTPStatus(t *testing.T, err error) int {
 	t.Helper()
 	var known equipError
