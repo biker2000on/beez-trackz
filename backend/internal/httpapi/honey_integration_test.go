@@ -91,7 +91,13 @@ func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 			harvest_lots,
 			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
 			external_sync, offline_mutation_receipts
-		RESTART IDENTITY CASCADE`
+		RESTART IDENTITY CASCADE;
+		INSERT INTO inventory_locations (id, kind, name, is_home)
+			VALUES ('00000000-0000-0000-0000-000000000201', 'site', 'Home', true)
+			ON CONFLICT (id) DO NOTHING;
+		INSERT INTO inventory_locations (id, kind, name)
+			VALUES ('00000000-0000-0000-0000-000000000202', 'deployed', 'Deployed')
+			ON CONFLICT (id) DO NOTHING`
 	var err error
 	for attempt := 0; attempt < 8; attempt++ {
 		_, err = pool.Exec(context.Background(), reset)
