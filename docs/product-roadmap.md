@@ -125,7 +125,19 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    the spec; Wave 1 landed migrations 00050/00051, `app/inventory`, and the
    generation guard. Sequencing is Phase A (additive ledger + freeze +
    parity) then Phase B (squash and drop) — see **Pre-launch replacement
-   phases** below.
+   phases** below. *Amended 2026-09-03:* **Phase A is code complete** through
+   wave 3d — every quantity writer and reader is on the ledger, the
+   cross-domain backfill with §7.2 parity and §7.4 residual splits ships as
+   `import-snapshot -backfill-ledger`, and the freeze arms only on parity
+   success. **Phase B is built and rehearsed against the seeded fixture**:
+   `00001_baseline.sql` is generated from the legacy chain, selected by
+   `BEEZ_SCHEMA_BASELINE`, and the baseline round trip passes end to end;
+   the equipment surface is proven against a baseline database (bill-of-
+   materials editing and assembly excepted — spec §12.1 open item 8, a
+   Phase B blocker). Spec §12.1 open items 1–7 are closed. **Next act is rehearsal on a copy of
+   production** (checklist in spec §12.1, procedure in
+   `docs/restore-runbook.md` section 6) — nothing is frozen or squashed on
+   the real database yet.
 10. **P1 — Workflow and application architecture reset.** Replace the
     module-first information architecture, add a use-case/application layer and
     stable workbench read models, and rewrite internal routes directly across the

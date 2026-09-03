@@ -796,32 +796,126 @@ translation and gate tests extend the P0 suites.
   dropped set. Test hardening for the remote server: scratch-DB budgets,
   `DROP DATABASE … WITH (FORCE)`, `-timeout 45m` in CI, `*.go`/`*.sql` pinned
   to LF.
-- **Wave 3c (in progress):** the Phase B reader/importer/gate transform (the
-  baseline round trip now passes end to end) and the open items below.
+- **Wave 3c (2026-09-03):** the Phase B reader/importer/gate transform — the
+  baseline round trip now passes end to end — plus open items 1–4 and 6 in the
+  application/HTTP layer: the harvest true-up and entry-delete guards re-based
+  on the §7.4 residual and the lot ceiling receipts (`app/production`), GnuCash
+  sale bodies reading equipment through `sale_items.item_id`, every remaining
+  reader of the dropped equipment tables and views moved to
+  `inventory_balances` / checkpoint reconciliation / operation history,
+  `app/sales.CheckAvailabilityExcluding` for re-validating a stored sale in
+  place, and `external_sync.entity_type` narrowed to the post-cutover allowlist
+  under the baseline profile.
+- **Wave 3d (2026-09-03):** the follow-ups wave 3c reported plus this log.
+  `DELETE /equipment/types/{id}` moved off `equipment_stock` and its three
+  history tables onto "does this item have any `inventory_movements`", and its
+  "is this a component of something" check is now composed per profile
+  (`equipComponentParentSQL`) because Phase B drops
+  `equipment_type_components` as well; the baseline profile test walks it.
+  Migration `00053` widened `inventory_reservations` to
+  `SUM(quantity × net_grams)`, which is what open item 5 was waiting on. Dead
+  Phase A helpers removed. **New open item 8** below: fixing delete-type
+  surfaced that the rest of the bill-of-materials surface reads the dropped
+  table too.
 
-**Open items carried into wave 3b/3c** (found by the wave-3a workers):
+**Open items carried into wave 3b/3c** (found by the wave-3a workers) — **items
+1–6 are closed as of 2026-09-03 (wave 3c/3d); item 7 closed in wave 3b. Item 8
+was opened by wave 3d and is still OPEN**:
 
-1. `routes_harvest_sessions.go:735` — the harvest-entry soft-delete guard is
-   vacuous now that lot pounds are receipts (decision 6); the true-up guard at
-   `:622` compares a declared weight delta against ledger bulk. Re-base both
-   on the lot ceilings.
-2. GnuCash sale bodies still join `equipment_stock` through
-   `sale_items.equipment_stock_id`; new equipment lines carry only
-   `item_id`. The composer must read `equipment_types` via `item_id` before
-   Phase B drops the column.
-3. `equipment_stock_status` (view) still sums the frozen legacy tables; it is
-   dropped in Phase B and must have no remaining readers by then.
-4. `app/sales.CheckAvailability` subtracts the asking sale's own stored
-   reservation; any caller that re-validates a stored sale in place needs a
-   "less this sale" variant.
-5. Raw-propolis sale lines carry no `item_id` (their stock is harvested
-   grams); `propolisOnHandGrams` subtracts unapplied lines itself — the one
-   reservation the view does not express.
-6. Untraced jar/product reservations pin one FIFO-inferred lot while apply
-   may consume across several; the report labels it honestly, the
-   reservation is approximate (candidate finding, accepted).
-7. Frontend `features/equipment` still names legacy identities (46
-   occurrences) — wave 3b.
+1. **Closed (wave 3c).** `routes_harvest_sessions.go:735` — the harvest-entry
+   soft-delete guard is vacuous now that lot pounds are receipts (decision 6);
+   the true-up guard at `:622` compares a declared weight delta against ledger
+   bulk. Re-base both on the lot ceilings. → both handlers now run under one
+   unit of work and go through `production.CheckHarvestResidual` /
+   `production.RebaseDerivedLotCeilings`, which enforce
+   `Σ harvested − Σ live lot ceilings ≥ 0` and move the ceiling receipt with
+   the stored lot weight. **User-visible tightening:** a true-up or entry
+   delete that would drive that residual negative is now refused — see the
+   Phase A rehearsal checklist below.
+2. **Closed (wave 3c).** GnuCash sale bodies still join `equipment_stock`
+   through `sale_items.equipment_stock_id`; new equipment lines carry only
+   `item_id`. → the composer reaches `equipment_types` through
+   `sale_items.item_id → inventory_items.source_id`, and emits the historical
+   `equipment_stock_id` fallback join only while the legacy chain is active.
+   COGS semantics are deliberately unchanged: a historical line that never
+   froze a `cost_basis_cents` still contributes nothing, so no pushed body
+   changes its `content_hash`.
+3. **Closed (wave 3c/3d).** `equipment_stock_status` (view) still sums the
+   frozen legacy tables; it is dropped in Phase B and must have no remaining
+   readers by then. → no production reader of `equipment_stock_status`,
+   `equipment_stock_reconciliation`, `equipment_loss_events`, or of
+   `equipment_stock` rows remains outside `app/backfill`. Wave 3d finished the
+   set with `equipDeleteType`. `TestEquipmentEndpointsServeABaselineDatabase`
+   boots the real handlers against `db.MigrateProfile(…, ProfileBaseline)`,
+   asserts the eight tables and views are absent, and walks create → stock
+   status → PATCH → adjust → deploy → return → damage → loss report →
+   reconciliation → history listings → delete type. The bill-of-materials
+   endpoints are the exception and are carried as open item 8.
+4. **Closed (wave 3c).** `app/sales.CheckAvailability` subtracts the asking
+   sale's own stored reservation; any caller that re-validates a stored sale
+   in place needs a "less this sale" variant. →
+   `sales.CheckAvailabilityExcluding(locationID, saleID, needs)` credits the
+   sale its own reservation before asking the ledger and is wired into the
+   draft/pending branch of `honeyRecordSale`, which previously ran no ledger
+   check at all.
+5. **Closed (wave 3d).** Raw-propolis sale lines carry no `item_id` (their
+   stock is harvested grams); `propolisOnHandGrams` subtracts unapplied lines
+   itself — the one reservation the view does not express. → migration `00053`
+   changes `inventory_reservations` to reserve
+   `SUM(si.quantity × COALESCE(pc.net_grams, 1))`, so a bagged SKU holds its
+   grams rather than its unit count. With that in place propolis lines can
+   carry `item_id = propolis_raw` and the hand-rolled subtraction in
+   `propolisOnHandGrams` goes away.
+6. **Closed (wave 3c) — accepted as designed.** Untraced jar/product
+   reservations pin one FIFO-inferred lot while apply may consume across
+   several; the report labels it honestly, the reservation is approximate
+   (candidate finding, accepted). No code change: the approximation is
+   deliberate and disclosed at the report.
+7. **Closed (wave 3b).** Frontend `features/equipment` still names legacy
+   identities (46 occurrences) — the equipment UI now addresses ledger
+   identities.
+8. **Open (found in wave 3d).** The bill-of-materials surface still names
+   `equipment_type_components` unconditionally and therefore fails on a
+   baseline database: `equipListComponents` (`GET /equipment/components`),
+   `equipSetComponents` (`PUT /equipment/types/{id}/components`), and the
+   component read inside `app/equipment.Assembly` (which
+   `POST /equipment/assemblies` runs). Phase B drops that table
+   (`db.BaselineDroppedDomains`) in favour of `inventory_boms` /
+   `inventory_bom_lines`, the shape `app/backfill` already mirrors into
+   (`role = 'input'`, keyed on inventory items rather than catalog rows).
+   Moving them is not mechanical — it has to decide whether the operator now
+   edits `inventory_boms` directly, and where migration 00046's cycle-guard
+   trigger goes once its table is gone (`TestEquipmentComponentCycleGuard`
+   pins the trigger, not an application rule). Until it lands, the equipment
+   surface serves a baseline database everywhere **except** the BOM editor and
+   assembly. This is a Phase B blocker, not a Phase A one.
+
+### Phase A rehearsal on a prod copy (next act)
+
+Phase A code is complete and Phase B is built and rehearsed against the seeded
+fixture. What has *not* happened is a rehearsal against a copy of production.
+Run it before anything is frozen; the operator procedure is
+`docs/restore-runbook.md` **section 6**, and nothing below replaces it.
+
+1. Recreate a disposable database from the current migrations and restore a
+   fresh production snapshot into it — never the compose `beeztrackz`
+   database or the `postgres_data` volume (runbook 6.1, section 3 pattern).
+2. Confirm that copy's P0 gate passes and describes *that* tree of rows
+   (runbook 6 Preconditions 4–5).
+3. Run `import-snapshot -backfill-ledger` against the copy with `TZ=UTC` and
+   an absolute `-report` path outside the artifact (runbook 6.1). Keep the
+   report.
+4. Read the §7.4 residual-split report. A **negative** unassigned bulk
+   residual is a STOP, not a number to coerce (runbook 6.3).
+5. Prove the freeze: a write to any freeze-eight table must raise (runbook
+   6.4).
+6. Exercise the tightened harvest guards on real data (open item 1). A true-up
+   or entry delete below what the lots' committed ceilings already claim is
+   now refused — lower or unlink the lot first. Legacy data can arrive already
+   below its ceilings; that state is not refused by the edit, it is confronted
+   by the reset gate (runbook 6.4a).
+7. Only then consider the real database, and only with the runbook's STOP
+   table in hand.
 
 ## 13. Roadmap corrections implied by this spec
 

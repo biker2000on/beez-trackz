@@ -981,7 +981,7 @@ Summary of the production writer set the trigger will refuse:
 | `honey_movements` | `honeyRecordJarring`, `honeyRecordBulkMovement`, `honeyRecordGiveAway`, `honeyAdjustJarCounts`, `honeyReverseMovement`; `bottlingRunCreate` / `bottlingRunVoid`; `productBatchCreate` / `productBatchVoid`; jar-size deactivate write-off; settlement shrink (global half) and `stockSettlementVoid` |
 | `stock_movements` | `stockInsertMovement` (transfer/return), `stockReverseMovements`, settlement shrink (location half) |
 | `product_adjustments` | `productInsertAdjustment` (incl. settlement product shrink), `productAdjustmentDelete`, `stockSettlementVoid` |
-| `equipment_stock` | `equipCreateStock`, `equipUpdateStock` (OV2: this PATCH becomes an `equipment_types` update, not a freeze-table write), `equipReceiveStock`, `equipApplyAssembly` (empty-row insert + rolled-up cost), `equipDeleteType`, `honeyConsumePackaging` |
+| `equipment_stock` | `equipCreateStock`, `equipUpdateStock` (OV2: this PATCH becomes an `equipment_types` update, not a freeze-table write), `equipReceiveStock`, `equipApplyAssembly` (empty-row insert + rolled-up cost), `equipDeleteType` (wave 3d: now refuses on `inventory_movements` and deletes the inventory item instead — no `equipment_stock` write), `honeyConsumePackaging` |
 | `equipment_stock_adjustments` | `equipInsertAdjustment` (receive, adjust, physical count, assembly, packaging consume); `saleInsertSoldAdjustment`; `saleRevertPhysical`; `saleUnapplyPhysical` |
 | `equipment_deployments` | `equipDeployTx`; `equipReturnTx`; `saleRevertPhysical` |
 | `equipment_deployment_returns` | `equipReturnTx`; `saleRevertPhysical` |
@@ -997,12 +997,50 @@ create/update/soft-delete (`routes_stock_locations.go`, home seed in
 `honey_ledger.go`) and `equipment_type_components` replace-all
 (`routes_equipment_bom.go`).
 
+As of wave 3d the `equipment_type_components` half of that is still open and
+is a **Phase B blocker** (spec §12.1 open item 8): `GET /equipment/components`,
+`PUT /equipment/types/{id}/components`, and `POST /equipment/assemblies` all
+still name the table, so they fail on a baseline database.
+`DELETE /equipment/types/{id}` no longer does.
+
 After a committed freeze, operate on the ledger alone. Legacy tables
 and views remain, frozen, for reference and for the Phase B gate.
 Producers write through `app/inventory` (`Record` / `Reverse` /
 `CheckAvailable`). Readers use `inventory_balances` /
 `inventory_available` / `inventory_reservations` / checkpoint
 reconciliation (audit T4).
+
+### 6.4a The harvest guards tighten when the ledger holds the lot pounds
+
+Not a procedure step — a behaviour change to expect the first time an
+operator edits a harvest on a backfilled database, and the one thing in
+Phase A that can refuse an edit that used to succeed.
+
+Lot pounds are ceiling receipts in the ledger now (spec decision 6), so
+"pounds harvested" and "bulk on hand" are two different quantities. The
+guard on both `hsTrueUp` (true up a session's weight) and `hsDeleteEntry`
+(soft-delete one harvest entry) is the §7.4 residual:
+
+    Σ harvested − Σ live lot ceilings ≥ 0
+
+**A true-up or entry delete that would drive that residual negative is
+refused.** Concretely: an operator cannot true a session *down* while its
+lots still claim the full weight. The message names the lot. The fix is to
+lower or unlink that lot first, then re-run the edit. Voiding the lot's
+bottling runs is a separate, earlier step — a linked lot with non-voided
+runs refuses the delete outright, and that refusal is what keeps the
+provenance of jars already on the shelf reconstructable.
+
+It deliberately does **not** refuse when the residual was already negative
+before the edit. Legacy data carried in by the backfill can arrive in that
+state (a manual lot weight typed over a smaller sum of harvests, for
+instance). The edit did not create the inconsistency and refusing there
+would trap the operator; the reset gate is what confronts it, by refusing
+to carry a negative residual into Phase B.
+
+Both handlers go through `production.CheckHarvestResidual` /
+`production.RebaseDerivedLotCeilings`; that is the single place the rule
+lives.
 
 ### 6.5 Rollback
 
@@ -1377,6 +1415,9 @@ behaviour is spec §9 and, once the flag lands,
 | `stock_locations` or `equipment_type_components` write raises during Phase A | those tables are not in the freeze-eight | Unexpected. The freeze covers only the eight tables in section 6.4. Investigate a bad trigger. Those writers still have to move before Phase B. |
 | You dropped `inventory_operations` / movements to "undo" Phase A | not a rollback | Restore the pre-Phase-A snapshot (section 6.5). The ledger is not a scratch pad. |
 | Physical count written as `product_adjustments` / `jar_adjustment` / equipment adjustment after freeze | freeze-eight writer | Use `count_adjust` through `app/inventory`. Legacy adjustment paths are the writer set in section 6.4. |
+| Harvest true-up refused: "the lot allocation" / a lot named, after backfill | §7.4 residual guard (section 6.4a) | Working as designed. The session's lots still claim pounds the true-up would remove. Lower or unlink that lot, then re-run the true-up. Do not edit `harvest_lots.honey_weight_lbs` by hand. |
+| Harvest entry delete refused although it "worked before Phase A" | §7.4 residual guard (section 6.4a) | Same rule, other handler. Lower or unlink the lot that claims those pounds. If the refusal names non-voided bottling runs instead, void those runs first — that is a deliberate audit-trail act, not a workaround. |
+| A harvest whose lots already over-claim edits fine, and you expected a refusal | guard refuses a **breach**, not a pre-existing negative residual (section 6.4a) | Expected. The edit did not create the inconsistency. The reset gate refuses to carry a negative residual into Phase B; fix it there with a `count_adjust` / lot correction, not by blocking the edit. |
 | GnuCash rows still typed `honey_movement` / `stock_movement` / `equipment_stock` / `equipment_stock_adjustment` / `product_adjustment` / `stock_location` after freeze | re-key not run | Section 6.6: six-type re-key, then content-hash rebaseline, then folio verify, then `markReconciled`. Do not enable sync. Allowlist: `backend/internal/httpapi/external_sync.go`. |
 | First post-freeze rescan marks every GnuCash row `diverged` | content-hash not rebaselined | Rebaseline against unchanged `remote_transaction_guid` / `remote_enter_date` before treating remote drift as real (section 5.5 / 6.6). |
 | `backfill_db_test.go` / `translate_test.go` skipped | `TEST_DATABASE_URL` unset | The freeze/parity contract is not proven. Not a pass. |

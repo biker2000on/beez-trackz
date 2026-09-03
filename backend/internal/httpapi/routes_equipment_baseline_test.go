@@ -26,9 +26,15 @@ import (
 // inventory_available, and the operation history instead. That is not something
 // a code review can settle — a stale join only fails when the table is missing
 // — so this boots the real handlers against a database migrated with the
-// baseline profile and walks the whole surface: create, stock status, adjust,
-// deploy, return, damage, loss report, reconciliation, and the two history
-// listings.
+// baseline profile and walks the surface: create, stock status, adjust,
+// deploy, return, damage, loss report, reconciliation, the two history
+// listings, and delete type.
+//
+// NOT yet covered, because they are not yet fixed: the bill-of-materials
+// endpoints (GET /equipment/components, PUT /equipment/types/{id}/components,
+// POST /equipment/assemblies). All three still name equipment_type_components
+// unconditionally, and Phase B drops that table — see equipComponentParentSQL
+// in routes_equipment_bom.go.
 //
 // It also pins the two profile-aware id resolvers (equipItemSelect /
 // equipTypeSelect): with BEEZ_SCHEMA_BASELINE set they must not emit the
@@ -250,6 +256,107 @@ func TestEquipmentEndpointsServeABaselineDatabase(t *testing.T) {
 	if entries := baselineDecodeArray(t, response); len(entries) != 1 {
 		t.Errorf("state changes = %d, want the one damage", len(entries))
 	}
+
+	// --- delete type ---
+	//
+	// It used to select equipment_stock, probe the three history tables, and
+	// delete the stock row, so on a baseline database it failed outright
+	// (wave-3c finding F2). On the ledger the refusal is "this item has
+	// inventory_movements", and a clean type takes its inventory item and its
+	// bill of materials with it.
+	response, _ = call(t, server.equipDeleteType,
+		baselineRequest(userID, http.MethodDelete, "/equipment/types/"+typeID, nil, "id", typeID))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete a type with ledger history = %d %s, want 409",
+			response.Code, response.Body.String())
+	}
+	if stock = baselineStockRow(t, server, userID, itemID); stock.TotalOwned != 14 {
+		t.Fatalf("refused delete changed the balance: owned = %d, want 14", stock.TotalOwned)
+	}
+
+	// A parent with a bill of materials, and a component that may not leave it.
+	//
+	// The BOM is written straight into inventory_boms / inventory_bom_lines
+	// rather than through PUT /equipment/types/{id}/components, because on a
+	// baseline database equipment_type_components is gone and that endpoint
+	// still names it (see equipComponentParentSQL's note). This is the shape
+	// app/backfill mirrors into, so it is what a real baseline database holds.
+	response, body = call(t, server.equipCreateType,
+		baselineRequest(userID, http.MethodPost, "/equipment/types",
+			map[string]any{"name": "Baseline spare", "category": "box"}))
+	ok(t, "create spare type", response)
+	spareTypeID := body["id"].(string)
+	response, body = call(t, server.equipCreateStock,
+		baselineRequest(userID, http.MethodPost, "/equipment/stock",
+			map[string]any{"typeId": spareTypeID, "initialQuantity": 0}))
+	ok(t, "create spare stock", response)
+	spareItemID := body["id"].(string)
+
+	response, body = call(t, server.equipCreateType,
+		baselineRequest(userID, http.MethodPost, "/equipment/types",
+			map[string]any{"name": "Baseline spare part", "category": "accessory"}))
+	ok(t, "create component type", response)
+	componentTypeID := body["id"].(string)
+	response, body = call(t, server.equipCreateStock,
+		baselineRequest(userID, http.MethodPost, "/equipment/stock",
+			map[string]any{"typeId": componentTypeID, "initialQuantity": 0}))
+	ok(t, "create component stock", response)
+	componentItemID := body["id"].(string)
+
+	var bomID uuid.UUID
+	if err := server.pool.QueryRow(ctx, `
+		INSERT INTO inventory_boms (name, output_item_id) VALUES ($1, $2) RETURNING id`,
+		"Baseline spare", spareItemID).Scan(&bomID); err != nil {
+		t.Fatalf("insert ledger BOM: %v", err)
+	}
+	if _, err := server.pool.Exec(ctx, `
+		INSERT INTO inventory_bom_lines (bom_id, role, item_id, quantity)
+		VALUES ($1, 'input', $2, 2)`, bomID, componentItemID); err != nil {
+		t.Fatalf("insert ledger BOM line: %v", err)
+	}
+
+	response, _ = call(t, server.equipDeleteType,
+		baselineRequest(userID, http.MethodDelete, "/equipment/types/"+componentTypeID, nil,
+			"id", componentTypeID))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete a component of another type = %d %s, want 409",
+			response.Code, response.Body.String())
+	}
+
+	// The parent has an inventory item (opening count zero, so no movements)
+	// and a recipe. Both go with it.
+	response, _ = call(t, server.equipDeleteType,
+		baselineRequest(userID, http.MethodDelete, "/equipment/types/"+spareTypeID, nil,
+			"id", spareTypeID))
+	ok(t, "delete spare type", response)
+
+	var typeRows, itemRows, bomRows, bomLineRows int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT (SELECT COUNT(*) FROM equipment_types WHERE id = $1),
+		       (SELECT COUNT(*) FROM inventory_items WHERE id = $2),
+		       (SELECT COUNT(*) FROM inventory_boms WHERE id = $3),
+		       (SELECT COUNT(*) FROM inventory_bom_lines WHERE bom_id = $3)`,
+		spareTypeID, spareItemID, bomID).Scan(&typeRows, &itemRows, &bomRows, &bomLineRows); err != nil {
+		t.Fatalf("probe the deleted type: %v", err)
+	}
+	if typeRows != 0 || itemRows != 0 || bomRows != 0 || bomLineRows != 0 {
+		t.Fatalf("after delete: types %d items %d boms %d bom lines %d, want 0/0/0/0",
+			typeRows, itemRows, bomRows, bomLineRows)
+	}
+
+	// The component is free once its only parent is gone, and a second delete
+	// of a type that is already gone is a 404, not a 500.
+	response, _ = call(t, server.equipDeleteType,
+		baselineRequest(userID, http.MethodDelete, "/equipment/types/"+componentTypeID, nil,
+			"id", componentTypeID))
+	ok(t, "delete freed component type", response)
+	response, _ = call(t, server.equipDeleteType,
+		baselineRequest(userID, http.MethodDelete, "/equipment/types/"+spareTypeID, nil,
+			"id", spareTypeID))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("delete a missing type = %d %s, want 404",
+			response.Code, response.Body.String())
+	}
 }
 
 // TestBaselineProfileDropsTheLegacyEquipmentArm pins the composed SQL itself,
@@ -265,6 +372,12 @@ func TestBaselineProfileDropsTheLegacyEquipmentArm(t *testing.T) {
 			t.Errorf("%s still reads equipment_stock on the baseline:\n%s", name, sql)
 		}
 	}
+	// equipment_type_components is dropped at Phase B too, so the delete-type
+	// component check has to be composed the same way.
+	if strings.Contains(equipComponentParentSQL(), "equipment_type_components") {
+		t.Errorf("equipComponentParentSQL still reads equipment_type_components on the baseline:\n%s",
+			equipComponentParentSQL())
+	}
 
 	t.Setenv(db.BaselineEnvVar, "")
 	if !strings.Contains(equipItemSelect("$1"), "FROM equipment_stock") {
@@ -272,6 +385,9 @@ func TestBaselineProfileDropsTheLegacyEquipmentArm(t *testing.T) {
 	}
 	if !strings.Contains(gnucashLegacyEquipmentJoin(), "equipment_stock") {
 		t.Error("the GnuCash composer dropped its historical fallback on the legacy chain")
+	}
+	if !strings.Contains(equipComponentParentSQL(), "equipment_type_components") {
+		t.Error("equipComponentParentSQL left the operator-edited BOM table on the legacy chain")
 	}
 }
 

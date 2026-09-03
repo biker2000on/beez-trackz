@@ -249,8 +249,9 @@ const (
 // A handler may start anywhere in the list and skip classes; it may never go
 // backwards. That is what makes the paths deadlock-free as a set:
 //
-//   - hsDeleteEntry: harvest row, then the lot rows reconcileLotsForHarvestDelete
-//     locks, then the bulk lock. The bulk check runs LAST for this reason.
+//   - hsDeleteEntry: harvest row, then the lot rows
+//     production.RebaseDerivedLotCeilings locks, then the bulk lock. The bulk
+//     check runs LAST for this reason.
 //   - harvestLotCreate / harvestLotUpdate: the requested harvest rows
 //     (lockRequestedHarvests) before the lot row. Inserting into
 //     harvest_lot_harvests takes an FK key-share lock on the harvest, so a
@@ -338,140 +339,6 @@ func harvestLotDerivedWeight(
 		FROM honey_harvests WHERE id = ANY($1) AND deleted_at IS NULL`,
 		harvestIDs).Scan(&total, &count)
 	return total, count, err
-}
-
-// reconcileLotsForHarvestDelete decides whether a harvest may leave the lots
-// it is linked to, and keeps derived lots honest when it may. Called inside
-// the deleting transaction, AFTER the harvest row has been marked deleted, so
-// the recomputed sums already exclude it.
-//
-// Lock order: this is class 2 (see honeyLockOrder). The caller is already
-// holding the class-1 harvest row and has not yet taken the bulk lock.
-//
-// Two rules, in this order:
-//
-//  1. A harvest that stands behind BOTTLED jars cannot leave. Refuse (409) if
-//     any linked lot — manual or derived — still has a non-voided bottling
-//     run. refuseLotBottling and lotLockoutAsOf walk a lot's linked harvests
-//     back to their hives to find the treatment covering them, and both skip
-//     soft-deleted harvests: a harvest that vanished from under a bottled lot
-//     takes its hive, and therefore the withdrawal window that justified or
-//     blocked those runs, out of that walk. The jars on the shelf would keep
-//     a provenance nobody can reconstruct. Voiding the runs first is the
-//     deliberate act that belongs in the audit trail — and once they are
-//     voided the harvest leaves freely.
-//
-//  2. Otherwise a derived lot is recomputed to the sum of its remaining live
-//     harvests. The bottled ceiling is re-checked as a belt-and-braces guard
-//     on that recompute; with rule 1 enforced there is nothing left to bottle
-//     against, so it should never fire.
-//
-// Manual-weight lots are never recomputed: their weight was typed, not
-// derived, so a harvest leaving the link set changes nothing they assert.
-// They are still covered by rule 1, because the provenance walk does not care
-// how the lot's pounds were arrived at.
-//
-// Returns a user-facing refusal ("" when the delete may proceed).
-func reconcileLotsForHarvestDelete(
-	ctx context.Context,
-	tx pgx.Tx,
-	harvestID uuid.UUID,
-) (string, error) {
-	type lotRecompute struct {
-		id       uuid.UUID
-		code     string
-		source   string
-		derived  float64
-		bottled  float64
-		runCount int
-	}
-	// Two statements, and they have to stay two. FOR UPDATE OF l takes the
-	// same harvest_lots row lock bottlingRunCreate and harvestLotUpdate take,
-	// so no run can commit against these lots from here on; ORDER BY l.id
-	// keeps multi-lot deletes in a stable lock order. But a locking SELECT in
-	// READ COMMITTED only re-checks the LOCKED row against the newer version —
-	// scalar subqueries in its target list keep the statement snapshot, which
-	// was taken before the lock was granted and therefore before the run that
-	// was in flight committed. Counting the runs in a second statement, once
-	// the locks are held, is what makes this guard see them.
-	rows, err := tx.Query(ctx, `
-		SELECT l.id, l.lot_code, l.honey_weight_source
-		FROM harvest_lots l
-		JOIN harvest_lot_harvests hl ON hl.lot_id = l.id
-		WHERE hl.harvest_id = $1
-		ORDER BY l.id
-		FOR UPDATE OF l`, harvestID)
-	if err != nil {
-		return "", err
-	}
-	var lots []lotRecompute
-	for rows.Next() {
-		var lot lotRecompute
-		if err := rows.Scan(&lot.id, &lot.code, &lot.source); err != nil {
-			rows.Close()
-			return "", err
-		}
-		lots = append(lots, lot)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	for i := range lots {
-		if err := tx.QueryRow(ctx, `
-			SELECT
-				COALESCE((SELECT SUM(hh.calculated_honey_weight)
-					FROM harvest_lot_harvests link
-					JOIN honey_harvests hh
-						ON hh.id = link.harvest_id AND hh.deleted_at IS NULL
-					WHERE link.lot_id = $1), 0),
-				COALESCE((SELECT SUM(COALESCE(run.honey_lbs,
-						run.quantity * COALESCE(size.honey_oz, 0) / 16.0))
-					FROM bottling_runs run
-					LEFT JOIN jar_sizes size ON size.id = run.jar_size_id
-					WHERE run.lot_id = $1 AND run.voided_at IS NULL), 0),
-				(SELECT COUNT(*) FROM bottling_runs run
-					WHERE run.lot_id = $1 AND run.voided_at IS NULL)`, lots[i].id).
-			Scan(&lots[i].derived, &lots[i].bottled, &lots[i].runCount); err != nil {
-			return "", err
-		}
-	}
-	for _, lot := range lots {
-		if lot.runCount > 0 {
-			runs := "bottling run"
-			if lot.runCount > 1 {
-				runs = "bottling runs"
-			}
-			return fmt.Sprintf(
-				"Lot %s was bottled from this harvest: %d %s still stand on it, "+
-					"and the jars keep the harvest's treatment history behind them. "+
-					"Void those runs first, then delete the harvest.",
-				lot.code, lot.runCount, runs), nil
-		}
-	}
-	for _, lot := range lots {
-		if lot.source != lotWeightSourceDerived {
-			continue
-		}
-		if lot.derived < lot.bottled-honeyPoundTolerance {
-			return fmt.Sprintf(
-				"Lot %s derives its weight from this harvest: without it the lot "+
-					"totals %.2f lbs but its bottling runs already used %.2f lbs. "+
-					"Type a manual weight on the lot or void those runs first.",
-				lot.code, lot.derived, lot.bottled), nil
-		}
-	}
-	for _, lot := range lots {
-		if lot.source != lotWeightSourceDerived {
-			continue
-		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE harvest_lots SET honey_weight_lbs=$2 WHERE id=$1`,
-			lot.id, lot.derived); err != nil {
-			return "", err
-		}
-	}
-	return "", nil
 }
 
 // resolveLotWeight decides the stored weight and its source.
