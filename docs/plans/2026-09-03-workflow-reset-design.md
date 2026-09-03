@@ -1210,7 +1210,29 @@ first and does not depend on any Production or Sales work.
      a 15 s expect timeout) and passes on a warm one and in isolation. Not a
      product defect, but wave 5 adds more routes to the same server.
 
-### Wave 3 — Application seam: idempotency, outbox, authorization
+### Wave 3 — Application seam: idempotency, outbox, authorization — **landed 2026-09-03 (`71332e2`), with deviations**
+
+Landed: `app.Runner.RunIdempotent` (mutation id + request hash as command
+identity, receipt written in the command's own transaction, byte-identical
+replay, 409 on payload mismatch, pre-hash receipts refused); the `processing`
+state and five-minute re-claim are gone for the six migrated route families
+(`middleware_offline.go` is transport for them and unchanged for the rest);
+`domain_events` outbox as twin migrations `legacy-00001-00052/00055` +
+`migrations/00002` with `uow.Emit`, `DrainEvents` (`FOR UPDATE SKIP LOCKED`,
+at-least-once, idempotent per event id) and the `cmd/worker` drain;
+`app/production.AddHarvestEntry` and `app/field.RefillFeeder` fully extracted;
+sale create/update/cancel, jarring and lot-create run under the runner so
+their writes, receipt and event commit or roll back together.
+**Deviations, carried into wave 4:** `sales.RecordSale`, `sales.UpdateSale`
+and `production.CreateLot` do not yet exist as named commands — the runner
+owns their transaction but the orchestration is still in the HTTP files;
+jarring still orchestrates around `RecordBottling`. The generic worker task
+only logs the event envelope: the first consumers (ntfy, recommendation
+regeneration, GnuCash push) are not rewired. §5.3's "memberships loaded at
+the edge" was delivered by run B's `codex-auth-memberships` worker, not here.
+Lead change: `internal/db` layout tests now derive the baseline head from the
+embedded FS and require every post-reset baseline migration to have a
+legacy-chain twin (`f5b0843`).
 
 - **Depends on** wave 1 (the actor). Independent of waves 2 and 4.
 - **Scope.** `Runner.RunIdempotent` and transactional receipts (§5.1); the
