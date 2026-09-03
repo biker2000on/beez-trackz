@@ -56,6 +56,12 @@ Sources for the open items below:
   supply a different display name and visual identity without forking source.
   Branding is runtime configuration, while compatibility-sensitive machine
   identifiers stay stable unless separately migrated.
+- Requested 2026-09-03 — a first-class apiary/hive **Observation** for the
+  things a beekeeper notices without performing another workflow: for example,
+  “a swarm took off yesterday.” Fold it into the current workflow/application
+  reset, not a later notes feature. Observations join the unified activity and
+  insight evidence streams; only an explicit follow-up or derived recommendation
+  turns one into work.
 - Reviewed 2026-09-01 — three-vendor Polyagent review of the three sections
   below at `241f7ea` (`polyagent-review-2026-09-01.md`; worker reports under
   run `20260901-roadmap-review-bz01`). Verdict: diagnosis and ordering
@@ -146,8 +152,9 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    the real database yet.
 10. **P1 — Workflow and application architecture reset.** Replace the
     module-first information architecture, add a use-case/application layer and
-    stable workbench read models, and rewrite internal routes directly across the
-    app. This is a pre-launch replacement, not a compatibility migration.
+    stable workbench read models, introduce one apiary/hive observation and
+    activity stream, and rewrite internal routes directly across the app. This is
+    a pre-launch replacement, not a compatibility migration.
     *Amended 2026-09-01:* the WorkItem projection lands in two slices — field
     Today/Yard after the shared command/policy seam (may start during the
     ledger work), Production/Sales workbenches only after ledger-backed
@@ -996,6 +1003,63 @@ cached evidence from current server evidence, and declare which source commands
 may be safely queued offline. Permission filtering applies to the commands and
 the facts used to explain the work item.
 
+**One observation and activity stream.** Add a first-class `Observation` source
+fact for something witnessed in the field that is worth remembering but is not
+necessarily a task, inspection, status change, or colony acquisition. The primary
+entry point is **Add observation** on an apiary, with equivalent context-preserving
+entry points on a hive and in Yard/Today quick actions. The minimum record is
+`occurred_at`, `apiary_id`, a canonical kind, and non-empty body; `hive_id` is
+optional because the source colony may be unknown. Optional attachments/source
+media, voice capture, tags, and `follow_up_at` use the existing media, command,
+and offline conventions rather than parallel storage.
+
+Seed the entry UI with **General**, **Swarm departure**, **Swarm arrival**,
+**Colony behavior**, **Weather**, **Forage**, **Pest/wildlife**, and **Other**.
+The canonical type mechanism must be extensible without another closed database
+CHECK for every useful observation. Keep `swarm_departure` distinct from a
+`colony_intakes.source = swarm` row: the former says a swarm was seen leaving
+(possibly from an unknown hive); the latter says a colony was acquired. A user
+may link or correct the suspected hive later without rewriting the original
+author, occurrence time, or audit history.
+
+This becomes the apiary's operational activity spine. A cohesive activity read
+model merges observations with the already-authoritative inspections, feedings,
+treatments, queen events, splits, harvest events, bloom observations, field
+objects, and adopted/source-retained media. Apiary Activity is chronological and
+filterable; a hive-linked observation also appears on that hive's timeline.
+Replace the current misleading “Yard timeline” boundary, which is an Immich
+flora/hive-photo view, with an Activity surface in which that photo evidence is
+one source rather than the whole timeline. Today may show a bounded recent-
+activity/evidence slice, but it must not turn every note into an attention item.
+
+Observations are evidence for insights and recommendations. The recommendation
+pipeline may cite an observation by stable ID, kind, scope, and occurrence time;
+for example, “Swarm observed at North Yard yesterday” can inform a later colony-
+strength or queen-status recommendation. An observation enters the WorkItem
+projection only when `follow_up_at` is set or a source-domain rule derives an
+actionable recommendation. That item keeps the observation as its evidence and
+executes the observation's explicit complete/reschedule command; deleting or
+editing a note must not silently dismiss a separately derived recommendation.
+
+**Existing-data migration.** Replace the narrow `field_incidents` silo rather
+than building a second journal beside it. Backfill every live and soft-deleted
+incident one-to-one into observations while preserving ID, apiary/hive scope,
+incident date, exact incident kind (`robbing`, `yellowjackets`, `bears`, `skunks`,
+or `flood`), notes, creator, timestamps, and deletion audit. Keep those specific
+kinds available beneath the broader Pest/wildlife grouping. Do **not** convert
+`apiaries.notes`: that mutable field remains current access/landowner/setup
+information, not dated history. Do not convert swarm colony intakes. Retire the
+global eight-row Incident Log only after its rows, permissions, delete behavior,
+snapshot registration, and relevant tests are represented by Observation and
+Activity contracts.
+
+Observation create/edit/link/delete and follow-up commands are editor-only and
+apiary-scoped; viewers see only observations for apiaries they may read. Creation
+and safe edits must be idempotent and queueable offline through the generated
+offline-route manifest—the current `/incidents` write is not. Activity responses
+carry the same `asOf` and freshness contract as WorkItem/read models so cached
+field evidence is visibly distinct from current server evidence.
+
 *Scope honesty (2026-09-01):* this is a new backend projection plus the
 deletion of three existing assemblers, not a filter flag. Today the Dashboard
 work list is a client-side assembler (`useFieldWork`: recs + feeding status,
@@ -1127,14 +1191,16 @@ withdrawals have no contextual manage links at all yet.
 1. Inventory all current routes, entry points, offline mutations, top journeys,
    and the application commands they should invoke. Prototype the target IA and
    WorkItem contract against one field day, one production run, one sale/
-   consignment settlement, one equipment task, and one admin setup flow.
+   consignment settlement, one equipment task, one general/swarm observation,
+   and one admin setup flow.
 2. The `internal/app` package and its unit-of-work/transaction conventions
    start earlier, as the P0 restore services (see the importer contract).
    During the inventory reset, extend that foundation into the
    `internal/app/inventory` command/
-   query pattern. Then implement the WorkItem
-   projection and Today/Yard filters without copying source state into a writable
-   generic queue — the field slice may start as soon as the shared
+   query pattern. In the field slice, implement Observation commands, the
+   incident migration, and the unified Activity read model; then implement the
+   WorkItem projection and Today/Yard filters without copying source state into a
+   writable generic queue. This work may start as soon as the shared
    command/policy seam exists; it does not wait for the ledger.
 3. Add Production and Sales workbench projections and move cross-domain
    orchestration out of HTTP handlers into explicit application commands. Prove
@@ -1150,8 +1216,15 @@ withdrawals have no contextual manage links at all yet.
 documented user-tested refinement) and mobile only the five primary entries;
 Today, Yard Queue, and Recommendations are views over one permission-aware,
 freshness-aware WorkItem projection; every work-item action executes its source
-command; production can be followed from hive harvest through extraction, lot,
-bottling, finished stock, and sale/transfer without crossing arbitrary modules;
+command; an editor can record “a swarm took off yesterday” against an apiary with
+no known source hive while offline, later link a hive, and see the synced record
+in Apiary Activity and that hive's timeline; the same observation can be cited as
+recommendation evidence but appears as work only with a follow-up or derived
+action; every legacy field incident survives the migration with its identity,
+scope, kind, author, dates, and deletion audit intact; apiary setup notes and swarm
+colony intakes retain their distinct meanings; production can be followed from
+hive harvest through extraction, lot, bottling, finished stock, and sale/transfer
+without crossing arbitrary modules;
 the representative field, production, sale/settlement, equipment, and admin
 journeys each have one clear starting point and canonical route; inventory and
 other migrated cross-domain transactions are owned by tested application
@@ -1439,7 +1512,9 @@ else a deadout or a weak nuc should have taught us.
 - **Incident log.** Robbing, yellowjackets, bears, skunks, flood.
   Date, hive or yard, notes. Timeline and "don't put a weak nuc
   here." Not a status enum on the hive — a hive can be robbed and
-  still active.
+  still active. The narrow delivered log is superseded during the P1 workflow
+  reset by the first-class Observation/Activity stream; existing incident rows
+  migrate into it rather than being discarded or kept as a second silo.
 - **Deadout autopsy.** Marking deadout today is mostly a status.
   Require (or strongly prompt): stores left, cluster position, last
   fall mite load, queen status, moisture / mold. Winter-survival
