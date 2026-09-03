@@ -82,7 +82,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
           </p>
           <div className="mt-4 flex justify-center gap-2">
             <Button asChild variant="outline">
-              <Link href="/apiaries">Back to apiaries</Link>
+              <Link href="/yard/apiaries">Back to apiaries</Link>
             </Button>
             <Button onClick={() => apiary.refetch()}>Retry</Button>
           </div>
@@ -101,7 +101,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
           size="sm"
           className="-ml-3 w-fit text-muted-foreground"
         >
-          <Link href="/apiaries">
+          <Link href="/yard/apiaries">
             <ArrowLeft />
             Apiaries
           </Link>
@@ -150,13 +150,13 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
                     inbound link; the yard you are standing in is its natural
                     entry point. */}
                 <Button asChild variant="outline">
-                  <Link href={`/transcribe?apiary=${apiaryId}`}>
+                  <Link href={`/yard/transcribe?apiary=${apiaryId}`}>
                     <Mic />
                     Voice walkthrough
                   </Link>
                 </Button>
                 <Button asChild variant="outline">
-                  <Link href={`/apiaries/${apiaryId}/bulk`}>
+                  <Link href={`/yard/apiaries/${apiaryId}/bulk`}>
                     <ListChecks />
                     Bulk record
                   </Link>
@@ -164,7 +164,7 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
               </>
             ) : null}
             <Button asChild variant="outline">
-              <Link href={`/apiaries/${apiaryId}/labels`}>
+              <Link href={`/yard/apiaries/${apiaryId}/labels`}>
                 <QrCode />
                 Print tags
               </Link>

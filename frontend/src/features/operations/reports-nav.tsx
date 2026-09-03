@@ -1,11 +1,17 @@
 "use client";
 
 /**
- * Three-group section menu for report detail pages. The report home is the
- * directory and deliberately has no duplicate strip.
+ * Three-group section menu for Insights detail pages. The Insights home is
+ * the directory and deliberately has no duplicate strip.
  *
  * Links carry the current `year` search param forward so switching sections
  * keeps the season you are looking at.
+ *
+ * Expenses and Customers are listed here but live under Sales (design
+ * 2026-09-03 S11, S12): they are CRUD editors, and Insights is read-only.
+ * They are therefore cross-area links in the directory and deliberately
+ * absent from `matches`, so opening one does not leave the Insights section
+ * menu highlighted over a Sales route.
  */
 
 import type { ReactNode } from "react";
@@ -16,37 +22,33 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAccessProfile } from "@/features/access/api";
 
 export const REPORT_PAGES = [
-  { href: "/reports", label: "Overview", description: "Headline numbers for the season." },
-  { href: "/reports/survival", label: "Winter survival", description: "Colonies through winter, by apiary, stand and queen line." },
-  { href: "/reports/yield", label: "Honey yield", description: "Hive leaderboard and year-over-year harvest weight." },
-  { href: "/reports/economics", label: "Apiary economics", description: "Cost and margin per apiary, allocated by yield.", adminOnly: true },
-  { href: "/reports/profitability", label: "Profitability", description: "Revenue, expenses, break-even prices and margins.", adminOnly: true },
-  { href: "/reports/expenses", label: "Expenses", description: "Everything spent this season, assignable to lots and hives.", adminOnly: true },
-  { href: "/reports/bottling", label: "Bottle next", description: "What to bottle next from recent demand.", adminOnly: true },
-  { href: "/reports/customers", label: "Customers & wholesale", description: "Customer list, reorder reminders and wholesale price lists.", adminOnly: true },
+  { href: "/insights", label: "Overview", description: "Headline numbers for the season." },
+  { href: "/insights/survival", label: "Winter survival", description: "Colonies through winter, by apiary, stand and queen line." },
+  { href: "/insights/yield", label: "Honey yield", description: "Hive leaderboard and year-over-year harvest weight." },
+  { href: "/insights/economics", label: "Apiary economics", description: "Cost and margin per apiary, allocated by yield.", adminOnly: true },
+  { href: "/insights/profitability", label: "Profitability", description: "Revenue, expenses, break-even prices and margins.", adminOnly: true },
+  { href: "/sales/expenses", label: "Expenses", description: "Everything spent this season, assignable to lots and hives. Edited in Sales.", adminOnly: true },
+  { href: "/insights/bottling", label: "Bottle next", description: "What to bottle next from recent demand.", adminOnly: true },
+  { href: "/sales/customers", label: "Customers & wholesale", description: "Customer list, reorder reminders and wholesale price lists. Edited in Sales.", adminOnly: true },
 ] as const;
 
 export const REPORT_GROUPS = [
   {
-    href: "/reports/outcomes",
+    href: "/insights/outcomes",
     label: "Outcomes",
-    matches: ["/reports/survival", "/reports/yield"],
+    matches: ["/insights/survival", "/insights/yield"],
   },
   {
-    href: "/reports/finance",
+    href: "/insights/finance",
     label: "Finance",
     adminOnly: true,
-    matches: [
-      "/reports/economics",
-      "/reports/profitability",
-      "/reports/expenses",
-    ],
+    matches: ["/insights/economics", "/insights/profitability"],
   },
   {
-    href: "/reports/sales-planning",
+    href: "/insights/sales-planning",
     label: "Sales & planning",
     adminOnly: true,
-    matches: ["/reports/bottling", "/reports/customers"],
+    matches: ["/insights/bottling"],
   },
 ] as const;
 
@@ -77,15 +79,15 @@ export function ReportsSectionNav() {
 
   // The report home is already a visual directory. Repeating every report in
   // a pill strip above those cards was redundant and clipped at tablet width.
-  if (pathname === "/reports") return null;
+  if (pathname === "/insights") return null;
 
   return (
     <SectionNav
-      label="Report sections"
+      label="Insights sections"
       sections={groups}
       mobileSections={pages}
-      mobileRootHref="/reports"
-      rootHref="/reports/outcomes"
+      mobileRootHref="/insights"
+      rootHref="/insights/outcomes"
       pathname={pathname}
       hrefSuffix={year ? `?year=${encodeURIComponent(year)}` : ""}
     />

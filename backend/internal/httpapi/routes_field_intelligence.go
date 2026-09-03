@@ -579,7 +579,7 @@ func (s *Server) hiveTagData(r *http.Request, id uuid.UUID) (map[string]any, err
 	if err != nil {
 		return nil, err
 	}
-	target := strings.TrimRight(s.cfg.AppURL, "/") + "/hives/" + id.String()
+	target := strings.TrimRight(s.cfg.AppURL, "/") + "/yard/hives/" + id.String()
 	return map[string]any{
 		"hiveId": id, "apiaryId": apiaryID, "apiaryName": apiaryName,
 		"positionLabel": position, "url": target,
@@ -621,7 +621,7 @@ func (s *Server) hiveTagQR(w http.ResponseWriter, r *http.Request) {
 			size = parsed
 		}
 	}
-	target := strings.TrimRight(s.cfg.AppURL, "/") + "/hives/" + id.String()
+	target := strings.TrimRight(s.cfg.AppURL, "/") + "/yard/hives/" + id.String()
 	png, err := qrcode.Encode(target, qrcode.Medium, size)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not generate QR code")

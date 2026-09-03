@@ -51,10 +51,10 @@ test("service worker source encodes offline queue contracts", async ({
   expect(retry).not.toContain("queuedAt =");
 
   expect(sw).toContain('"/login"');
-  expect(sw).toContain('"/dashboard"');
-  expect(sw).toContain('"/operations/yard-queue"');
-  expect(sw).toContain('"/honey"');
-  expect(sw).toContain('"/honey/market-day"');
+  expect(sw).toContain('"/today"');
+  expect(sw).toContain('"/yard/queue"');
+  expect(sw).toContain('"/yard/hives"');
+  expect(sw).toContain('"/production"');
   expect(sw).toContain("function navigateFallback");
   expect(sw).toContain("caches.match(url.pathname)");
 

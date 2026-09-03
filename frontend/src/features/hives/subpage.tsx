@@ -52,7 +52,7 @@ export function HiveSubpage({
     <div className="grid gap-5">
       <header className="grid gap-2">
         <Button asChild variant="ghost" size="sm" className="-ml-3 w-fit">
-          <Link href={`/hives/${hiveId}`}>
+          <Link href={`/yard/hives/${hiveId}`}>
             <ArrowLeft />
             {hive.data.positionLabel}
           </Link>

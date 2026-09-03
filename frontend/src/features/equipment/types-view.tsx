@@ -318,8 +318,9 @@ export function TypesView() {
             Equipment types &amp; BOMs
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            The catalog behind the inventory: types, their varieties, and the
-            bill of materials that lets you build one thing from others.
+            The catalog behind your equipment stock: types, their varieties,
+            and the bill of materials that lets you build one thing from
+            others.
           </p>
         </div>
         <Button onClick={() => setEditorState({})}>
@@ -338,7 +339,7 @@ export function TypesView() {
         <Card>
           <CardContent className="py-8 text-center text-sm text-muted-foreground">
             No equipment types yet. Create one, or seed the standard catalog
-            from the inventory page.
+            from the equipment page.
           </CardContent>
         </Card>
       ) : (
@@ -955,7 +956,7 @@ function DeleteTypeDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {type?.name}?</AlertDialogTitle>
           <AlertDialogDescription>
-            Only a type with no inventory history can be deleted; anything that
+            Only a type with no stock history can be deleted; anything that
             has been stocked or deployed should be retired instead. Variants of
             this type become base types.
           </AlertDialogDescription>

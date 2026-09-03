@@ -118,9 +118,9 @@ const deploySchema = z.object({
 type DeployValues = z.infer<typeof deploySchema>;
 
 /**
- * The one deploy dialog. From the inventory table the stock row is fixed and
- * the hive is chosen; from a hive's Equipment tab the hive is fixed and the
- * stock row is chosen. Both directions used to be independent
+ * The one deploy dialog. From the equipment stock table the stock row is
+ * fixed and the hive is chosen; from a hive's Equipment tab the hive is
+ * fixed and the stock row is chosen. Both directions used to be independent
  * implementations with different validation.
  */
 export function DeployDialog({

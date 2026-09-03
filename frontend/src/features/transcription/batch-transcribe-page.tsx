@@ -85,7 +85,7 @@ export function BatchTranscribePage() {
             size="sm"
             className="-ml-3 mb-1 w-fit text-muted-foreground"
           >
-            <Link href={`/apiaries/${presetApiaryId}`}>
+            <Link href={`/yard/apiaries/${presetApiaryId}`}>
               <ArrowLeft />
               Back to the yard
             </Link>

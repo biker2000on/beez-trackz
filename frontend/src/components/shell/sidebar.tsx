@@ -14,6 +14,7 @@ import {
   visibleNavItems,
   type NavRoute,
 } from "@/components/shell/nav-items";
+import { AccountLink } from "@/components/shell/account-link";
 import { LogoutButton } from "@/components/shell/logout-button";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { CommandPaletteButton } from "@/components/shortcuts/provider";
@@ -29,7 +30,7 @@ export function Sidebar() {
   const query = searchParams.toString();
   const currentHref = `${pathname}${query ? `?${query}` : ""}`;
   const profile = useAccessProfile();
-  const currentHiveId = pathname.match(/^\/hives\/([^/]+)/)?.[1];
+  const currentHiveId = pathname.match(/^\/yard\/hives\/([^/]+)/)?.[1];
   const hives = useHives({ includeArchived: true }, Boolean(currentHiveId));
   const isAdmin = profile.data?.isAdmin === true;
   const items = visibleNavItems(NAV_ITEMS, isAdmin);
@@ -43,7 +44,7 @@ export function Sidebar() {
   );
   const navRef = React.useRef<HTMLElement>(null);
 
-  const currentApiaryId = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
+  const currentApiaryId = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
   const currentHive = hives.data?.find((hive) => hive.id === currentHiveId);
   const contextApiaryId = currentApiaryId ?? currentHive?.apiaryId;
   const canEditAny =
@@ -80,7 +81,7 @@ export function Sidebar() {
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r bg-sidebar pt-[var(--safe-top)] text-sidebar-foreground lg:flex">
       <div className="flex items-center justify-between px-4 py-5">
         <Link
-          href="/dashboard"
+          href="/today"
           className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Logo />
@@ -155,6 +156,7 @@ export function Sidebar() {
       <div className="px-3 pb-4">
         <Separator className="mb-3" />
         <CommandPaletteButton />
+        <AccountLink />
         <LogoutButton />
       </div>
     </aside>

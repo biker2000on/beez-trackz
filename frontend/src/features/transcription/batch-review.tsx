@@ -127,7 +127,7 @@ export function BatchReviewPanel({
       void queryClient.invalidateQueries({ queryKey: ["hives"] });
       void queryClient.invalidateQueries({ queryKey: ["inspections"] });
       void queryClient.invalidateQueries({ queryKey: ["analytics"] });
-      router.push("/dashboard");
+      router.push("/today");
     },
     onError: (error) => toast.error(error.message),
   });

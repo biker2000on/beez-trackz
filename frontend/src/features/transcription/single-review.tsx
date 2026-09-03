@@ -80,7 +80,7 @@ export function SingleReviewPanel({
       void queryClient.invalidateQueries({ queryKey: ["hives"] });
       void queryClient.invalidateQueries({ queryKey: ["inspections"] });
       void queryClient.invalidateQueries({ queryKey: ["analytics"] });
-      router.push(`/hives/${hiveId}`);
+      router.push(`/yard/hives/${hiveId}`);
     },
     onError: (error) => toast.error(error.message),
   });

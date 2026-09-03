@@ -28,7 +28,7 @@ export function BulkRecordPage({ apiaryId }: { apiaryId: string }) {
           size="sm"
           className="-ml-3 w-fit text-muted-foreground"
         >
-          <Link href={`/apiaries/${apiaryId}`}>
+          <Link href={`/yard/apiaries/${apiaryId}`}>
             <ArrowLeft />
             {apiary.data?.name ?? "Apiary"}
           </Link>

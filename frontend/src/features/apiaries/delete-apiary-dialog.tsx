@@ -35,7 +35,7 @@ export function DeleteApiaryDialog({
       await deleteApiary.mutateAsync(apiaryId);
       toast.success("Apiary deleted");
       onOpenChange(false);
-      router.push("/apiaries");
+      router.push("/yard/apiaries");
     } catch (error) {
       // Surfaces the 409 guard ("Cannot delete apiary with active hives.").
       toast.error(

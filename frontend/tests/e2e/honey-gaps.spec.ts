@@ -113,7 +113,7 @@ test("honey overview flags negative bulk and asks for harvests", async ({
   page,
 }) => {
   await mockApp(page, { bulkOnHandLbs: -8.3, totalHarvestedLbs: 0 });
-  await page.goto("/honey");
+  await page.goto("/production");
   await expect(page.getByText("Bulk honey is short of what was jarred")).toBeVisible();
   await expect(page.getByRole("link", { name: "Record harvests" })).toBeVisible();
   await expect(page.getByText("Jars on the shelf exceed recorded harvests.")).toBeVisible();
@@ -123,7 +123,7 @@ test("market day refuses a paid sale when the jar has no price", async ({
   page,
 }) => {
   await mockApp(page, { bulkOnHandLbs: 0, totalHarvestedLbs: 0 });
-  await page.goto("/honey/market-day");
+  await page.goto("/sales/market-day");
   await expect(page.getByText("No price")).toBeVisible();
   await page.getByRole("button", { name: /Pint/ }).first().click();
   await expect(

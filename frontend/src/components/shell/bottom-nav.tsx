@@ -6,6 +6,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { ChevronDown, Menu } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { AccountLink } from "@/components/shell/account-link";
 import {
   NAV_ITEMS,
   isNavRouteActive,
@@ -31,7 +32,7 @@ export function BottomNav() {
   const query = searchParams.toString();
   const currentHref = `${pathname}${query ? `?${query}` : ""}`;
   const profile = useAccessProfile();
-  const currentHiveId = pathname.match(/^\/hives\/([^/]+)/)?.[1];
+  const currentHiveId = pathname.match(/^\/yard\/hives\/([^/]+)/)?.[1];
   const hives = useHives({ includeArchived: true }, Boolean(currentHiveId));
   const isAdmin = profile.data?.isAdmin === true;
   const [moreOpen, setMoreOpen] = React.useState(false);
@@ -41,7 +42,7 @@ export function BottomNav() {
   const allItems = visibleNavItems(NAV_ITEMS, isAdmin);
   const overflow = overflowMobileItems(isAdmin);
 
-  const currentApiaryId = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
+  const currentApiaryId = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
   const currentHive = hives.data?.find((hive) => hive.id === currentHiveId);
   const contextApiaryId = currentApiaryId ?? currentHive?.apiaryId;
   const canEditAny =
@@ -186,6 +187,9 @@ export function BottomNav() {
               );
             })}
           </ul>
+          <div className="border-t pt-2 pb-4">
+            <AccountLink onNavigate={() => setMoreOpen(false)} />
+          </div>
         </SheetContent>
       </Sheet>
     </>

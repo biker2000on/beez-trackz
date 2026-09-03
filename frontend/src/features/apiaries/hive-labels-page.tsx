@@ -106,7 +106,7 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
           size="sm"
           className="-ml-3 w-fit text-muted-foreground"
         >
-          <Link href={`/apiaries/${apiaryId}`}>
+          <Link href={`/yard/apiaries/${apiaryId}`}>
             <ArrowLeft />
             {apiary.data?.name ?? "Apiary"}
           </Link>
@@ -169,7 +169,7 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
                 hives on the apiary layout, then come back to print tags.
               </p>
               <Button asChild variant="outline">
-                <Link href={`/apiaries/${apiaryId}`}>Back to apiary layout</Link>
+                <Link href={`/yard/apiaries/${apiaryId}`}>Back to apiary layout</Link>
               </Button>
             </div>
           ) : null}

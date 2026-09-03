@@ -188,7 +188,7 @@ export function LossReportCard() {
             </div>
 
             <div className="rounded-lg border">
-              {/* The /inventory page's stock grid owns the window keyboard
+              {/* The /equipment page's stock grid owns the window keyboard
                   shortcuts, so this grid must not listen. */}
               <DataGrid
                 table={table}

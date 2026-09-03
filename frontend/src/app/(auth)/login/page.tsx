@@ -60,7 +60,7 @@ function LoginForm() {
   React.useEffect(() => {
     if (!status.data) return;
     if (status.data.authenticated) {
-      router.replace("/dashboard");
+      router.replace("/today");
     } else if (!status.data.setupComplete && !status.data.oidcEnabled) {
       router.replace("/setup");
     }
@@ -84,7 +84,7 @@ function LoginForm() {
         ...(values.email ? { email: values.email } : {}),
         password: values.password,
       });
-      router.replace("/dashboard");
+      router.replace("/today");
     } catch (error) {
       if (error instanceof ApiError) {
         const body = error.body as { setupRequired?: boolean } | null;

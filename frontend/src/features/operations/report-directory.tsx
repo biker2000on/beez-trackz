@@ -11,21 +11,21 @@ const GROUP_META = {
   outcomes: {
     title: "Outcomes",
     description: "Colony survival and honey yield across seasons.",
-    hrefs: ["/reports/survival", "/reports/yield"],
+    hrefs: ["/insights/survival", "/insights/yield"],
   },
   finance: {
     title: "Finance",
     description: "Costs, revenue, margins, and profitability.",
     hrefs: [
-      "/reports/economics",
-      "/reports/profitability",
-      "/reports/expenses",
+      "/insights/economics",
+      "/insights/profitability",
+      "/sales/expenses",
     ],
   },
   sales: {
     title: "Sales & planning",
     description: "Bottling priorities, customers, and wholesale follow-up.",
-    hrefs: ["/reports/bottling", "/reports/customers"],
+    hrefs: ["/insights/bottling", "/sales/customers"],
   },
 } as const;
 

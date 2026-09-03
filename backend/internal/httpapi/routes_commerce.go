@@ -74,16 +74,6 @@ func commerceSlug(value string) string {
 	return slug
 }
 
-func commerceSlugReserved(slug string) bool {
-	switch slug {
-	case "activity", "harvests", "jars", "lots", "market-day", "production",
-		"products", "sales", "serials", "sessions":
-		return true
-	default:
-		return false
-	}
-}
-
 func commerceOptionalHTTPURL(value *string) (*string, error) {
 	trimmed := honeyTrimPtr(value)
 	if trimmed == nil {
@@ -664,10 +654,6 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.PublicSlug) == "" {
 		slug = commerceSlug(req.LotCode)
 	}
-	if commerceSlugReserved(slug) {
-		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
-		return
-	}
 	id := uuid.New()
 	result, err := s.runApplicationCommand(r, http.StatusCreated,
 		func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
@@ -733,10 +719,6 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := commerceSlug(req.PublicSlug)
-	if commerceSlugReserved(slug) {
-		writeError(w, http.StatusBadRequest, "publicSlug is reserved by the Honey app")
-		return
-	}
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
 		_, err := production.UpdateLot(ctx, uow, production.LotInput{
 			ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,

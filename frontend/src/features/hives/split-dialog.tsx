@@ -123,7 +123,7 @@ export function SplitDialog({
         requestAnimationFrame(() => form.setFocus("positionLabel"));
       } else {
         onOpenChange(false);
-        router.push(`/hives/${result.id}`);
+        router.push(`/yard/hives/${result.id}`);
       }
     } catch (error) {
       toast.error(

@@ -154,7 +154,7 @@ export function HoneyOverview() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Recent harvests</CardTitle>
             <Button asChild variant="ghost" size="sm">
-              <Link href="/honey/harvests">
+              <Link href="/production/harvests">
                 All harvests
                 <ArrowRight />
               </Link>
@@ -204,7 +204,7 @@ export function HoneyOverview() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Recent activity</CardTitle>
             <Button asChild variant="ghost" size="sm">
-              <Link href="/honey/activity">
+              <Link href="/production/activity">
                 Full ledger
                 <ArrowRight />
               </Link>
@@ -258,7 +258,7 @@ export function HoneyOverview() {
             place so the numbers cannot disagree.
           </p>
           <Button asChild variant="outline" size="sm">
-            <Link href="/reports">
+            <Link href="/insights">
               <ChartNoAxesCombined />
               Open reports
             </Link>
@@ -291,7 +291,7 @@ function NextActions({
       key: "bulk-short",
       title: "Bulk honey is short of what was jarred",
       detail: `${formatHoney(Math.abs(bulkOnHandLbs))} more has been jarred than harvested. Record the missing harvests or write off the gap.`,
-      href: "/honey/harvests",
+      href: "/production/harvests",
       cta: "Record harvests",
     });
   } else if (bulkOnHandLbs > 0) {
@@ -299,7 +299,7 @@ function NextActions({
       key: "bottle",
       title: `${formatHoney(bulkOnHandLbs)} awaiting bottling`,
       detail: "Bulk honey is extracted but not yet in jars.",
-      href: "/reports/bottling",
+      href: "/insights/bottling",
       cta: "See bottling plan",
     });
   }
@@ -310,7 +310,7 @@ function NextActions({
       detail: lowStock
         .map((row) => `${row.label} ${row.onHand}/${row.threshold}`)
         .join(" · "),
-      href: "/honey/jars",
+      href: "/production/jars",
       cta: "Review jars",
     });
   }

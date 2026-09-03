@@ -227,7 +227,7 @@ export function HiveOverviewTab({
               ? `${mite.unit}${varroa.data?.overThreshold ? " · over action level" : ""} · ${formatDate(latestMite.date)}`
               : "Varroa load and inspection summary"
           }
-          href={`/hives/${hiveId}?tab=health`}
+          href={`/yard/hives/${hiveId}?tab=health`}
           loading={inspections.isPending || varroa.isPending}
         />
         <SummaryCard
@@ -235,7 +235,7 @@ export function HiveOverviewTab({
           label="Feeding"
           value={`${openFeeders} open ${openFeeders === 1 ? "feeder" : "feeders"}`}
           detail={latestFeeding ? `Last fed ${formatDate(latestFeeding.dateFed)}` : "No feeding recorded"}
-          href={`/hives/${hiveId}?tab=timeline&view=feedings`}
+          href={`/yard/hives/${hiveId}?tab=timeline&view=feedings`}
           loading={feedings.isPending}
         />
         <SummaryCard
@@ -243,7 +243,7 @@ export function HiveOverviewTab({
           label="Queen"
           value={currentQueen ? "Active queen" : "No active queen"}
           detail={currentQueen?.introducedDate ? `Introduced ${formatDate(currentQueen.introducedDate)}` : "Open queen history"}
-          href={`/hives/${hiveId}/queen`}
+          href={`/yard/hives/${hiveId}/queen`}
           loading={queens.isPending}
         />
         <SummaryCard
@@ -251,7 +251,7 @@ export function HiveOverviewTab({
           label="Equipment"
           value={`${activeEquipment} deployed`}
           detail="Current and returned equipment"
-          href={`/hives/${hiveId}/equipment`}
+          href={`/yard/hives/${hiveId}/equipment`}
           loading={deployments.isPending}
         />
         <SummaryCard
@@ -259,7 +259,7 @@ export function HiveOverviewTab({
           label="Photos"
           value={`${photos.data?.length ?? 0} on file`}
           detail="View and add hive photos"
-          href={`/hives/${hiveId}/photos`}
+          href={`/yard/hives/${hiveId}/photos`}
           loading={photos.isPending}
         />
         <SummaryCard
@@ -267,7 +267,7 @@ export function HiveOverviewTab({
           label="Timeline"
           value="Full history"
           detail="Inspections, feedings, treatments, moves, and harvests"
-          href={`/hives/${hiveId}?tab=timeline`}
+          href={`/yard/hives/${hiveId}?tab=timeline`}
         />
       </div>
       <HiveGpsCard hive={hive.data} canEdit={canEdit} />

@@ -1,69 +1,64 @@
 "use client";
 
 /**
- * Section menu for the Honey module. The old tab strip became real
+ * Section menu for the Production area. The old tab strip became real
  * routes, so this is a link bar rather than a `<Tabs>` — every section is
  * deep-linkable and back-button safe for free.
  *
- * Overview and Production stay here; Sales is a top-level destination.
  * Detail routes resolve to their parent group without changing the visible
  * navigation, so the chrome never jumps when opening Activity or a QR lookup.
  *
- * Market day is a full-screen point-of-sale route with its own chrome, so the
- * menu hides itself there (a stray click must not abandon a cart mid-sale).
+ * The workbench hides the menu: it is a single-read screen (design §4.8) and
+ * the quick-action dialogs below would each prefetch their option lists on
+ * top of the one call it is allowed to make. Sales moved out of this file
+ * entirely — its nav lives in the shell now (wave 4 frontend finding 5).
  */
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ShoppingBasket } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { SectionNav } from "@/components/shell/section-nav";
 
 import { HoneyQuickActions } from "./quick-actions";
 
-export const HONEY_SECTIONS = [
+export const PRODUCTION_SECTIONS = [
   {
-    href: "/honey",
+    href: "/production",
     label: "Overview",
-    matches: ["/honey/activity"],
+    matches: ["/production/activity"],
   },
   {
-    href: "/honey/production",
+    href: "/production/overview",
     label: "Production",
     matches: [
-      "/honey/harvests",
-      "/honey/jars",
-      "/honey/lots",
-      "/honey/serials",
-      "/honey/sessions",
-      "/honey/products",
+      "/production/harvests",
+      "/production/jars",
+      "/production/lots",
+      "/production/serials",
+      "/production/sessions",
+      "/production/products",
+      // Varietals was missing here while `NAV_ITEMS` listed it, so the menu
+      // de-highlighted on that one route. One nav tree, one answer.
+      "/production/varietals",
     ],
   },
 ] as const;
 
-export function HoneySectionNav() {
+export function ProductionSectionNav() {
   const pathname = usePathname();
-  if (pathname.startsWith("/honey/market-day") || pathname.startsWith("/sales/market-day")) return null;
+  if (pathname.startsWith("/production/workbench")) return null;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-3">
       <SectionNav
-        label="Honey sections"
-        sections={HONEY_SECTIONS}
-        rootHref="/honey"
+        label="Production sections"
+        sections={PRODUCTION_SECTIONS}
+        rootHref="/production"
         pathname={pathname}
       />
       <div className="flex items-center gap-2">
         {/* The overview owns the quick-action row; on sub-routes the same six
             dialogs (and their shortcuts) live behind this menu. */}
-        {pathname !== "/honey" && <HoneyQuickActions variant="menu" />}
-        <Button asChild size="sm" variant="outline">
-          <Link href="/sales/market-day">
-            <ShoppingBasket />
-            Market day
-          </Link>
-        </Button>
+        {pathname !== "/production" && <HoneyQuickActions variant="menu" />}
       </div>
     </div>
   );

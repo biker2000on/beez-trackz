@@ -180,7 +180,7 @@ function RecommendationCard({
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           {recommendation.hiveName && recommendation.hiveId && (
             <Link
-              href={`/hives/${recommendation.hiveId}`}
+              href={`/yard/hives/${recommendation.hiveId}`}
               className="flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:text-primary hover:underline"
             >
               <Hexagon className="size-3" />
@@ -322,7 +322,7 @@ export function RecommendationsView() {
 
   const openHive = React.useCallback(
     (rec: Recommendation) => {
-      if (rec.hiveId) router.push(`/hives/${rec.hiveId}`);
+      if (rec.hiveId) router.push(`/yard/hives/${rec.hiveId}`);
     },
     [router],
   );

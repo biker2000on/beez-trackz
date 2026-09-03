@@ -1354,7 +1354,97 @@ workbench).
   extraction, lot, bottling, finished stock and sale without leaving Production
   and Sales; neither workbench is assembled from more than one call.
 
-### Wave 5 — The route rewrite, in one change
+### Wave 5 — The route rewrite, in one change — **landed 2026-09-03, with deviations**
+
+Executed as one coordinated rewrite, integrated in wave 5a and wave 5b,
+against `docs/plans/2026-09-03-route-rename-map.md`: all sixty rows of §1,
+every surface in §2, and the §4 searches clean. Every page under
+`frontend/src/app/(app)` now sits at its area-prefixed path; `NAV_ITEMS` is
+seven areas with today's `adminOnly` / `requiresEdit` gating intact and
+`MOBILE_PRIORITY` is one entry per area, so the phone bar is Today / Yard /
+Production / Sales / More for an administrator and Today / Yard / Insights /
+More for everyone else; `contextualNavRoutes` matches on `/yard/...`;
+`manifest.start_url` is `/today` and its three shortcuts are area-prefixed;
+the SW `SHELL` is the new field routes, which arms the previously
+self-skipping last test of `work.spec.ts`; `CALM_ROUTES` is derived from
+`navRootHrefs()`; the palette's two record hrefs moved and `:375` did not;
+the work projection's hive href is `/yard/hives/{id}` (frontend-side — the
+backend `app/work` command paths are API paths and were already correct);
+`hiveTagQR` targets `/yard/hives/{id}`; the OIDC success redirect targets
+`/today`; the twelve `/harvest/*` shims, `/genealogy`, `/honey/market-day`,
+`/honey/sales`, `/honey/sales/[id]` and `/settings` are deleted with no
+redirect anywhere; `commerceSlugReserved` and its test are gone;
+`README.md:59-64` names the new precached routes; and
+`frontend/tests/e2e/retired-routes.spec.ts` is the standing negative proof.
+
+**Deviations and judgement calls.**
+
+1. **Ten of the retired paths cannot answer 404, and it is structural.**
+   `/honey/[slug]` is frozen and is a *dynamic* segment, so `/honey/activity`,
+   `/honey/lots`, `/honey/varietals` and the other single-segment honey pages
+   now resolve as public story slugs — which is exactly the evacuation §2.3
+   asked for. `retired-routes.spec.ts` therefore splits: the other 34 paths
+   are asserted `404` with `maxRedirects: 0` (a compatibility redirect would
+   otherwise be followed and answer 200), and these ten are asserted to render
+   the story chrome and *not* the app shell. The map's §4.5 sketch listed them
+   in one `RETIRED` array; that array cannot pass, and the split is what it
+   was actually asking for.
+2. **The spec is one aggregated request-based test per group, not one test per
+   path.** Forty-odd browser navigations on the shared dev server is enough
+   contention to time out the specs beside it, and a status code needs no
+   browser. Failures name every offending path at once rather than one per
+   run.
+3. **The e2e flake was fixed by warming and a single browser worker, not by a
+   production-build `webServer`.** `navigation.spec.ts:158` was racing
+   `next dev`'s first server and client compilation of the routes it visits,
+   not asserting anything false. A production server would remove the race
+   but cannot be used: the service worker registers only under
+   `NODE_ENV === "production"` (`components/pwa-register.tsx:54`) and then
+   serves `/api/v1/*` from its own `fetch` handler, which `page.route` mocks do
+   not intercept — the whole suite drives the UI from mocked reads, so every
+   spec would be talking to a backend that is not running.
+   `tests/e2e/global-setup.ts` pays the server-route compile cost before any
+   test, while `playwright.config.ts` keeps the first real browser navigation
+   from compiling client chunks concurrently on the shared `next dev` server.
+4. **`sales/layout.tsx` was deleted rather than restructured** (wave 4
+   frontend finding 5). Sales navigation lives in the shell now, so the layout
+   had nothing left to do but mount `HoneyQuickActions` and its six eager
+   option-list fetches on every `/sales/*` route including the workbench. The
+   dialogs moved to `/sales` itself, the one page that needs them, and
+   `/sales/workbench` is back to its single read. `production/layout.tsx`
+   keeps a section nav and hides it on `/production/workbench` for the same
+   reason.
+5. **`/settings` is deleted in this wave, but its split is still wave 6.**
+   `/me` and `/admin` both render `SettingsView`, which already role-gates its
+   own sections, so no user loses a section they can reach today and no route
+   is left aliased. `/admin/setup` does not exist yet — it arrives with the
+   split.
+6. **`/me` needed an entry point.** It is deliberately not an eighth area, so
+   `components/shell/account-link.tsx` puts one "My preferences" link beside
+   Log out in the sidebar and at the foot of the mobile More sheet. Without it
+   the route would exist and nothing would reach it.
+7. **Two stale route regexes were found and fixed outside the map.**
+   `sidebar.tsx` and `bottom-nav.tsx` derived the current apiary/hive id with
+   `/^\/hives\//` and `/^\/apiaries\//`, which no longer match anything, so
+   per-apiary editor scoping in both shells was silently falling back to
+   "can edit somewhere". Both now match `/yard/...`. The map's §4 searches do
+   not catch a regex literal — worth remembering for wave 7.
+8. **The §2.3 vocabulary rule was applied past the route.** The rule bans the
+   word "inventory" for hive gear in any user-facing string, not only in a
+   path. The Equipment page heading, its summary `aria-label`, its load-error
+   copy and its `<title>` said "inventory"; they now say equipment/stock, and
+   `features/equipment/inventory-view.tsx` is `stock-view.tsx` exporting
+   `EquipmentStockView`. §4.4's second search now prints only ledger
+   vocabulary.
+9. **`backend/internal/httpapi/zz_polyagent_tmp_shim.go` remains an integration
+   dependency, not a wave-5 deliverable.** Wave 4's backend half left
+   `routes_workbench.go:33` calling `s.withMemberships`, which never landed.
+   An interrupted wave-5 attempt committed a no-op identity shim, so build,
+   vet and the focused backend suite are green at this integration point, but
+   workbench reads do not load memberships at the edge. That file is outside
+   wave 5b's owned paths. Integration must land the real helper and delete the
+   temporary shim before shipping.
+
 
 - **Depends on** waves 2 and 4: canonical destinations must exist before
   aliases are deleted.

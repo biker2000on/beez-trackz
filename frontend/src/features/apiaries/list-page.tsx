@@ -177,7 +177,7 @@ export function ApiariesListPage() {
                 </Card>
               </button>
             ) : (
-              <Link key={apiary.id} href={`/apiaries/${apiary.id}`}>
+              <Link key={apiary.id} href={`/yard/apiaries/${apiary.id}`}>
                 <Card className="h-full transition-colors hover:border-primary/50">
                 <CardHeader className="pb-2">
                   <CardTitle className="flex items-center gap-2">

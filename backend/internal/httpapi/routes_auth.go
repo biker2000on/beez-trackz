@@ -570,7 +570,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, auth.NewSessionCookie(sessionToken, s.secureCookies()))
-	http.Redirect(w, r, strings.TrimRight(s.cfg.AppURL, "/")+"/dashboard", http.StatusFound)
+	http.Redirect(w, r, strings.TrimRight(s.cfg.AppURL, "/")+"/today", http.StatusFound)
 }
 
 func nullIfEmpty(s string) *string {

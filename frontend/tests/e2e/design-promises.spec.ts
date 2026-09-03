@@ -117,10 +117,10 @@ test("offline navigation serves cached pages before /offline (README.md)", () =>
   for (const route of [
     "/offline",
     "/login",
-    "/dashboard",
-    "/operations/yard-queue",
-    "/honey",
-    "/honey/market-day",
+    "/today",
+    "/yard/queue",
+    "/yard/hives",
+    "/production",
     "/sales",
     "/sales/market-day",
   ]) {

@@ -58,6 +58,10 @@ import {
   type HarvestLot,
 } from "./api";
 
+function honeyStoryHref(slug: string) {
+  return `/honey/${slug}`;
+}
+
 export function LotsTab() {
   const lots = useHarvestLots();
   const harvests = useHarvests();
@@ -74,7 +78,7 @@ export function LotsTab() {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button asChild size="sm" variant="outline">
-          <Link href="/honey/serials">
+          <Link href="/production/serials">
             <ScanSearch />
             Serial lookup
           </Link>
@@ -133,7 +137,7 @@ export function LotsTab() {
                         {lot.lockout.message}
                       </p>
                     )}
-                    <Link href={`/honey/${lot.publicSlug}`} target="_blank" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                    <Link href={honeyStoryHref(lot.publicSlug)} target="_blank" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
                       Open Honey Story <ExternalLink className="size-3" />
                     </Link>
                   </div>

@@ -51,16 +51,16 @@ Copy `.env.example` values into your environment (`SESSION_SECRET` and
 ## Collaboration, offline use, and MCP
 
 - The password owner and existing OIDC identities migrate as administrators.
-  Administrators add collaborators by verified OIDC email in **Settings >
+  Administrators add collaborators by verified OIDC email in **Admin >
   Users, access, and API**, assigning `viewer` or `editor` per apiary.
 - Viewers can read their assigned apiaries. Editors can also change apiary,
   hive, inspection, feeding, bloom, photo, and operational records. Global
   AI, inventory, commerce, and instance settings remain administrator-only.
 - The production PWA caches field-data reads and queues supported JSON writes
   in IndexedDB. Offline navigation serves the cached page when there is one —
-  the service worker precaches the field routes (dashboard, yard queue,
-  harvest, sales, and both market-day screens) and falls back to a cached copy
-  of the requested path; `/offline` is only shown for a route that was never
+  the service worker precaches the field routes (today, yard queue, hives,
+  production, sales, and market day) and falls back to a cached copy of the
+  requested path; `/offline` is only shown for a route that was never
   cached. Auth, access, and settings reads are never cached.
 - Reconnect replays queued writes with idempotency keys, and each replay
   carries the timestamp the change was queued at. If the server record changed

@@ -132,7 +132,7 @@ function QueueRow({ item }: { item: YardQueueItem }) {
 export function YardQueueLink() {
   return (
     <Button asChild size="sm" variant="outline">
-      <Link href="/operations/yard-queue">
+      <Link href="/yard/queue">
         <ClipboardList />
         Yard queue
       </Link>

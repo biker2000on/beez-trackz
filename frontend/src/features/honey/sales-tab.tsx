@@ -294,7 +294,7 @@ export function SalesTab() {
         </p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/honey">Back to Honey</Link>
+            <Link href="/production">Back to Honey</Link>
           </Button>
           <Button type="button" size="sm" onClick={() => void sales.refetch()}>
             Retry

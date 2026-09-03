@@ -9,7 +9,7 @@ import type { WorkCommand, WorkItem } from "./types";
 
 /**
  * The action-center keyboard controller, ported verbatim from the dashboard
- * (`features/dashboard/dashboard-view.tsx:139-215` before this wave) and
+ * (the dashboard's action centre, deleted with that page in wave 5) and
  * retargeted at `items[].commands[]` (design 2026-09-03 D8).
  *
  * What is preserved: arrows move a focus ring in exactly the visible order,
@@ -76,7 +76,7 @@ export function useActionCenter({
   items,
   onRun,
   busy,
-  hiveHref = (hiveId) => `/hives/${hiveId}`,
+  hiveHref = (hiveId) => `/yard/hives/${hiveId}`,
 }: ActionCenterOptions) {
   const router = useRouter();
   const [focusedIndex, setFocusedIndex] = React.useState(-1);

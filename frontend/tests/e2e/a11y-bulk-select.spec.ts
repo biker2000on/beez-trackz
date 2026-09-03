@@ -69,7 +69,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("hive table rows are selectable from the keyboard", async ({ page }) => {
-  await page.goto("/hives");
+  await page.goto("/yard/hives");
   await page.getByRole("button", { name: "Bulk select" }).click();
 
   const rows = page.locator("tbody tr");
@@ -95,7 +95,7 @@ test("hive table rows are selectable from the keyboard", async ({ page }) => {
 test("leaving bulk mode keeps the selection; Clear all empties it", async ({
   page,
 }) => {
-  await page.goto("/hives");
+  await page.goto("/yard/hives");
   await page.getByRole("button", { name: "Bulk select" }).click();
   await page.locator("tbody tr").first().click();
   await expect(page.getByText("1 selected")).toBeVisible();
@@ -113,7 +113,7 @@ test("leaving bulk mode keeps the selection; Clear all empties it", async ({
 });
 
 test("bulk mode still offers a way to open a hive", async ({ page }) => {
-  await page.goto("/hives");
+  await page.goto("/yard/hives");
   await page.getByRole("button", { name: "Bulk select" }).click();
   await expect(
     page.locator("tbody").getByRole("link", { name: "A1" }),

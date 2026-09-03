@@ -158,53 +158,53 @@ test.beforeEach(async ({ page }) => {
 test("detail pages expose no more than three peer tabs and preserve URL state", async ({
   page,
 }) => {
-  await page.goto("/apiaries/a1");
+  await page.goto("/yard/apiaries/a1");
   await expect(page.getByRole("tab")).toHaveCount(2);
   await page.getByRole("tab", { name: "Layout" }).click();
   await expect(page).toHaveURL(/tab=layout/);
 
-  await page.goto("/apiaries/a1?tab=photos");
-  await expect(page).toHaveURL("/apiaries/a1/photos");
+  await page.goto("/yard/apiaries/a1?tab=photos");
+  await expect(page).toHaveURL("/yard/apiaries/a1/photos");
 
-  await page.goto("/hives/h1");
+  await page.goto("/yard/hives/h1");
   await expect(page.getByRole("tab")).toHaveCount(3);
   await page.getByRole("tab", { name: "Timeline" }).click();
   await expect(page).toHaveURL(/tab=timeline/);
 
-  await page.goto("/hives/h1?tab=queen");
-  await expect(page).toHaveURL("/hives/h1/queen");
+  await page.goto("/yard/hives/h1?tab=queen");
+  await expect(page).toHaveURL("/yard/hives/h1/queen");
 });
 
-test("Honey keeps the same three workflow groups on hidden detail routes", async ({
+test("Production keeps the same workflow groups on hidden detail routes", async ({
   page,
 }) => {
-  await page.goto("/honey");
-  const nav = page.getByRole("navigation", { name: "Honey sections" });
+  await page.goto("/production");
+  const nav = page.getByRole("navigation", { name: "Production sections" });
   await expect(nav.getByRole("link")).toHaveText([
     "Overview",
     "Production",
   ]);
 
-  await page.goto("/honey/activity");
+  await page.goto("/production/activity");
   await expect(nav.getByRole("link")).toHaveText([
     "Overview",
     "Production",
   ]);
 });
 
-test("report navigation fits tablet width and the report home has no duplicate strip", async ({
+test("insights navigation fits tablet width and the insights home has no duplicate strip", async ({
   page,
 }) => {
-  await page.goto("/reports");
+  await page.goto("/insights");
   await expect(
-    page.getByRole("navigation", { name: "Report sections" }),
+    page.getByRole("navigation", { name: "Insights sections" }),
   ).toHaveCount(0);
 
   for (const width of [768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 768 });
-    await page.goto("/reports/finance");
+    await page.goto("/insights/finance");
     const links = page
-      .getByRole("navigation", { name: "Report sections" })
+      .getByRole("navigation", { name: "Insights sections" })
       .getByRole("link");
     await expect(links).toHaveCount(3);
     for (const link of await links.all()) {
@@ -222,10 +222,10 @@ test("phone-width pages never scroll the document sideways", async ({
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   for (const path of [
-    "/apiaries/a1",
-    "/hives/h1",
-    "/hives/h1?tab=timeline",
-    "/reports/finance",
+    "/yard/apiaries/a1",
+    "/yard/hives/h1",
+    "/yard/hives/h1?tab=timeline",
+    "/insights/finance",
   ]) {
     await page.goto(path);
     await expect(page.locator("main")).toBeVisible();
@@ -238,11 +238,17 @@ test("phone-width pages never scroll the document sideways", async ({
   }
 });
 
-test("Home remains pinned in the mobile bottom bar", async ({ page }) => {
+// Today is the phone bar's first slot and Yard its second, for every role
+// (design 2026-09-03 §2.2): Saturday work starts in the yard, so no
+// admin-only area may push it off the bar.
+test("Today and Yard remain pinned in the mobile bottom bar", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/honey/activity");
+  await page.goto("/production/activity");
   const mainNav = page.getByRole("navigation", { name: "Mobile navigation" });
-  await expect(mainNav.getByRole("link", { name: "Home" })).toBeVisible();
+  await expect(mainNav.getByRole("link", { name: "Today" })).toBeVisible();
+  await expect(mainNav.getByRole("link", { name: "Yard" })).toBeVisible();
 });
 
 test("command palette follows keyboard selection without horizontal overflow", async ({
@@ -260,7 +266,7 @@ test("command palette follows keyboard selection without horizontal overflow", a
     route.fulfill({ json: hives }),
   );
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/hives");
+  await page.goto("/yard/hives");
 
   const searchButton = page.getByRole("button", { name: "Search everything" });
   await expect(searchButton).toBeVisible();

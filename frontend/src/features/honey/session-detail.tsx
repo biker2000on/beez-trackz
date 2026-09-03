@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Harvest session detail (/honey/sessions/[id]): calculated vs actual
+ * Harvest session detail (/production/sessions/[id]): calculated vs actual
  * extraction summary, per-hive entries, a batch entry editor that saves the
  * whole walkthrough in one operation, and the true-up (finalization) flow
  * with its audit history.
@@ -378,7 +378,7 @@ function MoistureCard({
 function BackLink() {
   return (
     <Link
-      href="/honey/harvests"
+      href="/production/harvests"
       className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
     >
       <ArrowLeft className="size-4" />

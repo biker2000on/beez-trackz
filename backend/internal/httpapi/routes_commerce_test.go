@@ -53,39 +53,6 @@ func TestCommerceOptionalHTTPURL(t *testing.T) {
 	}
 }
 
-func TestHarvestLotCreateAndUpdateRejectReservedPublicSlug(t *testing.T) {
-	payload := map[string]any{
-		"lotCode":        "2026-RESERVED",
-		"publicSlug":     "lots",
-		"extractionDate": "2026-08-25",
-		"honeyWeightLbs": 10,
-	}
-	tests := []struct {
-		name    string
-		handler http.HandlerFunc
-		method  string
-		params  []string
-	}{
-		{name: "create", handler: (&Server{}).harvestLotCreate, method: http.MethodPost},
-		{
-			name: "update", handler: (&Server{}).harvestLotUpdate, method: http.MethodPatch,
-			params: []string{"id", uuid.NewString()},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			response, body := call(t, tc.handler,
-				adminRequest(tc.method, "/harvest-lots", payload, tc.params...))
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400: %s", response.Code, response.Body.String())
-			}
-			if body["error"] != "publicSlug is reserved by the Honey app" {
-				t.Fatalf("error = %v, want reserved-slug error", body["error"])
-			}
-		})
-	}
-}
-
 // Commerce request bodies stay in dollars on the wire and become integer cents
 // the moment they are decoded, so no handler ever performs float money math.
 func TestCommerceMoneyFieldsDecodeDollarsIntoCents(t *testing.T) {

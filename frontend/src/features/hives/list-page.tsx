@@ -162,7 +162,7 @@ export function HivesListPage() {
               {/* The name stays a link in bulk mode so a row can be
                   opened for a second look without losing the selection. */}
               <Link
-                href={`/hives/${hive.id}`}
+                href={`/yard/hives/${hive.id}`}
                 className="underline-offset-4 hover:underline"
                 onClick={(event) => event.stopPropagation()}
               >
@@ -331,7 +331,7 @@ export function HivesListPage() {
             onRowActivate={(hive) =>
               bulkMode
                 ? toggleSelect(hive.id)
-                : router.push(`/hives/${hive.id}`)
+                : router.push(`/yard/hives/${hive.id}`)
             }
             rowProps={
               bulkMode

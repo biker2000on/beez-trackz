@@ -305,7 +305,7 @@ export function ShortcutsProvider({
       const role = apiaryRole(access.data, apiary.id);
       const canEdit = role === "admin" || role === "editor";
       const routes = visibleNavRoutes(
-        contextualNavRoutes("/apiaries", `/apiaries/${apiary.id}`),
+        contextualNavRoutes("/yard/apiaries", `/yard/apiaries/${apiary.id}`),
         isAdmin,
         canEdit,
       );
@@ -326,7 +326,7 @@ export function ShortcutsProvider({
       const role = apiaryRole(access.data, hive.apiaryId);
       const canEdit = role === "admin" || role === "editor";
       const routes = visibleNavRoutes(
-        contextualNavRoutes("/hives", `/hives/${hive.id}`),
+        contextualNavRoutes("/yard/hives", `/yard/hives/${hive.id}`),
         isAdmin,
         canEdit,
       );
@@ -360,10 +360,10 @@ export function ShortcutsProvider({
         });
       }
       for (const session of sessions.data ?? []) {
-        const href = `/honey/sessions/${session.id}`;
+        const href = `/production/sessions/${session.id}`;
         commands.push({
           id: `session:${session.id}`,
-          label: `Honey › Production › ${session.apiaryName} extraction ${session.date}`,
+          label: `Production › ${session.apiaryName} extraction ${session.date}`,
           description: href,
           hint: "Session",
           searchText: `${session.apiaryName} ${session.notes ?? ""} harvest extraction session`,
@@ -375,7 +375,7 @@ export function ShortcutsProvider({
         const href = `/honey/${lot.publicSlug}`;
         commands.push({
           id: `lot-story:${lot.id}`,
-          label: `Honey › Lots › ${lot.lotCode} story`,
+          label: `Production › Lots › ${lot.lotCode} story`,
           description: href,
           hint: "Lot",
           searchText: `${lot.lotCode} ${lot.honeyVariety ?? ""} ${lot.season ?? ""} ${lot.apiaryRegion ?? ""} public story traceability`,
@@ -404,8 +404,8 @@ export function ShortcutsProvider({
     run: entry.handler,
   }));
 
-  const currentApiaryId = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
-  const currentHiveId = pathname.match(/^\/hives\/([^/]+)/)?.[1];
+  const currentApiaryId = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
+  const currentHiveId = pathname.match(/^\/yard\/hives\/([^/]+)/)?.[1];
   const contextCommands = recordCommands.filter(
     (command) =>
       command.contextKey === `apiary:${currentApiaryId}` ||

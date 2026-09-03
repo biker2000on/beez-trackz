@@ -648,23 +648,17 @@ test("the recommendation filter is the same shape under a different filter", asy
 /**
  * Offline navigation to `/today` from the service-worker shell.
  *
- * This is the one wave-2 acceptance item that cannot pass yet: the SW's
- * `SHELL` precache list (`src/app/sw.js/route.ts:25-36`) still names
- * `/dashboard` and `/operations/yard-queue`, and this wave does not own that
- * file — wave 5 rewrites `SHELL` alongside the routes. The assertion below is
- * written against the shell as it will be, and skipped until then, so wave 5
- * inherits a failing-on-purpose test rather than a missing one.
+ * Wave 2 wrote this assertion against the shell as it would be and skipped it
+ * while `SHELL` still named the legacy field routes. Wave 5 rewrote `SHELL`,
+ * so the self-skip is gone and the assertion is live: the two canonical field
+ * routes must be precached, or an offline navigation to Today falls through
+ * to `/offline`.
  */
-test("SHELL precache must include the canonical field routes (wave 5)", async ({
+test("the SHELL precache includes the canonical field routes", async ({
   request,
 }) => {
   const response = await request.get("/sw.js");
   const sw = await response.text();
-  const ready = sw.includes('"/today"') && sw.includes('"/yard/queue"');
-  test.skip(
-    !ready,
-    "wave 5 owns sw.js SHELL; /today and /yard/queue are not precached yet",
-  );
   expect(sw).toContain('"/today"');
   expect(sw).toContain('"/yard/queue"');
 });

@@ -21,7 +21,7 @@ export default function OfflinePage() {
           </p>
         </div>
         <Button asChild>
-          <Link href="/dashboard">
+          <Link href="/today">
             <RefreshCw />
             Go to the cached dashboard
           </Link>

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { YardStatusView } from "@/features/dashboard/yard-status-view";
+import { YardStatusView } from "@/features/yard/yard-status-view";
 
 export const metadata: Metadata = { title: "Yard" };
 

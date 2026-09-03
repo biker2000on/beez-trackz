@@ -98,7 +98,7 @@ function HarvestLoadError({
       <p className="text-sm text-muted-foreground">{message}</p>
       <div className="flex flex-wrap justify-center gap-2">
         <Button asChild variant="outline" size="sm">
-          <Link href="/honey">Back to Honey</Link>
+          <Link href="/production">Back to Honey</Link>
         </Button>
         <Button type="button" size="sm" onClick={onRetry}>
           Retry
@@ -185,7 +185,7 @@ export function HarvestsTab() {
           cell: ({ row: { original: session } }) => (
             <DataGridCellAction className="flex justify-end">
               <Button asChild variant="ghost" size="sm">
-                <Link href={`/honey/sessions/${session.id}`}>
+                <Link href={`/production/sessions/${session.id}`}>
                   View
                   <ChevronRight />
                 </Link>
@@ -240,7 +240,7 @@ export function HarvestsTab() {
               table={sessionTable}
               aria-label="Harvest sessions"
               onRowActivate={(session) =>
-                router.push(`/honey/sessions/${session.id}`)
+                router.push(`/production/sessions/${session.id}`)
               }
             />
           </div>

@@ -84,7 +84,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             title={
               <>
                 <Link
-                  href={`/honey/sessions/${session.id}`}
+                  href={`/production/sessions/${session.id}`}
                   className="underline-offset-4 hover:underline"
                 >
                   {session.apiaryName ?? "Extraction session"}
@@ -142,7 +142,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             title={
               <>
                 <Link
-                  href="/honey/lots"
+                  href="/production/lots"
                   className="underline-offset-4 hover:underline"
                 >
                   {lot.lotCode}
@@ -229,7 +229,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             title={
               <>
                 <Link
-                  href="/honey/jars"
+                  href="/production/jars"
                   className="underline-offset-4 hover:underline"
                 >
                   {jar.label}

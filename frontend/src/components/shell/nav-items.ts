@@ -1,15 +1,11 @@
 import {
-  ClipboardList,
-  Crown,
-  Droplets,
-  Hexagon,
-  LayoutDashboard,
   ChartNoAxesCombined,
+  Droplets,
   MapPin,
   Package,
   Receipt,
   Settings,
-  Sparkles,
+  Sun,
   type LucideIcon,
 } from "lucide-react";
 
@@ -37,94 +33,116 @@ export interface NavItem extends NavRoute {
  * The canonical protected-route index. Desktop/mobile navigation and Ctrl-K
  * all consume this tree so a route cannot be added to one surface and remain
  * hidden from the others.
+ *
+ * Seven areas, one per first path segment (design 2026-09-03 §2.1). Area
+ * ownership is therefore greppable: every authenticated route's first segment
+ * names the area that owns it. `/me` is deliberately absent — it is the
+ * per-user surface reached from the account menu, not an eighth area.
  */
 export const NAV_ITEMS: NavItem[] = [
   {
-    label: "Dashboard",
-    shortLabel: "Home",
-    href: "/dashboard",
-    icon: LayoutDashboard,
-    shortcutKey: "d",
-    keywords: ["home"],
-  },
-  {
-    label: "Yard queue",
-    shortLabel: "Queue",
-    href: "/operations/yard-queue",
-    icon: ClipboardList,
-    shortcutKey: "k",
-    keywords: ["saturday", "field work", "lockout", "harvest"],
-  },
-  {
-    label: "Apiaries",
-    shortLabel: "Yards",
-    href: "/apiaries",
-    icon: MapPin,
-    shortcutKey: "a",
-    keywords: ["yards", "apiary", "apiarty"],
+    label: "Today",
+    shortLabel: "Today",
+    href: "/today",
+    icon: Sun,
+    shortcutKey: "t",
+    keywords: ["home", "work", "what needs doing"],
     children: [
       {
-        label: "Voice walkthrough",
-        href: "/transcribe",
-        keywords: ["batch transcription", "record apiary"],
+        label: "Recommendations",
+        href: "/today/recommendations",
+        keywords: ["actions priorities triage snoozed dismissed"],
+      },
+    ],
+  },
+  {
+    label: "Yard",
+    shortLabel: "Yard",
+    href: "/yard",
+    icon: MapPin,
+    shortcutKey: "y",
+    keywords: ["field", "apiary", "apiarty", "yards", "colonies"],
+    children: [
+      {
+        label: "Queue",
+        href: "/yard/queue",
+        keywords: ["saturday", "field work", "lockout", "harvest"],
+      },
+      {
+        label: "Apiaries",
+        href: "/yard/apiaries",
+        keywords: ["yards apiary apiarty"],
+      },
+      { label: "Hives", href: "/yard/hives", keywords: ["colonies"] },
+      { label: "Queens", href: "/yard/queens", keywords: ["genealogy lineage"] },
+      {
+        label: "Voice recording",
+        href: "/yard/transcribe",
+        keywords: ["batch transcription record apiary voice inspection"],
         requiresEdit: true,
       },
     ],
   },
   {
-    label: "Hives",
-    shortLabel: "Hives",
-    href: "/hives",
-    icon: Hexagon,
-    shortcutKey: "h",
-    keywords: ["colonies"],
-  },
-  {
-    label: "Honey",
-    shortLabel: "Honey",
-    href: "/honey",
+    label: "Production",
+    shortLabel: "Production",
+    href: "/production",
     icon: Droplets,
-    shortcutKey: "y",
+    shortcutKey: "p",
     adminOnly: true,
+    keywords: ["honey extraction bottling"],
     children: [
       {
+        label: "Workbench",
+        href: "/production/workbench",
+        keywords: ["open sessions bulk on hand awaiting bottling jar par"],
+      },
+      {
         label: "Activity",
-        href: "/honey/activity",
+        href: "/production/activity",
         keywords: ["ledger", "timeline"],
       },
       {
         label: "Production",
-        href: "/honey/production",
+        href: "/production/overview",
         matches: [
-          "/honey/harvests",
-          "/honey/jars",
-          "/honey/lots",
-          "/honey/serials",
-          "/honey/sessions",
-          "/honey/products",
-          "/honey/varietals",
+          "/production/harvests",
+          "/production/jars",
+          "/production/lots",
+          "/production/serials",
+          "/production/sessions",
+          "/production/products",
+          "/production/varietals",
         ],
         children: [
-          { label: "Harvests", href: "/honey/harvests", keywords: ["extraction sessions"] },
-          { label: "Jars", href: "/honey/jars", keywords: ["bottling inventory"] },
+          {
+            label: "Harvests",
+            href: "/production/harvests",
+            keywords: ["extraction sessions"],
+          },
+          {
+            label: "Jars",
+            href: "/production/jars",
+            keywords: ["bottling stock"],
+          },
           {
             label: "Hive products",
-            href: "/honey/products",
+            href: "/production/products",
             keywords: ["creamed honey hot honey mead propolis tincture catalog"],
           },
           {
             label: "Varietals",
-            href: "/honey/varietals",
+            href: "/production/varietals",
             keywords: ["varietal lot balances bulk on hand rollup"],
           },
           {
             label: "Lots & QR",
-            href: "/honey/lots",
+            href: "/production/lots",
             keywords: ["traceability labels"],
             children: [
               {
                 label: "Serial lookup",
-                href: "/honey/serials",
+                href: "/production/serials",
                 keywords: ["jar qr lookup"],
               },
             ],
@@ -143,94 +161,104 @@ export const NAV_ITEMS: NavItem[] = [
     keywords: ["orders receipts colonies equipment creamed mead propolis"],
     children: [
       {
+        label: "Workbench",
+        href: "/sales/workbench",
+        keywords: ["takings drafts shortfall settlements due"],
+      },
+      {
         label: "Market day",
         href: "/sales/market-day",
         keywords: ["point of sale pos"],
       },
-      { label: "Consignment", href: "/sales/consignment", keywords: ["bike shop stock locations transfers settlement"] },
+      {
+        label: "Consignment",
+        href: "/sales/consignment",
+        keywords: ["bike shop stock locations transfers settlement"],
+      },
+      {
+        label: "Customers & wholesale",
+        href: "/sales/customers",
+        keywords: ["customer list reorder reminders wholesale price lists"],
+      },
+      {
+        label: "Expenses",
+        href: "/sales/expenses",
+        keywords: ["money out spend assignable to lots and hives"],
+      },
     ],
   },
   {
     label: "Equipment",
     shortLabel: "Gear",
-    href: "/inventory",
+    href: "/equipment",
     icon: Package,
-    shortcutKey: "i",
+    shortcutKey: "e",
     adminOnly: true,
-    keywords: ["equipment gear stock inventory"],
+    // "inventory" is ledger vocabulary now (design §2.3) and is deliberately
+    // not a search keyword for hive gear.
+    keywords: ["equipment gear stock"],
     children: [
       {
         label: "Types & BOMs",
-        href: "/inventory/types",
+        href: "/equipment/types",
         keywords: ["equipment types catalog bill of materials assemble variants"],
       },
     ],
   },
   {
-    label: "Reports",
-    shortLabel: "Reports",
-    href: "/reports",
+    label: "Insights",
+    shortLabel: "Insights",
+    href: "/insights",
     icon: ChartNoAxesCombined,
-    shortcutKey: "o",
+    shortcutKey: "i",
+    keywords: ["reports analytics"],
     children: [
       {
         label: "Outcomes",
-        href: "/reports/outcomes",
-        matches: ["/reports/survival", "/reports/yield"],
+        href: "/insights/outcomes",
+        matches: ["/insights/survival", "/insights/yield"],
         children: [
-          { label: "Winter survival", href: "/reports/survival" },
-          { label: "Honey yield", href: "/reports/yield" },
+          { label: "Winter survival", href: "/insights/survival" },
+          { label: "Honey yield", href: "/insights/yield" },
         ],
       },
       {
         label: "Finance",
-        href: "/reports/finance",
+        href: "/insights/finance",
         adminOnly: true,
-        matches: [
-          "/reports/economics",
-          "/reports/profitability",
-          "/reports/expenses",
-        ],
+        matches: ["/insights/economics", "/insights/profitability"],
         children: [
-          { label: "Apiary economics", href: "/reports/economics", adminOnly: true },
-          { label: "Profitability", href: "/reports/profitability", adminOnly: true },
-          { label: "Expenses", href: "/reports/expenses", adminOnly: true },
+          {
+            label: "Apiary economics",
+            href: "/insights/economics",
+            adminOnly: true,
+          },
+          {
+            label: "Profitability",
+            href: "/insights/profitability",
+            adminOnly: true,
+          },
         ],
       },
       {
         label: "Sales & planning",
-        href: "/reports/sales-planning",
+        href: "/insights/sales-planning",
         adminOnly: true,
-        matches: ["/reports/bottling", "/reports/customers"],
+        matches: ["/insights/bottling"],
         children: [
-          { label: "Bottle next", href: "/reports/bottling", adminOnly: true },
-          { label: "Customers & wholesale", href: "/reports/customers", adminOnly: true },
+          { label: "Bottle next", href: "/insights/bottling", adminOnly: true },
         ],
       },
     ],
   },
   {
-    label: "Queens",
-    shortLabel: "Queens",
-    href: "/queens",
-    icon: Crown,
-    shortcutKey: "q",
-    keywords: ["genealogy lineage"],
-  },
-  {
-    label: "Recommendations",
-    shortLabel: "Recs",
-    href: "/recommendations",
-    icon: Sparkles,
-    shortcutKey: "r",
-    keywords: ["actions priorities"],
-  },
-  {
-    label: "Settings",
-    shortLabel: "Settings",
-    href: "/settings",
+    label: "Admin",
+    shortLabel: "Admin",
+    href: "/admin",
     icon: Settings,
-    shortcutKey: "s",
+    shortcutKey: "a",
+    adminOnly: true,
+    keywords: ["settings integrations access api users setup"],
   },
 ];
 
@@ -239,9 +267,9 @@ export function contextualNavRoutes(
   parentHref: string,
   pathname: string,
 ): NavRoute[] {
-  const apiary = pathname.match(/^\/apiaries\/([^/]+)/)?.[1];
-  if (parentHref === "/apiaries" && apiary) {
-    const base = `/apiaries/${apiary}`;
+  const apiary = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
+  if (parentHref === "/yard/apiaries" && apiary) {
+    const base = `/yard/apiaries/${apiary}`;
     return [
       { label: "Overview", href: base, exact: true },
       { label: "Layout", href: `${base}?tab=layout`, exact: true },
@@ -251,15 +279,15 @@ export function contextualNavRoutes(
       { label: "Bulk record", href: `${base}/bulk`, requiresEdit: true },
       {
         label: "Voice walkthrough",
-        href: `/transcribe?apiary=${apiary}`,
+        href: `/yard/transcribe?apiary=${apiary}`,
         requiresEdit: true,
       },
     ];
   }
 
-  const hive = pathname.match(/^\/hives\/([^/]+)/)?.[1];
-  if (parentHref === "/hives" && hive) {
-    const base = `/hives/${hive}`;
+  const hive = pathname.match(/^\/yard\/hives\/([^/]+)/)?.[1];
+  if (parentHref === "/yard/hives" && hive) {
+    const base = `/yard/hives/${hive}`;
     return [
       { label: "Overview", href: base, exact: true },
       {
@@ -273,8 +301,10 @@ export function contextualNavRoutes(
       { label: "Queen", href: `${base}/queen`, keywords: ["lineage genealogy"] },
       { label: "Photos", href: `${base}/photos` },
       {
+        // One voice surface for the yard (S10): the hive-scoped route is a
+        // search param on `/yard/transcribe`, not a route of its own.
         label: "Voice inspection",
-        href: `${base}/transcribe`,
+        href: `/yard/transcribe?hive=${hive}`,
         keywords: ["record transcribe"],
         requiresEdit: true,
       },
@@ -376,19 +406,21 @@ export function flattenNavRoutes(
 /**
  * Order the bottom bar fills its four fixed slots from; the fifth slot is
  * always More. More itself renders the complete folded route tree.
+ *
+ * One entry per area, so the phone bar can never be a different information
+ * architecture from the desktop rail: an admin gets Today / Yard / Production
+ * / Sales plus More, and a viewer or editor gets Today / Yard / Insights plus
+ * More. Yard is pinned second for every role — it is where Saturday starts —
+ * and no admin-only area can push it off the bar.
  */
 const MOBILE_PRIORITY = [
-  "/dashboard",
-  "/apiaries",
-  "/hives",
-  "/honey",
+  "/today",
+  "/yard",
+  "/production",
   "/sales",
-  "/operations/yard-queue",
-  "/inventory",
-  "/reports",
-  "/recommendations",
-  "/queens",
-  "/settings",
+  "/equipment",
+  "/insights",
+  "/admin",
 ];
 
 export function primaryMobileItems(isAdmin: boolean): NavItem[] {
@@ -405,4 +437,13 @@ export function overflowMobileItems(isAdmin: boolean): NavItem[] {
   return visibleNavItems(NAV_ITEMS, isAdmin).filter(
     (item) => !pinned.has(item.href),
   );
+}
+
+/**
+ * Every area root. `CALM_ROUTES` (`components/install-prompt.tsx`) is
+ * derived from this so it cannot go stale the way the hand-written list did:
+ * that one still named a redirect-only route and omitted two live ones.
+ */
+export function navRootHrefs(): string[] {
+  return NAV_ITEMS.map((item) => item.href);
 }

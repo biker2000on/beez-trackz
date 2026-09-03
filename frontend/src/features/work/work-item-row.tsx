@@ -128,7 +128,7 @@ export function WorkItemRow({
   focused,
   onRun,
   busy,
-  hiveHref = (hiveId) => `/hives/${hiveId}`,
+  hiveHref = (hiveId) => `/yard/hives/${hiveId}`,
 }: {
   item: WorkItem;
   focused: boolean;

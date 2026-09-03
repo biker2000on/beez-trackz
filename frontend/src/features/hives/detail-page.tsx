@@ -160,7 +160,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   useShortcut(
     "r",
     "Record inspection by voice",
-    () => router.push(`/hives/${hiveId}/transcribe`),
+    () => router.push(`/yard/transcribe?hive=${hiveId}`),
     editable,
   );
   useShortcut("f", "Record feeding", () => setFeedOpen(true), editable);
@@ -192,7 +192,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
       <p className="text-sm text-muted-foreground">
         Could not load this hive.{" "}
         <Link
-          href="/hives"
+          href="/yard/hives"
           className="font-medium text-primary underline-offset-4 hover:underline"
         >
           Back to hives
@@ -233,7 +233,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         </div>
         <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
           <Link
-            href={`/apiaries/${data.apiaryId}`}
+            href={`/yard/apiaries/${data.apiaryId}`}
             className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
           >
             <MapPin className="size-3.5 text-primary" />
@@ -278,7 +278,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
               <DropdownMenuItem asChild>
-                <Link href={`/hives/${data.id}/transcribe`}>
+                <Link href={`/yard/transcribe?hive=${data.id}`}>
                   <Mic className="size-4" />
                   Record inspection by voice
                 </Link>
@@ -742,7 +742,7 @@ function SplitsList({ hiveId }: { hiveId: string }) {
               <p className="font-medium">
                 {isParent ? "Split into" : "Split from"}{" "}
                 <Link
-                  href={`/hives/${otherId}`}
+                  href={`/yard/hives/${otherId}`}
                   className="text-primary underline-offset-4 hover:underline"
                 >
                   {otherLabel}

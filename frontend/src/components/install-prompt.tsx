@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { navRootHrefs } from "@/components/shell/nav-items";
 
 /** Chromium-only event fired when the PWA is installable. */
 export interface BeforeInstallPromptEvent extends Event {
@@ -27,20 +28,18 @@ const SETTLE_MS = 5_000;
 const GUARD_POLL_MS = 1_000;
 
 /**
- * Routes where the user is browsing rather than doing. Detail, editing,
- * transcription, auth and public routes are deliberately absent: the prompt
- * must never land on top of in-progress field work.
+ * Routes where the user is browsing rather than doing: the seven area roots
+ * plus the recommendations inbox. Detail, editing, transcription, auth and
+ * public routes are deliberately absent — the prompt must never land on top
+ * of in-progress field work.
+ *
+ * Derived from `NAV_ITEMS` rather than hand-written. The previous list had
+ * drifted: it named a redirect-only route that never rendered at its own
+ * pathname, and omitted two calm pages that did.
  */
 const CALM_ROUTES = new Set([
-  "/dashboard",
-  "/operations/yard-queue",
-  "/apiaries",
-  "/hives",
-  "/genealogy",
-  "/honey",
-  "/inventory",
-  "/recommendations",
-  "/reports",
+  ...navRootHrefs(),
+  "/today/recommendations",
 ]);
 
 /**

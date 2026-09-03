@@ -45,30 +45,20 @@ const SHELL_READS = [
 ];
 
 /**
- * Navigation chrome, not workbench data.
+ * Navigation chrome, not workbench data — and there is none left.
  *
- * `/sales/*` inherits `sales/layout.tsx` → `SalesSectionNav` →
- * `HoneyQuickActions`, which mounts its six record dialogs eagerly and so
- * prefetches their option lists on every sales route. None of it is read by
- * the workbench — the workbench renders from `GET /sales/workbench` alone —
- * but it is a real cost on the screen, so it is listed here by name rather
- * than waved through: the assertion below still fails if the *page* grows a
- * fetch of its own. `features/honey` is wave-2-and-earlier code this wave
- * does not own; the section nav is rewritten in wave 5, which is where this
- * list should go to zero.
+ * Wave 4 landed with ten entries here: `/sales/*` inherited
+ * `sales/layout.tsx` → `SalesSectionNav` → `HoneyQuickActions`, which mounted
+ * six record dialogs eagerly and so prefetched their option lists on every
+ * sales route, the workbench included. Wave 5 deleted that layout — sales
+ * navigation lives in the shell now, and the record dialogs are mounted by
+ * `/sales` itself, the one page that needs them. The production section nav
+ * hides itself on `/production/workbench` for the same reason.
+ *
+ * Keeping the (now empty) list rather than deleting `dataReads` is
+ * deliberate: it is what fails when chrome creeps back onto either workbench.
  */
-const CHROME_READS = [
-  "/api/v1/honey/inventory",
-  "/api/v1/ops/units",
-  "/api/v1/sales/locations",
-  "/api/v1/stock-locations",
-  "/api/v1/customers",
-  "/api/v1/harvest-lots",
-  "/api/v1/wholesale-price-lists",
-  "/api/v1/hives",
-  "/api/v1/equipment/stock",
-  "/api/v1/products",
-];
+const CHROME_READS: string[] = [];
 
 interface CommandOverrides {
   permitted?: boolean;

@@ -101,5 +101,5 @@ export function HiveCard({
       </button>
     );
   }
-  return <Link href={`/hives/${hive.id}`}>{body}</Link>;
+  return <Link href={`/yard/hives/${hive.id}`}>{body}</Link>;
 }

@@ -23,7 +23,7 @@ export function ApiaryTimelinePage({ apiaryId }: { apiaryId: string }) {
     <div className="grid gap-5">
       <header className="grid gap-2">
         <Button asChild variant="ghost" size="sm" className="-ml-3 w-fit">
-          <Link href={`/apiaries/${apiaryId}`}>
+          <Link href={`/yard/apiaries/${apiaryId}`}>
             <ArrowLeft />
             {apiary.data.name}
           </Link>

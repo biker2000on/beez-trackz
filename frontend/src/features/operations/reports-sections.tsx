@@ -226,7 +226,7 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
           cell: ({ row }) => (
             <DataGridCellAction>
               <Link
-                href={`/hives/${row.original.hiveId}?tab=health`}
+                href={`/yard/hives/${row.original.hiveId}?tab=health`}
                 className="hover:underline"
               >
                 {row.original.hiveName}
@@ -292,7 +292,7 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
       table={table}
       aria-label="Varroa across the fleet"
       listenOnWindow={false}
-      onRowActivate={(row) => router.push(`/hives/${row.hiveId}?tab=health`)}
+      onRowActivate={(row) => router.push(`/yard/hives/${row.hiveId}?tab=health`)}
     />
   );
 }

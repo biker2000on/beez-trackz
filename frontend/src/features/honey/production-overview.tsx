@@ -7,25 +7,25 @@ import { Card, CardContent } from "@/components/ui/card";
 
 const PRODUCTION_AREAS = [
   {
-    href: "/honey/harvests",
+    href: "/production/harvests",
     title: "Harvests",
     description: "Record extraction sessions and individual hive harvests.",
     icon: Boxes,
   },
   {
-    href: "/honey/jars",
+    href: "/production/jars",
     title: "Jars",
     description: "Bottle bulk honey and keep packaged stock accurate.",
     icon: Package,
   },
   {
-    href: "/honey/lots",
+    href: "/production/lots",
     title: "Lots & QR",
     description: "Manage traceable lots, jar serials, labels, and lookup.",
     icon: QrCode,
   },
   {
-    href: "/honey/products",
+    href: "/production/products",
     title: "Hive products",
     description: "Catalog, propolis harvests, and creamed / hot / mead / tincture batches.",
     icon: FlaskConical,

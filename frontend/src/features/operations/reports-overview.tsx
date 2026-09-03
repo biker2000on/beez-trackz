@@ -1,6 +1,6 @@
 "use client";
 
-/** `/reports` index: headline numbers plus a map of the report sections. */
+/** `/insights` index: headline numbers plus a map of the report sections. */
 
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
@@ -18,13 +18,13 @@ import {
 export function ReportsOverview() {
   const [year, setYear] = useReportYear();
   const sections = REPORT_PAGES.filter(
-    (section) => section.href !== "/reports",
+    (section) => section.href !== "/insights",
   );
 
   return (
     <div className="grid gap-6">
       <ReportHeader
-        title="Reports"
+        title="Insights"
         description="One home for survival, yield and money: revenue, expenses, profitability and bottling plans."
         year={year}
         onYearChange={setYear}

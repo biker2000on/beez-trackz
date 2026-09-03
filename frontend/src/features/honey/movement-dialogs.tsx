@@ -113,7 +113,7 @@ function LotField({
           Bulk honey is tracked per harvest lot, so there is nothing to draw
           from yet.{" "}
           <Link
-            href="/honey/lots"
+            href="/production/lots"
             onClick={onNavigate}
             className="font-medium text-primary hover:underline"
           >

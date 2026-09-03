@@ -673,7 +673,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
   );
 
   const openHive = useCallback(
-    (hiveId: string) => router.push(`/hives/${hiveId}`),
+    (hiveId: string) => router.push(`/yard/hives/${hiveId}`),
     [router],
   );
 

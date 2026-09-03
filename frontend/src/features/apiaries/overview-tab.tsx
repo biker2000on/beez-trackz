@@ -106,7 +106,7 @@ export function OverviewTab({
             label="Hives"
             value={String(hives.length)}
             sub={breakdown || `${activeHives} active`}
-            href={`/apiaries/${apiaryId}?tab=layout`}
+            href={`/yard/apiaries/${apiaryId}?tab=layout`}
           />
         )}
         {weather.isPending ? (
@@ -123,7 +123,7 @@ export function OverviewTab({
                   ? "Open feeders in this yard"
                   : "No open feeders"
             }
-            href="/dashboard"
+            href="/today"
             attention={feeding?.needsAttention}
           />
         )}
@@ -135,7 +135,7 @@ export function OverviewTab({
             label="In bloom"
             value={String(blooms.data?.length ?? 0)}
             sub={activeBloomNames || "Nothing recorded in bloom"}
-            href={`/apiaries/${apiaryId}/flora`}
+            href={`/yard/apiaries/${apiaryId}/flora`}
           />
         )}
         <OverviewStat
@@ -143,7 +143,7 @@ export function OverviewTab({
           label="Photos"
           value="Gallery"
           sub="View and add yard photos"
-          href={`/apiaries/${apiaryId}/photos`}
+          href={`/yard/apiaries/${apiaryId}/photos`}
         />
       </div>
 

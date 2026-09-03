@@ -36,7 +36,7 @@ export function FieldReadinessPanel() {
           <ul className="grid gap-2 sm:grid-cols-2">
             {actionable.map((row) => (
               <li key={row.hiveId} className="rounded-lg border p-3">
-                <Link href={`/hives/${row.hiveId}`} className="font-medium hover:underline">
+                <Link href={`/yard/hives/${row.hiveId}`} className="font-medium hover:underline">
                   {row.hiveName} · {row.apiaryName}
                 </Link>
                 <p className="flex items-center gap-1 text-sm font-semibold">
