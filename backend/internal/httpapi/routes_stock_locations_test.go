@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/google/uuid"
 )
 
@@ -192,14 +193,12 @@ func globalOnHand(t *testing.T, server *Server, jarSizeID uuid.UUID) int {
 	return 0
 }
 
-// ledgerLocation is the inventory_locations twin of a stock_locations row.
-// Phase A keeps the two in step; the ledger's own tables key on the twin.
+// ledgerLocation accepts either identifier generation and returns the location
+// used by the inventory ledger.
 func ledgerLocation(t *testing.T, server *Server, stockLocationID uuid.UUID) uuid.UUID {
 	t.Helper()
-	var id uuid.UUID
-	if err := server.pool.QueryRow(context.Background(), `
-		SELECT id FROM inventory_locations
-		WHERE source_type='stock_location' AND source_id=$1`, stockLocationID).Scan(&id); err != nil {
+	id, err := production.ResolveLocationID(context.Background(), server.pool, stockLocationID)
+	if err != nil {
 		t.Fatalf("ledger location for %s: %v", stockLocationID, err)
 	}
 	return id

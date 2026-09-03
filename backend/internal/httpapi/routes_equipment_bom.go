@@ -161,6 +161,7 @@ func (s *Server) equipUpdateType(w http.ResponseWriter, r *http.Request) {
 // is what protects a database that has not run it yet.
 func equipComponentParentSQL() string {
 	if db.ActiveProfile() != db.ProfileBaseline {
+		// legacy-chain-only
 		return `
 			SELECT pt.name FROM equipment_type_components c
 			JOIN equipment_types pt ON pt.id = c.parent_type_id

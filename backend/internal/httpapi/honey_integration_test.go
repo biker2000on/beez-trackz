@@ -93,15 +93,20 @@ func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 		UPDATE equipment_stock_adjustments SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		UPDATE equipment_deployment_returns SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		UPDATE inventory_locations SET wholesale_price_list_id = NULL WHERE wholesale_price_list_id IS NOT NULL;
+		UPDATE inventory_locations SET customer_id = NULL WHERE customer_id IS NOT NULL;
 		DELETE FROM wholesale_price_list_items;
 		DELETE FROM wholesale_price_lists;
 		TRUNCATE harvest_session_true_ups, jar_serials, sale_items, sales,
 			product_batch_expenses, product_batches, propolis_harvests, product_catalog,
 			honey_movements, bottling_runs, harvest_lot_photos, harvest_lot_harvests,
 			harvest_lots,
-			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
+			honey_harvests, harvest_sessions, jar_sizes, expenses,
 			external_sync, offline_mutation_receipts
 		RESTART IDENTITY CASCADE;
+		-- customers is deleted, not truncated: inventory_locations.customer_id
+		-- (00056/00003) references it and TRUNCATE ... CASCADE would take the
+		-- seeded home and deployed locations with it.
+		DELETE FROM customers;
 		DELETE FROM inventory_balance_checkpoints;
 		DELETE FROM inventory_movements;
 		DELETE FROM inventory_operations;
@@ -110,7 +115,8 @@ func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 		DELETE FROM inventory_boms;
 		UPDATE equipment_types SET item_id = NULL WHERE item_id IS NOT NULL;
 		DELETE FROM inventory_items WHERE source_type IS NOT NULL;
-		DELETE FROM inventory_locations WHERE source_type IS NOT NULL`
+		DELETE FROM consignment_settlements;
+		DELETE FROM inventory_locations WHERE source_type IS NOT NULL OR kind = 'consignee'`
 	var err error
 	for attempt := 0; attempt < 8; attempt++ {
 		_, err = pool.Exec(context.Background(), reset)

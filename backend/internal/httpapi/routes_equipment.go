@@ -107,6 +107,7 @@ const equipItemSourceTypes = `('equipment_type','equipment_type_frame_drawn','eq
 func equipItemSelect(placeholder string) string {
 	legacy := ""
 	if db.ActiveProfile() != db.ProfileBaseline {
+		// legacy-chain-only
 		legacy = `OR ii.source_id=(SELECT es.type_id FROM equipment_stock es WHERE es.id=` +
 			placeholder + `) `
 	}
@@ -124,6 +125,7 @@ func equipItemSelect(placeholder string) string {
 func equipTypeSelect(placeholder string) string {
 	legacy := ""
 	if db.ActiveProfile() != db.ProfileBaseline {
+		// legacy-chain-only
 		legacy = `OR et.id=(SELECT es.type_id FROM equipment_stock es WHERE es.id=` +
 			placeholder + `) `
 	}

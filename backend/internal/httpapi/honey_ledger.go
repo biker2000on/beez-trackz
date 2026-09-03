@@ -10,7 +10,6 @@ import (
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -294,31 +293,15 @@ func honeyLockLot(
 // its own movements, so "what is at the shop" and "what is at home" are two
 // reads of the same projection and cannot drift apart.
 //
-// During Phase A stock_locations is still the catalog the API exposes; each
-// row has an inventory_locations twin that carries the quantities, created on
-// demand by app/production.EnsureLocationForStockLocation.
+// The HTTP surface keeps its historical stock-location name, but its catalog
+// and quantities both live in inventory_locations.
 
 // stockHomeSlug names the one row that is is_home.
 const stockHomeSlug = "home"
 
-// stockHomeLocationID resolves the home stock location, creating it if a
-// database (a truncated test one, most likely) has lost the row seeded by
-// 00024.
+// stockHomeLocationID resolves the inventory ledger's seeded home location.
 func stockHomeLocationID(ctx context.Context, q inspectionQuerier) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := q.QueryRow(ctx, `SELECT id FROM stock_locations WHERE is_home`).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, err
-	}
-	err = q.QueryRow(ctx, `
-		INSERT INTO stock_locations (name, slug, is_home, notes)
-		VALUES ('Home', $1, true, 'Default location for everything bottled or made.')
-		ON CONFLICT (slug) DO UPDATE SET is_home = true
-		RETURNING id`, stockHomeSlug).Scan(&id)
-	return id, err
+	return production.HomeLocationID(ctx, q)
 }
 
 // stockLocationQuantity is the net count of one SKU standing at one location.
@@ -330,7 +313,7 @@ type stockLocationQuantity struct {
 }
 
 // stockAwayQuantities is THE away-from-home formula: every non-home
-// location's count per SKU, keyed by the stock_locations id the API exposes.
+// location's count per SKU, keyed by inventory_locations.id.
 //
 // It reads inventory_available rather than inventory_balances because a sale
 // scoped to a location takes stock off that shelf the moment the line is
@@ -340,12 +323,12 @@ func stockAwayQuantities(
 	q inspectionQuerier,
 ) ([]stockLocationQuantity, error) {
 	rows, err := q.Query(ctx, `
-		SELECT l.source_id, js.id, pc.id, SUM(a.available)::int
+		SELECT l.id, js.id, pc.id, SUM(a.available)::int
 		FROM inventory_available a
 		JOIN inventory_locations l ON l.id = a.location_id
 		LEFT JOIN jar_sizes js ON js.item_id = a.item_id
 		LEFT JOIN product_catalog pc ON pc.item_id = a.item_id
-		WHERE l.source_type = 'stock_location' AND NOT l.is_home
+		WHERE l.kind = 'consignee' AND NOT l.is_home AND l.deleted_at IS NULL
 		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
 		GROUP BY 1, 2, 3
 		HAVING SUM(a.available) <> 0`)

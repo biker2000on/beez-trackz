@@ -30,18 +30,17 @@ import (
 // $X" that report is an ordinary sale — location-scoped, channel consignment,
 // with the money a receivable until it lands.
 //
-// Nothing here is a second ledger. Quantities derive from the same
-// honey_movements / sale_items spine plus stock_movements, and home is the
-// residual (see honey_ledger.go and migration 00024). The three rules the
-// roadmap set out are enforced in exactly one place each:
+// Nothing here is a second ledger. Quantities derive from inventory movements
+// and reservations, and home is an ordinary inventory location. The three
+// rules the roadmap set out are enforced in exactly one place each:
 //
 //   - never recognise revenue on a transfer  -> stockTransfer writes movements
 //     and nothing else; no sale row, no money column is touched.
 //   - never let home stock-validation count consigned jars -> honeyLockJarSizes
 //     subtracts stockAwayJarTotals.
-//   - every movement idempotent and reversible -> stock_movements carries a
-//     unique idempotency_key and a reverses_movement_id whose negation nets the
-//     pair to zero, exactly like honey_movements.
+//   - every movement idempotent and reversible -> inventory_operations carries
+//     a unique idempotency key and reversal pointer whose negation nets the
+//     pair to zero.
 
 func (s *Server) mountStockLocations(r chi.Router) {
 	admin := r.With(s.requireAdmin)
@@ -121,7 +120,7 @@ const stockLocationSelect = `
 	SELECT l.id, l.name, l.slug, l.is_home, l.is_consignment, l.customer_id, c.name,
 	       l.price_basis, l.commission_bps, l.wholesale_price_list_id, w.name,
 	       l.settlement_cadence, l.address, l.notes, l.is_active, l.created_at, l.updated_at
-	FROM stock_locations l
+	FROM inventory_locations l
 	LEFT JOIN customers c ON c.id = l.customer_id
 	LEFT JOIN wholesale_price_lists w ON w.id = l.wholesale_price_list_id`
 
@@ -160,20 +159,24 @@ func (s *Server) stockLoadLocations(
 		return locations, nil
 	}
 
-	quantities, err := stockAwayQuantities(ctx, s.pool)
+	rows, err = s.pool.Query(ctx, `
+		SELECT location_id, COALESCE(SUM(on_hand), 0)::int
+		FROM inventory_balances
+		GROUP BY location_id`)
 	if err != nil {
 		return nil, err
 	}
-	units := make(map[uuid.UUID]int, len(quantities))
-	awayTotal := 0
-	for _, row := range quantities {
-		units[row.LocationID] += row.Quantity
-		awayTotal += row.Quantity
+	defer rows.Close()
+	units := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var id uuid.UUID
+		var quantity int
+		if err := rows.Scan(&id, &quantity); err != nil {
+			return nil, err
+		}
+		units[id] = quantity
 	}
-
-	// Home holds everything the away locations do not.
-	globalUnits, err := stockGlobalUnits(ctx, s.pool)
-	if err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -182,11 +185,7 @@ func (s *Server) stockLoadLocations(
 		return nil, err
 	}
 	for i := range locations {
-		if locations[i].IsHome {
-			locations[i].OnHandUnits = globalUnits - awayTotal
-		} else {
-			locations[i].OnHandUnits = units[locations[i].ID]
-		}
+		locations[i].OnHandUnits = units[locations[i].ID]
 		locations[i].OutstandingBalance = balances[locations[i].ID]
 	}
 	return locations, nil
@@ -222,11 +221,14 @@ func stockOutstandingByLocation(
 	q inspectionQuerier,
 ) (map[uuid.UUID]money, error) {
 	rows, err := q.Query(ctx, `
-		SELECT stock_location_id,
+		SELECT l.id,
 		       COALESCE(SUM(total_amount_cents - amount_paid_cents), 0)
-		FROM sales
-		WHERE stock_location_id IS NOT NULL AND order_status <> 'cancelled'
-		GROUP BY 1`)
+		FROM sales s
+		JOIN inventory_locations l
+		  ON l.id=s.stock_location_id
+		  OR (l.source_type='stock_location' AND l.source_id=s.stock_location_id)
+		WHERE s.stock_location_id IS NOT NULL AND s.order_status <> 'cancelled'
+		GROUP BY l.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +252,8 @@ func (s *Server) stockLocationList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	locations, err := s.stockLoadLocations(r.Context(),
-		`WHERE l.deleted_at IS NULL ORDER BY l.is_home DESC, lower(l.name)`)
+		`WHERE l.deleted_at IS NULL AND (l.kind='consignee' OR l.is_home)
+		 ORDER BY l.is_home DESC, lower(l.name)`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -344,10 +347,10 @@ func (s *Server) stockLocationCreate(w http.ResponseWriter, r *http.Request) {
 
 	var id uuid.UUID
 	if err := s.pool.QueryRow(r.Context(), `
-		INSERT INTO stock_locations
-			(name, slug, is_consignment, customer_id, price_basis, commission_bps,
+		INSERT INTO inventory_locations
+			(kind, name, slug, is_consignment, customer_id, price_basis, commission_bps,
 			 wholesale_price_list_id, settlement_cadence, address, notes, is_active, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		VALUES ('consignee',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		RETURNING id`,
 		payload.Name, slug, payload.IsConsignment, payload.CustomerID, payload.PriceBasis,
 		bps, payload.WholesalePriceListID, payload.SettlementCadence,
@@ -393,25 +396,28 @@ func (s *Server) stockLocationUpdate(w http.ResponseWriter, r *http.Request) {
 	isActive := *payload.IsActive
 	// Home cannot become a consignment location: its stock is the operator's
 	// own by definition, and the database CHECK says so too.
-	tag, err := s.pool.Exec(r.Context(), `
-		UPDATE stock_locations
+	var updatedID uuid.UUID
+	err = s.pool.QueryRow(r.Context(), `
+		UPDATE inventory_locations
 		SET name=$2, is_consignment=$3, customer_id=$4, price_basis=$5, commission_bps=$6,
 		    wholesale_price_list_id=$7, settlement_cadence=$8, address=$9, notes=$10,
 		    is_active=$11
-		WHERE id=$1 AND deleted_at IS NULL AND NOT is_home`,
+		WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1))
+		  AND deleted_at IS NULL AND kind='consignee' AND NOT is_home
+		RETURNING id`,
 		id, payload.Name, payload.IsConsignment, payload.CustomerID, payload.PriceBasis,
 		bps, payload.WholesalePriceListID, payload.SettlementCadence,
-		inspectionTrimPtr(payload.Address), inspectionTrimPtr(payload.Notes), isActive)
+		inspectionTrimPtr(payload.Address), inspectionTrimPtr(payload.Notes), isActive).Scan(&updatedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "location not found, or home cannot be edited")
+		return
+	}
 	if err != nil {
 		writeDBError(w, err, "a location with that name already exists",
 			"invalid customer or wholesale price list")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "location not found, or home cannot be edited")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": id})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": updatedID})
 }
 
 // DELETE /stock-locations/{id} — soft delete. Stock still standing there has
@@ -424,7 +430,16 @@ func (s *Server) stockLocationDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	onHand, _, err := s.stockLocationShelf(ctx, s.pool, id)
+	resolvedID, err := production.ResolveLocationID(ctx, s.pool, id)
+	if app.IsKind(err, app.KindNotFound) {
+		writeError(w, http.StatusNotFound, "location not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	onHand, _, err := s.stockLocationShelf(ctx, s.pool, resolvedID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -438,18 +453,20 @@ func (s *Server) stockLocationDelete(w http.ResponseWriter, r *http.Request) {
 			"%d units are still at this location. Return or settle them first.", units))
 		return
 	}
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE stock_locations SET deleted_at=now(), deleted_by=$2, is_active=false
-		WHERE id=$1 AND deleted_at IS NULL AND NOT is_home`, id, actorID(r))
+	var deletedID uuid.UUID
+	err = s.pool.QueryRow(ctx, `
+		UPDATE inventory_locations SET deleted_at=now(), is_active=false
+		WHERE id=$1 AND deleted_at IS NULL AND kind='consignee' AND NOT is_home
+		RETURNING id`, resolvedID).Scan(&deletedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "location not found, or home cannot be deleted")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "location not found, or home cannot be deleted")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": id})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "id": deletedID})
 }
 
 // --- shelves ---------------------------------------------------------------
@@ -654,7 +671,8 @@ type stockInventoryRow struct {
 func (s *Server) stockInventoryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	locations, err := s.stockLoadLocations(ctx,
-		`WHERE l.deleted_at IS NULL ORDER BY l.is_home DESC, lower(l.name)`)
+		`WHERE l.deleted_at IS NULL AND (l.kind='consignee' OR l.is_home)
+		 ORDER BY l.is_home DESC, lower(l.name)`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -768,7 +786,9 @@ func (s *Server) stockLocationDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	locations, err := s.stockLoadLocations(ctx, `WHERE l.id=$1 AND l.deleted_at IS NULL`, id)
+	locations, err := s.stockLoadLocations(ctx, `
+		WHERE (l.id=$1 OR (l.source_type='stock_location' AND l.source_id=$1))
+		  AND l.deleted_at IS NULL AND (l.kind='consignee' OR l.is_home)`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -777,7 +797,8 @@ func (s *Server) stockLocationDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "location not found")
 		return
 	}
-	shelf, _, err := s.stockLocationShelf(ctx, s.pool, id)
+	locationID := locations[0].ID
+	shelf, _, err := s.stockLocationShelf(ctx, s.pool, locationID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -786,12 +807,16 @@ func (s *Server) stockLocationDetail(w http.ResponseWriter, r *http.Request) {
 	// Unsettled = reported sold but not yet paid for. Straight off the sale's
 	// invoiced-vs-collected columns; consignment adds no payment table.
 	saleRows, err := s.pool.Query(ctx, `
-		SELECT id, date, order_number, order_status, total_amount_cents, amount_paid_cents
-		FROM sales
-		WHERE stock_location_id=$1 AND order_status <> 'cancelled'
-		  AND amount_paid_cents < total_amount_cents
-		ORDER BY date DESC, created_at DESC
-		LIMIT 100`, id)
+		SELECT s.id, s.date, s.order_number, s.order_status,
+		       s.total_amount_cents, s.amount_paid_cents
+		FROM sales s
+		JOIN inventory_locations l
+		  ON l.id=s.stock_location_id
+		  OR (l.source_type='stock_location' AND l.source_id=s.stock_location_id)
+		WHERE l.id=$1 AND s.order_status <> 'cancelled'
+		  AND s.amount_paid_cents < s.total_amount_cents
+		ORDER BY s.date DESC, s.created_at DESC
+		LIMIT 100`, locationID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -824,12 +849,12 @@ func (s *Server) stockLocationDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	movements, err := s.stockMovementHistory(ctx, id, 100)
+	movements, err := s.stockMovementHistory(ctx, locationID, 100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	settlements, err := s.stockSettlementRows(ctx, id)
+	settlements, err := s.stockSettlementRows(ctx, locationID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -899,7 +924,7 @@ func (s *Server) stockMovementHistory(
 		      AND counterparty.id IN (
 			SELECT other.location_id FROM inventory_movements other
 			WHERE other.operation_id = o.id AND other.location_id <> loc.id)
-		WHERE loc.source_type = 'stock_location' AND loc.source_id = $1
+		WHERE loc.id = $1
 		GROUP BY o.id
 		ORDER BY o.occurred_at DESC, o.created_at DESC
 		LIMIT $2`, locationID, limit)
@@ -1159,7 +1184,10 @@ func stockLineKey(line stockTransferLine) string {
 func stockRequireLive(ctx context.Context, q inspectionQuerier, id uuid.UUID) error {
 	var deleted *time.Time
 	err := q.QueryRow(ctx,
-		`SELECT deleted_at FROM stock_locations WHERE id=$1`, id).Scan(&deleted)
+		`SELECT deleted_at FROM inventory_locations
+		 WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1))
+		   AND (kind='consignee' OR is_home)
+		 ORDER BY (id=$1) DESC LIMIT 1`, id).Scan(&deleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return equipFail(http.StatusNotFound, "location not found")
 	}
@@ -1373,7 +1401,7 @@ func (s *Server) stockBuildStatement(
 		JOIN inventory_locations loc ON loc.id = m.location_id
 		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
 		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
-		WHERE loc.source_type = 'stock_location' AND loc.source_id = $1
+		WHERE loc.id = $1
 		  AND o.occurred_at < $2
 		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
 		GROUP BY 1, 2`, location.ID, start)
@@ -1411,7 +1439,7 @@ func (s *Server) stockBuildStatement(
 		JOIN inventory_locations loc ON loc.id = m.location_id
 		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
 		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
-		WHERE loc.source_type = 'stock_location' AND loc.source_id = $1
+		WHERE loc.id = $1
 		  AND o.occurred_at >= $2 AND o.occurred_at < $3
 		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
 		GROUP BY 1, 2`, location.ID, start, end)
@@ -1442,8 +1470,12 @@ func (s *Server) stockBuildStatement(
 	soldRows, err := q.Query(ctx, `
 		SELECT si.jar_size_id, si.product_id, SUM(si.quantity)::int,
 		       COALESCE(SUM(si.quantity * si.unit_price_cents), 0)::bigint
-		FROM sale_items si JOIN sales s ON s.id = si.sale_id
-		WHERE s.stock_location_id=$1 AND s.order_status <> 'cancelled'
+		FROM sale_items si
+		JOIN sales s ON s.id = si.sale_id
+		JOIN inventory_locations loc
+		  ON loc.id=s.stock_location_id
+		  OR (loc.source_type='stock_location' AND loc.source_id=s.stock_location_id)
+		WHERE loc.id=$1 AND s.order_status <> 'cancelled'
 		  AND s.date >= $2 AND s.date < $3
 		  AND (si.jar_size_id IS NOT NULL OR si.product_id IS NOT NULL)
 		GROUP BY 1, 2`, location.ID, start, end)
@@ -1470,16 +1502,23 @@ func (s *Server) stockBuildStatement(
 
 	if err := q.QueryRow(ctx, `
 		SELECT COALESCE(SUM(total_amount_cents), 0), COALESCE(SUM(amount_paid_cents), 0)
-		FROM sales
-		WHERE stock_location_id=$1 AND order_status <> 'cancelled'
+		FROM sales s
+		JOIN inventory_locations loc
+		  ON loc.id=s.stock_location_id
+		  OR (loc.source_type='stock_location' AND loc.source_id=s.stock_location_id)
+		WHERE loc.id=$1 AND s.order_status <> 'cancelled'
 		  AND date >= $2 AND date < $3`, location.ID, start, end).
 		Scan(&statement.AmountInvoiced, &statement.AmountCollected); err != nil {
 		return stockStatement{}, err
 	}
 	statement.AmountOwed = statement.AmountInvoiced - statement.AmountCollected
 	if err := q.QueryRow(ctx, `
-		SELECT COALESCE(SUM(commission_cents), 0) FROM consignment_settlements
-		WHERE location_id=$1 AND voided_at IS NULL
+		SELECT COALESCE(SUM(cs.commission_cents), 0)
+		FROM consignment_settlements cs
+		JOIN inventory_locations loc
+		  ON loc.id=cs.location_id
+		  OR (loc.source_type='stock_location' AND loc.source_id=cs.location_id)
+		WHERE loc.id=$1 AND cs.voided_at IS NULL
 		  AND period_start >= $2::date AND period_end < $3::date`,
 		location.ID, start, end).Scan(&statement.Commission); err != nil {
 		return stockStatement{}, err
@@ -1518,7 +1557,9 @@ func (s *Server) stockSettlementPreview(w http.ResponseWriter, r *http.Request) 
 		to = first.AddDate(0, 1, -1).Format("2006-01-02")
 	}
 	ctx := r.Context()
-	locations, err := s.stockLoadLocations(ctx, `WHERE l.id=$1 AND l.deleted_at IS NULL`, id)
+	locations, err := s.stockLoadLocations(ctx, `
+		WHERE (l.id=$1 OR (l.source_type='stock_location' AND l.source_id=$1))
+		  AND l.deleted_at IS NULL AND l.kind='consignee'`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -1534,7 +1575,7 @@ func (s *Server) stockSettlementPreview(w http.ResponseWriter, r *http.Request) 
 	}
 	// What is on their shelf right now, which is what the operator compares
 	// the shop's count against when recording the report.
-	shelf, _, err := s.stockLocationShelf(ctx, s.pool, id)
+	shelf, _, err := s.stockLocationShelf(ctx, s.pool, locations[0].ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -1571,8 +1612,11 @@ func (s *Server) stockSettlementRows(
 		       cs.sale_id, s.order_number, cs.amount_owed_cents, cs.amount_paid_cents,
 		       cs.commission_cents, cs.notes, cs.created_at, cs.voided_at, cs.void_reason
 		FROM consignment_settlements cs
+		JOIN inventory_locations loc
+		  ON loc.id=cs.location_id
+		  OR (loc.source_type='stock_location' AND loc.source_id=cs.location_id)
 		LEFT JOIN sales s ON s.id = cs.sale_id
-		WHERE cs.location_id=$1
+		WHERE loc.id=$1
 		ORDER BY cs.period_end DESC, cs.created_at DESC
 		LIMIT 60`, locationID)
 	if err != nil {
@@ -1603,7 +1647,16 @@ func (s *Server) stockSettlementList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	settlements, err := s.stockSettlementRows(r.Context(), id)
+	resolvedID, err := production.ResolveLocationID(r.Context(), s.pool, id)
+	if app.IsKind(err, app.KindNotFound) {
+		writeError(w, http.StatusNotFound, "location not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	settlements, err := s.stockSettlementRows(r.Context(), resolvedID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return

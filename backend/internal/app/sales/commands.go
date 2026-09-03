@@ -130,7 +130,8 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 	var customer *uuid.UUID
 	var commissionBPS *int
 	var priceList *uuid.UUID
-	if err := uow.QueryRow(ctx, `SELECT name,is_home,is_consignment,customer_id,price_basis,commission_bps,wholesale_price_list_id FROM stock_locations WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, in.LocationID).Scan(&name, &home, &consignment, &customer, &basis, &commissionBPS, &priceList); errors.Is(err, pgx.ErrNoRows) {
+	var location uuid.UUID
+	if err := uow.QueryRow(ctx, `SELECT id,name,is_home,is_consignment,customer_id,price_basis,commission_bps,wholesale_price_list_id FROM inventory_locations WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1)) AND deleted_at IS NULL AND kind='consignee' ORDER BY (id=$1) DESC LIMIT 1 FOR UPDATE`, in.LocationID).Scan(&location, &name, &home, &consignment, &customer, &basis, &commissionBPS, &priceList); errors.Is(err, pgx.ErrNoRows) {
 		return out, app.NotFound(op, "location not found")
 	} else if err != nil {
 		return out, dbError(op, err)
@@ -140,10 +141,6 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 	}
 	if !consignment {
 		return out, app.Precondition(op, "location is not configured for consignment")
-	}
-	location, err := production.EnsureLocationForStockLocation(ctx, uow, in.LocationID)
-	if err != nil {
-		return out, err
 	}
 	homeLocation, err := production.HomeLocationID(ctx, uow)
 	if err != nil {
@@ -230,7 +227,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		return out, app.Invalid(op, "payment is larger than the amount owed")
 	}
 	settlementID := uuid.New()
-	if _, err := uow.Exec(ctx, `INSERT INTO consignment_settlements(id,location_id,period_start,period_end,reported_at,amount_owed_cents,amount_paid_cents,commission_cents,notes,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, settlementID, in.LocationID, in.PeriodStart, in.PeriodEnd, in.ReportedAt, owed, in.AmountPaidCents, commission, trim(in.Notes), actorValue(uow)); err != nil {
+	if _, err := uow.Exec(ctx, `INSERT INTO consignment_settlements(id,location_id,period_start,period_end,reported_at,amount_owed_cents,amount_paid_cents,commission_cents,notes,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, settlementID, location, in.PeriodStart, in.PeriodEnd, in.ReportedAt, owed, in.AmountPaidCents, commission, trim(in.Notes), actorValue(uow)); err != nil {
 		return out, dbError(op, err)
 	}
 	out.ID = settlementID
@@ -245,7 +242,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		if in.AmountPaidCents >= owed {
 			status = "paid"
 		}
-		if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,order_status,order_number,notes,created_by,stock_location_id,physical_applied_at) VALUES($1,$2,$3,$4,$4,'consignment',$5,$6,0,$7,$8,$9,$10,$11,$12,now())`, saleID, in.ReportedAt, customer, name, in.PaymentMethod, owed, in.AmountPaidCents, status, order, trim(in.Notes), actorValue(uow), in.LocationID); err != nil {
+		if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,order_status,order_number,notes,created_by,stock_location_id,physical_applied_at) VALUES($1,$2,$3,$4,$4,'consignment',$5,$6,0,$7,$8,$9,$10,$11,$12,now())`, saleID, in.ReportedAt, customer, name, in.PaymentMethod, owed, in.AmountPaidCents, status, order, trim(in.Notes), actorValue(uow), location); err != nil {
 			return out, dbError(op, err)
 		}
 		for _, p := range preparedLines {
@@ -745,8 +742,9 @@ func resolveSaleLocation(ctx context.Context, uow *app.UnitOfWork, id *uuid.UUID
 		home, err := production.HomeLocationID(ctx, uow)
 		return home, nil, err
 	}
+	var location uuid.UUID
 	var active, home, consignment bool
-	if err := uow.QueryRow(ctx, `SELECT is_active,is_home,is_consignment FROM stock_locations WHERE id=$1 AND deleted_at IS NULL`, *id).Scan(&active, &home, &consignment); errors.Is(err, pgx.ErrNoRows) {
+	if err := uow.QueryRow(ctx, `SELECT id,is_active,is_home,is_consignment FROM inventory_locations WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1)) AND deleted_at IS NULL AND (kind='consignee' OR is_home) ORDER BY (id=$1) DESC LIMIT 1`, *id).Scan(&location, &active, &home, &consignment); errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, nil, app.NotFound("resolve sale location", "invalid stockLocationId")
 	} else if err != nil {
 		return uuid.Nil, nil, dbError("resolve sale location", err)
@@ -758,11 +756,9 @@ func resolveSaleLocation(ctx context.Context, uow *app.UnitOfWork, id *uuid.UUID
 		return uuid.Nil, nil, app.Conflict("resolve sale location", "record a consignment report for this location")
 	}
 	if home {
-		loc, err := production.HomeLocationID(ctx, uow)
-		return loc, nil, err
+		return location, nil, nil
 	}
-	loc, err := production.EnsureLocationForStockLocation(ctx, uow, *id)
-	return loc, id, err
+	return location, &location, nil
 }
 func applies(status string) bool { return status == "paid" || status == "fulfilled" }
 func trim(v *string) *string {

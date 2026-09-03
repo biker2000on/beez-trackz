@@ -449,7 +449,7 @@ func SeededRowsYieldToSnapshot(ctx context.Context, uow *UnitOfWork) error {
 		op  string
 		sql string
 	}{
-		{"restore stock location seed", `DELETE FROM stock_locations WHERE slug='home'`},
+		{"restore stock location seed", `DELETE FROM stock_locations WHERE slug='home'`}, // legacy-chain-only
 		{"restore treatment product seeds", `DELETE FROM treatment_products`},
 		{"restore inventory location seeds", `DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`},
 		{"restore inventory item seeds", `DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`},

@@ -55,64 +55,32 @@ func DeployedLocationID(ctx context.Context, q app.Querier) (uuid.UUID, error) {
 	return id, wrapDB("resolve deployed location", err)
 }
 
-// EnsureLocationForStockLocation maps a Phase A stock_locations row onto its
-// inventory_locations twin, creating it when the row was added after the
-// migration seeded the consignees. stock_locations stays the catalog the API
-// exposes until Phase B; quantities only ever live against the twin.
+// EnsureLocationForStockLocation accepts either an inventory location id or a
+// Phase A stock-location id and returns the inventory location. New Phase B
+// consignees are inventory_locations rows in their own right and therefore do
+// not carry a legacy source pair.
 func EnsureLocationForStockLocation(
 	ctx context.Context, uow *app.UnitOfWork, stockLocationID uuid.UUID,
 ) (uuid.UUID, error) {
+	return ResolveLocationID(ctx, uow, stockLocationID)
+}
+
+// ResolveLocationID is the read-side form of EnsureLocationForStockLocation.
+// It accepts the same two identifier generations without requiring a unit of
+// work, so HTTP list/detail readers can normalize path parameters too.
+func ResolveLocationID(
+	ctx context.Context, q app.Querier, stockLocationID uuid.UUID,
+) (uuid.UUID, error) {
 	const op = "resolve stock location"
 	var id uuid.UUID
-	err := uow.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT id FROM inventory_locations
-		WHERE source_type='stock_location' AND source_id=$1`, stockLocationID).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, wrapDB(op, err)
-	}
-
-	var (
-		name        string
-		isHome      bool
-		isConsign   bool
-		priceBasis  string
-		commission  *int
-		priceListID *uuid.UUID
-		cadence     string
-		isActive    bool
-	)
-	err = uow.QueryRow(ctx, `
-		SELECT name, is_home, is_consignment, price_basis, commission_bps,
-		       wholesale_price_list_id, settlement_cadence, is_active
-		FROM stock_locations WHERE id=$1`, stockLocationID).
-		Scan(&name, &isHome, &isConsign, &priceBasis, &commission, &priceListID,
-			&cadence, &isActive)
+		WHERE id=$1 OR (source_type='stock_location' AND source_id=$1)
+		ORDER BY (id=$1) DESC
+		LIMIT 1`, stockLocationID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, app.NotFound(op, "stock location %s does not exist", stockLocationID)
 	}
-	if err != nil {
-		return uuid.Nil, wrapDB(op, err)
-	}
-	if isHome {
-		// Home already exists as a seeded row and never carries a source.
-		return HomeLocationID(ctx, uow)
-	}
-	kind := "storage_area"
-	if isConsign {
-		kind = "consignee"
-	}
-	err = uow.QueryRow(ctx, `
-		INSERT INTO inventory_locations
-			(kind, name, source_type, source_id, is_consignment, price_basis,
-			 commission_bps, wholesale_price_list_id, settlement_cadence, is_active, created_by)
-		VALUES ($1,$2,'stock_location',$3,$4,$5,$6,$7,$8,$9,$10)
-		ON CONFLICT (source_type, source_id) DO UPDATE SET name=EXCLUDED.name
-		RETURNING id`,
-		kind, name, stockLocationID, isConsign, priceBasis, commission, priceListID,
-		cadence, isActive, actorOrNil(uow)).Scan(&id)
 	return id, wrapDB(op, err)
 }
 

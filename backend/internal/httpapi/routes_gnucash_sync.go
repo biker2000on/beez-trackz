@@ -1080,6 +1080,7 @@ func gnucashLegacyEquipmentJoin() string {
 	if db.ActiveProfile() == db.ProfileBaseline {
 		return "LEFT JOIN equipment_types legacy_et ON false"
 	}
+	// legacy-chain-only
 	return `LEFT JOIN equipment_stock legacy_es
 			ON si.item_id IS NULL AND legacy_es.id = si.equipment_stock_id
 		LEFT JOIN equipment_types legacy_et ON legacy_et.id = legacy_es.type_id`

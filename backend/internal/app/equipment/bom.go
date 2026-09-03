@@ -289,11 +289,14 @@ func mirrorLegacyComponents(
 		return nil
 	}
 	if _, err := uow.Exec(ctx,
+		// legacy-chain-only
 		`DELETE FROM equipment_type_components WHERE parent_type_id=$1`, typeID); err != nil {
 		return app.Internal(action, err)
 	}
 	for _, line := range lines {
-		if _, err := uow.Exec(ctx, `
+		if _, err := uow.Exec(ctx,
+			// legacy-chain-only
+			`
 			INSERT INTO equipment_type_components
 				(parent_type_id,component_type_id,quantity,created_by)
 			VALUES($1,$2,$3,$4)`,

@@ -285,7 +285,7 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 			// idempotent second import performs no DDL and no record writes.
 			if presentTables["equipment_stock"] && len(artifact.Records["equipment_stock"]) > 0 {
 				var stockEmpty bool
-				if err := uow.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM equipment_stock)`).Scan(&stockEmpty); err != nil {
+				if err := uow.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM equipment_stock)`).Scan(&stockEmpty); err != nil { // legacy-chain-only
 					return err
 				}
 				if stockEmpty {
@@ -457,7 +457,7 @@ func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork, clearLe
 			// literally an empty ledger, not a mixture of artifact and target
 			// state. -backfill-ledger restores the schema identities before use.
 			for _, statement := range []string{
-				`DELETE FROM stock_locations WHERE slug='home'`,
+				`DELETE FROM stock_locations WHERE slug='home'`, // legacy-chain-only
 				`DELETE FROM treatment_products`,
 				`DELETE FROM inventory_balance_checkpoints`,
 				`DELETE FROM inventory_bom_lines`,

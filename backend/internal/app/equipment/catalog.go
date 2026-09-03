@@ -158,6 +158,7 @@ func legacyStockResolutionSQL() string {
 		ORDER BY CASE WHEN ii.id=$1 THEN 0 ELSE 1 END, ii.source_type
 		LIMIT 1`
 	}
+	// legacy-chain-only
 	return `
 		SELECT et.id,es.id,es.frame_condition::text
 		FROM equipment_types et
