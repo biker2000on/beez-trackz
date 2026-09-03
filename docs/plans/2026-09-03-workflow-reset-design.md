@@ -1116,6 +1116,14 @@ first and does not depend on any Production or Sales work.
 
 ## 8. Open questions for the operator
 
+**Decided 2026-09-03 by the lead under the operator's standing "use your
+judgement" instruction, before the implementation waves launched:**
+(1) expenses and customers live under **Sales** — Insights stays read-only;
+(2) **area-prefixed paths** (`/yard/hives/[id]`) — greppable ownership wins
+over two path segments; (3) "start extraction" stays **`online_only`** — a
+duplicated harvest session under replay is not an acceptable residual for a
+weight-bearing record; revisit once `RunIdempotent` has run in production.
+
 1. **S11, expenses under Sales.** This widens the roadmap's Sales charter
    ("market day, orders, consignment, customers, settlement, and payment") to
    include money out. The alternative is a Finance sub-area under Insights that
