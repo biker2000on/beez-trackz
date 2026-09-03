@@ -1477,6 +1477,26 @@ redirect anywhere; `commerceSlugReserved` and its test are gone;
 
 ### Wave 6 — Settings split
 
+**Landed 2026-09-03.** Backend (`338e100`, run E codex): twin migration
+`legacy…/00057_user_preferences` + `migrations/00004_user_preferences`
+(per-user table backfilled from the singleton; the six per-user columns leave
+`user_settings`), `app/me.UpdatePreferences` and `app/admin.UpdatePolicy`
+under the runner, `GET/PUT /api/v1/me/preferences`, `GET/PUT
+/api/v1/admin/policy`, the Settings section registry with the
+exactly-one-owner test, compliance and GnuCash reconciliation under
+`/api/v1/insights/*` (retired paths are authenticated 404s), ntfy/AI secrets
+never returned to non-admins. Lead follow-up `9c88deb`: the public Honey
+Story reads the operator's units/temperature from the first
+administrator's `user_preferences` row (decision: the story follows the
+operator, never the viewer; `user_settings` no longer carries them).
+Frontend (run E claude, worker lost during its Playwright run at 22:06Z;
+verified and integrated by the lead): `/me`, `/admin`, `/admin/setup`,
+`features/me`, `features/admin` (config registry, policy form, setup view,
+gate), compliance and reconciliation views under `/insights`, labor control
+on `/yard/queue`, the Settings catch-all deleted, `settings-split.spec.ts`.
+Deviation: `cmd/migrate-legacy` still lists the six moved `user_settings`
+columns; it targets pre-wave source generations and was left alone.
+
 - **Depends on** wave 5 (the routes exist).
 - **Scope.** The `user_preferences` migration and backfill (§6.4); `/me`,
   `/admin/setup` and `/admin`; contextual manage links from Production, Sales,
