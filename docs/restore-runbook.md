@@ -12,7 +12,11 @@ The format contract is `docs/snapshot-format.md` (`formatVersion: 1`). The
 ordered gate, comparison matrix, adversarial cases A1–A22, and disposable
 database plan in `docs/plans/2026-09-01-roundtrip-gate-design.md` are binding.
 The reset policy is the roadmap paragraph **Reset policy after the gate** in
-`docs/product-roadmap.md`.
+`docs/product-roadmap.md`. Phase A of the inventory ledger (additive backfill
+and freeze) is section 6; its binding spec is
+`docs/plans/2026-09-01-inventory-ledger-design.md` §9, and the exact writer /
+reader / freeze-set checklist is
+`docs/plans/2026-09-02-ledger-read-path-migration.md`.
 
 Run every Go command with `TZ=UTC`. Do not restore into the compose working
 database `beeztrackz` on volume `postgres_data`.
@@ -27,6 +31,10 @@ database `beeztrackz` on volume `postgres_data`.
 | `import-snapshot` CLI | **Landing in this wave** | Shared CLI contract below; implementation `backend/cmd/import-snapshot/` |
 | `roundtrip-gate` CLI | **Landing in this wave** | Assignment flags below; implementation `backend/cmd/roundtrip-gate/`; procedure `docs/plans/2026-09-01-roundtrip-gate-design.md` sections 2 and 5 |
 | `gnucash_sync_settings.restore_state` and mark-reconciled | **Landing in this wave** | `backend/internal/db/migrations/00049_gnucash_restore_state.sql` and `backend/internal/httpapi/routes_gnucash_sync.go` |
+| Ledger tables, views, seeded locations (incl. virtual `deployed`), nullable item/lot links, `equipment_types` catalog attributes | Wave 1, in this tree (2026-09-02) | `backend/internal/db/migrations/00050_inventory_ledger.sql` |
+| `schema_generation` stamp + generation guard | Wave 1, in this tree (2026-09-02) | `backend/internal/db/migrations/00051_schema_generation.sql`, `backend/internal/db/generation.go`, `db.ConnectWithOptions` |
+| `app/inventory` (`Record` / `Reverse` / `CheckAvailable`, builders, queries, checkpoints) | Wave 1, in this tree (2026-09-02) | `backend/internal/app/inventory/` (`doc.go`, `build/build.go`, `service.go`, `types.go`) |
+| `import-snapshot -backfill-ledger` (Phase A in-place translation, residual splits, freeze) | **Landing in this wave** | `backend/cmd/import-snapshot/main.go` for the authoritative flags; spec §9 Phase A; tests named in spec §12 |
 
 Where a flag, report field, or refusal is not yet in this tree, this runbook
 names the file to re-read after that binary lands. It does not invent flags.
@@ -58,6 +66,12 @@ import-snapshot -input <snapshot-dir> -database <postgres-url> \
 The report lists created / unchanged / updated / skipped / conflicted / failed
 per record, plus missing media and excluded configuration
 (`backend/internal/app/restore.go` `Report`).
+
+`-backfill-ledger` is a **separate** Phase A mode of this same binary, landing
+in this wave. It is not part of the P0 restore contract above. Do not invent
+companion flags for it. After it lands, re-read
+`backend/cmd/import-snapshot/main.go` for the authoritative flag set, then
+follow section 6.
 
 ### `roundtrip-gate` (landing in this wave)
 
@@ -505,8 +519,10 @@ onto a clean baseline that no longer depends on migrations 00001–00048) is
    databases — so none is left at a generation the binaries refuse
    (section 1.1).
 7. Only then is it acceptable, as a **later P1 act**, to replace the
-   development database and squash migrations. Wave 2 does not squash
-   anything.
+   development database and squash migrations. That squash is **Phase B**
+   of the ledger rewrite, after the ledger has run alone. This wave does
+   not squash anything and does not drop a table. The additive Phase A
+   backfill and freeze is section 6.
 
 ### STOP — do not reset
 
@@ -528,6 +544,8 @@ of the following is true:
 | You planned to enable GnuCash sync before pull-first reconciliation | Roadmap C9. |
 | `formatVersion` is not `1` and this build has no transform for it | Importer must not guess schema from `appCommit`. |
 | You do not have the wrapping checksum and the artifact on storage independent of the database being replaced | A successful import into a database you then drop is not a backup. |
+| You were about to squash migrations, drop `honey_movements` (or any freeze-set table), or treat Phase A backfill as the Phase B reset | No table is dropped in Phase A. Squash is Phase B, after a committed freeze, a physical count, and a post-adjustment snapshot (section 6). |
+| You do not have a pre-Phase-A snapshot on storage independent of the database you will backfill | A committed freeze rolls back only by restoring that snapshot (section 6). Do not start the backfill. |
 
 ---
 
@@ -758,20 +776,325 @@ after mark-reconciled.
 before push; a failed or incomplete pull pushes nothing) and
 `POST /settings/gnucash/rows/{id}/push`.
 
-Entity re-key of the nine dissolving `external_sync.entity_type` values and
-content-hash rebaseline against unchanged `remote_transaction_guid` /
-`remote_enter_date` apply when restoring into the **P1** schema, not during
-this same-schema rehearsal.
+Entity re-key of the **six** dissolved `external_sync.entity_type` values
+(audit (a); spec §8) and content-hash rebaseline against unchanged
+`remote_transaction_guid` / `remote_enter_date` apply in Phase A after
+the freeze (section 6.6), not during this same-schema rehearsal.
 
 ---
 
-## 6. Troubleshooting
+## 6. Phase A — ledger backfill and freeze
+
+This is the operator procedure for spec §9 Phase A: translate the live
+legacy quantity tables into `inventory_operations` in place, check parity,
+and freeze those tables read-only. It is **not** the P0 same-schema restore
+(section 4) and it is **not** the Phase B squash. No table is dropped here.
+There is no dual-write: once the freeze commits, the ledger is the only
+quantity writer.
+
+Binding documents: spec
+`docs/plans/2026-09-01-inventory-ledger-design.md` (§7 translation, §7.2
+parity, §7.4 residual splits, §8 GnuCash re-key, §9 Phase A, §12 tests)
+and the wave-1 audit
+`docs/plans/2026-09-02-ledger-read-path-migration.md` (freeze-eight, T3
+writer set, T4 projections, T5 backfill, six-type `external_sync` re-key).
+
+Wave 1 already landed on this chain (2026-09-02): migration
+`00050_inventory_ledger.sql`, migration `00051_schema_generation.sql` plus
+the generation guard, and `backend/internal/app/inventory`. This wave
+lands the producers, the projection switch, and the backfill/freeze
+command. Rehearse on a fresh copy of production first (spec §12
+Rehearsal); keep that report.
+
+### Preconditions
+
+Do these in order. Abort rather than skip.
+
+1. Process environment: `TZ=UTC`.
+2. Every developer, CI, and test database has been dropped and recreated
+   from the current migrations (section 1.1). A database merely copied
+   from a pre-00051 chain will be refused at start-up.
+3. The target is a `ledger-v1` database: `schema_generation` stamped,
+   goose head includes 00050 and 00051, `app/inventory` present. Confirm
+   with the binary that will run the backfill, not with an older one.
+4. Take a **fresh** snapshot of the database you will backfill (section 1,
+   with `-hash-minio` if this artifact might have to restore the
+   pre-Phase-A state). Store it **outside** that database. This snapshot
+   is the only rollback for a committed freeze.
+5. That artifact has a **passing P0 gate** (sections 2 and 3). If source
+   rows changed after the last passing rehearsal, re-export and re-run
+   the gate. The passing report must describe *this* database.
+6. GnuCash sync stays disabled for the backfill window (`sync_enabled =
+   false`). Do not enable it to "make pull work" (section 5.5).
+7. This wave's T3 producers and T4 readers are in the binary you will
+   run. The freeze is what makes any leftover legacy writer fail
+   loudly; arming it against a binary that still `INSERT`s
+   `honey_movements` (etc.) is a STOP. The audit's writer set is listed
+   under **Freeze** below.
+8. Freeze writes on the source if anything else can still mutate
+   quantity while the job runs. The backfill transaction is the
+   serialization point; a concurrent legacy write races the freeze.
+
+### 6.1 Rehearse on a copy, then run `-backfill-ledger`
+
+The in-place job is `import-snapshot -backfill-ledger`. The flag is
+**landing in this wave**. Do not invent companion flags (dry-run shape,
+report path, database URL flag name, a separate freeze-only switch).
+After the binary lands, the authoritative flag set is
+`backend/cmd/import-snapshot/main.go`. Spec §12 names the tests that
+pin the commit/rollback behaviour:
+`backend/cmd/import-snapshot/backfill_db_test.go` (successful backfill
+refuses INSERT/UPDATE/DELETE on every freeze-eight table; a failed
+parity leaves those tables writable and the ledger empty) and
+`backend/cmd/import-snapshot/translate_test.go` (causal order 1–10,
+`legacy_ref` on every translated row, residual splits, **negative
+unassigned residual fails**).
+
+What the job is (spec §9 steps 3–4), regardless of flag spelling:
+
+- The §7 translation, run in place as an idempotent job under the
+  system-restore actor against the **live** legacy tables. Same builders
+  (`backend/internal/app/inventory/build`) as live commands; the
+  translator adds only residual splits, provenance / `legacy_ref`
+  markers, and condition coercion.
+- One transaction. It ends by installing a `BEFORE INSERT OR UPDATE OR
+  DELETE` trigger on each of the eight freeze-set tables, then running
+  §7.2 parity against the **frozen** legacy aggregate family
+  (`backend/internal/snapshot/legacy.go`).
+- Parity must pass inside that transaction or the job refuses to
+  commit. Counts match exactly; mass within 0.0001. Jar / product /
+  propolis legacy formulas compare to `inventory_available`; bulk,
+  lots, away stock, and equipment compare to `inventory_balances`
+  (spec §7.2).
+
+Rehearse first against a disposable copy (same `CREATE DATABASE`
+pattern as section 3). Do not rehearse against compose `beeztrackz`
+or volume `postgres_data`. Only after that copy's report is pass, run
+the same binary against the intended database.
+
+```text
+TZ=UTC go run ./cmd/import-snapshot \
+  -backfill-ledger \
+  …
+```
+
+Fill in `…` from `backend/cmd/import-snapshot/main.go` after the flag
+lands. Existing P0 flags (`-input`, `-database`, `-dry-run`,
+`-conflict-policy`, `-report`) mean what section 2.3 / the CLI block
+above say; do not assume they all apply to backfill. Prefer an
+absolute `-report` path beside the pre-Phase-A wrapping checksum,
+**outside** the snapshot artifact.
+
+Pass: exit 0, freeze triggers installed, parity cells equal or
+**explained** by a declared `legacy-residual-split-v1` split, residual
+splits listed in the restore report (spec §7.4). Keep that report next
+to the pre-Phase-A snapshot.
+
+### 6.2 What parity failure looks like
+
+A failed backfill **does not commit**. Spec §9 step 4 and
+`backfill_db_test.go`: the freeze trigger is not installed, the eight
+legacy tables stay **writable**, and the ledger is empty (no leftover
+`inventory_operations` / movements from the aborted transaction). Live
+producers are not switched on — they are feature-gated behind a
+committed freeze.
+
+Treat any of the following as the same failure:
+
+- Exit nonzero, or a report with `failed` / `conflicted`.
+- An unexplained aggregate delta against the legacy family in
+  `backend/internal/snapshot/legacy.go` (spec §7.2). Matching totals
+  do not excuse a per-item / per-lot / per-location miss.
+- A negative unassigned bulk residual (section 6.3) — that is a STOP,
+  not a split to declare.
+- A freeze-eight table that still accepts a write after a reported
+  "success".
+
+Do not "finish by hand": do not insert freeze triggers, do not delete
+ledger rows, do not re-run a partial translation against a database
+that already has some `inventory_*` rows from a committed attempt. Fix
+the cause (source data, translator bug, binary that still writes
+legacy tables), restore the copy if you rehearsed destructively, and
+run the job again from a clean in-place state. The job is specified as
+idempotent; confirm the actual no-op contract in
+`backend/cmd/import-snapshot/` after it lands.
+
+### 6.3 Residual-split report, and the negative-unassigned STOP
+
+After translation steps 1–9, the job applies the declared splits (spec
+§7.4, transform version `legacy-residual-split-v1`):
+
+| Split | What it becomes | `details.reason` / lot |
+|---|---|---|
+| Unassigned bulk honey (`total harvested − Σ lot ceilings − Σ lot-less draws`) | one `opening_balance` receipt of that many lbs into item `honey_bulk` at `home` | lot `legacy-unassigned`, dated at the earliest harvest |
+| Home jar residual per jar size (`global jars − Σ away`) | one `opening_balance` per jar-size item at `home` | lot `legacy-unassigned` where the jar cannot be traced; `details.reason = 'home-residual-split'` |
+| Home product residual per catalog product | same shape per catalog item | same |
+
+Each split is listed in the restore report **and** in the new-ledger
+`verification.json` family with its amount (spec §7.4). Exact JSON
+keys land with the flag; read `backend/cmd/import-snapshot/main.go`
+and the report type in that package. A matching declared split is an
+explained difference; any other residual is a parity failure.
+
+**STOP — negative unassigned residual.** If the unassigned bulk residual
+is negative, the job must fail the gate (spec §7.4, §12 Translation).
+That is a real data problem (more lot-less draws than unassigned
+harvest). Investigate the source `honey_movements` / harvest / lot
+graph, fix it, take a new snapshot, re-run the P0 gate, and only then
+retry the backfill. Do not coerce the residual to zero. Do not invent
+a lot to hide it.
+
+`legacy-unassigned` jar stock is expected to be large relative to
+traced stock until the physical count retires it (spec OV7 / §7.1
+step 10). That is not a failure.
+
+### 6.4 What the freeze means
+
+On commit, a `BEFORE INSERT OR UPDATE OR DELETE` trigger raises on
+each of the eight tables (spec §9 step 3). Any process still writing
+those tables **fails loudly**. The exact SQLSTATE / message lands with
+the trigger; do not guess it. After a successful backfill, prove the
+refusal with a write against a freeze-set table (the
+`backfill_db_test.go` assertion is the template).
+
+The freeze-eight:
+
+`honey_movements`, `stock_movements`, `product_adjustments`,
+`equipment_stock`, `equipment_stock_adjustments`,
+`equipment_deployments`, `equipment_deployment_returns`,
+`equipment_state_changes`.
+
+`stock_locations` and `equipment_type_components` are **not** in the
+freeze-eight (they drop at Phase B). Their writers still have to move
+before squash.
+
+**These writers must already be migrated** (audit (c) / T3) before you
+arm the freeze. File:line checklist:
+`docs/plans/2026-09-02-ledger-read-path-migration.md` section (c).
+Summary of the production writer set the trigger will refuse:
+
+| Table | Production writers (handler / helper) |
+|---|---|
+| `honey_movements` | `honeyRecordJarring`, `honeyRecordBulkMovement`, `honeyRecordGiveAway`, `honeyAdjustJarCounts`, `honeyReverseMovement`; `bottlingRunCreate` / `bottlingRunVoid`; `productBatchCreate` / `productBatchVoid`; jar-size deactivate write-off; settlement shrink (global half) and `stockSettlementVoid` |
+| `stock_movements` | `stockInsertMovement` (transfer/return), `stockReverseMovements`, settlement shrink (location half) |
+| `product_adjustments` | `productInsertAdjustment` (incl. settlement product shrink), `productAdjustmentDelete`, `stockSettlementVoid` |
+| `equipment_stock` | `equipCreateStock`, `equipUpdateStock` (OV2: this PATCH becomes an `equipment_types` update, not a freeze-table write), `equipReceiveStock`, `equipApplyAssembly` (empty-row insert + rolled-up cost), `equipDeleteType`, `honeyConsumePackaging` |
+| `equipment_stock_adjustments` | `equipInsertAdjustment` (receive, adjust, physical count, assembly, packaging consume); `saleInsertSoldAdjustment`; `saleRevertPhysical`; `saleUnapplyPhysical` |
+| `equipment_deployments` | `equipDeployTx`; `equipReturnTx`; `saleRevertPhysical` |
+| `equipment_deployment_returns` | `equipReturnTx`; `saleRevertPhysical` |
+| `equipment_state_changes` | `equipInsertStateChange` (damage / repair / retire, return-damaged, dispose-from-condition) |
+
+Restore of quantity history after freeze is T5 translation into
+operations, not table copy. Today's `app/restore_portable.go` still
+inserts `equipment_stock` at zero and replays adjustments — that path
+must not hit the freeze (audit "Restore writer").
+
+Not freeze-eight, still must move before Phase B: `stock_locations`
+create/update/soft-delete (`routes_stock_locations.go`, home seed in
+`honey_ledger.go`) and `equipment_type_components` replace-all
+(`routes_equipment_bom.go`).
+
+After a committed freeze, operate on the ledger alone. Legacy tables
+and views remain, frozen, for reference and for the Phase B gate.
+Producers write through `app/inventory` (`Record` / `Reverse` /
+`CheckAvailable`). Readers use `inventory_balances` /
+`inventory_available` / `inventory_reservations` / checkpoint
+reconciliation (audit T4).
+
+### 6.5 Rollback
+
+Drop the ledger rows? **No.**
+
+| Situation | Rollback |
+|---|---|
+| Parity failed, job exited nonzero | Nothing to roll back. The transaction did not commit. Legacy tables are still writable; the ledger is empty. Fix and retry. |
+| You think a failed job "left rows behind" | Treat that as a translator/CLI bug. Do not `DELETE FROM inventory_operations`. Restore the pre-Phase-A snapshot into a disposable database and compare. |
+| Freeze **committed** and you need to undo Phase A | Restore the **pre-Phase-A snapshot** through the canonical importer (section 4) onto a replacement database. That is the only rollback. Do not drop freeze triggers by hand. Do not `TRUNCATE` `inventory_*`. Do not squash. |
+
+The pre-Phase-A snapshot plus its passing gate report are the recovery
+boundary. Keep them on storage independent of the database you froze.
+
+### 6.6 Between the phases
+
+These sit after a committed freeze and **before** Phase B squash (spec
+§9 "Operator steps that sit between the phases"). Do not skip to
+squash.
+
+1. **Physical count and consignment reconciliation** as `count_adjust`
+   operations on the ledger (inventory service, not a
+   `product_adjustments` / `equipment_stock_adjustments` /
+   `honey_movements` write — those now raise). Approved differences
+   only. This is also how `legacy-unassigned` lots get retired.
+2. **Post-adjustment snapshot.** Export (section 1) and round-trip
+   verify (section 3) so those `count_adjust` operations become the
+   new rollback boundary. Do not rely only on the pre-Phase-A
+   artifact from here on.
+3. **GnuCash re-key, rebaseline, reconcile, mark reconciled.** Sync
+   stays disabled through this step.
+   - Re-key the **six** dissolved `external_sync.entity_type` values
+     (audit (a); spec §8 — not the original "nine"):
+     `honey_movement`, `stock_movement`, `equipment_stock`,
+     `equipment_stock_adjustment`, `product_adjustment` →
+     `inventory_operation` via `legacy_ref_*`; `stock_location` →
+     `inventory_location`. Production currently has zero
+     `external_sync` rows, so the first pass may be an allowlist
+     change with nothing to rewrite — still run and retain the
+     report. Test named in spec §12:
+     `backend/internal/httpapi/external_sync_rekey_test.go`. The
+     allowlist itself is `backend/internal/httpapi/external_sync.go`.
+   - Content-hash rebaseline from the new body composition against
+     unchanged `remote_transaction_guid` / `remote_enter_date`
+     (section 5.5; roadmap B2). Only a *remote* body that no longer
+     matches stays `diverged`.
+   - Pull-first reconciliation sweep against folio's verify-by-external-ID
+     endpoint (section 5.5 step 5). No-write plan. Quarantine
+     mismatches.
+   - `markReconciled` (section 5.5 step 6). Confirm the exact request
+     in `backend/internal/httpapi/routes_gnucash_sync.go`.
+4. **Enable GnuCash sync** only after mark-reconciled (section 5.5
+   step 7).
+
+Phase B (squash to `00001_baseline.sql`, drop the frozen tables, stamp
+`schema_generation = 'ledger-v1-baseline'`, recreate every database,
+ordinary P0 gate against the new schema) starts only after the ledger
+has run alone for a real period **and** the physical count above has
+landed. That is a later act. This wave does not do it.
+
+### STOP — do not freeze / do not squash
+
+Stop immediately, keep the working database writable on the legacy
+tables, and keep the pre-Phase-A artifact, when any of the following
+is true:
+
+| STOP | Why |
+|---|---|
+| No fresh snapshot + passing P0 gate for *this* database | The only rollback for a committed freeze would describe a different tree of rows. |
+| A developer / CI / test database has not been recreated per section 1.1 | Generation guard will refuse it, or worse, a foreign chain gets served. |
+| T3 writers in audit (c) still `INSERT`/`UPDATE`/`DELETE` a freeze-eight table | The freeze will fail those processes loudly. Migrate them first. |
+| You were about to arm the freeze from a binary that does not contain this wave's producers and projections | Leftover handlers become the production quantity path, then break. |
+| Parity failed, or the report is missing / unreadable | Freeze must not commit. Legacy tables stay writable (section 6.2). |
+| Unassigned bulk residual is negative | Spec §7.4 data problem. Investigate; do not declare a split. |
+| An unexplained residual (not a listed `legacy-residual-split-v1` row) | Concealment. Fail, fix, retry. |
+| You were about to `DELETE` / `TRUNCATE` `inventory_*` rows to "undo" a backfill | A failed parity never commits. A committed freeze rolls back only by restoring the pre-Phase-A snapshot. |
+| You were about to drop freeze triggers by hand, or `DROP TABLE honey_movements` (etc.) | Freeze is armed by the backfill job; tables drop in Phase B only. |
+| You were about to squash migrations in this wave | Phase B, after count + post-adjustment snapshot. |
+| Target is compose `beeztrackz` / volume `postgres_data` and this is still the rehearsal copy | Rehearse on a disposable database (section 3 pattern). |
+| GnuCash `sync_enabled` is true | Disable, then backfill. Re-key / rebaseline / markReconciled happen *after* freeze (section 6.6). |
+| Restore into a frozen database still copies `equipment_stock` then replays adjustments | Post-freeze restore is T5 translation. `app/restore_portable.go` must not hit the freeze. |
+| `TEST_DATABASE_URL` is unset so `backfill_db_test.go` skipped and you treated that as a pass | The freeze contract is not proven. |
+
+---
+
+## 7. Troubleshooting
 
 Importer and gate failures are per-file / per-record. A silent partial restore
 is a bug. Kinds come from `backend/internal/app/errors.go`. Report outcomes
 come from `backend/internal/app/restore.go`. Gate comparison classes come from
 design section 3. GnuCash messages come from
-`backend/internal/httpapi/routes_gnucash_sync.go`.
+`backend/internal/httpapi/routes_gnucash_sync.go`. Phase A backfill / freeze
+behaviour is spec §9 and, once the flag lands,
+`backend/cmd/import-snapshot/main.go` plus
+`backend/cmd/import-snapshot/backfill_db_test.go`.
 
 | Symptom / class | Typical kind or case | Operator action |
 |---|---|---|
@@ -813,6 +1136,20 @@ design section 3. GnuCash messages come from
 | Write to a `--legacy-source` connection fails `25006` | `read_only_sql_transaction` | Working as designed. That connection exports; it never writes. |
 | Gate skipped: `TEST_DATABASE_URL is not configured` | design 5.3 | The gate is not passed. |
 | Honey tests / `TRUNCATE` wrecked a restore in progress | restored into the shared test DB | Never restore into `TEST_DATABASE_URL`'s database. Use a disposable name. |
+| `-backfill-ledger` flag unknown / help text has no such flag | flag still landing | Re-read `backend/cmd/import-snapshot/main.go`. Do not invent a wrapper script or a second CLI. Do not pass `-backfill-ledger` to `roundtrip-gate` or `export-snapshot`. |
+| Backfill exit nonzero; freeze-eight tables still writable; `inventory_operations` empty | spec §9 step 4; `backfill_db_test.go` | Working as designed. Parity did not commit. Read the restore report; fix source data or the translator; retry. Do not insert freeze triggers by hand. |
+| Backfill exit nonzero **and** ledger rows present or some tables frozen | translator/CLI bug | STOP. Do not delete ledger rows. Restore the pre-Phase-A snapshot onto a replacement database (section 6.5). File the report. |
+| Unexplained aggregate delta at freeze (counts off, or mass > 0.0001) | spec §7.2 vs `snapshot/legacy.go` | Fail. Jar/product/propolis compare to `inventory_available`; bulk/lots/away/equipment to `inventory_balances`. Do not treat a matching grand total as a pass. |
+| Report lists a negative unassigned bulk residual, or the job failed naming that residual | spec §7.4 STOP | Investigate `honey_movements` with `lot_id IS NULL` vs harvest/lot ceilings. Fix source, re-export, re-run the P0 gate, retry. Do not coerce to zero. |
+| Residual-split report missing a listed split, or a split amount that is not in `verification.json` | spec §7.4 | Fail. Each split has to appear in both the restore report and the new-ledger family. Re-read the report type in `backend/cmd/import-snapshot/` after it lands. |
+| `INSERT`/`UPDATE`/`DELETE` on `honey_movements` (or another freeze-eight table) raises after a reported success | freeze trigger | Working as designed. That writer should already be a T3 producer (audit (c), section 6.4). If it is a process you still need, the producer is missing — STOP and roll back via the pre-Phase-A snapshot. |
+| Same write still succeeds after a reported successful freeze | freeze did not install | Treat as a failed backfill. Do not operate as if Phase A committed. |
+| `stock_locations` or `equipment_type_components` write raises during Phase A | those tables are not in the freeze-eight | Unexpected. The freeze covers only the eight tables in section 6.4. Investigate a bad trigger. Those writers still have to move before Phase B. |
+| You dropped `inventory_operations` / movements to "undo" Phase A | not a rollback | Restore the pre-Phase-A snapshot (section 6.5). The ledger is not a scratch pad. |
+| Physical count written as `product_adjustments` / `jar_adjustment` / equipment adjustment after freeze | freeze-eight writer | Use `count_adjust` through `app/inventory`. Legacy adjustment paths are the writer set in section 6.4. |
+| GnuCash rows still typed `honey_movement` / `stock_movement` / `equipment_stock` / `equipment_stock_adjustment` / `product_adjustment` / `stock_location` after freeze | re-key not run | Section 6.6: six-type re-key, then content-hash rebaseline, then folio verify, then `markReconciled`. Do not enable sync. Allowlist: `backend/internal/httpapi/external_sync.go`. |
+| First post-freeze rescan marks every GnuCash row `diverged` | content-hash not rebaselined | Rebaseline against unchanged `remote_transaction_guid` / `remote_enter_date` before treating remote drift as real (section 5.5 / 6.6). |
+| `backfill_db_test.go` / `translate_test.go` skipped | `TEST_DATABASE_URL` unset | The freeze/parity contract is not proven. Not a pass. |
 
 ### Restore report outcomes (importer)
 
@@ -835,13 +1172,20 @@ A run is not OK unless `conflicted` and `failed` are both zero
 - Format and security: `docs/snapshot-format.md`
 - Gate procedure, matrix, A1–A22, disposable DB: `docs/plans/2026-09-01-roundtrip-gate-design.md`
 - Reset policy and acceptance: `docs/product-roadmap.md` (P0)
+- Phase A / Phase B sequence: `docs/product-roadmap.md` item 9, **Pre-launch replacement phases**
+- Ledger spec (translation, parity, residual splits, freeze, tests): `docs/plans/2026-09-01-inventory-ledger-design.md` sections 7, 8, 9, 12
+- Writer / reader / freeze-set / six-type re-key audit: `docs/plans/2026-09-02-ledger-read-path-migration.md`
 - Export flags: `backend/cmd/export-snapshot/main.go`
 - Restore semantics: `backend/internal/app/doc.go`, `backend/internal/app/restore.go`
+- Inventory service (wave 1): `backend/internal/app/inventory/doc.go`, `build/build.go`, `service.go`, `types.go`
+- Legacy aggregate family (parity oracle): `backend/internal/snapshot/legacy.go`
 - Excluded configuration: `backend/internal/snapshot/registry.go`
 - GnuCash refusals and guarded restore: `backend/internal/httpapi/routes_gnucash_sync.go`
-- Importer CLI (this wave): `backend/cmd/import-snapshot/`
+- `external_sync` allowlist (re-key source): `backend/internal/httpapi/external_sync.go`
+- Importer CLI (P0 restore and, this wave, `-backfill-ledger`): `backend/cmd/import-snapshot/main.go`
 - Gate CLI (this wave): `backend/cmd/roundtrip-gate/`
 - Restore-state column: `backend/internal/db/migrations/00049_gnucash_restore_state.sql`
+- Ledger tables (wave 1): `backend/internal/db/migrations/00050_inventory_ledger.sql`
 - Generation stamp: `backend/internal/db/migrations/00051_schema_generation.sql`
 - Generation guard: `backend/internal/db/generation.go`, `backend/internal/db/db.go`
 - Guard decisions A6 and OV3: `docs/plans/2026-09-01-inventory-ledger-design.md` sections 2.1 and 9 step 7

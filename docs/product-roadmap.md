@@ -121,7 +121,11 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
    design decisions listed in that section (hives as locations, draft-sale
    operations, unit representation, condition vocabularies, derived lot
    weight, serial identity, guard relocation) must be answered in the spec
-   before schema work starts.
+   before schema work starts. *Amended 2026-09-02:* those decisions are in
+   the spec; Wave 1 landed migrations 00050/00051, `app/inventory`, and the
+   generation guard. Sequencing is Phase A (additive ledger + freeze +
+   parity) then Phase B (squash and drop) — see **Pre-launch replacement
+   phases** below.
 10. **P1 — Workflow and application architecture reset.** Replace the
     module-first information architecture, add a use-case/application layer and
     stable workbench read models, and rewrite internal routes directly across the
@@ -808,29 +812,64 @@ notes.
 
 **Pre-launch replacement phases.**
 
-1. Complete the portable-snapshot round-trip gate. Freeze the inventory portion
-   of the export contract around domain facts and provenance rather than the old
-   balance formulas; use explicit `legacy-unassigned` lots only where the source
-   records genuinely cannot prove ancestry.
-2. Design the clean baseline around the generalized core and the domain records
-   that reference it. Route every stock-changing command through one inventory
-   application service and remove writable legacy ledgers, stored totals, and
-   competing balance formulas from the target schema and code paths.
-3. Import the validated snapshot into a disposable target database, translating
-   domain events/history into idempotent inventory operations in causal order.
-   Compare imported ledger sums with the snapshot's inventory verification data
-   by item, location, lot, varietal, and equipment condition; investigate rather
-   than conceal differences.
-4. Reset the working database to the clean baseline and restore the final validated
-   pre-reset snapshot through the same importer, with GnuCash sync disabled. Run
-   the full record-level and aggregate verification against `verification.json`
-   before accepting the restored database.
-5. Only after that actual clean-baseline restore, complete the physical count and
-   consignment-settlement reconciliation and record approved differences as
-   explicit adjustment operations in the new ledger. Export and round-trip verify
-   a post-adjustment snapshot so those adjustments become the new rollback
-   boundary; do not rely only on the pre-reset artifact. Re-enable GnuCash sync
-   only after its pull-first reconciliation and no-write push dry run pass.
+*Amended 2026-09-02 (spec §9 / OV7):* additive ledger + freeze + parity
+first; squash and drop second. Decisions 9 and 10 remain the destination.
+No dual-write. No table is dropped in Phase A.
+
+Wave 1 of this item **landed 2026-09-02** on the current goose chain:
+migration `00050_inventory_ledger.sql` (ledger tables, views, seeded
+locations including the virtual `deployed` location, nullable
+`item_id`/`inventory_lot_id` links on `sale_items`/`jar_sizes`/
+`product_catalog`/`equipment_types`/`harvest_lots`/`product_batches`,
+`equipment_types` catalog attribute columns), migration
+`00051_schema_generation.sql` plus the generation guard
+(`db.ConnectWithOptions`; `--legacy-source` read-only exception), and
+`backend/internal/app/inventory` (pure builders in `app/inventory/build`,
+`Service.Record` / `Reverse` / `CheckAvailable`, read queries, checkpoint
+refresh, lock order in `doc.go`). Legacy quantity tables still exist and
+were still written by the then-current handlers.
+
+1. Complete the portable-snapshot round-trip gate (P0, shipped 2026-09-01).
+   Freeze the inventory portion of the export contract around domain facts
+   and provenance rather than the old balance formulas; use explicit
+   `legacy-unassigned` lots only where the source records genuinely cannot
+   prove ancestry. A fresh snapshot + passing gate remains mandatory
+   immediately before the Phase A backfill and again before the Phase B
+   reset (`docs/restore-runbook.md`).
+2. **Phase A — additive ledger, freeze, parity (this wave).** Finish routing
+   every stock-changing command through one inventory application service
+   (`app/production`, `app/sales`, `app/equipment`, `app/field` calling
+   builders then `inventory.Record` / `CheckAvailable`; HTTP is transport)
+   and switch every live reader of a freeze-set table or view to
+   `inventory_balances` / `inventory_available` / `inventory_reservations`
+   / checkpoint reconciliation (audit T3/T4). Then run the in-place
+   backfill — `import-snapshot -backfill-ledger`, **landing in this wave**;
+   authoritative flags in `backend/cmd/import-snapshot/main.go` — under
+   the system-restore actor: spec §7 translation, residual splits, freeze
+   trigger on the eight legacy quantity tables, §7.2 parity against the
+   frozen legacy aggregate family. A failed parity never commits; legacy
+   tables stay writable and the ledger stays empty. Investigate rather
+   than conceal differences. Operate on the ledger alone; frozen tables
+   remain for reference. Procedure: `docs/restore-runbook.md` section 6.
+3. **Between the phases.** After a committed freeze, complete the physical
+   count and consignment-settlement reconciliation as `count_adjust`
+   operations on the new ledger (this retires `legacy-unassigned` lots).
+   Export and round-trip verify a post-adjustment snapshot so those
+   adjustments become the new rollback boundary; do not rely only on the
+   pre-Phase-A artifact. GnuCash: re-key the six dissolved
+   `external_sync` types, content-hash rebaseline, folio verify sweep,
+   `markReconciled`, then enable sync. Still no squash and no dropped
+   table.
+4. **Phase B — squash and drop (later).** Only after the ledger has run
+   alone for a real period and the physical count in step 3 has landed:
+   write `00001_baseline.sql` as the full target schema minus the dropped
+   set, move the old chain aside, stamp `schema_generation`
+   `'ledger-v1-baseline'`, recreate every database, take the final
+   snapshot, run the ordinary P0 gate (translation already happened in
+   Phase A), reset, and restore through the canonical importer with
+   GnuCash disabled. Run the full record-level and aggregate verification
+   against `verification.json` before accepting the restored database.
+   This wave does not do Phase B.
 
 **Cutover invariants.** Every operation is idempotent and supports reversal.
 A reversal operation references its original, and the original records that
