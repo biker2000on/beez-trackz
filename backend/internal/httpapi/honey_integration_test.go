@@ -73,15 +73,22 @@ func honeyTestServer(t *testing.T) *Server {
 // DELETE SET NULL). Null the links first so the honey reset stays local.
 func resetHoneyTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
+	// inventory_locations (migration 00050) references wholesale_price_lists,
+	// and TRUNCATE ... CASCADE follows that FK and wipes the seeded home /
+	// deployed / apiary locations the ledger depends on. Delete the price
+	// lists instead of truncating them so the seeds survive.
 	const reset = `
 		UPDATE hives SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		UPDATE feedings SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		UPDATE equipment_stock_adjustments SET sale_id = NULL WHERE sale_id IS NOT NULL;
 		UPDATE equipment_deployment_returns SET sale_id = NULL WHERE sale_id IS NOT NULL;
+		UPDATE inventory_locations SET wholesale_price_list_id = NULL WHERE wholesale_price_list_id IS NOT NULL;
+		DELETE FROM wholesale_price_list_items;
+		DELETE FROM wholesale_price_lists;
 		TRUNCATE harvest_session_true_ups, jar_serials, sale_items, sales,
 			product_batch_expenses, product_batches, propolis_harvests, product_catalog,
 			honey_movements, bottling_runs, harvest_lot_photos, harvest_lot_harvests,
-			harvest_lots, wholesale_price_list_items, wholesale_price_lists,
+			harvest_lots,
 			honey_harvests, harvest_sessions, jar_sizes, expenses, customers,
 			external_sync, offline_mutation_receipts
 		RESTART IDENTITY CASCADE`
