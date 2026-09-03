@@ -556,6 +556,24 @@ post-reset. The mapping is recorded in the restore report.
   remaining difference becomes one `opening_balance` per jar size at `home`,
   lot `legacy-unassigned`, with `details.reason = 'home-residual-split'`.
   Same for **home product residual** per catalog product.
+- **Draws that predate their receipts** (found by the first prod-copy
+  rehearsal, 2026-09-03: production's first sale is dated 2022-09-11, its
+  first recorded jarring 2023-07-03, yet the per-size totals net to exactly
+  0). The legacy formulas are order-blind; the ledger is not, so a causal
+  replay goes negative mid-sequence even when the end state is consistent.
+  Rule: when a translated draw (sale line, give-away, jar/product/count
+  adjustment, lot-less bulk draw) finds fewer units at its location than it
+  consumes, the translator first records an `opening_balance` receipt for the
+  **shortfall only** into that item's `legacy-unassigned` lot at that
+  location, dated at the draw, `details.reason = 'draw-before-receipt'`, then
+  allocates. Real harvest/batch lots are never topped up — an overdrawn named
+  lot still fails the gate. At the residual step a *negative* home/away
+  residual is accepted only up to that (item, location)'s injected total and
+  is written as one `legacy_reconcile` adjustment (reason
+  `'draw-before-receipt-reconcile'`) so every balance still equals the legacy
+  figure and §7.2 parity is unchanged; a negative residual beyond the injected
+  total remains a gate failure. Both the injections and the reconcile
+  adjustments are listed in the restore report.
 - Each split is listed in the restore report and in the new-ledger
   `verification.json` family with its amount, so the post-adjustment
   snapshot (roadmap phase 5) can retire the `legacy-unassigned` lots through
@@ -889,6 +907,16 @@ was opened by wave 3d and is still OPEN**:
    pins the trigger, not an application rule). Until it lands, the equipment
    surface serves a baseline database everywhere **except** the BOM editor and
    assembly. This is a Phase B blocker, not a Phase A one.
+9. **Open (found by the first prod-copy Phase A rehearsal, 2026-09-03).**
+   `import-snapshot -backfill-ledger` against a fresh copy of production
+   migrated the copy 48 → 53 and then refused with
+   `allocate lots: only 0 of 2 units are on hand`; nothing was written and
+   the freeze did not arm (the all-or-nothing guarantee held). Cause: sales
+   recorded before any jarring (§7.4, "draws that predate their receipts").
+   Fix is the §7.4 shortfall rule — injection into `legacy-unassigned` at the
+   draw, bounded reconcile at the residual step, both reported. This is a
+   **Phase A blocker**. The pre-Phase-A snapshot export via `--legacy-source`
+   worked (65 domains at migration 48).
 
 ### Phase A rehearsal on a prod copy (next act)
 
