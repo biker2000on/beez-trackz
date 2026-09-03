@@ -955,7 +955,18 @@ Phase A blocker**:
    profile-branching composer: it has to answer for a database that has not yet
    run `00054`.
 
-9. **Open (found by the first prod-copy Phase A rehearsal, 2026-09-03).**
+9. **Closed (wave 3e, 2026-09-03) — the prod-copy rehearsal passed with the
+   rule in place (see the rehearsal section below).** The §7.4 rule landed in `app/backfill`: as-of-draw balance checks
+   on jar/product/count draws, sale lines and lot-less bulk inputs; shortfall-
+   only `opening_balance` injections (`draw-before-receipt`); named lots never
+   topped up; residual step accepts a negative residual only within the
+   injected total and writes one `count_adjust` with
+   `source_type = 'legacy_reconcile'` (`draw-before-receipt-reconcile`); both
+   lists are in the report (`drawBeforeReceiptInjections` /
+   `drawBeforeReceiptReconciles`), the CLI summary, and runbook §6.3.
+   Fixtures: sale-before-jarring (injection, reconcile, zero parity, freeze
+   arms) and an overdrawn named lot (gate refuses, nothing written).
+   Original finding:
    `import-snapshot -backfill-ledger` against a fresh copy of production
    migrated the copy 48 → 53 and then refused with
    `allocate lots: only 0 of 2 units are on hand`; nothing was written and
@@ -966,13 +977,31 @@ Phase A blocker**:
    **Phase A blocker**. The pre-Phase-A snapshot export via `--legacy-source`
    worked (65 domains at migration 48).
 
-### Phase A rehearsal on a prod copy (next act)
+### Phase A rehearsal on a prod copy — PASSED 2026-09-03 (post wave 3e)
 
 Phase A code is complete and Phase B is built and rehearsed against the seeded
 fixture; as of wave 3e the whole equipment surface, bill of materials included,
-serves a baseline database. What has *not* happened is a rehearsal against a copy of production.
-Run it before anything is frozen; the operator procedure is
-`docs/restore-runbook.md` **section 6**, and nothing below replaces it.
+serves a baseline database. The rehearsal against a fresh copy of production
+(dump → throwaway server → `export-snapshot --legacy-source` at goose 48 →
+`import-snapshot -backfill-ledger`) **passed** at main `9be77d5` after the
+first attempt surfaced open item 9:
+
+| result | value |
+|---|---|
+| migrations applied on the copy | 48 → 54, stamped `ledger-v1` |
+| operations / movements | 89 / 101 (53 `legacy-import`, 36 `legacy-unattributed`) |
+| draw-before-receipt injections | 11 (Pint 57 jars, Quart 1 jar, unassigned bulk 611.8 lbs of jarring before recorded harvests) |
+| draw-before-receipt reconciles | 2 (Pint −57, Quart −1) |
+| §7.4 residual splits | none needed |
+| freeze | 8 tables armed; an UPDATE on `honey_movements` raises the guard |
+| BOM seed (00054) | no-op — production has no `equipment_type_components` rows |
+
+The 611.8 lbs of bulk honey jarred before any recorded harvest is the number
+to show the operator before the real reset: it is honest history, not a data
+error, but it means the `legacy-unassigned` bulk lot carries opening
+receipts that a physical count should retire. Re-run the rehearsal on the
+day of the reset; the operator procedure is `docs/restore-runbook.md`
+**section 6**, and nothing below replaces it.
 
 1. Recreate a disposable database from the current migrations and restore a
    fresh production snapshot into it — never the compose `beeztrackz`
