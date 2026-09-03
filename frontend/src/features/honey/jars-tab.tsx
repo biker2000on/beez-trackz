@@ -252,7 +252,14 @@ export function JarsTab() {
   if (rows.length === 0) {
     return (
       <p className="py-8 text-center text-sm text-muted-foreground">
-        No jar sizes configured. Add sizes in Settings first.
+        No jar sizes configured.{" "}
+        <Link
+          href="/admin/setup#jar-sizes"
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Add sizes in Operation setup
+        </Link>{" "}
+        first.
       </p>
     );
   }

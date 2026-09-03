@@ -382,95 +382,140 @@ function RevokeTokenDialog({
   );
 }
 
-export function AccessSection() {
-  const profile = useAccessProfile();
-  const users = useAccessUsers(profile.data?.isAdmin === true);
+/**
+ * The administrator half of the old "Users, access, and API" accordion
+ * (design 2026-09-03 §6.3): who may read and write which apiary. It is the
+ * only editor of a collaborator — `/me` shows an account its own memberships
+ * read-only.
+ */
+export function CollaboratorsSection() {
+  const users = useAccessUsers();
   const deactivate = useDeactivateAccessUser();
   const [editing, setEditing] = React.useState<AccessUser | undefined>();
   const [dialogOpen, setDialogOpen] = React.useState(false);
 
   return (
-    <div className="grid gap-6">
-      {profile.data?.isAdmin ? (
-        <div className="grid gap-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h3 className="font-semibold">Apiary collaborators</h3>
-              <p className="text-sm text-muted-foreground">
-                Viewers can read records. Editors can also create and change
-                records in their assigned apiaries.
+    <div className="grid gap-3" data-config-editor="collaborators">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Apiary collaborators</h3>
+          <p className="text-sm text-muted-foreground">
+            Viewers can read records. Editors can also create and change
+            records in their assigned apiaries.
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            setEditing(undefined);
+            setDialogOpen(true);
+          }}
+        >
+          <Plus />
+          Add user
+        </Button>
+      </div>
+      <div className="divide-y rounded-lg border">
+        {(users.data ?? []).map((user) => (
+          <div className="flex items-center gap-3 p-3" key={user.id}>
+            <UserRound className="size-4 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">
+                {user.displayName || user.email}
+                {user.isAdmin ? " · Administrator" : ""}
+                {user.isPending ? " · Invite pending" : ""}
+                {!user.isActive ? " · Disabled" : ""}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {user.email ?? "Local owner"}{" "}
+                {!user.isAdmin && user.memberships.length
+                  ? `· ${user.memberships.map((item) => `${item.apiaryName}: ${item.role}`).join(", ")}`
+                  : ""}
               </p>
             </div>
-            <Button
-              onClick={() => {
-                setEditing(undefined);
-                setDialogOpen(true);
-              }}
-            >
-              <Plus />
-              Add user
-            </Button>
-          </div>
-          <div className="divide-y rounded-lg border">
-            {(users.data ?? []).map((user) => (
-              <div className="flex items-center gap-3 p-3" key={user.id}>
-                <UserRound className="size-4 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {user.displayName || user.email}
-                    {user.isAdmin ? " · Administrator" : ""}
-                    {user.isPending ? " · Invite pending" : ""}
-                    {!user.isActive ? " · Disabled" : ""}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {user.email ?? "Local owner"}{" "}
-                    {!user.isAdmin && user.memberships.length
-                      ? `· ${user.memberships.map((item) => `${item.apiaryName}: ${item.role}`).join(", ")}`
-                      : ""}
-                  </p>
-                </div>
-                {!user.isAdmin ? (
-                  <>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label={`Edit ${user.displayName}`}
-                      onClick={() => {
-                        setEditing(user);
-                        setDialogOpen(true);
-                      }}
-                    >
-                      <Pencil />
-                    </Button>
-                    {user.isActive ? (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label={`Disable ${user.displayName}`}
-                        onClick={() => {
-                          if (window.confirm(`Disable ${user.displayName}?`)) {
-                            deactivate.mutate(user.id);
-                          }
-                        }}
-                      >
-                        <Trash2 />
-                      </Button>
-                    ) : null}
-                  </>
+            {!user.isAdmin ? (
+              <>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`Edit ${user.displayName}`}
+                  onClick={() => {
+                    setEditing(user);
+                    setDialogOpen(true);
+                  }}
+                >
+                  <Pencil />
+                </Button>
+                {user.isActive ? (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`Disable ${user.displayName}`}
+                    onClick={() => {
+                      if (window.confirm(`Disable ${user.displayName}?`)) {
+                        deactivate.mutate(user.id);
+                      }
+                    }}
+                  >
+                    <Trash2 />
+                  </Button>
                 ) : null}
-              </div>
-            ))}
+              </>
+            ) : null}
           </div>
-          {dialogOpen ? (
-            <UserDialog
-              key={editing?.id ?? "new"}
-              user={editing}
-              open
-              onOpenChange={setDialogOpen}
-            />
-          ) : null}
-        </div>
+        ))}
+      </div>
+      {dialogOpen ? (
+        <UserDialog
+          key={editing?.id ?? "new"}
+          user={editing}
+          open
+          onOpenChange={setDialogOpen}
+        />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The per-user half (design 2026-09-03 §6.1): the apiaries this account can
+ * reach, and the personal API and MCP tokens that carry exactly those
+ * permissions. Every authenticated user gets it, on `/me`.
+ */
+export function MyAccessSection() {
+  const profile = useAccessProfile();
+  const memberships = profile.data?.memberships ?? [];
+
+  return (
+    <div className="grid gap-6" data-config-editor="api-tokens">
+      <div className="grid gap-2">
+        <h3 className="font-semibold">Your apiary access</h3>
+        {profile.isPending ? (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        ) : profile.data?.isAdmin ? (
+          <p className="text-sm text-muted-foreground">
+            You are an administrator: every apiary, read and write.
+          </p>
+        ) : memberships.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No apiaries are shared with you yet. An administrator adds them
+            under Admin and Integrations.
+          </p>
+        ) : (
+          <ul className="divide-y rounded-lg border text-sm">
+            {memberships.map((membership) => (
+              <li
+                key={membership.apiaryId}
+                className="flex items-center justify-between gap-3 p-3"
+              >
+                <span className="truncate font-medium">
+                  {membership.apiaryName}
+                </span>
+                <span className="text-muted-foreground">{membership.role}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       <div className="grid gap-2">
         <h3 className="font-semibold">API and MCP tokens</h3>
         <p className="text-sm text-muted-foreground">

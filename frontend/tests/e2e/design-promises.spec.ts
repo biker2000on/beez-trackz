@@ -135,6 +135,9 @@ test("offline navigation serves cached pages before /offline (README.md)", () =>
     "/api/v1/auth/",
     "/api/v1/access/",
     "/api/v1/settings/",
+    // Per-user preferences and operation policy, after the settings split.
+    "/api/v1/me/",
+    "/api/v1/admin/",
   ]) {
     expect(cacheable).toContain(`!url.pathname.startsWith("${excluded}")`);
   }

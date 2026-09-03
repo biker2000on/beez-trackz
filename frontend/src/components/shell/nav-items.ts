@@ -249,16 +249,43 @@ export const NAV_ITEMS: NavItem[] = [
           { label: "Bottle next", href: "/insights/bottling", adminOnly: true },
         ],
       },
+      {
+        // Two reports that used to be Settings accordions (design §6.3, S5
+        // and S6). They are generated output, not configuration.
+        label: "Compliance packet",
+        href: "/insights/compliance",
+        adminOnly: true,
+        keywords: ["inspector market manager export treatments withdrawal"],
+      },
+      {
+        label: "GnuCash reconciliation",
+        href: "/insights/reconciliation",
+        adminOnly: true,
+        keywords: ["sync conflicts pushed failed folio book"],
+      },
     ],
   },
   {
+    // Two surfaces, one area (design §6.2, §6.3): `/admin` is credentials and
+    // access, `/admin/setup` is how the operation runs. Per-user preferences
+    // are neither, and live at `/me`.
     label: "Admin",
     shortLabel: "Admin",
     href: "/admin",
     icon: Settings,
     shortcutKey: "a",
     adminOnly: true,
-    keywords: ["settings integrations access api users setup"],
+    keywords: ["integrations access api users gnucash ntfy storage ai"],
+    children: [
+      {
+        label: "Operation setup",
+        href: "/admin/setup",
+        adminOnly: true,
+        keywords: [
+          "jar sizes treatment withdrawals thresholds labor catalogs policy",
+        ],
+      },
+    ],
   },
 ];
 

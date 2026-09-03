@@ -24,7 +24,7 @@ export function TreatmentProductsSection() {
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-3" data-config-editor="treatment-withdrawals">
       <p className="text-sm text-muted-foreground">
         A hive is locked from harvest while the treatment is still on, then
         until date-removed plus these days. New events stamp the days at

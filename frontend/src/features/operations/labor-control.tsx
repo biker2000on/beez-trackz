@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { ApiError, OfflineQueuedError } from "@/lib/api";
@@ -14,13 +15,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 
+import { useApiaryOptions } from "@/features/settings/api";
+
 import {
-  useApiaryOptions,
   useLaborCurrent,
   useLaborList,
   useLaborStart,
   useLaborStop,
-} from "./api";
+} from "./hooks";
 
 const NONE = "none";
 
@@ -35,8 +37,9 @@ function formatElapsed(startedAt: string, now: number): string {
 }
 
 /**
- * Start/stop control for a yard visit. Off until Settings > Preferences
- * enables labor minutes. Import this onto the yard-queue page as well.
+ * Start/stop control for a yard visit — Yard's, and only Yard's (design
+ * 2026-09-03 §6.5, S4). It is mounted by `/yard/queue`; Operation Setup owns
+ * nothing but the flag that turns it on.
  */
 export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean } = {}) {
   const current = useLaborCurrent();
@@ -70,8 +73,14 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
     if (quietWhenOff) return null;
     return (
       <p className="text-sm text-muted-foreground">
-        Labor minutes are off. Enable them under Preferences if you want
-        start/stop on a yard visit.
+        Labor minutes are off.{" "}
+        <Link
+          href="/admin/setup#labor"
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Enable them in Operation Setup
+        </Link>{" "}
+        if you want start/stop on a yard visit.
       </p>
     );
   }

@@ -13,14 +13,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   NTFY_EVENT_KINDS,
   NTFY_EVENT_LABELS,
+  OPERATION_POLICY_KEY,
   useDispatchNtfy,
-  usePreferences,
+  useOperationPolicy,
   useTestNtfy,
-  useUpdateNtfy,
+  useUpdateOperationPolicy,
   type NtfyEventKind,
   type NtfyPayload,
   type NtfySettings,
-  type Preferences,
+  type OperationPolicy,
 } from "./api";
 
 const EMPTY_NTFY: NtfySettings = {
@@ -31,9 +32,9 @@ const EMPTY_NTFY: NtfySettings = {
 };
 
 export function NtfySection() {
-  const prefs = usePreferences();
+  const prefs = useOperationPolicy();
   const queryClient = useQueryClient();
-  const update = useUpdateNtfy();
+  const update = useUpdateOperationPolicy();
   const test = useTestNtfy();
   const dispatch = useDispatchNtfy();
   // The stored token is never returned by the API; this is only the draft of
@@ -51,7 +52,7 @@ export function NtfySection() {
     return <Skeleton className="h-40 w-full" />;
   }
 
-  const data = prefs.data;
+  const data: OperationPolicy = prefs.data;
   const ntfy: NtfySettings = {
     ...EMPTY_NTFY,
     ...data.ntfy,
@@ -60,7 +61,7 @@ export function NtfySection() {
 
   function save(next: NtfyPayload) {
     const { accessToken, ...display } = next;
-    queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+    queryClient.setQueryData<OperationPolicy>(OPERATION_POLICY_KEY, {
       ...data,
       ntfy: {
         ...display,
@@ -70,10 +71,10 @@ export function NtfySection() {
             : accessToken !== "",
       },
     });
-    update.mutate(next, {
+    update.mutate({ ntfy: next }, {
       onSuccess: () => toast.success("ntfy settings saved"),
       onError: (error) => {
-        queryClient.setQueryData(["settings", "preferences"], data);
+        queryClient.setQueryData(OPERATION_POLICY_KEY, data);
         toast.error(
           error instanceof ApiError ? error.message : "Could not save ntfy settings",
         );
@@ -89,7 +90,7 @@ export function NtfySection() {
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-4" data-config-editor="ntfy">
       <p className="text-sm text-muted-foreground">
         Optional phone push via ntfy. Same events as the yard queue: mite check
         due, feeder empty, treatment off-date, flow started. Unconfigured is a
@@ -104,7 +105,7 @@ export function NtfySection() {
             placeholder="https://ntfy.sh"
             value={ntfy.serverUrl}
             onChange={(event) =>
-              queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              queryClient.setQueryData<OperationPolicy>(OPERATION_POLICY_KEY, {
                 ...data,
                 ntfy: { ...ntfy, serverUrl: event.target.value },
               })
@@ -121,7 +122,7 @@ export function NtfySection() {
             placeholder="beez-yard"
             value={ntfy.topic}
             onChange={(event) =>
-              queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+              queryClient.setQueryData<OperationPolicy>(OPERATION_POLICY_KEY, {
                 ...data,
                 ntfy: { ...ntfy, topic: event.target.value },
               })

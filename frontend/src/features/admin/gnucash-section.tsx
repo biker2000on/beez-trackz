@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, ArrowRight, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { cn } from "@/lib/utils";
-import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,19 +14,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   useAcknowledgeGnuCashRestore,
   useGnuCashAccounts,
-  useGnuCashRows,
   useGnuCashSettings,
-  useIgnoreGnuCashRow,
-  usePushGnuCashRow,
-  useRunGnuCashSync,
   useTestGnuCashConnection,
   useUpdateGnuCashSettings,
   type GnuCashAccount,
   type GnuCashAccountMapping,
-  type GnuCashRow,
   type GnuCashSettings,
   type GnuCashSettingsPayload,
-} from "./api";
+} from "@/features/settings/api";
+import {
+  errorMessage,
+  humanize,
+} from "@/features/settings/gnucash-format";
 
 /** Sentinel for "not mapped" in the account selects. */
 const UNMAPPED = "__unmapped__";
@@ -69,24 +67,6 @@ type LedgerSlot =
   | "discount"
   | "cogs"
   | "inventory";
-
-/** Turns a snake_case kind or category into a readable label. */
-function humanize(value: string): string {
-  return value
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
-
-function formatTimestamp(value: string | null): string {
-  if (!value) return "never";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
 
 /**
  * One account picker. Until the account list has been loaded from GnuCash the
@@ -136,70 +116,16 @@ function AccountSelect({
   );
 }
 
-function ConflictRow({
-  row,
-  onPush,
-  onIgnore,
-  busy,
-  canPush,
-}: {
-  row: GnuCashRow;
-  onPush: (id: string) => void;
-  onIgnore: (id: string) => void;
-  busy: boolean;
-  /** False while sync is disabled: the server refuses this write too. */
-  canPush: boolean;
-}) {
-  return (
-    <li className="grid gap-2 rounded-md border p-3 text-sm">
-      <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-medium">
-          {humanize(row.entityType)}
-          {row.summary ? ` — ${row.summary}` : ""}
-        </span>
-        <span className="text-xs text-muted-foreground">{row.externalId}</span>
-      </div>
-      <p className="text-xs text-muted-foreground">{row.lastError}</p>
-      {row.remoteEnterDate ? (
-        <p className="text-xs text-muted-foreground">
-          Changed in GnuCash {formatTimestamp(row.remoteEnterDate)}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy || !canPush}
-          title={
-            canPush ? undefined : "Enable GnuCash sync before writing to the book"
-          }
-          onClick={() => onPush(row.id)}
-        >
-          Push local again
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => onIgnore(row.id)}
-        >
-          Ignore
-        </Button>
-      </div>
-    </li>
-  );
-}
-
+/**
+ * The GnuCash *configuration*: folio credentials, the book identity and
+ * cursor, the account mapping and the restore acknowledgement (design
+ * 2026-09-03 §6.3, S6). Its output — the reconciliation report — is at
+ * `/insights/reconciliation`.
+ */
 export function GnuCashSection() {
   const settings = useGnuCashSettings();
-  const rows = useGnuCashRows();
   const update = useUpdateGnuCashSettings();
   const test = useTestGnuCashConnection();
-  const sync = useRunGnuCashSync();
-  const push = usePushGnuCashRow();
-  const ignore = useIgnoreGnuCashRow();
 
   // The stored token is never returned; this is only the draft replacement.
   const [tokenDraft, setTokenDraft] = React.useState("");
@@ -224,11 +150,9 @@ export function GnuCashSection() {
   // present and sync off": pausing a healthy integration is not a restore.
   const restorePending = data.restorePending;
   const reconciled = data.restoreState === "reconciled";
-  // Both names carry the same column; prefer the honest one.
-  const lastAttemptAt = data.lastSyncAttemptAt ?? data.lastSyncedAt;
   const mapping = data.accountMapping ?? {};
   const accountList = accounts.data?.accounts ?? [];
-  const busy = update.isPending || push.isPending || ignore.isPending;
+  const busy = update.isPending;
 
   function save(payload: GnuCashSettingsPayload, done?: string) {
     update.mutate(payload, {
@@ -262,18 +186,14 @@ export function GnuCashSection() {
     saveMapping({ ...mapping, [slot]: guid });
   }
 
-  const counts = rows.data?.counts ?? {};
-  const conflicts = rows.data?.conflicts ?? [];
-  const failures = rows.data?.failures ?? [];
-
   return (
-    <div className="grid gap-5">
+    <div className="grid gap-5" data-config-editor="gnucash">
       <p className="text-sm text-muted-foreground">
         Push sales and expenses into a GnuCash book through folio, as balanced
         double-entry transactions. Beez stays authoritative for physical
         quantities — jars, colonies, and equipment. Nothing read back from
         GnuCash ever changes a beez record; a book edited behind us shows up
-        below as a conflict for you to resolve.
+        as a conflict on the reconciliation report for you to resolve.
       </p>
 
       {/* --- connection --- */}
@@ -552,132 +472,21 @@ export function GnuCashSection() {
 
       <Separator />
 
-      {/* --- run and reconcile --- */}
-      <div className="grid gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            disabled={sync.isPending || !data.syncEnabled}
-            title={
-              data.syncEnabled
-                ? undefined
-                : "Sync is disabled. The server refuses every push until you enable it."
-            }
-            onClick={() =>
-              sync.mutate(undefined, {
-                onSuccess: (report) => {
-                  toast.success(
-                    `Pushed ${report.created} new, updated ${report.updated}, ` +
-                      `skipped ${report.skipped}, failed ${report.failed}`,
-                  );
-                  if (report.conflicts > 0) {
-                    toast.warning(
-                      `${report.conflicts} entr${
-                        report.conflicts === 1 ? "y was" : "ies were"
-                      } changed in GnuCash — resolve them below`,
-                    );
-                  }
-                  for (const message of report.errors) toast.error(message);
-                  void rows.refetch();
-                },
-                onError: (error) =>
-                  toast.error(errorMessage(error, "Sync failed")),
-              })
-            }
-          >
-            <RefreshCw
-              className={cn("size-4", sync.isPending && "animate-spin")}
-            />
-            Sync now
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {/* The column is stamped on every run, including one whose pull
-                failed and which pushed nothing, so it is an attempt time. */}
-            Last attempt {formatTimestamp(lastAttemptAt)}
-          </span>
-          {data.syncEnabled ? null : (
-            <span className="text-xs text-muted-foreground">
-              Sync is disabled — pushes are refused by the server.
-            </span>
-          )}
-        </div>
-
-        <dl className="flex flex-wrap gap-4 text-sm">
-          {(["synced", "pending", "failed", "ignored"] as const).map((state) => (
-            <div key={state} className="grid">
-              <dt className="text-xs text-muted-foreground">
-                {humanize(state)}
-              </dt>
-              <dd className="font-medium tabular-nums">{counts[state] ?? 0}</dd>
-            </div>
-          ))}
-        </dl>
-
-        {conflicts.length > 0 ? (
-          <div className="grid gap-2">
-            <h4 className="flex items-center gap-1 text-sm font-medium">
-              <AlertTriangle className="size-4 shrink-0 text-destructive" />
-              Changed in GnuCash ({conflicts.length})
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              Beez is authoritative for what physically happened. Pushing the
-              local version overwrites GnuCash; ignoring stops syncing that
-              entry and leaves GnuCash alone.
-            </p>
-            <ul className="grid gap-2">
-              {conflicts.map((row) => (
-                <ConflictRow
-                  key={row.id}
-                  row={row}
-                  busy={busy}
-                  canPush={data.syncEnabled}
-                  onPush={(id) =>
-                    push.mutate(id, {
-                      onSuccess: () => {
-                        toast.success("Pushed the beez version");
-                        void rows.refetch();
-                      },
-                      onError: (error) =>
-                        toast.error(errorMessage(error, "Push failed")),
-                    })
-                  }
-                  onIgnore={(id) =>
-                    ignore.mutate(id, {
-                      onSuccess: () => {
-                        toast.success("Stopped syncing that entry");
-                        void rows.refetch();
-                      },
-                      onError: (error) =>
-                        toast.error(errorMessage(error, "Could not ignore")),
-                    })
-                  }
-                />
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {failures.length > 0 ? (
-          <div className="grid gap-2">
-            <h4 className="text-sm font-medium">
-              Could not be pushed ({failures.length})
-            </h4>
-            <ul className="grid gap-2">
-              {failures.map((row) => (
-                <li key={row.id} className="rounded-md border p-3 text-sm">
-                  <span className="font-medium">
-                    {humanize(row.entityType)}
-                    {row.summary ? ` — ${row.summary}` : ""}
-                  </span>
-                  <p className="text-xs text-muted-foreground">
-                    {row.lastError}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
+      {/* The output of this configuration is a report, and reports live in
+          Insights (design 2026-09-03 §6.3, S6). Sync runs, the push counts and
+          the conflict queue are all there; this section owns the credentials,
+          the book and the mapping, and nothing else. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          Runs, push counts and entries changed in GnuCash are reported under
+          Insights.
+        </p>
+        <Button asChild variant="outline" size="sm">
+          <Link href="/insights/reconciliation">
+            Reconciliation report
+            <ArrowRight />
+          </Link>
+        </Button>
       </div>
     </div>
   );

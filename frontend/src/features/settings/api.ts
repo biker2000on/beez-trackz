@@ -4,180 +4,25 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 
-// --- Preferences -----------------------------------------------------------
-
-export const NTFY_EVENT_KINDS = [
-  "mite_check_due",
-  "feeder_empty",
-  "treatment_off_date",
-  "flow_started",
-] as const;
-export type NtfyEventKind = (typeof NTFY_EVENT_KINDS)[number];
-
-export const NTFY_EVENT_LABELS: Record<NtfyEventKind, string> = {
-  mite_check_due: "Mite check due",
-  feeder_empty: "Feeder empty",
-  treatment_off_date: "Treatment off-date",
-  flow_started: "Flow started",
-};
-
-export interface NtfySettings {
-  serverUrl: string;
-  topic: string;
-  /** Whether a token is stored. The token itself is never returned (same
-   * masked pattern as AISettings.apiKeys). */
-  hasAccessToken?: boolean;
-  enabled: boolean;
-  eventKinds: NtfyEventKind[];
-}
-
-/** PUT /settings/ntfy: omit accessToken to keep the stored one, send "" to
- * clear it, send a value to replace it. */
-export type NtfyPayload = Omit<NtfySettings, "hasAccessToken"> & {
-  accessToken?: string;
-};
-
-export interface Preferences {
-  displayName: string | null;
-  theme: string;
-  defaultApiaryId: string | null;
-  dateFormat: string;
-  weightUnit: string;
-  units: "metric" | "us" | null;
-  temperatureUnit: "c" | "f" | null;
-  laborTrackingEnabled: boolean;
-  miteThresholdPer100: number | null;
-  miteThresholdPerDay: number | null;
-  miteCheckIntervalDays: number | null;
-  moistureThresholdPct: number | null;
-  ntfy: NtfySettings;
-}
-
-export interface PreferencesPayload {
-  theme: string;
-  defaultApiaryId: string | null;
-  dateFormat: string;
-  weightUnit: string;
-  units?: "metric" | "us" | null;
-  temperatureUnit?: "c" | "f" | "" | null;
-  laborTrackingEnabled?: boolean;
-  miteThresholdPer100?: number | null;
-  miteThresholdPerDay?: number | null;
-  miteCheckIntervalDays?: number | null;
-  moistureThresholdPct?: number | null;
-}
+/**
+ * Shared reads and writes for the configuration catalogs and integrations.
+ *
+ * Per-user display preferences live in `@/features/me/api`
+ * (`/me/preferences`) and operation policy in `@/features/admin/api`
+ * (`/admin/policy`) — this module is only the catalogs (jar sizes, treatment
+ * products) and the provider integrations (AI, GnuCash), which kept their own
+ * routes through the settings split (design 2026-09-03 §6).
+ */
 
 export interface ApiaryOption {
   id: string;
   name: string;
 }
 
-export function usePreferences(enabled = true) {
-  return useQuery({
-    queryKey: ["settings", "preferences"],
-    queryFn: () => api.get<Preferences>("/settings"),
-    enabled,
-  });
-}
-
 export function useApiaryOptions() {
   return useQuery({
     queryKey: ["apiaries", "options"],
     queryFn: () => api.get<ApiaryOption[]>("/apiaries"),
-  });
-}
-
-export function useUpdatePreferences() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: PreferencesPayload) =>
-      api.put<{ success: boolean }>("/settings/preferences", payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
-      // The whole ops group: units display AND the labor widget's enabled
-      // flag, which this form toggles.
-      queryClient.invalidateQueries({ queryKey: ["ops"] });
-    },
-  });
-}
-
-export function useUpdateNtfy() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: NtfyPayload) =>
-      api.put<{ success: boolean }>("/settings/ntfy", payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
-    },
-  });
-}
-
-export function useTestNtfy() {
-  return useMutation({
-    mutationFn: () =>
-      api.post<{ success?: boolean; error?: string }>("/ops/ntfy/test"),
-  });
-}
-
-export function useDispatchNtfy() {
-  return useMutation({
-    mutationFn: () =>
-      api.post<{
-        published: number;
-        skipped: number;
-        errors: string[];
-        reason?: string;
-      }>("/ops/ntfy/dispatch"),
-  });
-}
-
-export interface LaborSession {
-  id: string;
-  apiaryId: string | null;
-  apiaryName: string | null;
-  startedAt: string;
-  stoppedAt: string | null;
-  minutes: number;
-  notes: string | null;
-  open: boolean;
-}
-
-export function useLaborCurrent() {
-  return useQuery({
-    queryKey: ["ops", "labor", "current"],
-    queryFn: () =>
-      api.get<{ enabled: boolean; current: LaborSession | null }>(
-        "/ops/labor/current",
-      ),
-  });
-}
-
-export function useLaborList() {
-  return useQuery({
-    queryKey: ["ops", "labor"],
-    queryFn: () => api.get<{ items: LaborSession[] }>("/ops/labor"),
-  });
-}
-
-export function useLaborStart() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload?: { apiaryId?: string | null; notes?: string }) =>
-      api.post<LaborSession>("/ops/labor/start", payload ?? {}),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ops", "labor"] });
-    },
-  });
-}
-
-export function useLaborStop() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload?: { id?: string; notes?: string }) =>
-      api.post<LaborSession>("/ops/labor/stop", payload ?? {}),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ops", "labor"] });
-    },
   });
 }
 

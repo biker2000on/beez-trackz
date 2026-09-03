@@ -442,7 +442,7 @@ export function JarSizesSection() {
   const isEmpty = jars.length === 0;
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-3" data-config-editor="jar-sizes">
       {isEmpty ? (
         <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
           No jar sizes yet. These are the containers the honey ledger sells and

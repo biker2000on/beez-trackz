@@ -7,6 +7,10 @@
  * Links carry the current `year` search param forward so switching sections
  * keeps the season you are looking at.
  *
+ * The compliance packet and the GnuCash reconciliation report are Insights'
+ * own — they arrived here from Settings with the split (design 2026-09-03
+ * §6.3, S5 and S6), so they are reports and not configuration.
+ *
  * Expenses and Customers are listed here but live under Sales (design
  * 2026-09-03 S11, S12): they are CRUD editors, and Insights is read-only.
  * They are therefore cross-area links in the directory and deliberately
@@ -30,6 +34,8 @@ export const REPORT_PAGES = [
   { href: "/sales/expenses", label: "Expenses", description: "Everything spent this season, assignable to lots and hives. Edited in Sales.", adminOnly: true },
   { href: "/insights/bottling", label: "Bottle next", description: "What to bottle next from recent demand.", adminOnly: true },
   { href: "/sales/customers", label: "Customers & wholesale", description: "Customer list, reorder reminders and wholesale price lists. Edited in Sales.", adminOnly: true },
+  { href: "/insights/compliance", label: "Compliance packet", description: "Hives, treatments, lots, sales and withdrawal windows, in one export.", adminOnly: true },
+  { href: "/insights/reconciliation", label: "GnuCash reconciliation", description: "What the feed pushed, what failed, and what changed in the book behind us.", adminOnly: true },
 ] as const;
 
 export const REPORT_GROUPS = [

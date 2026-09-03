@@ -355,7 +355,12 @@ function cacheableAPI(url) {
     url.pathname.startsWith("/api/v1/") &&
     !url.pathname.startsWith("/api/v1/auth/") &&
     !url.pathname.startsWith("/api/v1/access/") &&
-    !url.pathname.startsWith("/api/v1/settings/")
+    !url.pathname.startsWith("/api/v1/settings/") &&
+    // The settings split (design 2026-09-03 §6) moved preferences to a
+    // per-user route and operation policy to an admin one. Neither may be
+    // replayed to a second account out of a shared cache.
+    !url.pathname.startsWith("/api/v1/me/") &&
+    !url.pathname.startsWith("/api/v1/admin/")
   );
 }
 

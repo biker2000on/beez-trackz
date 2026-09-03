@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   createColumnHelper,
   tableFeatures,
@@ -280,7 +281,14 @@ export function MarketDayTab({
                 <span>
                   Set a default price on{" "}
                   {unpriced.map((line) => line.label).filter(Boolean).join(", ")}{" "}
-                  in Settings or Products before recording a paid sale.
+                  in{" "}
+                  <Link
+                    href="/admin/setup#jar-sizes"
+                    className="font-medium underline underline-offset-4"
+                  >
+                    Operation setup
+                  </Link>{" "}
+                  or Products before recording a paid sale.
                 </span>
               </div>
             )}

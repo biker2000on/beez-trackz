@@ -6,7 +6,6 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -16,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useApiaryOptions } from "@/features/settings/api";
 
 import {
   detectLocaleUnits,
@@ -27,11 +27,11 @@ import {
 } from "@/lib/units";
 
 import {
-  useApiaryOptions,
-  usePreferences,
-  useUpdatePreferences,
-  type Preferences,
-  type PreferencesPayload,
+  ME_PREFERENCES_KEY,
+  useMePreferences,
+  useUpdateMePreferences,
+  type MePreferences,
+  type MePreferencesPayload,
 } from "./api";
 
 const NONE = "none";
@@ -79,10 +79,15 @@ function PreferenceField({
   );
 }
 
-export function PreferencesSection() {
-  const prefs = usePreferences();
+/**
+ * The six per-user columns of `user_preferences` (design 2026-09-03 §6.4) and
+ * nothing else: the mite and moisture thresholds and the labor flag this form
+ * used to carry are operation policy and live in Operation Setup now.
+ */
+export function MePreferencesForm() {
+  const prefs = useMePreferences();
   const apiaries = useApiaryOptions();
-  const updatePrefs = useUpdatePreferences();
+  const updatePrefs = useUpdateMePreferences();
   const queryClient = useQueryClient();
   const { setTheme } = useTheme();
 
@@ -97,25 +102,20 @@ export function PreferencesSection() {
     }
   }, [prefs.data, setTheme]);
 
-  function save(patch: Partial<PreferencesPayload>) {
+  function save(patch: Partial<MePreferencesPayload>) {
     const current = prefs.data;
     if (!current) return;
-    const payload: PreferencesPayload = {
+    const payload: MePreferencesPayload = {
       theme: current.theme,
       defaultApiaryId: current.defaultApiaryId,
       dateFormat: current.dateFormat,
       weightUnit: current.weightUnit,
-      miteThresholdPer100: current.miteThresholdPer100,
-      miteThresholdPerDay: current.miteThresholdPerDay,
-      miteCheckIntervalDays: current.miteCheckIntervalDays,
-      moistureThresholdPct: current.moistureThresholdPct,
       units: current.units,
       temperatureUnit: current.temperatureUnit,
-      laborTrackingEnabled: current.laborTrackingEnabled,
       ...patch,
     };
     // Optimistic cache write so the selects don't snap back while saving.
-    queryClient.setQueryData<Preferences>(["settings", "preferences"], {
+    queryClient.setQueryData<MePreferences>(ME_PREFERENCES_KEY, {
       ...current,
       ...patch,
       temperatureUnit:
@@ -126,7 +126,7 @@ export function PreferencesSection() {
     updatePrefs.mutate(payload, {
       onSuccess: () => toast.success("Preferences saved"),
       onError: (error) => {
-        queryClient.setQueryData(["settings", "preferences"], current);
+        queryClient.setQueryData(ME_PREFERENCES_KEY, current);
         if (patch.theme) setTheme(current.theme);
         toast.error(
           error instanceof ApiError
@@ -175,13 +175,13 @@ export function PreferencesSection() {
   const propolisPreview = formatPropolisMass(28.35, resolved.units);
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <div className="grid gap-4 sm:grid-cols-2" data-config-editor="preferences">
       <PreferenceField label="Theme" htmlFor="pref-theme">
         <Select
           value={data.theme}
           onValueChange={(value) => {
             // Write both stores: next-themes for instant paint, the API for
-            // persistence across devices.
+            // persistence across devices — this account's, not the operation's.
             setTheme(value);
             save({ theme: value });
           }}
@@ -258,8 +258,9 @@ export function PreferencesSection() {
         </Select>
         {!data.units ? (
           <p className="text-xs text-muted-foreground">
-            Defaulted from this browser ({localeDefault === "us" ? "US" : "metric"}).
-            Saving stores it for Honey Story and labels too.
+            Defaulted from this browser (
+            {localeDefault === "us" ? "US" : "metric"}). Saving stores it for
+            Honey Story and labels too.
           </p>
         ) : null}
       </PreferenceField>
@@ -269,8 +270,7 @@ export function PreferencesSection() {
           value={data.temperatureUnit ?? "follow"}
           onValueChange={(value) =>
             save({
-              temperatureUnit:
-                value === "c" || value === "f" ? value : "",
+              temperatureUnit: value === "c" || value === "f" ? value : "",
             })
           }
         >
@@ -305,25 +305,6 @@ export function PreferencesSection() {
         </Select>
       </PreferenceField>
 
-      <div className="grid gap-2 sm:col-span-2">
-        <Label htmlFor="pref-labor">Yard-visit labor minutes</Label>
-        <label className="flex items-start gap-3 text-sm">
-          <input
-            id="pref-labor"
-            type="checkbox"
-            className="mt-1 size-4 accent-primary"
-            checked={data.laborTrackingEnabled}
-            onChange={(event) =>
-              save({ laborTrackingEnabled: event.target.checked })
-            }
-          />
-          <span>
-            Track start/stop on a Saturday walk. Off by default — this is
-            optional, not a scorecard.
-          </span>
-        </label>
-      </div>
-
       <div className="rounded-lg border bg-muted/40 p-3 text-sm sm:col-span-2">
         <p className="font-medium">Display preview</p>
         <p className="mt-1 text-muted-foreground">
@@ -333,103 +314,6 @@ export function PreferencesSection() {
           <span className="font-mono">4.4 lb</span> convert to the stored unit.
         </p>
       </div>
-
-      <PreferenceField label="Varroa wash threshold (per 100)" htmlFor="pref-mite-100">
-        <Input
-          id="pref-mite-100"
-          type="number"
-          min="0.1"
-          step="0.1"
-          placeholder="Seasonal default"
-          value={data.miteThresholdPer100 ?? ""}
-          onBlur={(event) => {
-            const raw = event.target.value.trim();
-            save({
-              miteThresholdPer100: raw === "" ? null : Number(raw),
-            });
-          }}
-          onChange={(event) => {
-            const raw = event.target.value.trim();
-            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
-              ...data,
-              miteThresholdPer100: raw === "" ? null : Number(raw),
-            });
-          }}
-        />
-      </PreferenceField>
-
-      <PreferenceField label="Varroa board threshold (per day)" htmlFor="pref-mite-day">
-        <Input
-          id="pref-mite-day"
-          type="number"
-          min="0.1"
-          step="0.1"
-          placeholder="9"
-          value={data.miteThresholdPerDay ?? ""}
-          onBlur={(event) => {
-            const raw = event.target.value.trim();
-            save({
-              miteThresholdPerDay: raw === "" ? null : Number(raw),
-            });
-          }}
-          onChange={(event) => {
-            const raw = event.target.value.trim();
-            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
-              ...data,
-              miteThresholdPerDay: raw === "" ? null : Number(raw),
-            });
-          }}
-        />
-      </PreferenceField>
-
-      <PreferenceField label="Harvest moisture threshold %" htmlFor="pref-moisture">
-        <Input
-          id="pref-moisture"
-          type="number"
-          min="0.1"
-          max="100"
-          step="0.1"
-          placeholder="18.6"
-          value={data.moistureThresholdPct ?? ""}
-          onBlur={(event) => {
-            const raw = event.target.value.trim();
-            save({
-              moistureThresholdPct: raw === "" ? null : Number(raw),
-            });
-          }}
-          onChange={(event) => {
-            const raw = event.target.value.trim();
-            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
-              ...data,
-              moistureThresholdPct: raw === "" ? null : Number(raw),
-            });
-          }}
-        />
-      </PreferenceField>
-
-      <PreferenceField label="Mite sample interval (days)" htmlFor="pref-mite-interval">
-        <Input
-          id="pref-mite-interval"
-          type="number"
-          min="1"
-          step="1"
-          placeholder="Seasonal default"
-          value={data.miteCheckIntervalDays ?? ""}
-          onBlur={(event) => {
-            const raw = event.target.value.trim();
-            save({
-              miteCheckIntervalDays: raw === "" ? null : Number(raw),
-            });
-          }}
-          onChange={(event) => {
-            const raw = event.target.value.trim();
-            queryClient.setQueryData<Preferences>(["settings", "preferences"], {
-              ...data,
-              miteCheckIntervalDays: raw === "" ? null : Number(raw),
-            });
-          }}
-        />
-      </PreferenceField>
     </div>
   );
 }

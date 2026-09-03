@@ -284,7 +284,21 @@ export function ShortcutsProvider({
   const pageShortcuts = Array.from(entries.values());
   const staticCommands = React.useMemo(() => {
     const routes = visibleNavRoutes(NAV_ITEMS, isAdmin, canEditAny);
-    return flattenNavRoutes(routes).map<PaletteCommand>((route) => {
+    // `/me` is deliberately not in `NAV_ITEMS` — it is the per-user surface,
+    // not an eighth area (design 2026-09-03 §2.1) — so the palette names it
+    // itself. Without this the only way there is the account menu.
+    const me: PaletteCommand = {
+      id: "route:/me",
+      label: "My preferences",
+      description: "/me",
+      hint: "Route",
+      searchText:
+        "settings theme units date format default apiary password api tokens mcp install account",
+      run: () => router.push("/me"),
+    };
+    return [
+      me,
+      ...flattenNavRoutes(routes).map<PaletteCommand>((route) => {
       const topLevel = route.breadcrumbs.length === 1
         ? navigation.find((item) => item.href === route.href)
         : undefined;
@@ -296,7 +310,8 @@ export function ShortcutsProvider({
         searchText: `${route.keywords?.join(" ") ?? ""} ${route.href}`,
         run: () => router.push(route.href),
       };
-    });
+      }),
+    ];
   }, [canEditAny, isAdmin, navigation, router]);
 
   const recordCommands = React.useMemo(() => {

@@ -6,7 +6,15 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 
-export function ComplianceSection() {
+import { AdminReportGate } from "./reports-nav";
+
+/**
+ * `/insights/compliance` — the authenticated compliance packet (design
+ * 2026-09-03 §6.3, S5). It is a generated report over hives, treatments,
+ * lots, sales and withdrawal windows; nothing about it is configuration, so
+ * it left Settings with the split.
+ */
+export function ComplianceView() {
   const [busy, setBusy] = React.useState(false);
 
   async function download() {
@@ -43,7 +51,15 @@ export function ComplianceSection() {
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-4">
+      <div className="grid gap-1">
+        <h1 className="text-2xl font-bold tracking-tight">Compliance packet</h1>
+        <p className="text-sm text-muted-foreground">
+          One export for the inspector or market manager.
+        </p>
+      </div>
+      <AdminReportGate>
+        <div className="grid gap-3">
       <p className="text-sm text-muted-foreground">
         One authenticated export for the inspector or market manager: hive
         list, treatments, lots, sales, and withdrawal windows. Not public.
@@ -69,6 +85,8 @@ export function ComplianceSection() {
           </a>
         </Button>
       </div>
+        </div>
+      </AdminReportGate>
     </div>
   );
 }

@@ -6,6 +6,8 @@
  * optional price / on-hand / new-total columns.
  */
 
+import Link from "next/link";
+
 import { Input } from "@/components/ui/input";
 import { BottlingRunPicker } from "@/features/commerce/bottling-run-picker";
 import { cn } from "@/lib/utils";
@@ -70,7 +72,14 @@ export function JarLinesEditor({
   if (rows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No jar sizes configured. Add sizes in Settings first.
+        No jar sizes configured.{" "}
+        <Link
+          href="/admin/setup#jar-sizes"
+          className="font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Add sizes in Operation setup
+        </Link>{" "}
+        first.
       </p>
     );
   }

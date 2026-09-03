@@ -432,3 +432,58 @@ export function useReplaceInspectionMiteCounts() {
     onSuccess: (_data, input) => invalidateMiteQueries(client, input.hiveId),
   });
 }
+
+// --- Yard-visit labor ------------------------------------------------------
+//
+// Yard owns the start/stop control (design 2026-09-03 §6.5, S4); Operation
+// Setup owns the `laborTrackingEnabled` flag that turns it on.
+
+export interface LaborSession {
+  id: string;
+  apiaryId: string | null;
+  apiaryName: string | null;
+  startedAt: string;
+  stoppedAt: string | null;
+  minutes: number;
+  notes: string | null;
+  open: boolean;
+}
+
+export function useLaborCurrent() {
+  return useQuery({
+    queryKey: ["ops", "labor", "current"],
+    queryFn: () =>
+      api.get<{ enabled: boolean; current: LaborSession | null }>(
+        "/ops/labor/current",
+      ),
+  });
+}
+
+export function useLaborList() {
+  return useQuery({
+    queryKey: ["ops", "labor"],
+    queryFn: () => api.get<{ items: LaborSession[] }>("/ops/labor"),
+  });
+}
+
+export function useLaborStart() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload?: { apiaryId?: string | null; notes?: string }) =>
+      api.post<LaborSession>("/ops/labor/start", payload ?? {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ops", "labor"] });
+    },
+  });
+}
+
+export function useLaborStop() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload?: { id?: string; notes?: string }) =>
+      api.post<LaborSession>("/ops/labor/stop", payload ?? {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ops", "labor"] });
+    },
+  });
+}

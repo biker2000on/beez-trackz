@@ -208,6 +208,16 @@ export function HiveOverviewTab({
                 treatmentEventId={lockout.treatmentEventId}
               />
             )}
+            {/* The withdrawal days behind this window are one policy table,
+                edited in exactly one place (design 2026-09-03 S14). */}
+            <p className="mt-2 text-xs">
+              <Link
+                href="/admin/setup#treatment-withdrawals"
+                className="font-medium text-amber-900 underline underline-offset-4 dark:text-amber-100"
+              >
+                Manage withdrawal days
+              </Link>
+            </p>
           </CardContent>
         </Card>
       )}

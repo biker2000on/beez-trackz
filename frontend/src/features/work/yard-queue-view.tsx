@@ -3,7 +3,7 @@
 import * as React from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { LaborControl } from "@/features/settings/labor-control";
+import { LaborControl } from "@/features/operations/labor-control";
 
 import { useWorkYard } from "./api";
 import { WorkSurface, type WorkSection } from "./work-surface";

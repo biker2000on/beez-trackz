@@ -41,7 +41,9 @@ const AS_OF = "2026-09-03T12:00:00Z";
 const SHELL_READS = [
   "/api/v1/auth/status",
   "/api/v1/access/me",
-  "/api/v1/settings",
+  // The theme toggle's own read. Since the settings split it is the per-user
+  // route, and it is issued for every account rather than only for admins.
+  "/api/v1/me/preferences",
 ];
 
 /**

@@ -44,7 +44,7 @@ export function StorageSection() {
           : "unknown";
 
   return (
-    <div className="grid gap-3 text-sm">
+    <div className="grid gap-3 text-sm" data-config-editor="photo-storage">
       <div className="grid gap-1">
         <p>
           Default backend:{" "}
