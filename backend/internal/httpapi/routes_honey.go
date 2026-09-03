@@ -1577,21 +1577,6 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				}
 				lines[i].ItemID = itemID
 			}
-			if lines[i].EquipmentStockID == uuid.Nil {
-				// Read only, never written: the legacy row exists solely to
-				// satisfy the pre-ledger CHECK, so the Phase A freeze on
-				// equipment_stock still holds.
-				if err := uow.QueryRow(ctx, `
-					SELECT es.id FROM equipment_stock es
-					JOIN equipment_types et ON et.id = es.type_id
-					WHERE et.item_id = $1`, lines[i].ItemID).
-					Scan(&lines[i].EquipmentStockID); err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return equipBadRequest("invalid itemId")
-					}
-					return err
-				}
-			}
 		}
 		actor := actorID(r)
 		if _, err := uow.Exec(ctx, `
@@ -1609,7 +1594,7 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 				"invalid customer, harvest lot, or wholesale price list")
 		}
 		for _, line := range lines {
-			var jarSizeID, hiveID, itemID, equipmentStockID, productID, bottlingRunID *uuid.UUID
+			var jarSizeID, hiveID, itemID, productID, bottlingRunID *uuid.UUID
 			switch {
 			case line.Kind == saleKindJar:
 				id := line.JarSizeID
@@ -1624,22 +1609,21 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 			case line.Kind == saleKindEquipment:
 				id := line.ItemID
 				itemID = &id
-				stock := line.EquipmentStockID
-				equipmentStockID = &stock
 			case saleKindIsProduct(line.Kind):
 				id := line.ProductID
 				productID = &id
 			}
 			// equipment_stock_id is not written any more: an equipment line names
-			// the inventory item it consumes (review OV2). The other identities
-			// stay; LinkLines fills item_id and inventory_lot_id for jar and
-			// product lines once every line is stored.
+			// the inventory item it consumes (review OV2, migration 00052).
+			// The other identities stay; LinkLines fills item_id and
+			// inventory_lot_id for jar and product lines once every line is
+			// stored.
 			if _, err := uow.Exec(ctx, `
 			INSERT INTO sale_items
-				(sale_id, kind, jar_size_id, hive_id, item_id, equipment_stock_id,
+				(sale_id, kind, jar_size_id, hive_id, item_id,
 				 product_id, quantity, unit_price_cents, bottling_run_id, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-				saleID, line.Kind, jarSizeID, hiveID, itemID, equipmentStockID, productID,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				saleID, line.Kind, jarSizeID, hiveID, itemID, productID,
 				line.Quantity, line.UnitPrice, bottlingRunID, actor); err != nil {
 				if honeyIsFKViolation(err) {
 					return equipBadRequest("invalid jar, hive, equipment, or product target")

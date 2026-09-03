@@ -161,22 +161,15 @@ func TestOfflineSuccessFlushesAfterReceiptCompletes(t *testing.T) {
 func TestOfflineIdempotencyCoversEquipmentAdjust(t *testing.T) {
 	server := honeyTestServer(t)
 	ctx := context.Background()
-	var typeID, stockID uuid.UUID
+	var typeID uuid.UUID
 	if err := server.pool.QueryRow(ctx, `
 		INSERT INTO equipment_types (name, category) VALUES ($1,'box') RETURNING id`,
 		"Offline adjust "+uuid.NewString()).Scan(&typeID); err != nil {
 		t.Fatalf("seed type: %v", err)
 	}
-	if err := server.pool.QueryRow(ctx, `
-		INSERT INTO equipment_stock (type_id, total_owned) VALUES ($1, 0) RETURNING id`,
-		typeID).Scan(&stockID); err != nil {
-		t.Fatalf("seed stock: %v", err)
-	}
-	if _, err := server.pool.Exec(ctx, `
-		INSERT INTO equipment_stock_adjustments (stock_id, quantity, reason, date)
-		VALUES ($1, 10, 'purchased', now())`, stockID); err != nil {
-		t.Fatalf("seed owned: %v", err)
-	}
+	// The opening ten are booked through the ledger, which is where the
+	// balance the adjust handler reads and writes actually lives.
+	stockID := equipSeedStockForTest(t, server, typeID, 10)
 
 	mutationID := uuid.New().String()
 	handler := server.offlineMutations(http.HandlerFunc(server.equipAdjustStock))
@@ -205,21 +198,18 @@ func TestOfflineIdempotencyCoversEquipmentAdjust(t *testing.T) {
 		t.Error("replayed equipment adjust was not served from the receipt")
 	}
 
+	// Two operations against this type: the opening receipt and one adjust.
+	// A replay that slipped past the receipt would show a third.
 	var n int
-	if err := server.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM equipment_stock_adjustments WHERE stock_id=$1`,
-		stockID).Scan(&n); err != nil {
-		t.Fatalf("count adjustments: %v", err)
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM inventory_operations
+		WHERE source_type='equipment_type' AND source_id=$1`, typeID).Scan(&n); err != nil {
+		t.Fatalf("count equipment operations: %v", err)
 	}
 	if n != 2 {
-		t.Errorf("replaying the mutation wrote %d ledger rows, want 2 (opening + one adjust)", n)
+		t.Errorf("replaying the mutation wrote %d ledger operations, want 2 (opening + one adjust)", n)
 	}
-	var owned int
-	if err := server.pool.QueryRow(ctx,
-		`SELECT total_owned FROM equipment_stock WHERE id=$1`, stockID).Scan(&owned); err != nil {
-		t.Fatalf("read owned: %v", err)
-	}
-	if owned != 12 {
-		t.Errorf("total_owned = %d, want 12 (applied once)", owned)
+	if owned := equipOnHandForTest(t, server, typeID); owned != 12 {
+		t.Errorf("on hand = %d, want 12 (applied once)", owned)
 	}
 }

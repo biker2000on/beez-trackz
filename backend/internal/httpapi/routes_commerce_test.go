@@ -157,8 +157,10 @@ func TestProfitabilityByKindIncludesAppliedCostAndMargin(t *testing.T) {
 	server := honeyTestServer(t)
 	ctx := context.Background()
 	world := seedMixedSaleWorld(t, server)
+	// The unit cost is a catalog fact on the type now, not a column on the
+	// stock row COGS used to read (review OV2).
 	if _, err := server.pool.Exec(ctx,
-		`UPDATE equipment_stock SET unit_cost_cents=450 WHERE id=$1`, world.stockID); err != nil {
+		`UPDATE equipment_types SET unit_cost_cents=450 WHERE id=$1`, world.typeID); err != nil {
 		t.Fatalf("seed equipment unit cost: %v", err)
 	}
 	var uncostedHiveID uuid.UUID

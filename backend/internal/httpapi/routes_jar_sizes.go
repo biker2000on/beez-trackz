@@ -1,14 +1,19 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -148,7 +153,7 @@ func (s *Server) jarCreate(w http.ResponseWriter, r *http.Request) {
 // from on-hand, dashboard totals, inventory value, and low-stock alerts while
 // their sales kept counting as revenue: an untracked write-off performed by a
 // settings toggle. Pass {"writeOffRemaining": true} to deactivate anyway, which
-// records a visible jar_adjustment movement zeroing the remaining stock.
+// records a visible count_adjust operation zeroing the remaining stock.
 func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")
 	if err != nil {
@@ -233,78 +238,76 @@ func (s *Server) jarUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
+	// One unit of work for both halves: the write-off operation and the
+	// jar_sizes UPDATE either both land or neither does.
 	wroteOff := 0
-	if deactivating {
-		onHand, _, unknown, err := honeyLockJarSizes(ctx, tx, []uuid.UUID{id})
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if unknown {
-			writeError(w, http.StatusNotFound, "jar size not found")
-			return
-		}
-		away, err := stockAwayJarTotals(ctx, tx)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		if consigned := away[id]; consigned != 0 {
-			writeError(w, http.StatusConflict, fmt.Sprintf(
-				"%d jars of this size are at consignment locations. Return or settle "+
-					"them before deactivating the size.", consigned))
-			return
-		}
-		remaining := onHand[id]
-		if remaining != 0 {
-			if !req.WriteOffRemaining {
-				writeError(w, http.StatusConflict, fmt.Sprintf(
-					"%d jars are still on hand for this size. Sell, give away, or adjust them "+
-						"to zero first, or resend with writeOffRemaining=true to record a write-off.",
-					remaining))
-				return
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		wroteOff = 0
+		if deactivating {
+			// Home availability straight from the ledger. No row lock is taken
+			// here (review A4): quantity locking belongs to the inventory
+			// service, which locks the tuple inside Record.
+			var remaining int
+			if err := uow.QueryRow(ctx, `
+				SELECT COALESCE((SELECT SUM(a.available) FROM inventory_available a
+				                 JOIN inventory_locations l ON l.id = a.location_id
+				                 WHERE a.item_id = js.item_id AND l.is_home), 0)::int
+				FROM jar_sizes js WHERE js.id = $1`, id).Scan(&remaining); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return equipFail(http.StatusNotFound, "jar size not found")
+				}
+				return err
 			}
-			reason := "jar size deactivation write-off"
-			if value := honeyTrimPtr(req.WriteOffReason); value != nil {
-				reason = *value
+			away, err := stockAwayJarTotals(ctx, uow)
+			if err != nil {
+				return err
 			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO honey_movements (date, kind, jar_size_id, quantity, reason, created_by)
-				VALUES (now(), 'jar_adjustment', $1, $2, $3, $4)`,
-				id, -remaining, reason, actorID(r)); err != nil {
-				writeError(w, http.StatusInternalServerError, "database error")
-				return
+			if consigned := away[id]; consigned != 0 {
+				return equipFail(http.StatusConflict,
+					"%d jars of this size are at consignment locations. Return or settle "+
+						"them before deactivating the size.", consigned)
 			}
-			wroteOff = remaining
+			if remaining != 0 {
+				if !req.WriteOffRemaining {
+					return equipFail(http.StatusConflict,
+						"%d jars are still on hand for this size. Sell, give away, or adjust them "+
+							"to zero first, or resend with writeOffRemaining=true to record a write-off.",
+						remaining)
+				}
+				// The write-off is a count correction, not a loss: the jars are
+				// not gone, the size is being retired and its shelf zeroed. It
+				// records one count_adjust operation with the registry reason
+				// "count"; the operator's wording rides along as the note.
+				reason := "jar size deactivation write-off"
+				if value := honeyTrimPtr(req.WriteOffReason); value != nil {
+					reason = *value
+				}
+				lines := []production.JarLine{{JarSizeID: id, Quantity: -remaining}}
+				if _, err := production.New().AdjustJarCounts(
+					ctx, uow, lines, time.Now().UTC(), &reason); err != nil {
+					return err
+				}
+				wroteOff = remaining
+			}
 		}
-	}
 
-	args = append(args, id)
-	query := fmt.Sprintf("UPDATE jar_sizes SET %s WHERE id = $%d",
-		strings.Join(sets, ", "), len(args))
-	tag, err := tx.Exec(ctx, query, args...)
-	if err != nil {
-		if jarIsUniqueViolation(err) {
-			writeError(w, http.StatusConflict, "label already exists")
-			return
+		args := append(append([]any(nil), args...), id)
+		query := fmt.Sprintf("UPDATE jar_sizes SET %s WHERE id = $%d",
+			strings.Join(sets, ", "), len(args))
+		tag, err := uow.Exec(ctx, query, args...)
+		if err != nil {
+			if jarIsUniqueViolation(err) {
+				return equipFail(http.StatusConflict, "label already exists")
+			}
+			return err
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "jar size not found")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+		if tag.RowsAffected() == 0 {
+			return equipFail(http.StatusNotFound, "jar size not found")
+		}
+		return nil
+	})
+	if err != nil {
+		writeCommandError(w, err)
 		return
 	}
 	response := map[string]any{"success": true}

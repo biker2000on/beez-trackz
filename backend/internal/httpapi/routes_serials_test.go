@@ -73,7 +73,14 @@ func newSerialFixture(t *testing.T) *serialFixture {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM jar_serials WHERE bottling_run_id=$1`, fixture.runID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM honey_movements WHERE bottling_run_id=$1`, fixture.runID)
+		// The run's ledger operations, movements first (FK order).
+		_, _ = pool.Exec(cleanupCtx, `
+			DELETE FROM inventory_movements WHERE operation_id IN (
+				SELECT id FROM inventory_operations
+				WHERE source_type='bottling_run' AND source_id=$1)`, fixture.runID)
+		_, _ = pool.Exec(cleanupCtx, `
+			DELETE FROM inventory_operations
+			WHERE source_type='bottling_run' AND source_id=$1`, fixture.runID)
 		_, _ = pool.Exec(cleanupCtx, `DELETE FROM bottling_runs WHERE id=$1`, fixture.runID)
 		_, _ = pool.Exec(cleanupCtx,
 			`DELETE FROM sales WHERE customer_name=$1`, "Serial test "+suffix)

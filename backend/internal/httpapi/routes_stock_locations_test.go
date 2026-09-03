@@ -192,6 +192,79 @@ func globalOnHand(t *testing.T, server *Server, jarSizeID uuid.UUID) int {
 	return 0
 }
 
+// ledgerLocation is the inventory_locations twin of a stock_locations row.
+// Phase A keeps the two in step; the ledger's own tables key on the twin.
+func ledgerLocation(t *testing.T, server *Server, stockLocationID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT id FROM inventory_locations
+		WHERE source_type='stock_location' AND source_id=$1`, stockLocationID).Scan(&id); err != nil {
+		t.Fatalf("ledger location for %s: %v", stockLocationID, err)
+	}
+	return id
+}
+
+// settlementShrink reads the single shrink operation a settlement recorded for
+// one item, and reports its quantity, the location it moved on, and the
+// free-text reason carried in details.
+//
+// One operation, not two: under the ledger the consignee's shelf IS the
+// stock, so the old pairing of a location row with a "global half" would
+// count the same loss twice.
+func settlementShrink(
+	t *testing.T, server *Server, settlementID, itemID uuid.UUID,
+) (quantity float64, locationID uuid.UUID, reason string) {
+	t.Helper()
+	rows, err := server.pool.Query(context.Background(), `
+		SELECT COALESCE(SUM(m.quantity), 0)::float8,
+		       MIN(m.location_id::text)::uuid,
+		       COALESCE(o.details->>'reason_text', '')
+		FROM inventory_operations o
+		JOIN inventory_movements m ON m.operation_id = o.id
+		WHERE o.source_type='consignment_settlement' AND o.source_id=$1
+		  AND o.kind IN ('shrink','count_adjust') AND m.item_id=$2
+		  AND o.reverses_operation_id IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM inventory_operations r
+		                  WHERE r.reverses_operation_id = o.id)
+		GROUP BY o.id, o.details`, settlementID, itemID)
+	if err != nil {
+		t.Fatalf("settlement shrink: %v", err)
+	}
+	defer rows.Close()
+	found := 0
+	for rows.Next() {
+		if err := rows.Scan(&quantity, &locationID, &reason); err != nil {
+			t.Fatalf("scan settlement shrink: %v", err)
+		}
+		found++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("settlement shrink: %v", err)
+	}
+	if found != 1 {
+		t.Fatalf("live settlement shrink operations = %d, want exactly 1", found)
+	}
+	return quantity, locationID, reason
+}
+
+// settlementOperationCount counts every operation a settlement produced,
+// reversals included.
+func settlementOperationCount(t *testing.T, server *Server, settlementID uuid.UUID) int {
+	t.Helper()
+	var count int
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM inventory_operations
+		WHERE (source_type='consignment_settlement' AND source_id=$1)
+		   OR reverses_operation_id IN (
+		        SELECT id FROM inventory_operations
+		        WHERE source_type='consignment_settlement' AND source_id=$1)`,
+		settlementID).Scan(&count); err != nil {
+		t.Fatalf("count settlement operations: %v", err)
+	}
+	return count
+}
+
 // A transfer is not a sale. It must move stock and touch nothing else.
 func TestTransferMovesStockWithoutRecognisingRevenue(t *testing.T) {
 	server := honeyTestServer(t)
@@ -374,11 +447,19 @@ func TestSettlementRecognisesRevenueReturnsAndShrink(t *testing.T) {
 	if got := globalOnHand(t, server, jarSizeID); got != 14 {
 		t.Errorf("global on hand = %d, want 14 (24 - 9 sold - 1 shrink)", got)
 	}
-	var shrinkReason string
-	if err := server.pool.QueryRow(ctx, `
-		SELECT reason FROM honey_movements
-		WHERE kind='jar_adjustment' AND settlement_id IS NOT NULL`).Scan(&shrinkReason); err != nil {
-		t.Fatalf("shrink was not attributed to the location: %v", err)
+	// The shrink is one operation, on the consignee's own shelf, naming the
+	// location it happened at.
+	settlementID, err := uuid.Parse(body["id"].(string))
+	if err != nil {
+		t.Fatalf("parse settlement id: %v", err)
+	}
+	shrinkQty, shrinkLocation, shrinkReason := settlementShrink(
+		t, server, settlementID, jarItemID(t, server, jarSizeID))
+	if shrinkQty != -1 {
+		t.Errorf("shrink quantity = %v, want -1", shrinkQty)
+	}
+	if shrinkLocation != ledgerLocation(t, server, shopID) {
+		t.Errorf("shrink location = %v, want the shop", shrinkLocation)
 	}
 	if shrinkReason != "shrink at Bike shop" {
 		t.Errorf("shrink reason = %q, want it to name the location", shrinkReason)
@@ -467,20 +548,29 @@ func TestSettlementVoidReversesEveryEffect(t *testing.T) {
 
 	ctx := context.Background()
 	var cancelled int
-	var movementRows int
-	if err := server.pool.QueryRow(ctx, `
-		SELECT (SELECT COUNT(*) FROM sales WHERE order_status='cancelled'),
-		       (SELECT COUNT(*) FROM stock_movements WHERE settlement_id IS NOT NULL)`).
-		Scan(&cancelled, &movementRows); err != nil {
+	if err := server.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM sales WHERE order_status='cancelled'`).
+		Scan(&cancelled); err != nil {
 		t.Fatalf("inspect void: %v", err)
 	}
 	if cancelled != 1 {
 		t.Errorf("cancelled sales = %d, want 1", cancelled)
 	}
-	// Reversal, not deletion: the return pair, the shrink, and their
-	// negations all survive.
-	if movementRows == 0 {
-		t.Error("the void destroyed the settlement's movements instead of reversing them")
+	// Reversal, not deletion: the return, the shrink, and their negations all
+	// survive as operations, and nothing the settlement wrote is left live.
+	if got := settlementOperationCount(t, server, settlementID); got == 0 {
+		t.Error("the void destroyed the settlement's operations instead of reversing them")
+	}
+	var live int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM inventory_operations o
+		WHERE o.source_type='consignment_settlement' AND o.source_id=$1
+		  AND NOT EXISTS (SELECT 1 FROM inventory_operations r
+		                  WHERE r.reverses_operation_id = o.id)`, settlementID).Scan(&live); err != nil {
+		t.Fatalf("count live settlement operations: %v", err)
+	}
+	if live != 0 {
+		t.Errorf("%d settlement operations survived the void unreversed", live)
 	}
 
 	// Voiding twice is a conflict, not a second unwind.
@@ -501,11 +591,15 @@ func TestTransferReversalIsWholeAndIdempotent(t *testing.T) {
 	shopID := seedShop(t, server, "Bike shop", 30)
 	transfer(t, server, shopID, jarSizeID, 10)
 
+	// The transfer is one paired operation; its id is what the reversal
+	// endpoint takes.
 	var movementID uuid.UUID
 	if err := server.pool.QueryRow(context.Background(), `
-		SELECT id FROM stock_movements WHERE location_id=$1 AND quantity > 0`,
-		shopID).Scan(&movementID); err != nil {
-		t.Fatalf("read movement: %v", err)
+		SELECT DISTINCT o.id FROM inventory_operations o
+		JOIN inventory_movements m ON m.operation_id = o.id
+		WHERE o.source_type='stock_transfer' AND m.location_id=$1 AND m.quantity > 0`,
+		ledgerLocation(t, server, shopID)).Scan(&movementID); err != nil {
+		t.Fatalf("read transfer operation: %v", err)
 	}
 
 	response, body := call(t, server.stockMovementReverse, adminRequest(
@@ -514,8 +608,11 @@ func TestTransferReversalIsWholeAndIdempotent(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("reverse = %d %v", response.Code, body)
 	}
-	if body["reversed"] != float64(2) {
-		t.Errorf("reversed %v rows, want both halves", body["reversed"])
+	// One operation, not two rows: a transfer is a single paired operation
+	// whose two lines net to zero, so reversing it is one reversal. The
+	// wholeness the test is really about is the pair of balances below.
+	if body["reversed"] != float64(1) {
+		t.Errorf("reversed %v operations, want the one paired transfer", body["reversed"])
 	}
 	if got := shelfCount(t, server, shopID, jarSizeID); got != 0 {
 		t.Errorf("shop shelf after reversal = %d, want 0", got)
@@ -717,25 +814,19 @@ func TestSettlementRecordsProductShrink(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	var delta int
-	var reason string
-	var locationID uuid.UUID
-	if err := server.pool.QueryRow(ctx, `
-		SELECT delta, reason, location_id FROM product_adjustments
-		WHERE settlement_id IS NOT NULL AND deleted_at IS NULL`).
-		Scan(&delta, &reason, &locationID); err != nil {
-		t.Fatalf("the shrink wrote no product adjustment: %v", err)
-	}
-	if delta != -1 || locationID != shopID || reason != "shrink at Bike shop" {
-		t.Errorf("adjustment = %d at %v (%q), want -1 at the shop naming it",
-			delta, locationID, reason)
-	}
-
-	// Voiding puts every half back, the product ledger's included.
 	settlementID, err := uuid.Parse(body["id"].(string))
 	if err != nil {
 		t.Fatalf("parse settlement id: %v", err)
 	}
+	delta, locationID, reason := settlementShrink(
+		t, server, settlementID, productItemID(t, server, productID))
+	if delta != -1 || locationID != ledgerLocation(t, server, shopID) ||
+		reason != "shrink at Bike shop" {
+		t.Errorf("shrink = %v at %v (%q), want -1 at the shop naming it",
+			delta, locationID, reason)
+	}
+
+	// Voiding puts the shrink back too.
 	voidResponse, voidBody := call(t, server.stockSettlementVoid, adminRequest(
 		http.MethodPost, "/api/v1/consignment-settlements/"+settlementID.String()+"/void",
 		nil, "id", settlementID.String()))
@@ -750,12 +841,14 @@ func TestSettlementRecordsProductShrink(t *testing.T) {
 	}
 	var live int
 	if err := server.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM product_adjustments
-		WHERE settlement_id=$1 AND deleted_at IS NULL`, settlementID).Scan(&live); err != nil {
-		t.Fatalf("count adjustments: %v", err)
+		SELECT COUNT(*) FROM inventory_operations o
+		WHERE o.source_type='consignment_settlement' AND o.source_id=$1
+		  AND NOT EXISTS (SELECT 1 FROM inventory_operations r
+		                  WHERE r.reverses_operation_id = o.id)`, settlementID).Scan(&live); err != nil {
+		t.Fatalf("count live settlement operations: %v", err)
 	}
 	if live != 0 {
-		t.Errorf("%d settlement adjustments survived the void", live)
+		t.Errorf("%d settlement operations survived the void unreversed", live)
 	}
 }
 

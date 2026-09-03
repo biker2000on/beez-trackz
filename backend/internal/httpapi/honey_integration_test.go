@@ -15,11 +15,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/equipment"
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
@@ -161,6 +163,146 @@ func call(
 	return response, decoded
 }
 
+// --- ledger assertions ---
+//
+// The legacy quantity tables (honey_movements, stock_movements,
+// product_adjustments) are no longer written: every quantity is an
+// inventory_operations row with its inventory_movements lines. These helpers
+// are the vocabulary the rewritten assertions use, so a test says "one
+// count_adjust operation moved -3 of this jar size" rather than reaching into
+// the ledger schema by hand.
+
+// operationIDsForSource lists the live operations a source row produced,
+// oldest first. Reversals are excluded: they are their own operations and are
+// found through reversalOf.
+func operationIDsForSource(
+	t *testing.T, server *Server, sourceType string, sourceID uuid.UUID,
+) []uuid.UUID {
+	t.Helper()
+	rows, err := server.pool.Query(context.Background(), `
+		SELECT id FROM inventory_operations
+		WHERE source_type=$1 AND source_id=$2 AND reverses_operation_id IS NULL
+		ORDER BY occurred_at, created_at, id`, sourceType, sourceID)
+	if err != nil {
+		t.Fatalf("operations for %s %s: %v", sourceType, sourceID, err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan operation id: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("operations for %s %s: %v", sourceType, sourceID, err)
+	}
+	return ids
+}
+
+// operationsOfKind counts live (unreversed, non-reversal) operations of a kind.
+func operationsOfKind(t *testing.T, server *Server, kind string) int {
+	t.Helper()
+	var count int
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM inventory_operations o
+		WHERE o.kind=$1 AND o.reverses_operation_id IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM inventory_operations r
+		                  WHERE r.reverses_operation_id = o.id)`, kind).Scan(&count); err != nil {
+		t.Fatalf("count %s operations: %v", kind, err)
+	}
+	return count
+}
+
+// latestOperationOfKind returns the newest live operation of a kind. It fails
+// the test when there is none, because every caller is asserting that the
+// handler recorded one.
+func latestOperationOfKind(t *testing.T, server *Server, kind string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT o.id FROM inventory_operations o
+		WHERE o.kind=$1 AND o.reverses_operation_id IS NULL
+		ORDER BY o.occurred_at DESC, o.created_at DESC, o.id DESC
+		LIMIT 1`, kind).Scan(&id); err != nil {
+		t.Fatalf("latest %s operation: %v", kind, err)
+	}
+	return id
+}
+
+// reversalOf returns the operation that reverses opID, or uuid.Nil when the
+// operation still stands.
+func reversalOf(t *testing.T, server *Server, opID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := server.pool.QueryRow(context.Background(),
+		`SELECT id FROM inventory_operations WHERE reverses_operation_id=$1`, opID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil
+	}
+	if err != nil {
+		t.Fatalf("reversal of %s: %v", opID, err)
+	}
+	return id
+}
+
+// operationActor is the app user credited with an operation.
+func operationActor(t *testing.T, server *Server, opID uuid.UUID) *uuid.UUID {
+	t.Helper()
+	var actor *uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT created_by FROM inventory_operations WHERE id=$1`, opID).Scan(&actor); err != nil {
+		t.Fatalf("actor of %s: %v", opID, err)
+	}
+	return actor
+}
+
+// operationItemQuantity sums an operation's movement lines for one item, over
+// every location and lot. It is the ledger's answer to "what did this
+// movement row say".
+func operationItemQuantity(
+	t *testing.T, server *Server, opID, itemID uuid.UUID,
+) float64 {
+	t.Helper()
+	var total float64
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COALESCE(SUM(quantity), 0)::float8 FROM inventory_movements
+		WHERE operation_id=$1 AND item_id=$2`, opID, itemID).Scan(&total); err != nil {
+		t.Fatalf("quantity of %s: %v", opID, err)
+	}
+	return total
+}
+
+// jarItemID is the inventory item a jar size maps to. It fails when the size
+// has never been through a command, which is itself the bug worth reporting.
+func jarItemID(t *testing.T, server *Server, jarSizeID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var itemID *uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT item_id FROM jar_sizes WHERE id=$1`, jarSizeID).Scan(&itemID); err != nil {
+		t.Fatalf("jar item for %s: %v", jarSizeID, err)
+	}
+	if itemID == nil {
+		t.Fatalf("jar size %s has no inventory item", jarSizeID)
+	}
+	return *itemID
+}
+
+// productItemID is jarItemID for a product_catalog SKU.
+func productItemID(t *testing.T, server *Server, productID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var itemID *uuid.UUID
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT item_id FROM product_catalog WHERE id=$1`, productID).Scan(&itemID); err != nil {
+		t.Fatalf("product item for %s: %v", productID, err)
+	}
+	if itemID == nil {
+		t.Fatalf("product %s has no inventory item", productID)
+	}
+	return *itemID
+}
+
 // seedJarSize inserts a jar size directly so tests control its price and honey
 // content precisely.
 func seedJarSize(t *testing.T, server *Server, label string, oz float64, priceCents int64) uuid.UUID {
@@ -224,9 +366,46 @@ func seedLot(t *testing.T, server *Server, weightLbs float64) uuid.UUID {
 	return lotID
 }
 
+// jarStock fills jars out of a lot that holds everything seedHarvest
+// extracted.
+//
+// The lot's weight is not arbitrary: since decision 6 a lot's pounds ARE the
+// bulk-honey receipt, so a fixture lot bigger than the harvest would show up
+// as bulk on hand the harvest never produced. Sizing the lot to the seeded
+// harvests keeps "harvested minus jarred" true, which is what the overview
+// and production-plan tests read.
 func jarStock(t *testing.T, server *Server, jarSizeID uuid.UUID, quantity int) {
 	t.Helper()
-	jarStockFromLot(t, server, seedLot(t, server, 10000), jarSizeID, quantity)
+	var needed float64
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT COALESCE((SELECT honey_oz FROM jar_sizes WHERE id=$1), 16) * $2 / 16.0`,
+		jarSizeID, quantity).Scan(&needed); err != nil {
+		t.Fatalf("size fixture lot: %v", err)
+	}
+	jarStockFromLot(t, server, seedFixtureLot(t, server, needed), jarSizeID, quantity)
+}
+
+// seedFixtureLot creates the lot a fixture draws its honey from, sized to the
+// harvests the test already seeded (or to what the caller needs, whichever is
+// larger).
+//
+// The sizing is the point: since decision 6 a lot's pounds ARE the bulk-honey
+// receipt, so an arbitrarily large fixture lot would report bulk honey the
+// harvests never produced, and the overview, production plan and true-up
+// guards would all read a number with nothing behind it.
+func seedFixtureLot(t *testing.T, server *Server, minimumLbs float64) uuid.UUID {
+	t.Helper()
+	var harvested float64
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT COALESCE(SUM(calculated_honey_weight), 0) FROM honey_harvests
+		 WHERE deleted_at IS NULL`).Scan(&harvested); err != nil {
+		t.Fatalf("size fixture lot: %v", err)
+	}
+	weight := harvested
+	if minimumLbs > weight {
+		weight = minimumLbs
+	}
+	return seedLot(t, server, weight)
 }
 
 func jarStockFromLot(
@@ -361,11 +540,7 @@ func TestDeleteMovementWritesReversingEntry(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("seed adjustment = %d %v", response.Code, body)
 	}
-	var movementID uuid.UUID
-	if err := server.pool.QueryRow(context.Background(),
-		`SELECT id FROM honey_movements WHERE kind='jar_adjustment'`).Scan(&movementID); err != nil {
-		t.Fatalf("read movement: %v", err)
-	}
+	movementID := latestOperationOfKind(t, server, "count_adjust")
 
 	response, body = call(t, server.honeyReverseMovement, adminRequest(
 		http.MethodDelete, "/api/v1/honey/movements/"+movementID.String(),
@@ -377,23 +552,30 @@ func TestDeleteMovementWritesReversingEntry(t *testing.T) {
 		t.Fatalf("unexpected reversal response: %v", body)
 	}
 
-	// The original row survives, and the reversal negates it.
-	var originalCount, reversalQuantity int
-	var reversalActor *uuid.UUID
-	if err := server.pool.QueryRow(context.Background(), `
-		SELECT (SELECT COUNT(*) FROM honey_movements WHERE id=$1),
-			(SELECT quantity FROM honey_movements WHERE reverses_movement_id=$1),
-			(SELECT created_by FROM honey_movements WHERE reverses_movement_id=$1)`,
-		movementID).Scan(&originalCount, &reversalQuantity, &reversalActor); err != nil {
-		t.Fatalf("inspect reversal: %v", err)
+	// The original operation survives — the ledger is append-only — and the
+	// reversal is a separate operation whose lines negate it.
+	itemID := jarItemID(t, server, jarSizeID)
+	var originalCount int
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM inventory_operations WHERE id=$1`, movementID).
+		Scan(&originalCount); err != nil {
+		t.Fatalf("inspect original: %v", err)
 	}
 	if originalCount != 1 {
-		t.Error("the original movement was destroyed")
+		t.Error("the original operation was destroyed")
 	}
-	if reversalQuantity != -3 {
-		t.Errorf("reversal quantity = %d, want -3", reversalQuantity)
+	if got := operationItemQuantity(t, server, movementID, itemID); got != 3 {
+		t.Errorf("original quantity = %v, want 3", got)
 	}
-	if reversalActor == nil || *reversalActor != testUserID {
+	reversalID := reversalOf(t, server, movementID)
+	if reversalID == uuid.Nil {
+		t.Fatal("no reversing operation was written")
+	}
+	if got := operationItemQuantity(t, server, reversalID, itemID); got != -3 {
+		t.Errorf("reversal quantity = %v, want -3", got)
+	}
+	if reversalActor := operationActor(t, server, reversalID); reversalActor == nil ||
+		*reversalActor != testUserID {
 		t.Errorf("reversal actor = %v, want %v", reversalActor, testUserID)
 	}
 
@@ -663,13 +845,19 @@ func TestBottlingRunLinksMovementAndRequiresJarSize(t *testing.T) {
 		t.Fatalf("bottling run = %d %v", response.Code, body)
 	}
 	runID, _ := body["id"].(string)
-	var linked int
-	if err := server.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM honey_movements WHERE bottling_run_id=$1`, runID).Scan(&linked); err != nil {
-		t.Fatalf("read movement link: %v", err)
+	// The run is the operation's source: one transform, bulk honey in and
+	// jars out, rather than a pair of honey_movements rows pointing back at
+	// the run by id.
+	runUUID, err := uuid.Parse(runID)
+	if err != nil {
+		t.Fatalf("bottling run id %q: %v", runID, err)
 	}
-	if linked != 1 {
-		t.Errorf("movements linked to the run = %d, want 1", linked)
+	linked := operationIDsForSource(t, server, "bottling_run", runUUID)
+	if len(linked) != 1 {
+		t.Fatalf("operations for the run = %d, want 1", len(linked))
+	}
+	if got := operationItemQuantity(t, server, linked[0], jarItemID(t, server, jarSizeID)); got != 10 {
+		t.Errorf("jars produced by the run = %v, want 10", got)
 	}
 
 	// A run cannot bottle more than the lot yielded (40 lbs; 10 jars used 10).
@@ -708,15 +896,19 @@ func TestJarSizeDeactivationBlocksOrWritesOff(t *testing.T) {
 	if body["jarsWrittenOff"] != 7.0 {
 		t.Errorf("jarsWrittenOff = %v, want 7", body["jarsWrittenOff"])
 	}
-	var writeOffs int
-	if err := server.pool.QueryRow(context.Background(), `
-		SELECT COUNT(*) FROM honey_movements
-		WHERE kind='jar_adjustment' AND jar_size_id=$1 AND quantity=-7`,
-		jarSizeID).Scan(&writeOffs); err != nil {
-		t.Fatalf("read write-off movement: %v", err)
+	// The write-off is a visible count_adjust operation, not a silent
+	// disappearance from the on-hand query.
+	writeOffID := latestOperationOfKind(t, server, "count_adjust")
+	if got := operationItemQuantity(t, server, writeOffID, jarItemID(t, server, jarSizeID)); got != -7 {
+		t.Errorf("write-off quantity = %v, want -7", got)
 	}
-	if writeOffs != 1 {
-		t.Errorf("write-off movements = %d, want 1 visible ledger entry", writeOffs)
+	var reason string
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT reason FROM inventory_operations WHERE id=$1`, writeOffID).Scan(&reason); err != nil {
+		t.Fatalf("read write-off reason: %v", err)
+	}
+	if reason != "count" {
+		t.Errorf("write-off reason = %q, want %q", reason, "count")
 	}
 }
 
@@ -873,13 +1065,8 @@ func TestOfflineIdempotencyCoversHoneyMutations(t *testing.T) {
 		t.Error("replayed honey mutation was not served from the receipt")
 	}
 
-	var adjustments int
-	if err := server.pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM honey_movements WHERE kind='jar_adjustment'`).Scan(&adjustments); err != nil {
-		t.Fatalf("count adjustments: %v", err)
-	}
-	if adjustments != 1 {
-		t.Errorf("replaying the mutation wrote %d ledger rows, want 1", adjustments)
+	if adjustments := operationsOfKind(t, server, "count_adjust"); adjustments != 1 {
+		t.Errorf("replaying the mutation wrote %d ledger operations, want 1", adjustments)
 	}
 }
 
@@ -950,11 +1137,14 @@ func TestReverseJarringBlockedWhenJarsAreSold(t *testing.T) {
 		t.Fatalf("record sale = %d %v", response.Code, body)
 	}
 
+	// Jarring is a transform sourced on the bottling run, so the run id and
+	// the operation id come from the same row.
 	var movementID, runID uuid.UUID
 	if err := server.pool.QueryRow(context.Background(),
-		`SELECT id, bottling_run_id FROM honey_movements WHERE kind='jarring'`).
+		`SELECT id, source_id FROM inventory_operations
+		 WHERE source_type='bottling_run' AND reverses_operation_id IS NULL`).
 		Scan(&movementID, &runID); err != nil {
-		t.Fatalf("read movement: %v", err)
+		t.Fatalf("read bottling operation: %v", err)
 	}
 	// A run-linked jarring is never reversed on its own.
 	response, body = call(t, server.honeyReverseMovement, adminRequest(
@@ -972,14 +1162,8 @@ func TestReverseJarringBlockedWhenJarsAreSold(t *testing.T) {
 		t.Fatalf("voiding a sold-out run = %d %v, want 409", response.Code, body)
 	}
 
-	var reversals int
-	if err := server.pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM honey_movements WHERE reverses_movement_id=$1`,
-		movementID).Scan(&reversals); err != nil {
-		t.Fatalf("count reversals: %v", err)
-	}
-	if reversals != 0 {
-		t.Errorf("a reversal row was written despite the shortfall")
+	if reversalOf(t, server, movementID) != uuid.Nil {
+		t.Errorf("a reversing operation was written despite the shortfall")
 	}
 }
 
@@ -1012,11 +1196,7 @@ func TestReverseBottlingRunMovementRefused(t *testing.T) {
 		t.Fatalf("create bottling run = %d %v", response.Code, body)
 	}
 
-	var movementID uuid.UUID
-	if err := server.pool.QueryRow(context.Background(),
-		`SELECT id FROM honey_movements WHERE bottling_run_id IS NOT NULL`).Scan(&movementID); err != nil {
-		t.Fatalf("read run movement: %v", err)
-	}
+	movementID := latestOperationOfKind(t, server, "transform")
 	response, body = call(t, server.honeyReverseMovement, adminRequest(
 		http.MethodDelete, "/api/v1/honey/movements/"+movementID.String(), nil,
 		"id", movementID.String()))
@@ -1081,16 +1261,24 @@ func TestVoidBottlingRunReversesMovementsAndFreesLot(t *testing.T) {
 		t.Errorf("removedSerials = %v, want 10", body["removedSerials"])
 	}
 
-	var reversals, serials int
-	if err := server.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM honey_movements
-		WHERE bottling_run_id=$1 AND reverses_movement_id IS NOT NULL
-			AND quantity = -10`, runID).Scan(&reversals); err != nil {
-		t.Fatalf("read reversal: %v", err)
+	// One reversing operation against the run's transform, negating the ten
+	// jars it produced.
+	runUUID, err := uuid.Parse(runID)
+	if err != nil {
+		t.Fatalf("bottling run id %q: %v", runID, err)
 	}
-	if reversals != 1 {
-		t.Errorf("reversing entries = %d, want 1", reversals)
+	runOps := operationIDsForSource(t, server, "bottling_run", runUUID)
+	if len(runOps) != 1 {
+		t.Fatalf("operations for the run = %d, want 1", len(runOps))
 	}
+	reversalID := reversalOf(t, server, runOps[0])
+	if reversalID == uuid.Nil {
+		t.Fatal("voiding the run wrote no reversing operation")
+	}
+	if got := operationItemQuantity(t, server, reversalID, jarItemID(t, server, jarSizeID)); got != -10 {
+		t.Errorf("reversed jars = %v, want -10", got)
+	}
+	var serials int
 	if err := server.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM jar_serials WHERE bottling_run_id=$1`, runID).Scan(&serials); err != nil {
 		t.Fatalf("read serials: %v", err)
@@ -1167,30 +1355,64 @@ func TestTrueUpCannotShrinkBulkBelowJarredPounds(t *testing.T) {
 	}
 }
 
-// ASI-5-004: soft-deleting a harvest entry is a bulk withdrawal too.
+// ASI-5-004 under the ledger: soft-deleting a harvest entry can no longer
+// take jarred pounds away.
+//
+// It used to be a bulk withdrawal, because bulk on hand was "harvested minus
+// jarred" and the entry was one of the harvested terms. Since decision 6 the
+// pounds live in the harvest lot the jars were bottled out of, so removing
+// the entry removes a measurement, not stock: the lot keeps its receipt and
+// the jars keep their honey. The delete is therefore allowed, and what the
+// test guards is that nothing quietly vanishes from inventory when it
+// happens.
+//
+// The pre-ledger refusal still exists in routes_harvest_sessions.go, where it
+// compares the entry's weight against ledger bulk and so can never fire for a
+// harvest row any more. Re-basing it onto the lot ceilings belongs with that
+// file, which is outside this wave's owned paths.
 func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pound", 16, 1200)
 	seedHarvest(t, server, 100)
 	jarStock(t, server, jarSizeID, 90)
 
+	ctx := context.Background()
+	before, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk before delete: %v", err)
+	}
+
 	var entryID uuid.UUID
-	if err := server.pool.QueryRow(context.Background(),
+	if err := server.pool.QueryRow(ctx,
 		`SELECT id FROM honey_harvests`).Scan(&entryID); err != nil {
 		t.Fatalf("read entry: %v", err)
 	}
 	response, body := call(t, server.hsDeleteEntry, adminRequest(
 		http.MethodDelete, "/api/v1/harvest-entries/"+entryID.String(), nil,
 		"id", entryID.String()))
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("deleting the only entry with 90 lbs jarred = %d %v, want 400",
-			response.Code, body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("deleting the entry = %d %v, want 200", response.Code, body)
 	}
 
-	// A second small entry keeps bulk above zero, so it can still be deleted.
+	after, err := honeyBulkOnHand(ctx, server.pool)
+	if err != nil {
+		t.Fatalf("bulk after delete: %v", err)
+	}
+	if after.BulkOnHandLbs != before.BulkOnHandLbs {
+		t.Errorf("bulk on hand moved from %v to %v when a measurement was deleted",
+			before.BulkOnHandLbs, after.BulkOnHandLbs)
+	}
+	// And the 90 jars are still there: the entry never held them.
+	for _, row := range mustJarInventory(t, server) {
+		if row.JarSizeID == jarSizeID && row.OnHand != 90 {
+			t.Errorf("jars after deleting the entry = %d, want 90", row.OnHand)
+		}
+	}
+
+	// A second entry deletes just as cleanly.
 	seedHarvest(t, server, 5)
 	var smallID uuid.UUID
-	if err := server.pool.QueryRow(context.Background(),
+	if err := server.pool.QueryRow(ctx,
 		`SELECT id FROM honey_harvests WHERE calculated_honey_weight=5`).Scan(&smallID); err != nil {
 		t.Fatalf("read small entry: %v", err)
 	}
@@ -1200,6 +1422,15 @@ func TestDeleteEntryCannotRemoveJarredPounds(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("deleting a covered entry = %d %v, want 200", response.Code, body)
 	}
+}
+
+func mustJarInventory(t *testing.T, server *Server) []honeyInventoryRow {
+	t.Helper()
+	rows, err := server.honeyJarInventory(context.Background())
+	if err != nil {
+		t.Fatalf("jar inventory: %v", err)
+	}
+	return rows
 }
 
 // ASI-3-001: a public signup may set the opt-in flag on an existing customer
@@ -1379,6 +1610,11 @@ func TestHarvestSessionBatchEntriesAndFinalization(t *testing.T) {
 		t.Fatalf("rows after failed batch = %d, want 2 (nothing partial)", rows)
 	}
 
+	// The session's 75 lbs are put into a lot before the true-up, because
+	// trueing a weight down is a bulk withdrawal and bulk honey now lives in
+	// lots: without a lot the ledger holds nothing and any shrink is refused.
+	seedFixtureLot(t, server, 0)
+
 	// Finalize with a true-up, then a new entry must be refused.
 	response, body = call(t, server.hsTrueUp, adminRequest(
 		http.MethodPost, "/api/v1/harvest-sessions/"+sessionID.String()+"/true-up",
@@ -1498,21 +1734,12 @@ func seedMixedSaleWorld(t *testing.T, server *Server) mixedSaleWorld {
 		"Deep "+uuid.NewString()).Scan(&w.typeID); err != nil {
 		t.Fatalf("seed type: %v", err)
 	}
-	if err := server.pool.QueryRow(ctx, `
-		INSERT INTO equipment_stock (type_id, total_owned) VALUES ($1, 0) RETURNING id`,
-		w.typeID).Scan(&w.stockID); err != nil {
-		t.Fatalf("seed stock: %v", err)
-	}
-	if _, err := server.pool.Exec(ctx, `
-		INSERT INTO equipment_stock_adjustments (stock_id, quantity, reason, date)
-		VALUES ($1, 5, 'purchased', now())`, w.stockID); err != nil {
-		t.Fatalf("seed owned: %v", err)
-	}
-	if err := server.pool.QueryRow(ctx, `
-		INSERT INTO equipment_deployments (stock_id, hive_id, quantity, date_deployed)
-		VALUES ($1, $2, 2, now()) RETURNING id`, w.stockID, w.hiveID).Scan(&w.deployID); err != nil {
-		t.Fatalf("seed deploy: %v", err)
-	}
+	// Five received at home, two of them standing on the hive. Both go in
+	// through the equipment commands: a row in equipment_stock_adjustments or
+	// equipment_deployments is a legacy record with no balance behind it, and
+	// a sale drawing on it would find nothing there.
+	w.stockID = equipSeedStockForTest(t, server, w.typeID, 5)
+	w.deployID = equipDeployForTest(t, server, w.stockID, w.hiveID, 2)
 	if err := server.pool.QueryRow(ctx, `
 		INSERT INTO feedings (hive_id, date_fed, type, quantity, quantity_unit, status)
 		VALUES ($1, now(), 'sugar_syrup_1to1', 1, 'quarts', 'open') RETURNING id`,
@@ -1563,12 +1790,9 @@ func TestRecordMixedSaleAndCancelRestores(t *testing.T) {
 		t.Errorf("feeder = %s/%s, want closed/sold_with_hive", feederStatus, feederReason)
 	}
 
-	var owned, deployed, available int
-	if err := server.pool.QueryRow(ctx, `
-		SELECT total_owned, deployed, available FROM equipment_stock_status WHERE stock_id=$1`,
-		w.stockID).Scan(&owned, &deployed, &available); err != nil {
-		t.Fatalf("read stock: %v", err)
-	}
+	// The colony took the two that stood on it; the equipment line was
+	// satisfied by that same gear, so the three in storage never moved.
+	owned, deployed, available := equipStockStatusForTest(t, server, w.typeID)
 	if owned != 3 || deployed != 0 || available != 3 {
 		t.Errorf("stock owned/deployed/available = %d/%d/%d, want 3/0/3", owned, deployed, available)
 	}
@@ -1603,11 +1827,7 @@ func TestRecordMixedSaleAndCancelRestores(t *testing.T) {
 	if feederStatus != "open" {
 		t.Errorf("feeder after cancel = %s, want open", feederStatus)
 	}
-	if err := server.pool.QueryRow(ctx, `
-		SELECT total_owned, deployed, available FROM equipment_stock_status WHERE stock_id=$1`,
-		w.stockID).Scan(&owned, &deployed, &available); err != nil {
-		t.Fatalf("read stock after cancel: %v", err)
-	}
+	owned, deployed, available = equipStockStatusForTest(t, server, w.typeID)
 	if owned != 5 || deployed != 2 || available != 3 {
 		t.Errorf("stock after cancel = %d/%d/%d, want 5/2/3", owned, deployed, available)
 	}
@@ -1638,11 +1858,7 @@ func TestDraftSaleDefersPhysicalUntilPaid(t *testing.T) {
 			`SELECT status::text FROM feedings WHERE id=$1`, w.feederID).Scan(&feederStatus); err != nil {
 			t.Fatalf("%s read feeder: %v", label, err)
 		}
-		if err := server.pool.QueryRow(ctx, `
-			SELECT total_owned, deployed FROM equipment_stock_status WHERE stock_id=$1`,
-			w.stockID).Scan(&owned, &deployed); err != nil {
-			t.Fatalf("%s read stock: %v", label, err)
-		}
+		owned, deployed, _ = equipStockStatusForTest(t, server, w.typeID)
 		return
 	}
 	readApplied := func(saleID string) *time.Time {
@@ -1756,14 +1972,19 @@ func TestDraftSaleDefersPhysicalUntilPaid(t *testing.T) {
 		t.Errorf("after cancel = hive %s feeder %s stock %d/%d, want active/open/5/2",
 			hive, feeder, owned, deployed)
 	}
-	var reversals int
+	// Cancelling a sale whose physical effects were already unapplied writes
+	// nothing further: the consumption and its reversal both stand, and no
+	// live operation is left behind claiming the stock.
+	var live int
 	if err := server.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM equipment_stock_adjustments
-		WHERE stock_id=$1 AND notes='sale cancelled'`, w.stockID).Scan(&reversals); err != nil {
-		t.Fatalf("count reversals: %v", err)
+		SELECT COUNT(*) FROM inventory_operations o
+		WHERE o.source_type='sale' AND o.source_id=$1
+		  AND NOT EXISTS (SELECT 1 FROM inventory_operations r
+		                  WHERE r.reverses_operation_id = o.id)`, saleID).Scan(&live); err != nil {
+		t.Fatalf("count sale operations: %v", err)
 	}
-	if reversals != 0 {
-		t.Errorf("cancelling an unapplied sale wrote %d reversal adjustments", reversals)
+	if live != 0 {
+		t.Errorf("cancelling the sale left %d live ledger operations", live)
 	}
 
 	// The hive is free again, so the second draft can now be paid.
@@ -1850,8 +2071,12 @@ func TestPropolisHarvestDoesNotChangeBulkHoney(t *testing.T) {
 		t.Errorf("propolis on hand = %v g, want 85", grams)
 	}
 
+	// The propolis receipt must not have touched the honey ledger at all.
 	var honeyMovements int
-	if err := server.pool.QueryRow(ctx, `SELECT COUNT(*) FROM honey_movements`).
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM inventory_movements m
+		JOIN inventory_items i ON i.id = m.item_id
+		WHERE i.kind IN ('honey_bulk','jar')`).
 		Scan(&honeyMovements); err != nil {
 		t.Fatalf("count honey movements: %v", err)
 	}
@@ -2001,13 +2226,7 @@ func TestSaleCannotBeCreatedCancelled(t *testing.T) {
 	if hiveStatus != "active" {
 		t.Errorf("hive status = %s, want active (nothing should have been sold)", hiveStatus)
 	}
-	var owned int
-	if err := server.pool.QueryRow(ctx,
-		`SELECT total_owned FROM equipment_stock_status WHERE stock_id=$1`, w.stockID).
-		Scan(&owned); err != nil {
-		t.Fatalf("read stock: %v", err)
-	}
-	if owned != 5 {
+	if owned, _, _ := equipStockStatusForTest(t, server, w.typeID); owned != 5 {
 		t.Errorf("stock owned = %d, want 5", owned)
 	}
 }
@@ -2030,22 +2249,22 @@ func TestEquipmentSaleLeavesKeptHiveDeployments(t *testing.T) {
 	if response.Code != http.StatusCreated {
 		t.Fatalf("equipment sale = %d %v", response.Code, body)
 	}
-	var returned int
-	var removed *time.Time
-	if err := server.pool.QueryRow(ctx,
-		`SELECT quantity_returned, date_removed FROM equipment_deployments WHERE id=$1`,
-		w.deployID).Scan(&returned, &removed); err != nil {
-		t.Fatalf("read deployment: %v", err)
-	}
-	if returned != 0 || removed != nil {
-		t.Errorf("kept hive deployment returned/removed = %d/%v, want 0/nil", returned, removed)
-	}
-	var owned, deployed, available int
+	// Nothing came off the hive: no return operation was written against the
+	// deploy, and the hive still carries its two.
+	var returns int
 	if err := server.pool.QueryRow(ctx, `
-		SELECT total_owned, deployed, available FROM equipment_stock_status WHERE stock_id=$1`,
-		w.stockID).Scan(&owned, &deployed, &available); err != nil {
-		t.Fatalf("read stock: %v", err)
+		SELECT COUNT(*) FROM inventory_operations
+		WHERE kind='return' AND source_type='inventory_operation' AND source_id=$1`,
+		w.deployID).Scan(&returns); err != nil {
+		t.Fatalf("count returns: %v", err)
 	}
+	if returns != 0 {
+		t.Errorf("kept hive deployment saw %d returns, want none", returns)
+	}
+	if got := equipDeployedOnHiveForTest(t, server, w.typeID, w.hiveID); got != 2 {
+		t.Errorf("gear left on the kept hive = %d, want 2", got)
+	}
+	owned, deployed, available := equipStockStatusForTest(t, server, w.typeID)
 	if owned != 3 || deployed != 2 || available != 1 {
 		t.Errorf("stock owned/deployed/available = %d/%d/%d, want 3/2/1", owned, deployed, available)
 	}
@@ -2088,7 +2307,7 @@ func TestJarringWithLotCreatesBottlingRunsAndRespectsLotWeight(t *testing.T) {
 		t.Fatalf("lot-linked jarring = %d %v", response.Code, body)
 	}
 
-	var runs, linkedMovements int
+	var runs, linkedOperations int
 	if err := server.pool.QueryRow(ctx,
 		`SELECT COUNT(*) FROM bottling_runs WHERE lot_id=$1`, lotID).Scan(&runs); err != nil {
 		t.Fatalf("count runs: %v", err)
@@ -2097,13 +2316,14 @@ func TestJarringWithLotCreatesBottlingRunsAndRespectsLotWeight(t *testing.T) {
 		t.Errorf("bottling runs for the lot = %d, want 1", runs)
 	}
 	if err := server.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM honey_movements m
-		JOIN bottling_runs run ON run.id = m.bottling_run_id
-		WHERE run.lot_id = $1`, lotID).Scan(&linkedMovements); err != nil {
-		t.Fatalf("count linked movements: %v", err)
+		SELECT COUNT(*) FROM inventory_operations o
+		JOIN bottling_runs run ON run.id = o.source_id
+		WHERE o.source_type='bottling_run' AND run.lot_id = $1`, lotID).
+		Scan(&linkedOperations); err != nil {
+		t.Fatalf("count linked operations: %v", err)
 	}
-	if linkedMovements != 1 {
-		t.Errorf("movements linked to the lot = %d, want 1", linkedMovements)
+	if linkedOperations != 1 {
+		t.Errorf("operations linked to the lot = %d, want 1", linkedOperations)
 	}
 
 	// 10 lbs are bottled and 90 lbs of bulk remain, so 50 more jars clear the
@@ -2128,14 +2348,17 @@ func TestJarringWithLotCreatesBottlingRunsAndRespectsLotWeight(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("lot-less jarring = %d %v, want %d", response.Code, body, http.StatusBadRequest)
 	}
+	// Nothing was drawn out of bulk honey without naming the lot it came
+	// from: every bulk line carries a lot id.
 	var untraced int
 	if err := server.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM honey_movements
-		WHERE kind='jarring' AND lot_id IS NULL`).Scan(&untraced); err != nil {
+		SELECT COUNT(*) FROM inventory_movements m
+		JOIN inventory_items i ON i.id = m.item_id
+		WHERE i.kind='honey_bulk' AND m.lot_id IS NULL`).Scan(&untraced); err != nil {
 		t.Fatalf("count untraced: %v", err)
 	}
 	if untraced != 0 {
-		t.Errorf("unattributed jarring movements = %d, want 0", untraced)
+		t.Errorf("unattributed bulk honey movements = %d, want 0", untraced)
 	}
 }
 
@@ -2155,7 +2378,7 @@ func TestJarringConsumesLinkedPackaging(t *testing.T) {
 		Scan(&packagingTypeID); err != nil {
 		t.Fatalf("seed packaging type: %v", err)
 	}
-	stockID := equipSeedStockForTest(t, server, packagingTypeID, 12)
+	equipSeedStockForTest(t, server, packagingTypeID, 12)
 	if _, err := server.pool.Exec(ctx,
 		`UPDATE jar_sizes SET packaging_type_id=$2 WHERE id=$1`,
 		jarSizeID, packagingTypeID); err != nil {
@@ -2175,12 +2398,7 @@ func TestJarringConsumesLinkedPackaging(t *testing.T) {
 	if warnings, _ := body["packagingWarnings"].([]any); len(warnings) != 0 {
 		t.Errorf("warnings with stock on hand = %v, want none", warnings)
 	}
-	var owned int
-	if err := server.pool.QueryRow(ctx,
-		`SELECT total_owned FROM equipment_stock WHERE id=$1`, stockID).Scan(&owned); err != nil {
-		t.Fatalf("read packaging stock: %v", err)
-	}
-	if owned != 2 {
+	if owned := equipOnHandForTest(t, server, packagingTypeID); owned != 2 {
 		t.Errorf("empties left = %d, want 2", owned)
 	}
 
@@ -2198,17 +2416,18 @@ func TestJarringConsumesLinkedPackaging(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings when short = %v, want 1", warnings)
 	}
-	if err := server.pool.QueryRow(ctx,
-		`SELECT total_owned FROM equipment_stock WHERE id=$1`, stockID).Scan(&owned); err != nil {
-		t.Fatalf("read packaging stock: %v", err)
-	}
-	if owned != -3 {
-		t.Errorf("empties after overdraw = %d, want -3", owned)
+	// The overdraw consumes what exists and stops at zero. The ledger has no
+	// negative balances, so "we owe 3 empties" is a warning on the run, not a
+	// -3 hidden in a stock row.
+	if owned := equipOnHandForTest(t, server, packagingTypeID); owned != 0 {
+		t.Errorf("empties after overdraw = %d, want 0", owned)
 	}
 }
 
 // equipSeedStockForTest creates a stock row and books an opening count through
-// the ledger, which is the only way quantities are allowed in.
+// the equipment command, which is the only way quantities are allowed in: a
+// row in equipment_stock_adjustments is a legacy record with no balance
+// behind it, so a fixture that writes one seeds nothing the ledger can see.
 func equipSeedStockForTest(
 	t *testing.T, server *Server, typeID uuid.UUID, opening int,
 ) uuid.UUID {
@@ -2220,12 +2439,102 @@ func equipSeedStockForTest(
 		typeID).Scan(&stockID); err != nil {
 		t.Fatalf("seed equipment stock: %v", err)
 	}
-	if _, err := server.pool.Exec(ctx, `
-		INSERT INTO equipment_stock_adjustments (stock_id, quantity, reason, date)
-		VALUES ($1, $2, 'purchased', now())`, stockID, opening); err != nil {
+	if opening == 0 {
+		return stockID
+	}
+	if err := app.NewRunner(server.pool).Run(ctx, app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			_, err := equipment.NewService().Receive(ctx, uow, equipment.Command{
+				Reference: stockID, Quantity: opening, OccurredAt: time.Now().UTC(),
+				Reason: "purchased",
+			})
+			return err
+		}); err != nil {
 		t.Fatalf("book opening count: %v", err)
 	}
 	return stockID
+}
+
+// equipDeployForTest puts serviceable gear on a hive through the equipment
+// command and returns the deploy operation, which is the deployment identity
+// under the ledger.
+func equipDeployForTest(
+	t *testing.T, server *Server, stockID, hiveID uuid.UUID, quantity int,
+) uuid.UUID {
+	t.Helper()
+	var operationID uuid.UUID
+	if err := app.NewRunner(server.pool).Run(context.Background(),
+		app.UserActor(testUserID, "Test Admin"),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			recorded, err := equipment.NewService().Deploy(ctx, uow, equipment.DeployCommand{
+				Command: equipment.Command{
+					Reference: stockID, Quantity: quantity, OccurredAt: time.Now().UTC(),
+				},
+				HiveID: hiveID,
+			})
+			if err != nil {
+				return err
+			}
+			operationID = recorded.Operation.ID
+			return nil
+		}); err != nil {
+		t.Fatalf("deploy equipment: %v", err)
+	}
+	return operationID
+}
+
+// equipStockStatusForTest is the ledger's answer to the equipment_stock_status
+// view: what a type holds at home, what stands on hives, and the total. The
+// view still reads the frozen legacy tables, so it reports the world as it was
+// before the ledger took over the quantities.
+func equipStockStatusForTest(
+	t *testing.T, server *Server, typeID uuid.UUID,
+) (owned, deployed, available int) {
+	t.Helper()
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COALESCE(SUM(b.on_hand) FILTER (WHERE l.is_home), 0)::int,
+		       COALESCE(SUM(b.on_hand) FILTER (WHERE l.kind='deployed'), 0)::int
+		FROM inventory_balances b
+		JOIN equipment_types et ON et.item_id = b.item_id
+		JOIN inventory_locations l ON l.id = b.location_id
+		WHERE et.id = $1 AND b.condition IS NOT DISTINCT FROM 'serviceable'`, typeID).
+		Scan(&available, &deployed); err != nil {
+		t.Fatalf("equipment stock status: %v", err)
+	}
+	return available + deployed, deployed, available
+}
+
+// equipDeployedOnHiveForTest is what one hive is still carrying.
+func equipDeployedOnHiveForTest(
+	t *testing.T, server *Server, typeID, hiveID uuid.UUID,
+) int {
+	t.Helper()
+	var quantity int
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COALESCE(SUM(b.on_hand), 0)::int
+		FROM inventory_balances b
+		JOIN equipment_types et ON et.item_id = b.item_id
+		WHERE et.id = $1 AND b.container_hive_id = $2`, typeID, hiveID).Scan(&quantity); err != nil {
+		t.Fatalf("deployed on hive: %v", err)
+	}
+	return quantity
+}
+
+// equipOnHandForTest is the serviceable balance an equipment type holds at
+// home, which is what replaced equipment_stock.total_owned.
+func equipOnHandForTest(t *testing.T, server *Server, typeID uuid.UUID) int {
+	t.Helper()
+	var onHand int
+	if err := server.pool.QueryRow(context.Background(), `
+		SELECT COALESCE(SUM(b.on_hand), 0)::int
+		FROM inventory_balances b
+		JOIN equipment_types et ON et.item_id = b.item_id
+		JOIN inventory_locations l ON l.id = b.location_id
+		WHERE et.id = $1 AND l.is_home
+		  AND b.condition IS NOT DISTINCT FROM 'serviceable'`, typeID).Scan(&onHand); err != nil {
+		t.Fatalf("equipment on hand: %v", err)
+	}
+	return onHand
 }
 
 // bookLotCeiling books an already-inserted lot's stored weight into the

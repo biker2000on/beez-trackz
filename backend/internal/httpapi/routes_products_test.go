@@ -152,7 +152,7 @@ func seedProductBatch(
 	payload := map[string]any{
 		"kind":         "hot_honey",
 		"productId":    productID.String(),
-		"harvestLotId": seedLot(t, server, honeyLbs*10).String(),
+		"harvestLotId": seedFixtureLot(t, server, honeyLbs).String(),
 		"startedAt":    time.Now().Format("2006-01-02"),
 		"honeyLbs":     honeyLbs,
 		"quantityOut":  quantityOut,
@@ -246,14 +246,23 @@ func TestProductAdjustmentRecordsShrink(t *testing.T) {
 	if got := productOnHand(t, server, productID); got != 8 {
 		t.Errorf("on hand after undo = %d, want 8", got)
 	}
-	var deleted *time.Time
-	if err := server.pool.QueryRow(context.Background(),
-		`SELECT deleted_at FROM product_adjustments WHERE id=$1`, adjustmentID).
-		Scan(&deleted); err != nil {
-		t.Fatalf("the undo destroyed the row instead of soft-deleting it: %v", err)
+	// The ledger is append-only, so the undo is a reversing operation rather
+	// than a deleted_at stamp: the original operation and its lines survive
+	// and the reversal negates them.
+	if reversalID := reversalOf(t, server, adjustmentID); reversalID == uuid.Nil {
+		t.Error("the undo wrote no reversing operation")
+	} else if got := operationItemQuantity(
+		t, server, reversalID, productItemID(t, server, productID)); got != 1 {
+		t.Errorf("reversal quantity = %v, want +1", got)
 	}
-	if deleted == nil {
-		t.Error("the adjustment was not marked deleted")
+	var original int
+	if err := server.pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM inventory_operations WHERE id=$1`, adjustmentID).
+		Scan(&original); err != nil {
+		t.Fatalf("read original adjustment: %v", err)
+	}
+	if original != 1 {
+		t.Error("the undo destroyed the original operation")
 	}
 	// A second undo finds nothing live rather than adjusting twice.
 	again, _ := call(t, server.productAdjustmentDelete, adminRequest(
@@ -300,15 +309,34 @@ func TestProductBatchVoidReleasesHoneyAndOutput(t *testing.T) {
 	if got := productOnHand(t, server, productID); got != 0 {
 		t.Errorf("a voided batch still made %d units", got)
 	}
-	// Reversal, not deletion: both movements survive and net to zero.
-	var movements int
-	if err := server.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM honey_movements WHERE product_batch_id=$1`, batchID).
-		Scan(&movements); err != nil {
-		t.Fatalf("count movements: %v", err)
+	// Reversal, not deletion: the batch's transform and its reversal both
+	// survive and net to zero.
+	var operations int
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM inventory_operations
+		WHERE (source_type='product_batch' AND source_id=$1)
+		   OR reverses_operation_id IN (
+		        SELECT id FROM inventory_operations
+		        WHERE source_type='product_batch' AND source_id=$1)`, batchID).
+		Scan(&operations); err != nil {
+		t.Fatalf("count operations: %v", err)
 	}
-	if movements != 2 {
-		t.Errorf("batch movements = %d, want the original plus its reversal", movements)
+	if operations != 2 {
+		t.Errorf("batch operations = %d, want the original plus its reversal", operations)
+	}
+	var net float64
+	if err := server.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(m.quantity), 0)::float8
+		FROM inventory_movements m
+		JOIN inventory_operations o ON o.id = m.operation_id
+		WHERE o.source_type='product_batch' AND o.source_id=$1
+		   OR o.reverses_operation_id IN (
+		        SELECT id FROM inventory_operations
+		        WHERE source_type='product_batch' AND source_id=$1)`, batchID).Scan(&net); err != nil {
+		t.Fatalf("sum batch movements: %v", err)
+	}
+	if net != 0 {
+		t.Errorf("batch movements net to %v, want 0", net)
 	}
 
 	second, _ := call(t, server.productBatchVoid, adminRequest(

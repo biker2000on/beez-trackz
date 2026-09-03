@@ -113,6 +113,13 @@ func (s *Service) Apply(ctx context.Context, uow *app.UnitOfWork, input ApplyInp
 			if err != nil {
 				return err
 			}
+			// sale_items.inventory_lot_id is only recorded provenance when the
+			// line names the bottling run it came off. Otherwise it is the
+			// reservation's FIFO guess, and drawing from the lot it guessed
+			// does not turn the guess into a fact (review A3).
+			if line.BottlingRunID == nil {
+				method = production.MethodFIFOInferred
+			}
 			if method == production.MethodFIFOInferred {
 				inferred = true
 			}
