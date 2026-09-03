@@ -22,6 +22,9 @@ type options struct {
 	RepoRoot     string
 	Keep         bool
 	SkipMedia    bool
+	// LegacySource accepts a source database of the previous schema
+	// generation, read only. The disposable target is unaffected.
+	LegacySource bool
 	// ImporterBinary short-circuits building the CLI. Tests that already
 	// built it set this; operators do not.
 	ImporterBinary string
@@ -124,12 +127,16 @@ func run(ctx context.Context, opts options) (*gateReport, error) {
 			"the source URL names %s, which is the disposable gate database", opts.GateDatabase))
 	}
 	g.note("source database %s (read only)", redactURL(opts.SourceURL))
+	if opts.LegacySource {
+		g.note("source accepted as a %s-generation database on a read-only connection (-legacy-source)",
+			db.LegacyGeneration)
+	}
 	g.note("admin database %s (CREATE/DROP only)", redactURL(opts.AdminURL))
 	if !g.end() {
 		return g.report, nil
 	}
 
-	sourcePool, err := openUTCPool(ctx, opts.SourceURL)
+	sourcePool, err := openSourcePool(ctx, opts.SourceURL, opts.LegacySource)
 	if err != nil {
 		return nil, fmt.Errorf("connect source database: %w", err)
 	}

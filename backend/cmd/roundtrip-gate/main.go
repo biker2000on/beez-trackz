@@ -13,10 +13,16 @@
 // It never restores into the database named in -database. That URL is used
 // only to CREATE and DROP the disposable gate database.
 //
-//	roundtrip-gate -database <admin-postgres-url> -workdir <dir> [-keep] [-skip-media]
+//	roundtrip-gate -database <admin-postgres-url> -workdir <dir> [-keep] [-skip-media] [-legacy-source]
 //
 // The source database is read only, and comes from -source, SNAPSHOT_SOURCE_URL,
 // or DATABASE_URL, in that order.
+//
+// Every connection is checked against the binary's schema generation
+// (internal/db.CheckGeneration). -legacy-source relaxes that for the SOURCE
+// alone, and only onto a connection with default_transaction_read_only = on,
+// which is how the pre-reset rehearsal reads a database of the previous
+// generation. The disposable target is always strict.
 package main
 
 import (
@@ -55,6 +61,10 @@ func main() {
 		"do not treat media hash-state differences as failures; originals are compared by reference only")
 	gateDatabase := flag.String("gate-database", gateDatabaseName,
 		"name of the disposable database to create, restore into, and drop")
+	// The SOURCE only. The disposable target is created and migrated by this
+	// binary, so it is always of the current generation and always strict.
+	legacySource := flag.Bool("legacy-source", false,
+		"accept a SOURCE database of the previous schema generation, read only (the target stays strict)")
 	flag.Parse()
 
 	if strings.TrimSpace(*databaseURL) == "" {
@@ -88,6 +98,7 @@ func main() {
 		RepoRoot:     repoRoot,
 		Keep:         *keep,
 		SkipMedia:    *skipMedia,
+		LegacySource: *legacySource,
 		Logf:         func(format string, args ...any) { log.Printf(format, args...) },
 	})
 	if err != nil {

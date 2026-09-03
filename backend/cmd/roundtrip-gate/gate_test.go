@@ -40,7 +40,15 @@ func requireDatabase(t *testing.T) string {
 // keys, and a date that is a different calendar day from its timestamp.
 func seededSource(ctx context.Context, t *testing.T, adminURL string) (string, *pgxpool.Pool) {
 	t.Helper()
-	sourceURL, cleanup, err := freshDatabase(ctx, adminURL, fixtureDatabase)
+	return seededSourceNamed(ctx, t, adminURL, fixtureDatabase)
+}
+
+// seededSourceNamed is seededSource with the database name spelled out, so a
+// suite that leaves its fixture in an unusual state (the legacy-source tests)
+// cannot collide with the ordinary one.
+func seededSourceNamed(ctx context.Context, t *testing.T, adminURL, database string) (string, *pgxpool.Pool) {
+	t.Helper()
+	sourceURL, cleanup, err := freshDatabase(ctx, adminURL, database)
 	if err != nil {
 		t.Fatalf("create the fixture database: %v", err)
 	}

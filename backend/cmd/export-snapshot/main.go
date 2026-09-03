@@ -58,6 +58,13 @@ func main() {
 	minioAccessKey := flag.String("minio-access-key", os.Getenv("MINIO_ACCESS_KEY"), "MinIO access key (or MINIO_ACCESS_KEY)")
 	minioSecretKey := flag.String("minio-secret-key", os.Getenv("MINIO_SECRET_KEY"), "MinIO secret key (or MINIO_SECRET_KEY)")
 	minioSSL := flag.Bool("minio-use-ssl", envBool("MINIO_USE_SSL"), "connect to MinIO with TLS")
+	// The one sanctioned exception to the schema generation guard (design
+	// review OV3). It exists so the translate gate can read the database of
+	// the previous generation, and it is read only: the pool sets
+	// default_transaction_read_only and the guard refuses to grant the
+	// exception unless that setting actually took.
+	legacySource := flag.Bool("legacy-source", false,
+		"read a database of the PREVIOUS schema generation, read only (for the pre-reset export)")
 	flag.Parse()
 
 	if strings.TrimSpace(*databaseURL) == "" {
@@ -65,9 +72,16 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	pool, err := db.ConnectWithoutMigrations(ctx, *databaseURL)
+	connect := db.ConnectWithoutMigrations
+	if *legacySource {
+		connect = db.ConnectLegacySource
+	}
+	pool, err := connect(ctx, *databaseURL)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *legacySource {
+		log.Printf("reading %s as a legacy-generation source: the connection is read only", db.LegacyGeneration)
 	}
 	defer pool.Close()
 

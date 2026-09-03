@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/db"
 )
 
 // gateDatabaseName is the disposable database this driver creates, uses, and
@@ -92,28 +94,28 @@ func freshDatabase(ctx context.Context, adminURL, name string) (string, func(), 
 	return replaceDatabase(adminURL, name), cleanup, nil
 }
 
-// openUTCPool opens a pool whose every connection is in UTC, matching
+// utcParams pins every connection in a gate pool to UTC, matching
 // cmd/migrate-legacy and the export/restore/comparison sessions the design
 // requires. A comparison probe that ran in the operator's local timezone
 // would re-derive year buckets differently from the exporter.
+var utcParams = map[string]string{"timezone": "UTC"}
+
+// openUTCPool opens a UTC pool under the strict schema generation guard. The
+// disposable target always uses this: the gate proves the CURRENT chain, so a
+// target of any other generation is a broken run, not a supported mode.
 func openUTCPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	config, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse database url: %w", err)
-	}
-	if config.ConnConfig.RuntimeParams == nil {
-		config.ConnConfig.RuntimeParams = map[string]string{}
-	}
-	config.ConnConfig.RuntimeParams["timezone"] = "UTC"
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-	return pool, nil
+	return db.ConnectWithOptions(ctx, databaseURL, db.ConnectOptions{RuntimeParams: utcParams})
+}
+
+// openSourcePool opens the SOURCE database. With legacySource the guard
+// accepts the previous generation, and only then, and only on a read-only
+// connection (design review OV3). The disposable target never takes this
+// path — see openUTCPool.
+func openSourcePool(ctx context.Context, databaseURL string, legacySource bool) (*pgxpool.Pool, error) {
+	return db.ConnectWithOptions(ctx, databaseURL, db.ConnectOptions{
+		AllowLegacy:   legacySource,
+		RuntimeParams: utcParams,
+	})
 }
 
 // fingerprintDatabase is the content contract of design section 4.1: per

@@ -30,7 +30,9 @@ func main() {
 	defer stop()
 
 	// The API owns schema migrations. Starting them here as well can race the
-	// API during a fresh deployment.
+	// API during a fresh deployment. The generation guard inside still runs:
+	// a worker is a writer, so it never accepts a database of another
+	// generation, read only or otherwise (design review OV3).
 	pool, err := db.ConnectWithoutMigrations(ctx, cfg.DatabaseURL)
 	if err != nil {
 		slog.Error("database", "err", err)

@@ -99,6 +99,59 @@ roundtrip-gate -database <admin-url> -workdir <dir> [-keep] [-skip-media]
    directory itself (`os.Mkdir`, mode `0700`) and fails if the path is present.
 5. Have operator-controlled storage ready that is **not** the Postgres data
    volume and **not** the database you may later replace.
+6. Know which **schema generation** the source is. Every entry point checks it
+   (section 1.1). If the source predates the `schema_generation` stamp, the
+   export needs `--legacy-source`; if it does not, do not pass the flag.
+
+### 1.1 The schema generation guard, and `--legacy-source`
+
+Goose answers "which migrations ran", not "is this the schema this binary was
+built for". Those two questions come apart at the ledger reset: a database
+still sitting at the head of the *old* chain looks healthy to `goose up`
+against the *new* one, so the process would happily serve a schema that
+predates the ledger (design review A6).
+
+Migration `00051_schema_generation.sql` closes that hole. It creates a one-row
+`schema_generation` table stamped with this binary's generation (`ledger-v1`).
+`backend/internal/db/generation.go` classifies any database:
+
+| What the database looks like | Generation | Result |
+|---|---|---|
+| `schema_generation` holds exactly `ledger-v1`, goose head equals the embedded head | `ledger-v1` | accepted everywhere |
+| no `schema_generation` table at all | `legacy` | refused everywhere except `--legacy-source` |
+| row deleted, rewritten, or duplicated | mismatch | refused everywhere |
+| right stamp, foreign goose head (another build migrated it) | mismatch | refused everywhere |
+
+The expected goose head is **derived from the embedded migrations at start-up**,
+never written down, so adding a migration cannot leave the guard behind.
+
+`server`, `worker`, `set-password`, `import-snapshot` (dry run and real), and
+the round-trip gate's **disposable target** all take the strict path. The
+refusal is one line naming actual beside expected, for example:
+
+```text
+schema generation guard: missing-generation-table (actual legacy, expected ledger-v1); this database predates the schema_generation stamp; recreate it from the current migrations, or read it with export-snapshot --legacy-source
+```
+
+**The one exception is read-only.** `export-snapshot --legacy-source` and
+`roundtrip-gate -legacy-source` (the **source** connection only) accept
+generation `legacy`, and only on a pool opened with
+`SET default_transaction_read_only = on`. The guard re-reads that setting
+before granting the exception, and any write on such a connection fails with
+SQLSTATE `25006`. `import-snapshot` and `worker` never accept it, with or
+without a flag: they are writers.
+
+Migrating a pre-stamp database *forward* through the ordinary chain is still
+normal — `db.Connect` applies 00051 and stamps it. The guard refuses a foreign
+generation; it does not refuse the chain.
+
+> **Recreate all databases once.** When this guard lands, every developer, CI,
+> and test database created before it must be dropped and recreated from the
+> current migrations (`DROP DATABASE x; CREATE DATABASE x;`, then let `server`
+> or `import-snapshot` migrate it). A database merely migrated forward is
+> fine; one restored or copied from another chain is not, and will be refused
+> at start-up rather than silently served. The same applies again at the Phase
+> B squash, when the generation changes.
 
 ### Export CLI
 
@@ -117,7 +170,8 @@ TZ=UTC go run ./cmd/export-snapshot \
   [-minio-bucket beeztrackz-media] \
   [-minio-access-key ...] \
   [-minio-secret-key ...] \
-  [-minio-use-ssl]
+  [-minio-use-ssl] \
+  [-legacy-source]
 ```
 
 Flags as implemented in `backend/cmd/export-snapshot/main.go`:
@@ -136,6 +190,7 @@ Flags as implemented in `backend/cmd/export-snapshot/main.go`:
 | `-minio-access-key` | `MINIO_ACCESS_KEY` | Required with `-hash-minio`. |
 | `-minio-secret-key` | `MINIO_SECRET_KEY` | Required with `-hash-minio`. |
 | `-minio-use-ssl` | `MINIO_USE_SSL` | TLS to MinIO. |
+| `-legacy-source` | `false` | Read a source of the **previous** schema generation. Opens the pool `default_transaction_read_only = on`; the guard verifies that before accepting, and writes fail `25006`. Use it only when a strict run refused with `missing-generation-table`. |
 
 Pass: the process prints `snapshot written to … (formatVersion=1, domains=…, migration=…)` and exits 0. `manifest.json` is written last. Domain files are mode `0600`.
 
@@ -301,6 +356,9 @@ does **not** replace the working database. Abort on the first failing step.
    classified omissions and understand `-skip-media`.
 5. GnuCash sync on the source may be enabled. The disposable target is created
    with `sync_enabled = false` and the importer must leave it false.
+6. Know the source's schema generation (section 1.1). A source from before the
+   `schema_generation` stamp needs `-legacy-source`; the disposable target is
+   always strict, because the gate creates and migrates it itself.
 
 ### What the driver does (design section 2)
 
@@ -310,8 +368,15 @@ The operator runs one command:
 TZ=UTC go run ./cmd/roundtrip-gate \
   -database <admin-url> \
   -workdir /safe/path/gate-run \
-  [-keep] [-skip-media]
+  [-keep] [-skip-media] [-legacy-source]
 ```
+
+`-legacy-source` relaxes the generation guard for the **source** connection
+only, and only onto a read-only connection (section 1.1). It does not relax
+the calendar: the source pool is still pinned to UTC. The disposable target is
+never affected. When the source is behind the target, the gate records
+`schema-migration-ahead` as an *explained* difference, not a failure —
+record-digest equality is what proves the newer schema changed nothing.
 
 Ordered steps, aborting on the first failure:
 
@@ -397,6 +462,29 @@ onto a clean baseline that no longer depends on migrations 00001–00048) is
    (section 1, with `-hash-minio` for a reset artifact) into a **new**
    directory. Keep the previous validated artifact. Repeat sections 2 and 3
    for the new artifact. Do not overwrite the rehearsal copy.
+
+   If the source predates the generation this binary was built for — the
+   normal shape of a pre-reset export — add `--legacy-source`:
+
+   ```text
+   TZ=UTC go run ./cmd/export-snapshot \
+     -database-url <legacy-source-url> \
+     -legacy-source \
+     -hash-minio \
+     -output <new-directory>
+   ```
+
+   and run the rehearsal against it the same way:
+
+   ```text
+   TZ=UTC go run ./cmd/roundtrip-gate \
+     -database <admin-url> -source <legacy-source-url> \
+     -legacy-source -workdir /safe/path/gate-run
+   ```
+
+   Both connections are read only; neither command can modify the source.
+   Never look for `-legacy-source` on `import-snapshot` — it has no such flag,
+   by design.
 3. Confirm the gate report for **this** artifact is pass.
 4. Restore with the canonical importer only, into the intended empty database,
    GnuCash sync disabled:
@@ -412,7 +500,10 @@ onto a clean baseline that no longer depends on migrations 00001–00048) is
    false; secret columns are null. Keep this report **outside** the database
    being replaced, next to the artifact and the gate report.
 6. Reconfigure excluded configuration (section 5). Leave GnuCash sync
-   disabled through post-restore reconciliation.
+   disabled through post-restore reconciliation. Also **drop and recreate
+   every other database on the current chain** — developer, CI, and test
+   databases — so none is left at a generation the binaries refuse
+   (section 1.1).
 7. Only then is it acceptable, as a **later P1 act**, to replace the
    development database and squash migrations. Wave 2 does not squash
    anything.
@@ -433,6 +524,7 @@ of the following is true:
 | You were about to run `cmd/migrate-legacy` or one-off SQL | Out of contract; copies secrets; not domain-aware. |
 | Target is compose `beeztrackz` / volume `postgres_data` and you have not intended a replace **after** a passing gate | Rehearsal must never use that database as a restore target. |
 | Target GnuCash `sync_enabled` is true | Restore must leave sync disabled. |
+| You were about to pass `--legacy-source` to something that writes, or to work around a generation refusal by hand-editing `schema_generation` or `goose_db_version` | The guard is the only thing between a wrong-generation binary and the data. Recreate the database instead. |
 | You planned to enable GnuCash sync before pull-first reconciliation | Roadmap C9. |
 | `formatVersion` is not `1` and this build has no transform for it | Importer must not guess schema from `appCommit`. |
 | You do not have the wrapping checksum and the artifact on storage independent of the database being replaced | A successful import into a database you then drop is not a backup. |
@@ -714,6 +806,11 @@ design section 3. GnuCash messages come from
 | Old API token 401 | `api_tokens` omitted | Create a new token after login. |
 | ntfy / AI / GnuCash calls fail with missing credentials | excluded keys | Re-enter per section 5. Safe AI URLs should already be present. |
 | `cmd/migrate-legacy` "target already contains apiaries" | wrong tool | Stop. Use `import-snapshot`. |
+| `schema generation guard: missing-generation-table (actual legacy, …)` | database predates migration 00051 | Reading it? Re-run with `--legacy-source` (exporter and gate source only). Using it? Recreate it from the current migrations. Never hand-create `schema_generation`. |
+| `schema generation guard: generation-mismatch` | stamp deleted, rewritten, or duplicated | The database is not this chain's. Drop and recreate it; restore data through `import-snapshot`. |
+| `schema generation guard: migration-version-mismatch` | goose head is not the embedded head | A different build migrated this database. Deploy the matching binary, or recreate. Do not delete `goose_db_version` rows. |
+| `schema generation guard: legacy-source-not-read-only` | the read-only setting did not take | A role default or connection parameter re-armed writes. Fix that; the exception is only safe read only. |
+| Write to a `--legacy-source` connection fails `25006` | `read_only_sql_transaction` | Working as designed. That connection exports; it never writes. |
 | Gate skipped: `TEST_DATABASE_URL is not configured` | design 5.3 | The gate is not passed. |
 | Honey tests / `TRUNCATE` wrecked a restore in progress | restored into the shared test DB | Never restore into `TEST_DATABASE_URL`'s database. Use a disposable name. |
 
@@ -744,4 +841,7 @@ A run is not OK unless `conflicted` and `failed` are both zero
 - GnuCash refusals and guarded restore: `backend/internal/httpapi/routes_gnucash_sync.go`
 - Importer CLI (this wave): `backend/cmd/import-snapshot/`
 - Gate CLI (this wave): `backend/cmd/roundtrip-gate/`
-- Restore-state column (this wave): `backend/internal/db/migrations/00049_gnucash_restore_state.sql`
+- Restore-state column: `backend/internal/db/migrations/00049_gnucash_restore_state.sql`
+- Generation stamp: `backend/internal/db/migrations/00051_schema_generation.sql`
+- Generation guard: `backend/internal/db/generation.go`, `backend/internal/db/db.go`
+- Guard decisions A6 and OV3: `docs/plans/2026-09-01-inventory-ledger-design.md` sections 2.1 and 9 step 7

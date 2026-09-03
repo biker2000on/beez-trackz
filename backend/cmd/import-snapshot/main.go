@@ -162,6 +162,10 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 	sort.Strings(report.MissingMedia)
 	sort.Strings(report.ExcludedConfig)
 
+	// Both paths are the strict generation guard: the importer writes, so it
+	// never accepts the previous generation, with or without -dry-run
+	// (design review OV3). Only export-snapshot --legacy-source and the
+	// gate's source connection get that exception.
 	var pool *pgxpool.Pool
 	if opts.dryRun {
 		pool, err = db.ConnectWithoutMigrations(ctx, opts.database)
