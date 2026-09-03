@@ -177,7 +177,13 @@ const metersPerFoot = 0.3048
 
 func operatorUnitsSystem(ctx context.Context, q inspectionQuerier) string {
 	var units *string
-	if err := q.QueryRow(ctx, `SELECT units FROM user_settings LIMIT 1`).Scan(&units); err != nil {
+	// The operator's preference: the first administrator's user_preferences
+	// row (00057/00004 moved per-user display choices off user_settings).
+	// Honey Story deliberately follows the operator, not the viewer.
+	if err := q.QueryRow(ctx, `
+		SELECT up.units FROM user_preferences up
+		JOIN app_users u ON u.id = up.user_id
+		WHERE u.is_admin ORDER BY u.created_at LIMIT 1`).Scan(&units); err != nil {
 		return "us"
 	}
 	if units != nil && (*units == "metric" || *units == "us") {
@@ -983,7 +989,9 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 	units := operatorUnitsSystem(r.Context(), s.pool)
 	var temperatureUnit *string
 	_ = s.pool.QueryRow(r.Context(), `
-		SELECT temperature_unit FROM user_settings LIMIT 1`).Scan(&temperatureUnit)
+		SELECT up.temperature_unit FROM user_preferences up
+		JOIN app_users u ON u.id = up.user_id
+		WHERE u.is_admin ORDER BY u.created_at LIMIT 1`).Scan(&temperatureUnit)
 	// Deliberately curated response: no hive IDs, apiary IDs, coordinates,
 	// inspection data, expenses, or customer data can cross this boundary.
 	// Units are the operator's stored preference so Honey Story does not
