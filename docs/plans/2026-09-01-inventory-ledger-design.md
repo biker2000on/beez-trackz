@@ -773,6 +773,44 @@ translation and gate tests extend the P0 suites.
 | Freeze | `cmd/import-snapshot/backfill_db_test.go` | after a successful backfill every legacy table refuses INSERT/UPDATE/DELETE; a failed parity leaves them writable and the ledger empty |
 | Rehearsal | operator step, runbook | Phase A backfill on a fresh prod copy; later, Phase B `roundtrip-gate` against the new schema; reports retained |
 
+## 12.1 Implementation log and open items (updated as waves land)
+
+- **Wave 1 (2026-09-02):** migration 00050 (core), 00051 (generation
+  stamp), `app/inventory`, generation guard with `--legacy-source`, read-path
+  audit.
+- **Wave 2 (2026-09-02):** `app/equipment`, `app/field`, equipment readers and
+  recs on the ledger, `app/backfill` (equipment history, freeze, six-type
+  re-key — refuses to freeze while other legacy rows exist), Phase A docs.
+- **Wave 3a (2026-09-03):** `app/production`, `app/sales`, every honey /
+  product / stock-location / sales writer and reader on the ledger, migration
+  00052 (`sale_items` targets `item_id`), BOM assembly on the ledger,
+  equipment opening residual, seeded-row yield for the P0 importer. No
+  production writer of the eight legacy tables remains.
+
+**Open items carried into wave 3b/3c** (found by the wave-3a workers):
+
+1. `routes_harvest_sessions.go:735` — the harvest-entry soft-delete guard is
+   vacuous now that lot pounds are receipts (decision 6); the true-up guard at
+   `:622` compares a declared weight delta against ledger bulk. Re-base both
+   on the lot ceilings.
+2. GnuCash sale bodies still join `equipment_stock` through
+   `sale_items.equipment_stock_id`; new equipment lines carry only
+   `item_id`. The composer must read `equipment_types` via `item_id` before
+   Phase B drops the column.
+3. `equipment_stock_status` (view) still sums the frozen legacy tables; it is
+   dropped in Phase B and must have no remaining readers by then.
+4. `app/sales.CheckAvailability` subtracts the asking sale's own stored
+   reservation; any caller that re-validates a stored sale in place needs a
+   "less this sale" variant.
+5. Raw-propolis sale lines carry no `item_id` (their stock is harvested
+   grams); `propolisOnHandGrams` subtracts unapplied lines itself — the one
+   reservation the view does not express.
+6. Untraced jar/product reservations pin one FIFO-inferred lot while apply
+   may consume across several; the report labels it honestly, the
+   reservation is approximate (candidate finding, accepted).
+7. Frontend `features/equipment` still names legacy identities (46
+   occurrences) — wave 3b.
+
 ## 13. Roadmap corrections implied by this spec
 
 - The roadmap's generalized-core bullet listing `inventory_units` +
