@@ -996,6 +996,39 @@ first attempt surfaced open item 9:
 | freeze | 8 tables armed; an UPDATE on `honey_movements` raises the guard |
 | BOM seed (00054) | no-op — production has no `equipment_type_components` rows |
 
+**Applied to production 2026-09-03 15:38Z** (operator decision the same
+day): api/worker stopped, `pg_dump` + pre-Phase-A artifact taken, then the
+same binary (`abdd2a7`, static Linux CLIs run inside the stack network)
+migrated production 48 → 54 and backfilled with results identical to the
+rehearsal table above; the freeze was proven by a refused `UPDATE`; the stack
+was repointed to image tag `abdd2a7…` and came up healthy at goose 54. GnuCash
+sync had never been configured on production, so the between-phase GnuCash
+steps are vacuous there. One deviation from runbook §6 precondition 5: the
+P0 gate on the pre-Phase-A artifact failed for a reader defect (a pre-ledger
+artifact carries no `inventory_*` domains and the reader treats them as
+required) — the `pg_dump` is the rollback boundary until that fix lands and
+the gate is re-run on the same artifact.
+
+**Phase B applied to production 2026-09-03 16:00Z**, twenty minutes after
+Phase A, on the operator's instruction (the roadmap's "run alone for a real
+period" was waived; the physical count is still owed and now lands as
+`count_adjust` operations on the baseline database). Sequence, per runbook
+§7.5: post-Phase-A `pg_dump` restored to a copy → round-trip gate with
+`BEEZ_SCHEMA_BASELINE=1` **passed** (78 domains at migration 54, 1212 records
+created, 10 skipped = the dropped set, 53 reference checks explained by
+`ledger-v1-baseline-drop-v1`, nothing else) → api/worker stopped → final
+`pg_dump` and final artifact (all 78 domain digests identical to the gated
+copy's) → `DROP DATABASE … WITH (FORCE)` / `CREATE` → `import-snapshot` under
+the baseline profile (applies `00001_baseline.sql`, stamps
+`ledger-v1-baseline`) → the operator's own identities re-applied (the
+importer excludes `auth_subject`, `oidc_identities`, AI/ntfy credentials by
+design; they were carried over from the working database so nobody was
+locked out) → verify (89 operations / 101 movements, 35 hives, 107 sales,
+bulk 1044.1 lbs, Pint/Quart available 0, zero legacy tables) → compose
+`x-api-env` gained `BEEZ_SCHEMA_BASELINE: "1"` → stack up, healthy at goose 1.
+Runbook §7.5 step 9 (retire `legacy-00001-00052/` and the profile switch)
+stays pending until the baseline has served a release.
+
 The 611.8 lbs of bulk honey jarred before any recorded harvest is the number
 to show the operator before the real reset: it is honest history, not a data
 error, but it means the `legacy-unassigned` bulk lot carries opening
