@@ -101,7 +101,8 @@ method, and notes. Queen events store hive/queen, event date, constrained
 event type, and notes. Both feed the unified hive timeline.
 
 ### harvest_lots, bottling_runs, and jar_serials
-Harvest lots store unique lot code/public slug, extraction date and weight,
+Harvest lots store unique lot code/public slug, extraction date, the day the
+frames were pulled (`pulled_on`, nullable, migration 00059), weight,
 a varietal reference (`varietal_id` -> `honey_varietals`, the honey's only
 name; migration 00058 dropped the old free-text `honey_variety`), season,
 approximate region, bloom/story/testing data, reorder URL, and public flag. Join tables connect source `honey_harvests` and curated

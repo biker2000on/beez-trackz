@@ -11,6 +11,7 @@ const (
 	InventoryLocationsConsigneeAttrsTransform = "inventory-locations-consignee-attrs-v1"
 	UserPreferencesTransform                  = "user-preferences-v1"
 	HarvestLotVarietalNameTransform           = "harvest-lot-varietal-name-v1"
+	HarvestLotPulledOnTransform               = "harvest-lot-pulled-on-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -116,6 +117,15 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		// whose honey_variety text named no varietal restores unnamed.
 		RemovedColumns: map[string][]string{
 			"harvest_lots": {"honey_variety"},
+		},
+	},
+	{
+		LegacyMigration: 59, BaselineMigration: 6,
+		Name: HarvestLotPulledOnTransform,
+		// The day the frames were pulled, nullable. An older artifact's lot
+		// restores with pulled_on NULL; nothing is derived for it.
+		AddedColumns: map[string][]string{
+			"harvest_lots": {"pulled_on"},
 		},
 	},
 }

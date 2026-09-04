@@ -22,12 +22,12 @@ type portableMigrationShape struct {
 // that changes an exported domain cannot land without updating the one
 // versioned declaration used by both importer and comparator.
 func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "db", "legacy-00001-00052", "0005[0-8]_*.sql"))
+	files, err := filepath.Glob(filepath.Join("..", "db", "legacy-00001-00052", "0005[0-9]_*.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 9 {
-		t.Fatalf("migration files = %d, want 9: %v", len(files), files)
+	if len(files) != 10 {
+		t.Fatalf("migration files = %d, want 10: %v", len(files), files)
 	}
 
 	registered := map[string]bool{}
@@ -85,8 +85,8 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 	}
 
 	want := map[int64]portableMigrationShape{}
-	if len(PostArtifactMigrations) != 9 {
-		t.Fatalf("PostArtifactMigrations has %d entries, want one for each migration 00050-00058", len(PostArtifactMigrations))
+	if len(PostArtifactMigrations) != 10 {
+		t.Fatalf("PostArtifactMigrations has %d entries, want one for each migration 00050-00059", len(PostArtifactMigrations))
 	}
 	for index, migration := range PostArtifactMigrations {
 		if migration.LegacyMigration != int64(50+index) || migration.Name == "" {
@@ -100,7 +100,7 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 		want[migration.LegacyMigration] = shape
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("PostArtifactMigrations drifted from legacy SQL 00050-00058\n got: %#v\nwant: %#v", got, want)
+		t.Fatalf("PostArtifactMigrations drifted from legacy SQL 00050-00059\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/photostore"
 	"github.com/biker2000on/beez-trackz/backend/internal/storage"
@@ -26,6 +27,9 @@ type Server struct {
 	queue             *asynq.Client
 	photos            *photostore.Resolver
 	weatherHTTPClient *http.Client
+	// storyDrafter overrides the recommendations AI provider used by the
+	// harvest-lot story draft (routes_lot_prefill.go); nil reads AI settings.
+	storyDrafter func(ctx context.Context) (production.StoryDrafter, string, error)
 }
 
 func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, queue *asynq.Client) http.Handler {

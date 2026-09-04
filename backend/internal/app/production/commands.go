@@ -124,10 +124,15 @@ func UpdateJarSize(ctx context.Context, uow *app.UnitOfWork, in UpdateJarSizeInp
 // LotInput carries a harvest lot as the operator entered it. VarietalID names
 // the honey: honey_varietals.name is the lot's only name, titling the public
 // Honey Story and every operator-facing list; there is no free-text name.
+// ClaimSpecies left blank with a VarietalID set is filled from the varietal's
+// name, so the floral claim never has to repeat the honey's name; an explicit
+// ClaimSpecies (a blend) still wins. PulledOn is the day the frames/supers
+// were pulled; nil when unknown.
 type LotInput struct {
 	ID                                               uuid.UUID
 	LotCode, PublicSlug                              string
 	ExtractionDate                                   time.Time
+	PulledOn                                         *time.Time
 	HoneyWeightLbs                                   *float64
 	HoneyWeightEntered, HoneyWeightSource            *string
 	VarietalID                                       *uuid.UUID
@@ -163,7 +168,11 @@ func CreateLot(ctx context.Context, uow *app.UnitOfWork, in LotInput) (CreateLot
 	if err != nil {
 		return out, err
 	}
-	if _, err := uow.Exec(ctx, `INSERT INTO harvest_lots(id,lot_code,public_slug,extraction_date,honey_weight_lbs,honey_weight_entered,honey_weight_source,season,apiary_region,bloom_notes,beekeeper_story,testing_data,reorder_url,is_public,moisture_pct,bottling_moisture_pct,claim_species,claim_year,claim_apiary_id,claim_elevation_m,varietal_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, trim(in.ClaimSpecies), in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID, actorValue(uow)); err != nil {
+	species, err := lotClaimSpecies(ctx, uow, in)
+	if err != nil {
+		return out, err
+	}
+	if _, err := uow.Exec(ctx, `INSERT INTO harvest_lots(id,lot_code,public_slug,extraction_date,honey_weight_lbs,honey_weight_entered,honey_weight_source,season,apiary_region,bloom_notes,beekeeper_story,testing_data,reorder_url,is_public,moisture_pct,bottling_moisture_pct,claim_species,claim_year,claim_apiary_id,claim_elevation_m,varietal_id,pulled_on,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, species, in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID, in.PulledOn, actorValue(uow)); err != nil {
 		return out, classifyCommandDB(op, err)
 	}
 	if err := replaceLotLinks(ctx, uow, in); err != nil {
@@ -208,7 +217,11 @@ func UpdateLot(ctx context.Context, uow *app.UnitOfWork, in LotInput) (UpdateLot
 		}
 		return out, app.Precondition(op, "Lot weight cannot be below the %.2f lbs its bottling runs already used", used)
 	}
-	tag, err := uow.Exec(ctx, `UPDATE harvest_lots SET lot_code=$2,public_slug=$3,extraction_date=$4,honey_weight_lbs=$5,honey_weight_entered=$6,honey_weight_source=$7,season=$8,apiary_region=$9,bloom_notes=$10,beekeeper_story=$11,testing_data=$12,reorder_url=$13,is_public=$14,moisture_pct=$15,bottling_moisture_pct=$16,claim_species=$17,claim_year=$18,claim_apiary_id=$19,claim_elevation_m=$20,varietal_id=$21 WHERE id=$1`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, trim(in.ClaimSpecies), in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID)
+	species, err := lotClaimSpecies(ctx, uow, in)
+	if err != nil {
+		return out, err
+	}
+	tag, err := uow.Exec(ctx, `UPDATE harvest_lots SET lot_code=$2,public_slug=$3,extraction_date=$4,honey_weight_lbs=$5,honey_weight_entered=$6,honey_weight_source=$7,season=$8,apiary_region=$9,bloom_notes=$10,beekeeper_story=$11,testing_data=$12,reorder_url=$13,is_public=$14,moisture_pct=$15,bottling_moisture_pct=$16,claim_species=$17,claim_year=$18,claim_apiary_id=$19,claim_elevation_m=$20,varietal_id=$21,pulled_on=$22 WHERE id=$1`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, species, in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID, in.PulledOn)
 	if err != nil {
 		return out, classifyCommandDB(op, err)
 	}
@@ -311,6 +324,27 @@ func prepareLot(ctx context.Context, uow *app.UnitOfWork, in LotInput) (float64,
 	}
 	return weight, source, entered, elevation, nil
 }
+
+// lotClaimSpecies resolves the floral claim's species: the operator's own
+// text when present (a blend), else the varietal's name (the varietal IS the
+// honey's name, and the public Honey Story reads claim_species), else nil.
+func lotClaimSpecies(ctx context.Context, uow *app.UnitOfWork, in LotInput) (*string, error) {
+	const op = "resolve lot claim species"
+	if species := trim(in.ClaimSpecies); species != nil {
+		return species, nil
+	}
+	if in.VarietalID == nil {
+		return nil, nil
+	}
+	var name string
+	if err := uow.QueryRow(ctx, `SELECT name FROM honey_varietals WHERE id=$1`, *in.VarietalID).Scan(&name); errors.Is(err, pgx.ErrNoRows) {
+		return nil, app.NotFound(op, "invalid varietalId")
+	} else if err != nil {
+		return nil, wrapDB(op, err)
+	}
+	return trim(&name), nil
+}
+
 func replaceLotLinks(ctx context.Context, uow *app.UnitOfWork, in LotInput) error {
 	for _, id := range in.HarvestIDs {
 		if _, err := uow.Exec(ctx, `INSERT INTO harvest_lot_harvests(lot_id,harvest_id) VALUES($1,$2)`, in.ID, id); err != nil {

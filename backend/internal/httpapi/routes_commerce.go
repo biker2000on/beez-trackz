@@ -31,6 +31,10 @@ func (s *Server) mountCommerce(r chi.Router) {
 	admin.Post("/harvest-lots/{id}/bottling-runs", s.bottlingRunCreate)
 	admin.Post("/bottling-runs/{id}/void", s.bottlingRunVoid)
 	admin.Get("/harvest-lots/{id}/qr", s.harvestLotQR)
+	// Lot dialog helpers: what the season already knows, and an AI draft of
+	// the beekeeper story (routes_lot_prefill.go).
+	admin.Get("/lots/prefill", s.lotPrefill)
+	admin.Post("/lots/story-draft", s.lotStoryDraft)
 
 	admin.Get("/expenses", s.expenseList)
 	admin.Post("/expenses", s.expenseCreate)
@@ -90,6 +94,9 @@ type harvestLotPayload struct {
 	LotCode        string `json:"lotCode"`
 	PublicSlug     string `json:"publicSlug"`
 	ExtractionDate string `json:"extractionDate"`
+	// PulledOn is the day the frames/supers were pulled (YYYY-MM-DD); null
+	// or omitted when unknown.
+	PulledOn *string `json:"pulledOn"`
 	// Pointer so "no weight supplied" is distinguishable from an explicit 0:
 	// with linked harvests, omitting it means "derive it".
 	HoneyWeightLbs     *float64 `json:"honeyWeightLbs"`
@@ -122,6 +129,7 @@ type harvestLotRow struct {
 	LotCode            string    `json:"lotCode"`
 	PublicSlug         string    `json:"publicSlug"`
 	ExtractionDate     time.Time `json:"extractionDate"`
+	PulledOn           *string   `json:"pulledOn"`
 	HoneyWeightLbs     float64   `json:"honeyWeightLbs"`
 	HoneyWeightEntered *string   `json:"honeyWeightEntered"`
 	// HoneyWeightSource is 'manual' (operator typed it) or 'derived' (summed
@@ -162,7 +170,8 @@ type harvestLotRow struct {
 }
 
 const harvestLotSelect = `
-	SELECT lot.id, lot.lot_code, lot.public_slug, lot.extraction_date, lot.honey_weight_lbs,
+	SELECT lot.id, lot.lot_code, lot.public_slug, lot.extraction_date,
+		to_char(lot.pulled_on, 'YYYY-MM-DD'), lot.honey_weight_lbs,
 		lot.honey_weight_entered, lot.honey_weight_source,
 		lot.varietal_id, varietal.name, lot.season, lot.apiary_region, lot.bloom_notes,
 		lot.beekeeper_story, COALESCE(lot.testing_data, '{}'::jsonb), lot.reorder_url, lot.is_public,
@@ -384,6 +393,20 @@ func resolveLotWeight(
 	return 0, lotWeightSourceManual, entered, ""
 }
 
+// parseLotDatePtr reads an optional YYYY-MM-DD lot date. Blank means "not
+// known" (nil), and the value is a calendar day in UTC so the date column
+// stores exactly the day typed.
+func parseLotDatePtr(raw *string) (*time.Time, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return nil, nil
+	}
+	day, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(*raw), time.UTC)
+	if err != nil {
+		return nil, err
+	}
+	return &day, nil
+}
+
 func ptrString(v *string) string {
 	if v == nil {
 		return ""
@@ -443,7 +466,7 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 	for rows.Next() {
 		var item harvestLotRow
 		if err := rows.Scan(&item.ID, &item.LotCode, &item.PublicSlug, &item.ExtractionDate,
-			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyWeightSource,
+			&item.PulledOn, &item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyWeightSource,
 			&item.VarietalID, &item.VarietalName, &item.Season,
 			&item.ApiaryRegion, &item.BloomNotes, &item.BeekeeperStory, &item.TestingData,
 			&item.ReorderURL, &item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
@@ -629,6 +652,11 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
 		return
 	}
+	pulledOn, err := parseLotDatePtr(req.PulledOn)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "pulledOn must be a YYYY-MM-DD date")
+		return
+	}
 	moistureMsg, overrideReason, err := s.refuseLotMoisture(
 		r.Context(), req.MoisturePct, req.moistureOverrideReq)
 	if err != nil {
@@ -665,7 +693,7 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 	result, err := s.runApplicationCommand(r, http.StatusCreated,
 		func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
 			return production.CreateLot(ctx, uow, production.LotInput{
-				ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,
+				ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date, PulledOn: pulledOn,
 				HoneyWeightLbs: req.HoneyWeightLbs, HoneyWeightEntered: honeyTrimPtr(req.HoneyWeightEntered), HoneyWeightSource: req.HoneyWeightSource,
 				VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
 				BloomNotes: req.BloomNotes, BeekeeperStory: req.BeekeeperStory, TestingData: req.TestingData, ReorderURL: reorderURL, IsPublic: public,
@@ -695,6 +723,11 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil || strings.TrimSpace(req.LotCode) == "" ||
 		(req.HoneyWeightLbs != nil && *req.HoneyWeightLbs < 0) {
 		writeError(w, http.StatusBadRequest, "lotCode, extractionDate, and non-negative honeyWeightLbs are required")
+		return
+	}
+	pulledOn, err := parseLotDatePtr(req.PulledOn)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "pulledOn must be a YYYY-MM-DD date")
 		return
 	}
 	moistureMsg, overrideReason, err := s.refuseLotMoisture(
@@ -728,7 +761,7 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 	slug := commerceSlug(req.PublicSlug)
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
 		_, err := production.UpdateLot(ctx, uow, production.LotInput{
-			ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,
+			ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date, PulledOn: pulledOn,
 			HoneyWeightLbs: req.HoneyWeightLbs, HoneyWeightEntered: honeyTrimPtr(req.HoneyWeightEntered), HoneyWeightSource: req.HoneyWeightSource,
 			VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
 			BloomNotes: req.BloomNotes, BeekeeperStory: req.BeekeeperStory, TestingData: req.TestingData, ReorderURL: reorderURL, IsPublic: public,
@@ -1007,7 +1040,7 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 		"claimSpecies": item.ClaimSpecies, "claimYear": item.ClaimYear,
 		"claimApiaryName": item.ClaimApiaryName, "claimElevationM": item.ClaimElevationM,
 		"apiaryRegion": item.ApiaryRegion, "sourceApiaries": item.SourceApiaries,
-		"harvestDate": item.ExtractionDate, "harvestedPounds": item.HoneyWeightLbs,
+		"harvestDate": item.ExtractionDate, "pulledOn": item.PulledOn, "harvestedPounds": item.HoneyWeightLbs,
 		"beekeeperNotes": item.BeekeeperStory, "testingData": item.TestingData,
 		"reorderUrl": item.ReorderURL, "photos": publicPhotos,
 		"bottlingRuns": publicBottlingRuns,
