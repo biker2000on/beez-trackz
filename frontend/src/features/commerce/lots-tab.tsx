@@ -646,7 +646,7 @@ function LotFormDialog({
               <Label htmlFor="lot-weight">Extracted weight</Label>
               {useDerived ? (
                 <div className="flex h-9 items-center justify-between gap-2 rounded-md border border-dashed px-3">
-                  <span className="truncate text-sm">
+                  <span className="min-w-0 truncate text-sm">
                     {formatLbs(derivedLbs)}
                     <span className="text-muted-foreground">
                       {" "}· derived from {selectedHarvests.length}{" "}
