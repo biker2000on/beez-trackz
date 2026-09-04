@@ -163,8 +163,10 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
     (started 2026-09-03):** design + rename map, wave 1 (WorkItem projection),
     wave 2 (Today / Yard Queue), wave 3 (idempotent runner, outbox, six
     commands) and wave 4 (Production/Sales workbenches, named commands, first
-    outbox consumers) are on main and deployed; wave 5 (route rewrite) is on
-    its worker branch (5a done, 5b running); waves 6–7 pending. Status detail:
+    outbox consumers) are on main and deployed; waves 5 (route rewrite), 6
+    (Settings split) and 7 (deletion sweep, minus the 30-day-gated API alias)
+    landed on main 2026-09-03/04 and await one deploy behind the snapshot
+    post-artifact-migration transform. Status detail:
     `docs/plans/2026-09-03-workflow-reset-design.md` §7. Replace the
     module-first information architecture, add a use-case/application layer and
     stable workbench read models, introduce one apiary/hive observation and

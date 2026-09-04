@@ -1516,6 +1516,24 @@ columns; it targets pre-wave source generations and was left alone.
 
 ### Wave 7 — Deletion sweep
 
+**Landed on main 2026-09-04 ~00:15Z (`6737bae` backend, `955f52f` frontend),
+except the time-gated item.** Backend: `yard_queue.go` and its test deleted,
+`GET /operations/yard-queue` unregistered, the handlers wave 4's commands
+replaced removed from `routes_honey.go` (−829 lines) and
+`routes_stock_locations.go` (−337), the work parity test pinned to a frozen
+fixture. Frontend: the recommendations inbox and the yard-queue feature
+deleted, retired vocabulary removed, `journeys.spec.ts` walks the five §3
+journeys plus the desktop/mobile state matrix (online, offline, stale,
+forbidden, error, undo/interrupted). Both run-F workers were lost mid-run;
+the lead finished and verified them (backend: build, vet, httpapi + app
+suites; frontend: tsc, lint, build, full e2e 69 green). Lead fixes on the
+way: a NULL-safe slug scan for post-reset consignees and baseline fixtures
+dated yesterday (a midnight-UTC flake), plus two journey-mock stubs
+(profitability arrays, GnuCash catalog arrays). **Still open:** the
+`/api/v1/honey/sales` API alias and its manifest entry (30-day receipt TTL
+after wave 5, so not before 2026-10-03); the §5.4 handlers not yet named
+commands stay as thin transport.
+
 - **Depends on** waves 5 and 6, plus one offline-receipt TTL window after wave
   5 (`RECEIPT_TTL_MS = 30 days`, `sw.js/route.ts:38`) before the
   `/api/v1/honey/sales` **API** alias may go (D3).
