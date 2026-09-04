@@ -17,7 +17,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import {
@@ -55,6 +54,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatMoney, todayISO } from "@/features/honey/format";
@@ -92,7 +92,7 @@ function skuBody(row: {
 
 // --- grid plumbing ---------------------------------------------------------
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 
 const rightAligned: DataGridColumnMeta = {
   align: "right",
@@ -234,7 +234,7 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
   const owed = data.unsettled.reduce((sum, sale) => sum + sale.balanceDue, 0);
 
   return (
-    <div className="mx-auto grid w-full max-w-5xl gap-5">
+    <div className="mx-auto grid w-full max-w-none gap-5">
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-2">
           <Link href="/sales/consignment">

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import {
@@ -34,6 +33,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DataGrid,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { useShortcut } from "@/components/shortcuts/provider";
 import { useBulkSelect } from "@/lib/use-bulk-select";
@@ -49,7 +49,7 @@ const ALL = "all";
 
 type ViewMode = "card" | "table";
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, Hive>();
 
 export function HivesListPage() {

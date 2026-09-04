@@ -3,7 +3,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
@@ -24,6 +23,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import {
   Dialog,
@@ -91,7 +91,7 @@ function kindLabel(kind: string) {
 
 // --- table models ---
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const catalogColumnHelper = createColumnHelper<
   typeof gridFeatures,
   CatalogProduct

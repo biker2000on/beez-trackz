@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: "Varietals & lot balances" };
 
 export default function VarietalsPage() {
   return (
-    <div className="mx-auto grid w-full max-w-6xl gap-4">
+    <div className="mx-auto grid w-full max-w-none gap-4">
       <VarietalsView />
     </div>
   );

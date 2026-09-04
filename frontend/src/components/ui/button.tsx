@@ -3,6 +3,7 @@ import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -44,6 +45,18 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  /**
+   * Icon-only buttons (`size="icon"` / `"icon-sm"`) show their accessible
+   * label as a tooltip so the glyph is never the only explanation. The label
+   * comes from `aria-label` (preferred) or `title`; pass `tooltip={false}` to
+   * opt out (e.g. a trigger that opens its own labelled popover) or a string
+   * to show different tooltip copy.
+   */
+  tooltip?: string | false;
+}
+
+function isIconSize(size: ButtonProps["size"]): boolean {
+  return size === "icon" || size === "icon-sm";
 }
 
 function Button({
@@ -51,15 +64,32 @@ function Button({
   variant,
   size,
   asChild = false,
+  tooltip,
   ...props
 }: ButtonProps) {
   const Comp = asChild ? Slot : "button";
-  return (
+  const label =
+    tooltip === false
+      ? null
+      : (tooltip ?? props["aria-label"] ?? props.title ?? null);
+  if (process.env.NODE_ENV !== "production" && isIconSize(size) && !label && tooltip !== false) {
+    console.warn(
+      "Icon-only <Button> without an aria-label or title: users cannot tell what it does.",
+    );
+  }
+  const element = (
     <Comp
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
+  );
+  if (!isIconSize(size) || !label) return element;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{element}</TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 

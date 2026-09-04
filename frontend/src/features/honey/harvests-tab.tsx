@@ -12,7 +12,6 @@ import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { ChevronRight, Plus } from "lucide-react";
@@ -25,6 +24,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import {
   Dialog,
@@ -70,7 +70,7 @@ import {
 import { sessionFinalized } from "./session-detail";
 import type { HarvestSessionRow } from "./types";
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<
   typeof gridFeatures,
   HarvestSessionRow

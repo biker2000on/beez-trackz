@@ -3,7 +3,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { Award, ChartNoAxesCombined } from "lucide-react";
@@ -18,6 +17,7 @@ import {
 import {
   DataGrid,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -30,7 +30,7 @@ function scoreTone(score: number) {
   return "text-muted-foreground";
 }
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, QueenPerformance>();
 
 const rightAligned: DataGridColumnMeta = {

@@ -16,7 +16,7 @@ export const metadata: Metadata = { title: "Sales" };
  */
 export default function SalesPage() {
   return (
-    <div className="mx-auto grid w-full max-w-5xl gap-4">
+    <div className="mx-auto grid w-full max-w-none gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Sales</h1>

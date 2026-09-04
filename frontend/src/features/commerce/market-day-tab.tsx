@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { Minus, Plus, ShoppingBasket, TriangleAlert } from "lucide-react";
@@ -27,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DataGrid,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { formatMoney, todayISO } from "@/features/honey/format";
 import { useJarInventory, useProductCatalog, useRecordSale } from "@/features/honey/hooks";
@@ -246,9 +246,9 @@ export function MarketDayTab({
                     <span><span className="block text-lg font-bold">{row.label}</span><span className="text-sm text-muted-foreground">{row.defaultPrice && row.defaultPrice > 0 ? formatMoney(row.defaultPrice) : "No price"} · {row.onHand} left</span></span>
                   </button>
                   <div className="flex items-center justify-between">
-                    <Button size="icon-sm" variant="outline" onClick={() => adjust(key, -1, row.onHand)} disabled={quantity === 0}><Minus /></Button>
+                    <Button size="icon-sm" variant="outline" aria-label={`Remove one ${row.label}`} onClick={() => adjust(key, -1, row.onHand)} disabled={quantity === 0}><Minus /></Button>
                     <span className="text-xl font-bold tabular-nums">{quantity}</span>
-                    <Button size="icon-sm" variant="outline" onClick={() => adjust(key, 1, row.onHand)} disabled={quantity >= row.onHand}><Plus /></Button>
+                    <Button size="icon-sm" variant="outline" aria-label={`Add one ${row.label}`} onClick={() => adjust(key, 1, row.onHand)} disabled={quantity >= row.onHand}><Plus /></Button>
                   </div>
                 </CardContent>
               </Card>
@@ -431,9 +431,9 @@ function ProductButton({
           </span>
         </button>
         <div className="flex items-center justify-between">
-          <Button size="icon-sm" variant="outline" onClick={() => onAdjust(key, -1, cap)} disabled={quantity === 0}><Minus /></Button>
+          <Button size="icon-sm" variant="outline" aria-label="Remove one" onClick={() => onAdjust(key, -1, cap)} disabled={quantity === 0}><Minus /></Button>
           <span className="text-xl font-bold tabular-nums">{quantity}</span>
-          <Button size="icon-sm" variant="outline" onClick={() => onAdjust(key, 1, cap)} disabled={quantity >= cap}><Plus /></Button>
+          <Button size="icon-sm" variant="outline" aria-label="Add one" onClick={() => onAdjust(key, 1, cap)} disabled={quantity >= cap}><Plus /></Button>
         </div>
       </CardContent>
     </Card>
@@ -458,7 +458,7 @@ function ReconciliationCard({ date, loading, data }: { date: string; loading: bo
 
 type BreakdownRow = Reconciliation["breakdown"][number];
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 
 const rightAligned: DataGridColumnMeta = {
   align: "right",

@@ -13,7 +13,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { Bell, DollarSign, Plus, Trash2, Users } from "lucide-react";
@@ -54,6 +53,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Textarea } from "@/components/ui/textarea";
 import { useApiaryOptions, useHiveOptions, useJarInventory } from "@/features/honey/hooks";
@@ -78,7 +78,7 @@ import {
 
 // --- grid plumbing ---------------------------------------------------------
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 
 const rightAligned: DataGridColumnMeta = {
   align: "right",

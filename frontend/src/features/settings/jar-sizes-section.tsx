@@ -3,7 +3,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { Check, Plus } from "lucide-react";
@@ -16,6 +15,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Input } from "@/components/ui/input";
 import {
@@ -78,7 +78,7 @@ function jarDraftValues(jar: JarSize, draft: JarDraft | undefined): JarDraftValu
   };
 }
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, JarSize>();
 
 export function JarSizesSection() {

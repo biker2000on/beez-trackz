@@ -15,7 +15,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { DollarSign, HeartPulse, Scale, TrendingUp } from "lucide-react";
@@ -27,6 +26,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,7 +50,7 @@ import { METHOD_LABELS } from "./varroa-panel";
 type YieldHiveRow = YieldReportData["byHive"][number];
 type EconomicsApiaryRow = EconomicsReportData["apiaries"][number];
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const varroaColumnHelper = createColumnHelper<
   typeof gridFeatures,
   VarroaFleetHive

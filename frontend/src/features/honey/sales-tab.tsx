@@ -7,7 +7,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { Ban, Check, FileText, PackageCheck } from "lucide-react";
@@ -28,6 +27,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
@@ -37,7 +37,7 @@ import { formatDate, formatMoney } from "./format";
 import { useDeleteSale, useHoneySales, useUpdateSale } from "./hooks";
 import type { HoneySale } from "./types";
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, HoneySale>();
 
 /** A cancelled sale keeps its row but reads as struck from the record. */
@@ -247,11 +247,14 @@ export function SalesTab() {
                     <PackageCheck className="size-4" />
                   </Button>
                 )}
-              <Button type="button" variant="ghost" size="icon-sm" asChild>
-                <Link
-                  href={`/sales/${sale.id}`}
-                  aria-label="Open receipt or invoice"
-                >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Open receipt or invoice"
+                asChild
+              >
+                <Link href={`/sales/${sale.id}`}>
                   <FileText className="size-4" />
                 </Link>
               </Button>

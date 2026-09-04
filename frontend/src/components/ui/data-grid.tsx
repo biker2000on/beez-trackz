@@ -18,12 +18,13 @@
  */
 
 import * as React from "react";
-import { FlexRender } from "@tanstack/react-table";
+import { FlexRender, tableFeatures } from "@tanstack/react-table";
 import type {
   RowData,
   Table as TanstackTable,
   TableFeatures,
 } from "@tanstack/react-table";
+import { Search, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { isTypingTarget } from "@/lib/keyboard";
@@ -33,6 +34,41 @@ export interface DataGridColumnMeta {
   align?: "left" | "right";
   headClassName?: string;
   cellClassName?: string;
+}
+
+/**
+ * The feature set every grid uses. Pass to `useTable({ features })` and
+ * `createColumnHelper<typeof dataGridFeatures, Row>()`.
+ */
+export const dataGridFeatures = tableFeatures({});
+
+/**
+ * Text the search box matches a row against: every string and number in the
+ * row's data, nested objects included, joined and lower-cased. Grids whose
+ * rows are mostly display columns still search on what the row *is*, not
+ * only on what an accessor happened to expose.
+ */
+function rowHaystack(value: unknown, depth = 0): string {
+  if (value == null || depth > 3) return "";
+  if (typeof value === "string") return value.toLowerCase();
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => rowHaystack(item, depth + 1)).join(" ");
+  }
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((item) => rowHaystack(item, depth + 1))
+      .join(" ");
+  }
+  return "";
+}
+
+/** Every whitespace-separated term must appear somewhere in the row. */
+export function rowMatchesSearch(original: unknown, search: string): boolean {
+  const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const haystack = rowHaystack(original);
+  return terms.every((term) => haystack.includes(term));
 }
 
 interface DataGridProps<
@@ -56,6 +92,14 @@ interface DataGridProps<
    * more than one grid and wire the second grid's shortcuts yourself.
    */
   listenOnWindow?: boolean;
+  /**
+   * Show the ledger-style search box above the table (every term must match
+   * somewhere in the row's data; `/` focuses it, Escape clears it). Defaults
+   * to `listenOnWindow`, so the page's primary grid is searchable and
+   * secondary card grids are not.
+   */
+  searchable?: boolean;
+  searchPlaceholder?: string;
   "aria-label"?: string;
   className?: string;
   /**
@@ -93,17 +137,35 @@ export function DataGrid<
   onRowActivate,
   onRowDelete,
   listenOnWindow = true,
+  searchable = listenOnWindow,
+  searchPlaceholder = "Search… (press / to focus)",
   "aria-label": ariaLabel,
   className,
   trailingRows,
   rowProps,
 }: DataGridProps<TFeatures, TData>) {
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const searchRef = React.useRef<HTMLInputElement>(null);
   const [focusedRowIndex, setFocusedRowIndex] = React.useState(-1);
 
-  const rows = table.getRowModel().rows;
+  const canSearch = searchable;
+  const [globalFilter, setGlobalFilterText] = React.useState("");
+  const setGlobalFilter = (value: string) => {
+    setGlobalFilterText(value);
+    setFocusedRowIndex(-1);
+  };
+
+  const allRows = table.getRowModel().rows;
+  const rows = React.useMemo(
+    () =>
+      canSearch && globalFilter.trim()
+        ? allRows.filter((row) => rowMatchesSearch(row.original, globalFilter))
+        : allRows,
+    [allRows, canSearch, globalFilter],
+  );
   const headerGroups = table.getHeaderGroups();
   const rowCount = rows.length;
+  const totalCount = allRows.length;
 
   // The handler reads the latest rows/state through a ref so the window
   // listener is attached once, not re-bound on every data change.
@@ -128,10 +190,16 @@ export function DataGrid<
     if (!listenOnWindow) return;
     function handleKeyDown(event: KeyboardEvent) {
       const state = stateRef.current;
-      if (state.rowCount === 0) return;
       if (isTypingTarget(event.target)) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (overlayOpen()) return;
+      if (event.key === "/" && searchRef.current) {
+        event.preventDefault();
+        searchRef.current.focus();
+        searchRef.current.select();
+        return;
+      }
+      if (state.rowCount === 0) return;
 
       const move = (next: number) => {
         event.preventDefault();
@@ -196,6 +264,49 @@ export function DataGrid<
       ref={containerRef}
       className={cn("relative w-full overflow-x-auto", className)}
     >
+      {canSearch && (
+        <div className="flex items-center gap-2 border-b px-3 py-2">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              aria-hidden
+              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <input
+              ref={searchRef}
+              type="search"
+              value={globalFilter}
+              onChange={(event) => setGlobalFilter(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (globalFilter) setGlobalFilter("");
+                  else event.currentTarget.blur();
+                }
+              }}
+              placeholder={searchPlaceholder}
+              aria-label={ariaLabel ? `Search ${ariaLabel}` : "Search rows"}
+              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-8 text-sm shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-search-cancel-button]:hidden"
+            />
+            {globalFilter && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => {
+                  setGlobalFilter("");
+                  searchRef.current?.focus();
+                }}
+                className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            )}
+          </div>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {globalFilter ? `${rowCount} of ${totalCount}` : `${totalCount} rows`}
+          </span>
+        </div>
+      )}
       <table
         aria-label={ariaLabel}
         className="w-full caption-bottom text-sm"
@@ -284,6 +395,16 @@ export function DataGrid<
               </React.Fragment>
             );
           })}
+          {canSearch && globalFilter && rowCount === 0 && (
+            <tr>
+              <td
+                colSpan={table.getAllLeafColumns().length}
+                className="px-3 py-6 text-center text-sm text-muted-foreground"
+              >
+                No rows match &ldquo;{globalFilter}&rdquo;.
+              </td>
+            </tr>
+          )}
           {trailingRows}
         </tbody>
       </table>

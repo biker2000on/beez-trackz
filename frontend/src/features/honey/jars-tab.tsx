@@ -13,7 +13,6 @@ import * as React from "react";
 import Link from "next/link";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 
@@ -22,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import {
   DataGrid,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -56,7 +56,7 @@ function splitByLocation(inventory: StockInventory | undefined) {
   return { homeId: home?.id, away, byJarSize };
 }
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<
   typeof gridFeatures,
   HoneyInventoryRow

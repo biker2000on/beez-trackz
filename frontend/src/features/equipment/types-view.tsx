@@ -9,7 +9,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import {
@@ -37,6 +36,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import {
   Dialog,
@@ -103,7 +103,7 @@ interface TypeGridRow {
   bom: EquipmentComponentLine[];
 }
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, TypeGridRow>();
 
 const rightAligned: DataGridColumnMeta = {

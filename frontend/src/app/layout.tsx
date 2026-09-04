@@ -7,6 +7,7 @@ import { QueryProvider } from "@/lib/query";
 import { Toaster } from "@/components/ui/toaster";
 import { PwaRegister } from "@/components/pwa-register";
 import { InstallPrompt } from "@/components/install-prompt";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BrandProvider } from "@/components/brand-provider";
 import { DARK_THEME_COLOR, resolveBrand } from "@/lib/brand";
 
@@ -95,10 +96,12 @@ export default function RootLayout({
             disableTransitionOnChange
           >
             <QueryProvider>
+              <TooltipProvider delayDuration={300}>
               {children}
               <Toaster />
               <PwaRegister />
               <InstallPrompt />
+              </TooltipProvider>
             </QueryProvider>
           </ThemeProvider>
         </BrandProvider>

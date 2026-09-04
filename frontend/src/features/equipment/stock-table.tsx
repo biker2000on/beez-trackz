@@ -15,7 +15,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import {
@@ -35,6 +34,7 @@ import {
   DataGrid,
   DataGridCellAction,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 import {
   DropdownMenu,
@@ -76,7 +76,7 @@ type RowDialog =
 
 const STATE_DIALOGS: StateDialogMode[] = ["damage", "repair", "retire"];
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<
   typeof gridFeatures,
   EquipmentStockRow

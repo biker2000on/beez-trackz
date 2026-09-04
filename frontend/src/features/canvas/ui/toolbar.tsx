@@ -172,13 +172,13 @@ export function CanvasToolbar({
 
         <div className="h-6 w-px bg-border" />
 
-        <Button variant="outline" size="icon-sm" onClick={onZoomIn} title="Zoom in">
+        <Button variant="outline" size="icon-sm" onClick={onZoomIn} aria-label="Zoom in">
           <ZoomIn />
         </Button>
-        <Button variant="outline" size="icon-sm" onClick={onZoomOut} title="Zoom out">
+        <Button variant="outline" size="icon-sm" onClick={onZoomOut} aria-label="Zoom out">
           <ZoomOut />
         </Button>
-        <Button variant="outline" size="icon-sm" onClick={onFitAll} title="Fit all stands">
+        <Button variant="outline" size="icon-sm" onClick={onFitAll} aria-label="Fit all stands">
           <Maximize />
         </Button>
 

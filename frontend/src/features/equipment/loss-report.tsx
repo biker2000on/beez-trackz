@@ -9,7 +9,6 @@
 import * as React from "react";
 import {
   createColumnHelper,
-  tableFeatures,
   useTable,
 } from "@tanstack/react-table";
 import { TrendingDown } from "lucide-react";
@@ -29,6 +28,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DataGrid,
   type DataGridColumnMeta,
+  dataGridFeatures,
 } from "@/components/ui/data-grid";
 
 import { formatCents, formatDate } from "./format";
@@ -42,7 +42,7 @@ function startOfYearISO(): string {
 
 type LossByTypeRow = LossReport["byType"][number];
 
-const gridFeatures = tableFeatures({});
+const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, LossByTypeRow>();
 
 const rightAligned: DataGridColumnMeta = {
