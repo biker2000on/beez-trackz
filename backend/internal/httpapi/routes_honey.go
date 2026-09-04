@@ -41,14 +41,14 @@ func (s *Server) mountHoney(r chi.Router) {
 	// Reverses rather than deletes; see honeyReverseMovement.
 	admin.Delete("/honey/movements/{id}", s.honeyReverseMovement)
 
-	// /sales is the canonical path; /honey/sales stays so queued offline
-	// mutations and older clients keep working.
-	for _, prefix := range []string{"/sales", "/honey/sales"} {
-		admin.Get(prefix, s.honeyListSalesHandler)
-		admin.Post(prefix, s.honeyRecordSale)
-		admin.Patch(prefix+"/{id}", s.honeyUpdateSale)
-		admin.Delete(prefix+"/{id}", s.honeyCancelSale)
-	}
+	// /sales is the only path. The /honey/sales alias that kept queued
+	// offline mutations replaying across the route rewrite was retired on
+	// 2026-09-04 (operator waived the receipt-TTL wait); a mutation still
+	// queued against it replays as 404.
+	admin.Get("/sales", s.honeyListSalesHandler)
+	admin.Post("/sales", s.honeyRecordSale)
+	admin.Patch("/sales/{id}", s.honeyUpdateSale)
+	admin.Delete("/sales/{id}", s.honeyCancelSale)
 	admin.Get("/sales/locations", s.honeySaleLocations)
 	admin.Get("/honey/sale-locations", s.honeySaleLocations)
 	admin.Get("/hives/{id}/sale-offer", s.hiveSaleOffer)

@@ -76,9 +76,6 @@ export const OFFLINE_ROUTE_MANIFEST: OfflineRouteManifest = {
       "prefix": "/api/v1/honey/movements/"
     },
     {
-      "prefix": "/api/v1/honey/sales"
-    },
-    {
       "prefix": "/api/v1/sales"
     },
     {

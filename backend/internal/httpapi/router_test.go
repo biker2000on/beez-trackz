@@ -80,3 +80,20 @@ func TestAPIUploadPathsAreExemptFromJSONBodyLimit(t *testing.T) {
 		t.Error("POST /api/v1/auth/login should not be exempt")
 	}
 }
+
+// The /honey/sales API alias was retired on 2026-09-04 (item 10 wave 7, the
+// operator waived the offline-receipt TTL wait). Nothing may bring it back:
+// an unregistered path falls through to the router's 404 before any session
+// check, so this holds unauthenticated too.
+func TestRetiredHoneySalesAliasIs404(t *testing.T) {
+	cfg := &config.Config{SessionSecret: "test", AppURL: "http://localhost:3000"}
+	handler := NewRouter(cfg, nil, nil, nil)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		request := httptest.NewRequest(method, "/api/v1/honey/sales", nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s /api/v1/honey/sales = %d, want %d (alias retired)", method, response.Code, http.StatusNotFound)
+		}
+	}
+}

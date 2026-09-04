@@ -54,7 +54,6 @@ var offlineRoutes = offlineRouteManifest{
 		{Prefix: "/api/v1/honey/give-away"},
 		{Prefix: "/api/v1/honey/jar-adjustments"},
 		{Prefix: "/api/v1/honey/movements/"},
-		{Prefix: "/api/v1/honey/sales"},
 		{Prefix: "/api/v1/sales"},
 		{Prefix: "/api/v1/jar-sizes"},
 		{Prefix: "/api/v1/expenses"},

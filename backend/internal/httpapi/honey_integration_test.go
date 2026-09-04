@@ -442,7 +442,7 @@ func TestSaleRoundTripsMoneyAsCents(t *testing.T) {
 	// 12.345 must round half away from zero to 1235 cents, which a float
 	// multiplication would get wrong.
 	response, body := call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":           time.Now().Format("2006-01-02"),
 			"discountAmount": 0.10,
 			"lines": []map[string]any{
@@ -472,7 +472,7 @@ func TestSaleRoundTripsMoneyAsCents(t *testing.T) {
 
 	// The wire format is still dollars, to two decimals.
 	listResponse := httptest.NewRecorder()
-	server.honeyListSalesHandler(listResponse, adminRequest(http.MethodGet, "/api/v1/honey/sales", nil))
+	server.honeyListSalesHandler(listResponse, adminRequest(http.MethodGet, "/api/v1/sales", nil))
 	if !strings.Contains(listResponse.Body.String(), `"totalAmount":36.95`) {
 		t.Errorf("sale JSON did not carry dollars: %s", listResponse.Body.String())
 	}
@@ -648,7 +648,7 @@ func TestHoneyInventoryClassifiesBackfilledHistoryByLedgerSemantics(t *testing.T
 		t.Fatalf("record give-away = %d %v", response.Code, body)
 	}
 	response, body = call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{{
 				"jarSizeId": pintID.String(), "quantity": 4, "unitPrice": 12,
@@ -786,7 +786,7 @@ func TestDeleteSaleCancelsAndRestoresStock(t *testing.T) {
 	jarStock(t, server, jarSizeID, 10)
 
 	_, saleBody := call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
 				{"jarSizeId": jarSizeID.String(), "quantity": 4, "unitPrice": 12},
@@ -803,7 +803,7 @@ func TestDeleteSaleCancelsAndRestoresStock(t *testing.T) {
 	}
 
 	response, body := call(t, server.honeyCancelSale, adminRequest(
-		http.MethodDelete, "/api/v1/honey/sales/"+saleID,
+		http.MethodDelete, "/api/v1/sales/"+saleID,
 		map[string]any{"reason": "customer changed their mind"}, "id", saleID))
 	if response.Code != http.StatusOK || body["success"] != true {
 		t.Fatalf("cancel sale = %d %v", response.Code, body)
@@ -839,7 +839,7 @@ func TestPatchSaleReachesCancelled(t *testing.T) {
 	seedHarvest(t, server, 100)
 	jarStock(t, server, jarSizeID, 10)
 	_, saleBody := call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":        time.Now().Format("2006-01-02"),
 			"orderStatus": "pending",
 			"lines": []map[string]any{
@@ -849,7 +849,7 @@ func TestPatchSaleReachesCancelled(t *testing.T) {
 	saleID, _ := saleBody["id"].(string)
 
 	response, body := call(t, server.honeyUpdateSale, adminRequest(
-		http.MethodPatch, "/api/v1/honey/sales/"+saleID,
+		http.MethodPatch, "/api/v1/sales/"+saleID,
 		map[string]any{"orderStatus": "cancelled"}, "id", saleID))
 	if response.Code != http.StatusOK {
 		t.Fatalf("PATCH to cancelled = %d %v", response.Code, body)
@@ -963,12 +963,12 @@ func TestOverviewSeparatesCollectedAndInvoicedRevenue(t *testing.T) {
 
 	// One paid sale and one unpaid invoice.
 	call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":  time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 2, "unitPrice": 10}},
 		}))
 	call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":        time.Now().Format("2006-01-02"),
 			"orderStatus": "pending",
 			"lines":       []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 3, "unitPrice": 10}},
@@ -1259,7 +1259,7 @@ func TestOfflineSaleReceiptIsTransactionalAndReplaysIdentically(t *testing.T) {
 	handler := server.offlineMutations(http.HandlerFunc(server.honeyRecordSale))
 
 	send := func(quantity int) *httptest.ResponseRecorder {
-		request := adminRequest(http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		request := adminRequest(http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{{
 				"jarSizeId": jarSizeID.String(), "quantity": quantity, "unitPrice": 12,
@@ -1363,7 +1363,7 @@ func TestReverseJarringBlockedWhenJarsAreSold(t *testing.T) {
 	jarStock(t, server, jarSizeID, 10)
 
 	response, body := call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
 				{"jarSizeId": jarSizeID.String(), "quantity": 10, "unitPrice": 12},

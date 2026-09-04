@@ -317,7 +317,7 @@ func TestHomeStockValidationIgnoresConsignedJars(t *testing.T) {
 
 	// Four are left at home. Five is one too many.
 	response, body := call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":    time.Now().Format("2006-01-02"),
 			"channel": "farmers_market",
 			"lines": []map[string]any{
@@ -330,7 +330,7 @@ func TestHomeStockValidationIgnoresConsignedJars(t *testing.T) {
 
 	// Four is exactly right.
 	response, body = call(t, server.honeyRecordSale, adminRequest(
-		http.MethodPost, "/api/v1/honey/sales", map[string]any{
+		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":    time.Now().Format("2006-01-02"),
 			"channel": "farmers_market",
 			"lines": []map[string]any{

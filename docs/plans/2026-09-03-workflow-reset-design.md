@@ -1529,10 +1529,11 @@ the lead finished and verified them (backend: build, vet, httpapi + app
 suites; frontend: tsc, lint, build, full e2e 69 green). Lead fixes on the
 way: a NULL-safe slug scan for post-reset consignees and baseline fixtures
 dated yesterday (a midnight-UTC flake), plus two journey-mock stubs
-(profitability arrays, GnuCash catalog arrays). **Still open:** the
-`/api/v1/honey/sales` API alias and its manifest entry (30-day receipt TTL
-after wave 5, so not before 2026-10-03); the §5.4 handlers not yet named
-commands stay as thin transport.
+(profitability arrays, GnuCash catalog arrays). **Closed 2026-09-04:** the
+`/api/v1/honey/sales` API alias and its manifest entry were removed on the
+operator's waiver of the 30-day receipt TTL (a mutation still queued on a
+device against the old path replays as 404; `TestRetiredHoneySalesAliasIs404`
+pins it). The §5.4 handlers not yet named commands stay as thin transport.
 
 - **Depends on** waves 5 and 6, plus one offline-receipt TTL window after wave
   5 (`RECEIPT_TTL_MS = 30 days`, `sw.js/route.ts:38`) before the

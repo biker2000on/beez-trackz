@@ -76,7 +76,7 @@ func TestOfflineRouteManifestRules(t *testing.T) {
 		want         bool
 	}{
 		{http.MethodPost, "/api/v1/inspections", true},
-		{http.MethodPost, "/api/v1/honey/sales", true},
+		{http.MethodPost, "/api/v1/honey/sales", false},
 		{http.MethodPost, "/api/v1/canvas/hives", false},
 		{http.MethodPut, "/api/v1/canvas/hives", true},
 		{http.MethodPost, "/api/v1/harvest-sessions", false},

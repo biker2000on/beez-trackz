@@ -31,9 +31,9 @@ func TestOfflineMutationSupported(t *testing.T) {
 		{"MCP", http.MethodPost, "/api/v1/mcp", false},
 		// Honey/commerce writes: market day is the most offline-prone surface
 		// in the product and every one of these used to be excluded.
-		{"record sale", http.MethodPost, "/api/v1/honey/sales", true},
-		{"update sale", http.MethodPatch, "/api/v1/honey/sales/a", true},
-		{"cancel sale", http.MethodDelete, "/api/v1/honey/sales/a", true},
+		{"record sale (retired alias)", http.MethodPost, "/api/v1/honey/sales", false},
+		{"update sale (retired alias)", http.MethodPatch, "/api/v1/honey/sales/a", false},
+		{"cancel sale (retired alias)", http.MethodDelete, "/api/v1/honey/sales/a", false},
 		{"record sale canonical", http.MethodPost, "/api/v1/sales", true},
 		{"update sale canonical", http.MethodPatch, "/api/v1/sales/a", true},
 		{"cancel sale canonical", http.MethodDelete, "/api/v1/sales/a", true},
@@ -91,9 +91,9 @@ func TestMigratedOfflineCommandsUseTransactionalReceipts(t *testing.T) {
 		want   bool
 	}{
 		{http.MethodPost, "/api/v1/honey/jarring", true},
-		{http.MethodPost, "/api/v1/honey/sales", true},
+		{http.MethodPost, "/api/v1/honey/sales", false},
 		{http.MethodPost, "/api/v1/sales", true},
-		{http.MethodPatch, "/api/v1/honey/sales/abc", true},
+		{http.MethodPatch, "/api/v1/honey/sales/abc", false},
 		{http.MethodPatch, "/api/v1/sales/abc", true},
 		{http.MethodPost, "/api/v1/harvest-sessions/abc/entries", true},
 		{http.MethodPost, "/api/v1/harvest-lots", true},
