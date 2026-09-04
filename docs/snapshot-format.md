@@ -18,7 +18,7 @@ snapshot/
     ...one UTF-8 JSON Lines file for every registered domain present at export...
 ```
 
-Files use UTF-8 without a BOM and LF line endings. JSONL files end every record, including the last, with LF. Empty domains are represented by an empty file, not an omitted file. The one compatibility exception is a pre-ledger artifact (`schemaMigration < 50`): migration 00050 had not created the `inventory_*` tables, so those registered ledger domains are absent rather than empty. `manifest.json` is written last. Its own hash is intentionally not recursive; all other canonical artifact files are linked from it by SHA-256.
+Files use UTF-8 without a BOM and LF line endings. JSONL files end every record, including the last, with LF. Empty domains are represented by an empty file, not an omitted file. A domain may be absent only when the versioned post-artifact migration declaration says that its table did not exist at the artifact's schema ceiling (for example, `inventory_*` before legacy 00050 or `user_preferences` before legacy 00057). `manifest.json` is written last. Its own hash is intentionally not recursive; all other canonical artifact files are linked from it by SHA-256.
 
 ## `manifest.json`
 
@@ -31,7 +31,7 @@ The manifest has these required fields:
 - `exporterVersion`: version of the exporter implementation.
 - `files`: one entry per domain file, each with `domain`, relative `path`, `records`, exact `bytes`, and lowercase hexadecimal `sha256`. The hash covers the complete JSONL bytes, including LF.
 - `canonical`: the canonical JSON/digest version, UTF-8 and line-ending declarations, UTC and named-business-timezone rules, canonical units, money representation, record-envelope rule, external-sync idempotency derivation, and the migration-00034 treatment reconciliation rule.
-- `omittedDomains`: explicit `{domain, reason}` declarations. Version 1 declares API tokens, OIDC identities, notification dispatch attempts, session state, nonexistent payments, nonexistent durable sync tombstones, and nonexistent stored external-write idempotency keys.
+- `omittedDomains`: explicit `{domain, reason}` declarations. Version 1 declares API tokens, OIDC identities, notification dispatch attempts, the `domain_events` delivery outbox, target-derived `schema_generation`, session state, nonexistent payments, nonexistent durable sync tombstones, and nonexistent stored external-write idempotency keys.
 - `excludedConfiguration`: domain/key lists and operator-facing reasons for configuration that must be supplied again.
 - `mediaManifestVersion` and `mediaManifest`: the version plus path/bytes/SHA-256 of `media-manifest.json`.
 - `verification`: the path/bytes/SHA-256 of `verification.json`.
@@ -46,7 +46,7 @@ Domain names are portable concepts. The format-v1 exporter reads the similarly n
 
 Version 1 exports every domain below:
 
-- Identity/configuration: `app_users` (without login subject or password hash), `user_settings` (safe display/unit/threshold/AI task and non-secret endpoint configuration), `apiary_memberships`, and `offline_mutation_receipts` (owned retry/idempotency audit history).
+- Identity/configuration: `app_users` (without login subject or password hash), instance-wide `user_settings`, per-user `user_preferences`, `apiary_memberships`, and `offline_mutation_receipts` (owned retry/idempotency audit history).
 - Apiary and colony: `apiaries` (including canonicalized `canvas_layout`), `hives`, `hive_location_history`, `hive_splits`, `queens`, and `queen_events`.
 - Inspection and health: `inspections` (including strength-score fields and canonicalized `pests`, `treatments`, `source_media`, and `weather_snapshot`), `feedings`, `feeding_status_backfills`, `mite_counts`, `treatment_events`, and `treatment_products`.
 - Harvest and honey provenance: `harvest_sessions`, `harvest_session_true_ups`, `honey_harvests`, `harvest_lots` (including canonicalized `testing_data`), `harvest_lot_harvests`, `harvest_lot_photos`, `honey_varietals`, and `honey_movements`.
@@ -161,6 +161,23 @@ Before a destructive reset:
 6. Keep GnuCash sync disabled. After guarded credential/book identity restoration, entity re-keying, and content-hash rebaseline, require pull-first reconciliation and a no-write push plan before enabling sync.
 7. Retain the validated artifact and gate report outside the database being replaced. If source data changes, take a fresh snapshot and repeat the gate.
 
+## Schema-ahead migration declaration
+
+Format v1 has one ordered declaration in `backend/internal/snapshot/schema_ahead.go`. Every legacy-chain migration after 00049 has an entry, including migrations that were reviewed and have no portable record effect. The baseline migration number is recorded when the same change landed after the reset.
+
+| Legacy | Baseline | Transform | Portable effect |
+|---:|---:|---|---|
+| 00050 | 00001 | `pre-ledger-artifact-v1` | Creates the 13 `inventory_*` domains; adds nullable ledger-link/catalog columns to `equipment_types`, `harvest_lots`, `jar_sizes`, `product_batches`, `product_catalog`, and `sale_items`. |
+| 00051 | 00001 | `schema-generation-v1` | No exported record effect; `schema_generation` is explicitly omitted as target-derived state. |
+| 00052 | 00001 | `sale-items-item-target-v1` | No new portable shape beyond the 00050 `sale_items` columns. |
+| 00053 | 00001 | `reservations-in-item-units-v1` | View-only; no exported record effect. |
+| 00054 | 00001 | `inventory-bom-cycle-guard-v1` | Guard/backfill behavior only; no new record shape. |
+| 00055 | 00002 | `domain-events-outbox-v1` | Creates `domain_events`, explicitly omitted because an outbox is transient delivery state. |
+| 00056 | 00003 | `inventory-locations-consignee-attrs-v1` | Adds nullable `slug`, `customer_id`, `address`, `notes`, and `deleted_at` to `inventory_locations`. Dropped legacy FKs alter verification metadata, not records. |
+| 00057 | 00004 | `user-preferences-v1` | Creates `user_preferences`; for every `app_users.id`, copies six preference values from the singleton `user_settings`; removes those six keys from `user_settings`. Existing artifact preference rows win by preserved `user_id`. |
+
+Every future migration that creates an exported domain or adds/drops a column on one must update this declaration. `TestPostArtifactMigrationsMatchLegacySQL` parses legacy SQL 00050 onward for `CREATE TABLE`, `ADD COLUMN`, and `DROP COLUMN` and fails if the declaration drifts. A newly created non-domain table must instead appear in the explicit omitted-domain registry with a reason.
+
 ## Import CLI and reader semantics
 
 The format-v1 importer is invoked as:
@@ -179,11 +196,10 @@ restore failure is nonzero.
 The reader treats the artifact as untrusted until all checks complete. It
 requires the exact supported `formatVersion`, canonicalization and digest
 declarations, UTF-8/LF declarations, and one manifest entry for every
-registered domain, except that a ledger domain may be absent when and only
-when `schemaMigration < 50`. The reader records every such name in
-`Artifact.PreLedgerDomains`; the declared transform name is
-`pre-ledger-artifact-v1`. A ledger domain absent at migration 50 or later, or
-any absent non-ledger domain, is an error. Manifest paths must be relative and contained by the
+registered domain unless the post-artifact declaration says the domain was
+created later. It records those names and their migration/transform in
+`Artifact.SchemaAheadDomains` (`Artifact.PreLedgerDomains` remains the
+migration-00050 subset). Any other absent domain is an error. Manifest paths must be relative and contained by the
 artifact. Each file's byte count and SHA-256 are recomputed before decoding.
 JSONL files require one complete envelope per LF-terminated line; envelope
 domain/version declarations must match the manifest, preserved IDs must be
@@ -213,7 +229,9 @@ target family. A populated ledger domain or reference, or a non-empty
 named explanations appear in both `gate-report.json` and
 `gate-summary.txt`.
 
-For retained domains, the comparator also explains a digest mismatch only when every differing field is a column added by migrations 00050-00054 and the field is absent in the pre-ledger source but null in the re-export. These record explanations are summarized once per domain with the affected-record count and added keys; non-null added-column values, other field changes, and post-ledger sources remain failures.
+For every older artifact, the importer applies pending declarations in migration order. Migration 00056 leaves its five missing `inventory_locations` fields to become null on insert. Migration 00057 first derives one `user_preferences` record per `app_users` ID from the singleton `user_settings` values (without replacing a preference already present in the artifact), then removes `theme`, `default_apiary_id`, `date_format`, `weight_unit`, `units`, and `temperature_unit` from the `user_settings` insert. Each applied transform is named in `restore-report.json`.
+
+The comparator uses the identical declaration. It explains added keys only when the re-export value is null, removed keys only when all other fields match, and a new domain only when its complete row set equals the declared derivation (target-generated `created_at`/`updated_at` must be present). It summarizes each affected domain in `gate-summary.txt` under the migration's transform name. A non-null added value, wrong/missing derived row, undeclared key, or any other difference remains a failure.
 
 On a write restore the importer first applies pending goose migrations. A
 database containing rows beyond known migration seeds is refused under the

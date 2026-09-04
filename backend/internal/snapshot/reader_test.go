@@ -102,6 +102,35 @@ func TestOpenArtifactRejectsLedgerDomainAbsentAtMigration50(t *testing.T) {
 	}
 }
 
+func TestOpenArtifactRecordsUserPreferencesAbsentBeforeMigration57(t *testing.T) {
+	root, manifest := readerFixture(t, nil)
+	manifest.SchemaMigration = 56
+	omitFixtureDomains(t, root, manifest, []string{"user_preferences"})
+
+	artifact, err := OpenArtifact(root)
+	if err != nil {
+		t.Fatalf("open migration-56 artifact: %v", err)
+	}
+	if len(artifact.SchemaAheadDomains) != 1 {
+		t.Fatalf("schema-ahead domains = %+v", artifact.SchemaAheadDomains)
+	}
+	got := artifact.SchemaAheadDomains[0]
+	if got.Domain != "user_preferences" || got.Migration != 57 || got.Transform != UserPreferencesTransform {
+		t.Fatalf("schema-ahead domain = %+v", got)
+	}
+}
+
+func TestOpenArtifactRejectsUserPreferencesAbsentAtMigration57(t *testing.T) {
+	root, manifest := readerFixture(t, nil)
+	manifest.SchemaMigration = 57
+	omitFixtureDomains(t, root, manifest, []string{"user_preferences"})
+
+	_, err := OpenArtifact(root)
+	if err == nil || !strings.Contains(err.Error(), `required domain "user_preferences" is absent`) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestOpenArtifactStillRejectsUndeclaredMissingDomain(t *testing.T) {
 	root, manifest := readerFixture(t, nil)
 	omitFixtureDomains(t, root, manifest, []string{"hives"})

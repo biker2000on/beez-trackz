@@ -138,6 +138,112 @@ func TestRoundTripGatePassesAgainstAPreLedgerSource(t *testing.T) {
 	}
 }
 
+// TestRoundTripGatePassesFromPhaseBArtifactBoundary is the production Phase B
+// rollback shape: the final Phase A artifact was exported at legacy migration
+// 00054, then migrations 00056 and 00057 changed portable record shapes.
+func TestRoundTripGatePassesFromPhaseBArtifactBoundary(t *testing.T) {
+	adminURL := requireDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	repoRoot, err := findRepoRoot(".")
+	if err != nil {
+		t.Fatalf("locate the backend module: %v", err)
+	}
+	workdir := t.TempDir()
+	if _, err := buildImporter(ctx, repoRoot, workdir); err != nil {
+		t.Fatalf("build the importer: %v", err)
+	}
+
+	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	sourceURL, cleanup, err := freshDatabase(ctx, adminURL, "beez_phase_b_boundary_src_"+suffix)
+	if err != nil {
+		t.Fatalf("create migration-54 source: %v", err)
+	}
+	t.Cleanup(cleanup)
+	migrateGateDatabaseTo(t, sourceURL, 54)
+	pool, err := pgxpool.New(ctx, sourceURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`INSERT INTO app_users(id,username,display_name,email,is_admin) VALUES
+		 ('10000000-0000-4000-8000-000000000001','beek-one','Beek One','one@example.com',true),
+		 ('10000000-0000-4000-8000-000000000002','beek-two','Beek Two','two@example.com',false)`,
+		`INSERT INTO user_settings(id,display_name,theme,date_format,weight_unit,units,temperature_unit)
+		 VALUES('00000000-0000-4000-8000-000000000054','Phase B boundary','dark','YYYY-MM-DD','kg','metric','c')`,
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			pool.Close()
+			t.Fatalf("seed migration-54 source: %v\n%s", err, statement)
+		}
+	}
+	pool.Close()
+
+	report, err := run(ctx, options{
+		AdminURL: adminURL, SourceURL: sourceURL, Workdir: workdir,
+		GateDatabase: "beez_phase_b_boundary_dst_" + suffix, RepoRoot: repoRoot,
+		LegacySource: true,
+		Logf:         func(format string, args ...any) { t.Logf(format, args...) },
+	})
+	if err != nil {
+		t.Fatalf("run migration-54 gate: %v", err)
+	}
+	if err := writeReports(report, workdir); err != nil {
+		t.Fatalf("write migration-54 gate reports: %v", err)
+	}
+	if !report.Passed {
+		t.Log(report.summary())
+		t.Fatalf("migration-54 gate failed with %d findings", len(report.Failures))
+	}
+	for _, transform := range []string{
+		snapshot.InventoryLocationsConsigneeAttrsTransform,
+		snapshot.UserPreferencesTransform,
+	} {
+		found := false
+		for _, item := range report.Explained {
+			found = found || item.Code == transform
+		}
+		if !found {
+			t.Errorf("gate report does not name transform %s", transform)
+		}
+	}
+
+	restored, findings := loadArtifact(report.RestoredArtifac)
+	if restored == nil || len(failures(findings)) != 0 {
+		t.Fatalf("reload restored artifact: %v", findings)
+	}
+	preferences := restored.Records["user_preferences"]
+	if len(preferences) != 2 {
+		t.Fatalf("restored user_preferences = %d, want one per app user", len(preferences))
+	}
+	for _, preference := range preferences {
+		for key, want := range map[string]any{
+			"theme": "dark", "date_format": "YYYY-MM-DD", "weight_unit": "kg",
+			"units": "metric", "temperature_unit": "c",
+		} {
+			if got := preference.Fields[key]; got != want {
+				t.Errorf("preference %s %s = %#v, want %#v", preference.IDKey, key, got, want)
+			}
+		}
+	}
+	summaryBytes, err := os.ReadFile(workdir + "/gate-summary.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := string(summaryBytes)
+	for _, want := range []string{
+		"domain inventory_locations:",
+		"domain user_settings: 1 records dropped only columns",
+		"domain user_preferences: 2 rows equal the declared derivation",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("gate-summary.txt does not contain %q:\n%s", want, summary)
+		}
+	}
+}
+
 func migrateGateDatabaseTo(t *testing.T, databaseURL string, version int64) {
 	t.Helper()
 	if err := goose.SetDialect("postgres"); err != nil {

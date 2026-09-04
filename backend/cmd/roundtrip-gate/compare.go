@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -100,12 +101,23 @@ func compareRecords(source, restored *artifact) []finding {
 	for _, domain := range sortedDomains(source.Records, restored.Records) {
 		sourceIndex, inSource := source.ByID[domain]
 		restoredIndex, inRestored := restored.ByID[domain]
+		// A domain a declared post-artifact migration derives (user_preferences
+		// from user_settings × app_users) is compared against its declared
+		// derivation, whether the older source lacked the domain entirely or
+		// carried it empty (a legacy-chain database one migration behind).
+		if migration, declaration, ok := declaredNewDomainBetween(source, restored, domain); ok &&
+			(!inSource || len(sourceIndex) == 0) {
+			if detail, equal := compareDerivedDomain(source, restoredIndex, declaration); equal {
+				findings = append(findings, explained(stepCompare, migration.Name, "%s", detail))
+				continue
+			}
+		}
 		if !inSource {
-			if source.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration &&
-				snapshot.IsLedgerDomain(domain) && len(restoredIndex) == 0 {
-				findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
-					"domain %s has zero records in the re-export and was absent before migration %05d",
-					domain, snapshot.LedgerSchemaMigration))
+			if len(restoredIndex) == 0 {
+				// An undeclared empty domain is still schema drift: format v1
+				// requires every absence/addition to be named by a migration.
+				findings = append(findings, fail(stepCompare, "extra-domain",
+					"the re-export contains undeclared empty domain %s", domain))
 				continue
 			}
 			findings = append(findings, fail(stepCompare, "extra-domain",
@@ -132,8 +144,12 @@ func compareRecords(source, restored *artifact) []finding {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		explainedRecords := 0
-		explainedColumns := map[string]bool{}
+		type transformSummary struct {
+			records int
+			added   map[string]bool
+			removed map[string]bool
+		}
+		summaries := map[string]*transformSummary{}
 		for _, id := range ids {
 			want := sourceIndex[id]
 			got, present := restoredIndex[id]
@@ -143,10 +159,20 @@ func compareRecords(source, restored *artifact) []finding {
 				continue
 			}
 			if got.Digest != want.Digest {
-				if columns, ok := preLedgerNullAddedColumns(source, restored, domain, want, got); ok {
-					explainedRecords++
-					for _, column := range columns {
-						explainedColumns[column] = true
+				if effects, ok := declaredRecordTransforms(source, restored, domain, want, got); ok {
+					for _, effect := range effects {
+						summary := summaries[effect.name]
+						if summary == nil {
+							summary = &transformSummary{added: map[string]bool{}, removed: map[string]bool{}}
+							summaries[effect.name] = summary
+						}
+						summary.records++
+						for _, column := range effect.added {
+							summary.added[column] = true
+						}
+						for _, column := range effect.removed {
+							summary.removed[column] = true
+						}
 					}
 					continue
 				}
@@ -155,15 +181,32 @@ func compareRecords(source, restored *artifact) []finding {
 					domain, id, want.Digest, got.Digest, firstFieldDifference(want, got)))
 			}
 		}
-		if explainedRecords > 0 {
-			columns := make([]string, 0, len(explainedColumns))
-			for column := range explainedColumns {
-				columns = append(columns, column)
+		transformNames := make([]string, 0, len(summaries))
+		for name := range summaries {
+			transformNames = append(transformNames, name)
+		}
+		sort.Strings(transformNames)
+		for _, name := range transformNames {
+			summary := summaries[name]
+			added, removed := sortedSet(summary.added), sortedSet(summary.removed)
+			switch {
+			case name == snapshot.PreLedgerTransform && len(added) > 0 && len(removed) == 0:
+				findings = append(findings, explained(stepCompare, name,
+					"domain %s: %d records gained only declared null columns absent from the pre-ledger source: %s",
+					domain, summary.records, strings.Join(added, ", ")))
+			case len(added) > 0 && len(removed) == 0:
+				findings = append(findings, explained(stepCompare, name,
+					"domain %s: %d records gained only declared null columns absent from the older source: %s",
+					domain, summary.records, strings.Join(added, ", ")))
+			case len(removed) > 0 && len(added) == 0:
+				findings = append(findings, explained(stepCompare, name,
+					"domain %s: %d records dropped only columns removed by the declared migration: %s",
+					domain, summary.records, strings.Join(removed, ", ")))
+			default:
+				findings = append(findings, explained(stepCompare, name,
+					"domain %s: %d records match declared shape changes (added null: %s; removed: %s)",
+					domain, summary.records, strings.Join(added, ", "), strings.Join(removed, ", ")))
 			}
-			sort.Strings(columns)
-			findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
-				"domain %s: %d records gained only declared null columns absent from the pre-ledger source: %s",
-				domain, explainedRecords, strings.Join(columns, ", ")))
 		}
 		extras := make([]string, 0)
 		for id := range restoredIndex {
@@ -184,44 +227,123 @@ func compareRecords(source, restored *artifact) []finding {
 	return findings
 }
 
-// preLedgerNullAddedColumns recognizes only the record shape introduced by
-// nullable columns on retained tables: the source key is absent and the
-// ledger-bearing re-export carries that declared key with a null value.
-func preLedgerNullAddedColumns(source, restored *artifact, domain string, want, got artifactRecord) ([]string, bool) {
-	if source.Manifest.SchemaMigration >= snapshot.LedgerSchemaMigration ||
-		restored.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration {
-		return nil, false
-	}
-	declared, ok := snapshot.PreLedgerAddedColumns[domain]
-	if !ok {
-		return nil, false
-	}
-	allowed := make(map[string]bool, len(declared))
-	for _, column := range declared {
-		allowed[column] = true
-	}
+type recordTransformEffect struct {
+	name    string
+	added   []string
+	removed []string
+}
 
-	for name, left := range want.Fields {
-		right, present := got.Fields[name]
-		if !present || !equalJSON(left, right) {
-			return nil, false
+func declaredRecordTransforms(source, restored *artifact, domain string, want, got artifactRecord) ([]recordTransformEffect, bool) {
+	expected := make(map[string]any, len(want.Fields))
+	for name, value := range want.Fields {
+		expected[name] = value
+	}
+	var effects []recordTransformEffect
+	for _, migration := range migrationsBetween(source, restored) {
+		effect := recordTransformEffect{name: migration.Name}
+		for _, column := range migration.AddedColumns[domain] {
+			if _, present := expected[column]; !present {
+				expected[column] = nil
+				effect.added = append(effect.added, column)
+			}
+		}
+		for _, column := range migration.RemovedColumns[domain] {
+			if _, present := expected[column]; present {
+				delete(expected, column)
+				effect.removed = append(effect.removed, column)
+			}
+		}
+		if len(effect.added)+len(effect.removed) > 0 {
+			effects = append(effects, effect)
 		}
 	}
-	var added []string
-	for name, right := range got.Fields {
-		if _, present := want.Fields[name]; present {
-			continue
+	return effects, len(effects) > 0 && equalJSON(expected, got.Fields)
+}
+
+func migrationsBetween(source, restored *artifact) []snapshot.PostArtifactMigration {
+	left := effectiveArtifactMigration(source)
+	right := effectiveArtifactMigration(restored)
+	var out []snapshot.PostArtifactMigration
+	for _, migration := range snapshot.PostArtifactMigrations {
+		if left < migration.LegacyMigration && right >= migration.LegacyMigration {
+			out = append(out, migration)
 		}
-		if !allowed[name] || right != nil {
-			return nil, false
+	}
+	return out
+}
+
+func effectiveArtifactMigration(item *artifact) int64 {
+	hasLedger := false
+	for _, domain := range snapshot.LedgerDomains {
+		if _, present := item.Records[domain.Name]; present {
+			hasLedger = true
+			break
 		}
-		added = append(added, name)
 	}
-	if len(added) == 0 {
-		return nil, false
+	return snapshot.EffectiveLegacyMigration(item.Manifest.SchemaMigration, hasLedger)
+}
+
+func declaredNewDomainBetween(source, restored *artifact, domain string) (snapshot.PostArtifactMigration, snapshot.NewDomainMigration, bool) {
+	for _, migration := range migrationsBetween(source, restored) {
+		for _, declaration := range migration.NewDomains {
+			if declaration.Domain == domain {
+				return migration, declaration, true
+			}
+		}
 	}
-	sort.Strings(added)
-	return added, true
+	return snapshot.PostArtifactMigration{}, snapshot.NewDomainMigration{}, false
+}
+
+func compareDerivedDomain(source *artifact, restored map[string]artifactRecord, declaration snapshot.NewDomainMigration) (string, bool) {
+	if declaration.ExpectedEmpty {
+		return fmt.Sprintf("domain %s has zero records in the re-export and was absent from the older source", declaration.Domain), len(restored) == 0
+	}
+	values := source.Records[declaration.ValuesFromDomain]
+	if len(values) == 0 {
+		return fmt.Sprintf("domain %s has zero rows because %s is empty", declaration.Domain, declaration.ValuesFromDomain), len(restored) == 0
+	}
+	if len(values) != 1 || len(restored) != len(source.Records[declaration.ForEachDomain]) {
+		return "", false
+	}
+	for _, owner := range source.Records[declaration.ForEachDomain] {
+		key := owner.Fields[declaration.ForEachKeyField]
+		encoded, err := snapshot.MarshalCanonical(key)
+		if err != nil {
+			return "", false
+		}
+		got, present := restored[string(encoded)]
+		if !present {
+			return "", false
+		}
+		expected := map[string]any{declaration.KeyField: key}
+		for _, column := range declaration.CopiedColumns {
+			expected[column] = values[0].Fields[column]
+		}
+		actual := make(map[string]any, len(got.Fields))
+		for name, value := range got.Fields {
+			actual[name] = value
+		}
+		for _, column := range declaration.GeneratedColumns {
+			if _, present := actual[column]; !present {
+				return "", false
+			}
+			delete(actual, column)
+		}
+		if !equalJSON(expected, actual) {
+			return "", false
+		}
+	}
+	return fmt.Sprintf("domain %s: %d rows equal the declared derivation from %s for every %s id",
+		declaration.Domain, len(restored), declaration.ValuesFromDomain, declaration.ForEachDomain), true
+}
+
+func sortedSet(values map[string]bool) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // firstFieldDifference names one differing field so a digest mismatch is
@@ -260,6 +382,11 @@ func compareReferences(source, restored *artifact) []finding {
 		want := sourceChecks[name]
 		got, present := restoredChecks[name]
 		if !present {
+			if migration, ok := declaredRemovedReference(source, restored, name); ok {
+				findings = append(findings, explained(stepCompare, migration.Name,
+					"reference check %s is absent after its foreign key was dropped; record data is unchanged", name))
+				continue
+			}
 			if db.ActiveProfile() == db.ProfileBaseline &&
 				(db.BaselineDrops(want.FromDomain) || db.BaselineDrops(want.ToDomain)) {
 				findings = append(findings, explained(stepCompare, "reference-"+db.BaselineTransform,
@@ -273,6 +400,12 @@ func compareReferences(source, restored *artifact) []finding {
 		}
 		if want.PopulatedCount != got.PopulatedCount || want.ResolvedCount != got.ResolvedCount ||
 			want.DanglingCount != got.DanglingCount {
+			if migration, _, ok := declaredNewDomainBetween(source, restored, want.FromDomain); ok && got.DanglingCount == 0 {
+				findings = append(findings, explained(stepCompare, migration.Name,
+					"reference check %s counts follow the derived domain %s (source %d populated, re-export %d, none dangling)",
+					name, want.FromDomain, want.PopulatedCount, got.PopulatedCount))
+				continue
+			}
 			findings = append(findings, fail(stepCompare, "reference-count-mismatch",
 				"%s: source %d populated / %d resolved / %d dangling, re-export %d / %d / %d",
 				name, want.PopulatedCount, want.ResolvedCount, want.DanglingCount,
@@ -286,11 +419,18 @@ func compareReferences(source, restored *artifact) []finding {
 	for name := range restoredChecks {
 		if _, present := sourceChecks[name]; !present {
 			check := restoredChecks[name]
-			if source.Manifest.SchemaMigration < snapshot.LedgerSchemaMigration &&
-				referenceTouchesLedger(check) && check.PopulatedCount == 0 &&
-				check.ResolvedCount == 0 && check.DanglingCount == 0 {
-				findings = append(findings, explained(stepCompare, snapshot.PreLedgerTransform,
-					"reference check %s is new with the ledger schema and has zero populated records", name))
+			if migration, domain, ok := declaredNewDomainReference(source, restored, check); ok &&
+				check.ResolvedCount == check.PopulatedCount && check.DanglingCount == 0 {
+				findings = append(findings, explained(stepCompare, migration.Name,
+					"reference check %s is introduced with domain %s and is satisfied (%d populated)",
+					name, domain, check.PopulatedCount))
+				continue
+			}
+			if migration, ok := declaredAddedReference(source, restored, name); ok &&
+				check.ResolvedCount == check.PopulatedCount && check.DanglingCount == 0 {
+				findings = append(findings, explained(stepCompare, migration.Name,
+					"reference check %s is introduced by the declared migration and is satisfied (%d populated)",
+					name, check.PopulatedCount))
 				continue
 			}
 			findings = append(findings, fail(stepCompare, "reference-check-additional",
@@ -298,6 +438,42 @@ func compareReferences(source, restored *artifact) []finding {
 		}
 	}
 	return findings
+}
+
+func declaredAddedReference(source, restored *artifact, name string) (snapshot.PostArtifactMigration, bool) {
+	for _, migration := range migrationsBetween(source, restored) {
+		for _, added := range migration.AddedReferenceChecks {
+			if added == name {
+				return migration, true
+			}
+		}
+	}
+	return snapshot.PostArtifactMigration{}, false
+}
+
+func declaredRemovedReference(source, restored *artifact, name string) (snapshot.PostArtifactMigration, bool) {
+	for _, migration := range migrationsBetween(source, restored) {
+		for _, removed := range migration.RemovedReferenceChecks {
+			if removed == name {
+				return migration, true
+			}
+		}
+	}
+	return snapshot.PostArtifactMigration{}, false
+}
+
+func declaredNewDomainReference(source, restored *artifact, check snapshot.ReferenceCheck) (snapshot.PostArtifactMigration, string, bool) {
+	for _, migration := range migrationsBetween(source, restored) {
+		for _, declaration := range migration.NewDomains {
+			if _, present := source.Records[declaration.Domain]; present {
+				continue
+			}
+			if check.FromDomain == declaration.Domain || check.ToDomain == declaration.Domain {
+				return migration, declaration.Domain, true
+			}
+		}
+	}
+	return snapshot.PostArtifactMigration{}, "", false
 }
 
 func referenceTouchesLedger(check snapshot.ReferenceCheck) bool {

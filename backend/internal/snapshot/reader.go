@@ -29,6 +29,15 @@ type Artifact struct {
 	// PreLedgerDomains names ledger domains legitimately absent because the
 	// artifact was exported before migration 00050 created their tables.
 	PreLedgerDomains []string
+	// SchemaAheadDomains names every registered domain absent because its
+	// declaring migration is newer than the artifact.
+	SchemaAheadDomains []SchemaAheadDomain
+}
+
+type SchemaAheadDomain struct {
+	Domain    string
+	Migration int64
+	Transform string
 }
 
 // OpenArtifact reads and independently verifies a format-v1 snapshot.
@@ -73,14 +82,27 @@ func OpenArtifact(directory string) (*Artifact, error) {
 		}
 		artifact.Records[file.Domain] = records
 	}
+	hasLedgerDomain := false
+	for _, domain := range LedgerDomains {
+		if seenDomains[domain.Name] {
+			hasLedgerDomain = true
+			break
+		}
+	}
 	for _, domain := range RegisteredDomains() {
 		if !seenDomains[domain.Name] {
 			if db.BaselineDrops(domain.Name) {
 				artifact.DroppedDomains = append(artifact.DroppedDomains, domain.Name)
 				continue
 			}
-			if manifest.SchemaMigration < LedgerSchemaMigration && IsLedgerDomain(domain.Name) {
-				artifact.PreLedgerDomains = append(artifact.PreLedgerDomains, domain.Name)
+			migration, _, declared := DeclaredNewDomainAfter(manifest.SchemaMigration, hasLedgerDomain, domain.Name)
+			if declared {
+				artifact.SchemaAheadDomains = append(artifact.SchemaAheadDomains, SchemaAheadDomain{
+					Domain: domain.Name, Migration: migration.LegacyMigration, Transform: migration.Name,
+				})
+				if migration.LegacyMigration == LedgerSchemaMigration {
+					artifact.PreLedgerDomains = append(artifact.PreLedgerDomains, domain.Name)
+				}
 				continue
 			}
 			return nil, fmt.Errorf("snapshot reader: required domain %q is absent", domain.Name)

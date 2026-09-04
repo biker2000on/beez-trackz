@@ -397,4 +397,123 @@ func TestPreLedgerComparatorExplainsOnlyDeclaredNullAddedColumns(t *testing.T) {
 	})
 }
 
+func TestSchemaAheadComparatorExplainsDeclaredMigrations56And57(t *testing.T) {
+	settingsID := `"00000000-0000-4000-8000-000000000057"`
+	userOne := `"10000000-0000-4000-8000-000000000001"`
+	userTwo := `"10000000-0000-4000-8000-000000000002"`
+	locationID := `"20000000-0000-4000-8000-000000000001"`
+	settings := map[string]any{
+		"id": settingsID[1 : len(settingsID)-1], "display_name": "Instance", "theme": "dark",
+		"default_apiary_id": nil, "date_format": "YYYY-MM-DD", "weight_unit": "kg",
+		"units": "metric", "temperature_unit": "c",
+	}
+	source := comparatorArtifact(54, map[string]map[string]map[string]any{
+		"app_users": {
+			userOne: {"id": userOne[1 : len(userOne)-1]},
+			userTwo: {"id": userTwo[1 : len(userTwo)-1]},
+		},
+		"user_settings":       {settingsID: settings},
+		"inventory_locations": {locationID: {"id": locationID[1 : len(locationID)-1], "name": "Home"}},
+	})
+	restoredSettings := map[string]any{"id": settingsID[1 : len(settingsID)-1], "display_name": "Instance"}
+	restored := comparatorArtifact(57, map[string]map[string]map[string]any{
+		"app_users": {
+			userOne: {"id": userOne[1 : len(userOne)-1]},
+			userTwo: {"id": userTwo[1 : len(userTwo)-1]},
+		},
+		"user_settings": {settingsID: restoredSettings},
+		"inventory_locations": {locationID: {
+			"id": locationID[1 : len(locationID)-1], "name": "Home", "slug": nil,
+			"customer_id": nil, "address": nil, "notes": nil, "deleted_at": nil,
+		}},
+		"user_preferences": {
+			userOne: derivedPreferenceFields(userOne[1:len(userOne)-1], "dark"),
+			userTwo: derivedPreferenceFields(userTwo[1:len(userTwo)-1], "dark"),
+		},
+	})
+
+	findings := compareRecords(source, restored)
+	if got := failures(findings); len(got) != 0 {
+		t.Fatalf("declared schema-ahead changes failed comparison: %v", got)
+	}
+	for _, want := range []struct{ code, detail string }{
+		{snapshot.InventoryLocationsConsigneeAttrsTransform, "domain inventory_locations: 1 records"},
+		{snapshot.UserPreferencesTransform, "domain user_settings: 1 records"},
+		{snapshot.UserPreferencesTransform, "domain user_preferences: 2 rows"},
+	} {
+		found := false
+		for _, item := range findings {
+			found = found || item.Code == want.code && contains(item.Detail, want.detail)
+		}
+		if !found {
+			t.Errorf("missing %s explanation containing %q: %v", want.code, want.detail, findings)
+		}
+	}
+
+	bad := restored.ByID["user_preferences"][userTwo]
+	bad.Fields["theme"] = "light"
+	restored.ByID["user_preferences"][userTwo] = bad
+	for index, record := range restored.Records["user_preferences"] {
+		if record.IDKey == userTwo {
+			restored.Records["user_preferences"][index] = bad
+		}
+	}
+	if findings := compareRecords(source, restored); !hasCode(findings, "extra-domain") {
+		t.Fatalf("incorrect derived preferences were explained: %v", findings)
+	}
+}
+
+func comparatorArtifact(migration int64, domains map[string]map[string]map[string]any) *artifact {
+	item := &artifact{
+		Manifest: snapshot.Manifest{SchemaMigration: migration},
+		Records:  map[string][]artifactRecord{}, ByID: map[string]map[string]artifactRecord{},
+	}
+	for domain, records := range domains {
+		item.ByID[domain] = map[string]artifactRecord{}
+		for id, fields := range records {
+			record := artifactRecord{Domain: domain, IDKey: id, Digest: jsonString(fields), Fields: fields}
+			item.Records[domain] = append(item.Records[domain], record)
+			item.ByID[domain][id] = record
+		}
+	}
+	return item
+}
+
+func derivedPreferenceFields(userID, theme string) map[string]any {
+	return map[string]any{
+		"user_id": userID, "theme": theme, "default_apiary_id": nil,
+		"date_format": "YYYY-MM-DD", "weight_unit": "kg", "units": "metric", "temperature_unit": "c",
+		"created_at": "2026-09-03T00:00:00Z", "updated_at": "2026-09-03T00:00:00Z",
+	}
+}
+
+func TestSchemaAheadComparatorExplainsReferenceMetadataChanges(t *testing.T) {
+	source := comparatorArtifact(54, map[string]map[string]map[string]any{
+		"app_users":     {`"10000000-0000-4000-8000-000000000001"`: {"id": "10000000-0000-4000-8000-000000000001"}},
+		"user_settings": {`"00000000-0000-4000-8000-000000000057"`: {"id": "00000000-0000-4000-8000-000000000057"}},
+	})
+	restored := comparatorArtifact(57, map[string]map[string]map[string]any{
+		"app_users":        {`"10000000-0000-4000-8000-000000000001"`: {"id": "10000000-0000-4000-8000-000000000001"}},
+		"user_preferences": {`"10000000-0000-4000-8000-000000000001"`: derivedPreferenceFields("10000000-0000-4000-8000-000000000001", "system")},
+	})
+	for _, name := range []string{
+		"consignment_settlements_location_id_fkey",
+		"external_sync_location_id_fkey",
+		"sales_stock_location_id_fkey",
+	} {
+		source.Verification.ReferenceChecks = append(source.Verification.ReferenceChecks, snapshot.ReferenceCheck{Name: name})
+	}
+	restored.Verification.ReferenceChecks = []snapshot.ReferenceCheck{{
+		Name: "user_preferences_user_id_fkey", FromDomain: "user_preferences", ToDomain: "app_users",
+		PopulatedCount: 1, ResolvedCount: 1,
+	}}
+	findings := compareReferences(source, restored)
+	if got := failures(findings); len(got) != 0 {
+		t.Fatalf("declared reference metadata changes failed: %v", got)
+	}
+	if len(findings) != 4 {
+		t.Fatalf("reference explanations = %d, want 4: %v", len(findings), findings)
+	}
+}
+
 func contains(haystack, needle string) bool { return indexOf(haystack, needle) >= 0 }

@@ -393,7 +393,9 @@ only, and only onto a read-only connection (section 1.1). It does not relax
 the calendar: the source pool is still pinned to UTC. The disposable target is
 never affected. When the source is behind the target, the gate records
 `schema-migration-ahead` as an *explained* difference, not a failure —
-record-digest equality is what proves the newer schema changed nothing.
+the declared post-artifact migration transforms explain only their predicted
+record changes. Their names appear in both gate reports; everything outside
+those declarations still fails.
 
 Ordered steps, aborting on the first failure:
 
@@ -447,6 +449,7 @@ the equality oracle; do not re-query the source database to "confirm."
 | Duplicate preserved ID | Two lines with the same `id` in one domain (A4). | Re-export after fixing source data; do not coin-flip. |
 | Dangling reference | Required relationship missing inside the artifact (A3, section 3.2). | Fix source data, re-export. Dry run must fail before restore starts. |
 | Digest mismatch | Same `(domain, id)` survived but canonical semantic fields differ. | Fail. Totals matching does not excuse this. |
+| Declared schema-ahead transform | The source artifact predates a migration that added null columns, removed columns, or deterministically derived a new domain. | Confirm the migration name and per-domain summary. Any value outside the declaration is still a failure. |
 | Absent / extra ID | Record missing or added under a new UUID (including a goose seed that was not replaced). | Fail unless the design's seed-identity remap applied and was recorded. |
 | `updated_at` / audit drift | Restore trigger rewrote audit fields. | Fail. Restore must preserve `created_at` / `deleted_at` / `voided_at` and insert-time `updated_at`. |
 | Unexplained aggregate delta | Legacy inventory, money, or production total differs beyond the definition's tolerance. | Fail. Explained differences are only those coded in the report (none on same-schema except the design's listed markers such as `legacy-unassigned` **kept as the same marker**). |
@@ -1073,10 +1076,14 @@ Drop the ledger rows? **No.**
 The pre-Phase-A snapshot plus its passing gate report are the recovery
 boundary. Keep them on storage independent of the database you froze.
 
-An artifact whose manifest has `schemaMigration < 50` legitimately has no
-`inventory_*` domain files. The reader/importer declare those missing domains
-as `pre-ledger-artifact-v1`; restore replays the legacy tables onto the fresh
-head database and leaves every ledger domain empty. Re-run
+An artifact older than the target restores through the ordered declarations
+in `backend/internal/snapshot/schema_ahead.go`. An artifact whose manifest has
+`schemaMigration < 50` legitimately has no `inventory_*` domain files; the
+reader/importer name those missing domains `pre-ledger-artifact-v1`, restore
+replays the legacy tables onto the fresh head database, and leaves every
+ledger domain empty. Later declarations are applied in order and named in the
+restore report (including `inventory-locations-consignee-attrs-v1` and
+`user-preferences-v1` when applicable). Re-run
 `import-snapshot -database <replacement-url> -backfill-ledger` to translate
 that restored legacy state, require parity, and arm the freeze. Never aim this
 restore at the frozen database: the importer returns a typed precondition
@@ -1294,12 +1301,19 @@ by hand.
 Every step runs with `TZ=UTC`. Steps 1–4 do not touch the working
 database.
 
-1. **Final snapshot.** Export from the Phase A working database
-   (section 1). The legacy tables are frozen, so the exporter omits the
+1. **Final snapshot.** Use the retained final Phase A artifact exported at
+   legacy migration 00054 (78 domains) and its passing P0 round-trip report.
+   If taking a newer replacement snapshot, export from the Phase A working
+   database (section 1). The legacy tables are frozen, so the exporter omits the
    stale `legacy` aggregate family and fills `newLedger` — that is
    expected, and it is why the parity oracle for this reset is the
    ledger, not the legacy sums. Store the artifact and its wrapping
    checksum off the database host (section 1, "Where to store it").
+   The generation guard lets a **read-only** source sit *behind* the
+   exporting binary's head (same generation): a newer build can always take
+   the artifact from an older database, and the declared post-artifact
+   migrations (`docs/snapshot-format.md`) carry that artifact forward on
+   restore. A source *ahead* of the binary is still refused.
 
 2. **Gate the artifact against a baseline target.** The ordinary P0
    gate, with the baseline profile selected for the run:
@@ -1315,8 +1329,11 @@ database.
    The source is the Phase A database and is read only; the disposable
    target is created, migrated with the baseline, restored into,
    re-exported, and dropped. Read the report per section 3: it must
-   pass, and its explained findings must be the ten dropped domains by
-   name and nothing else. **Retain `gate-report.json`,
+   pass. For the retained migration-54 boundary, explained findings are the
+   ten dropped baseline domains plus the precisely named 00056/00057 schema-
+   ahead transforms: null `inventory_locations` additions, the six removed
+   `user_settings` keys, and one derived `user_preferences` row per app user.
+   Any other finding fails. **Retain `gate-report.json`,
    `gate-summary.txt`, and `artifact.sha256`.**
 
 3. **STOP and check.** Work the "do not squash" table in 7.6. Any row

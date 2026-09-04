@@ -48,3 +48,16 @@ func TestRestoreReportNamesPreLedgerArtifactTransform(t *testing.T) {
 		t.Fatalf("skipped count = %d, want 1", report.Counts[app.OutcomeSkipped])
 	}
 }
+
+func TestRestoreReportNamesSchemaAheadMigration(t *testing.T) {
+	report := newReport(false)
+	report.addSchemaAheadMigration(snapshot.AppliedPostArtifactMigration{
+		Migration: 57, Name: snapshot.UserPreferencesTransform,
+		Domains: []string{"user_preferences", "user_settings"},
+	})
+	got := report.Records[0]
+	if got.Transform != snapshot.UserPreferencesTransform || got.TransformVersion != "legacy-00057" ||
+		got.Domain != "user_preferences,user_settings" || got.Outcome != app.OutcomeSkipped {
+		t.Fatalf("schema-ahead report record = %+v", got)
+	}
+}

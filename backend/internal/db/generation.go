@@ -110,8 +110,23 @@ func CheckGeneration(ctx context.Context, pool generationQuerier, opts Generatio
 	switch generation {
 	case expected:
 		// Right generation: the goose head must match too, or this database
-		// has been moved by some other build of the chain.
-		return checkMigrationVersion(ctx, pool)
+		// has been moved by some other build of the chain. The one exception
+		// is a read-only source that is BEHIND this binary (a Phase A artifact
+		// being taken from a database the newer build has not migrated —
+		// runbook 7.5 step 1): older is readable, newer never is.
+		err := checkMigrationVersion(ctx, pool)
+		if err == nil || !opts.AllowLegacy {
+			return err
+		}
+		var genErr *GenerationError
+		if !errors.As(err, &genErr) || genErr.Reason != ReasonMigrationMismatch {
+			return err
+		}
+		actual, parseErr := strconv.ParseInt(genErr.Actual, 10, 64)
+		if parseErr != nil || actual >= ExpectedMaxMigration() {
+			return err
+		}
+		return requireReadOnly(ctx, pool)
 
 	case LegacyGeneration:
 		if !opts.AllowLegacy {

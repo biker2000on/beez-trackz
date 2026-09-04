@@ -82,6 +82,14 @@ func (r *restoreReport) addPreLedgerDomain(domain string) {
 	})
 }
 
+func (r *restoreReport) addSchemaAheadMigration(applied snapshot.AppliedPostArtifactMigration) {
+	r.Counts[app.OutcomeSkipped]++
+	r.Records = append(r.Records, reportRecord{
+		Domain: strings.Join(applied.Domains, ","), Outcome: app.OutcomeSkipped,
+		Transform: applied.Name, TransformVersion: fmt.Sprintf("legacy-%05d", applied.Migration),
+	})
+}
+
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
@@ -208,6 +216,17 @@ func execute(ctx context.Context, opts options, report *restoreReport) error {
 	artifact, err := snapshot.OpenArtifact(input)
 	if err != nil {
 		return err
+	}
+	appliedMigrations, err := snapshot.ApplyPostArtifactMigrations(artifact)
+	if err != nil {
+		return err
+	}
+	for _, applied := range appliedMigrations {
+		// Migration 00050 retains its established per-missing-domain report
+		// below. Later schema-ahead migrations are reported once by name.
+		if applied.Name != snapshot.PreLedgerTransform {
+			report.addSchemaAheadMigration(applied)
+		}
 	}
 	for _, excluded := range artifact.Manifest.ExcludedConfiguration {
 		report.ExcludedConfig = append(report.ExcludedConfig, excluded.Domain+": "+strings.Join(excluded.Keys, ", ")+" — "+excluded.Reason)
@@ -647,7 +666,7 @@ func domainOrder(artifact *snapshot.Artifact) []string {
 func documentedPriority() map[string]int {
 	groups := [][]string{
 		{"app_users", "apiaries", "jar_sizes", "product_catalog", "equipment_types", "equipment_type_components", "treatment_products", "honey_varietals", "customers", "wholesale_price_lists"},
-		{"hives", "queens", "stock_locations", "photos", "media_files"},
+		{"user_preferences", "hives", "queens", "stock_locations", "photos", "media_files"},
 		{"sales", "consignment_settlements", "bottling_runs", "transcript_versions"},
 		{"equipment_stock", "equipment_stock_adjustments", "equipment_state_changes"},
 		{"honey_movements", "stock_movements", "jar_serials", "harvest_lot_photos"},

@@ -22,6 +22,7 @@ func domain(name string) Domain { return Domain{Name: name, Table: name} }
 var Domains = []Domain{
 	{Name: "app_users", Table: "app_users", ExcludedColumns: []string{"auth_subject", "password_hash"}},
 	{Name: "user_settings", Table: "user_settings", ExcludedColumns: []string{"password_hash", "ntfy_access_token"}, JSONSecretPaths: map[string][][]string{"ai_provider_config": {{"apiKeys", "anthropic"}, {"apiKeys", "google"}}}},
+	domain("user_preferences"),
 	domain("apiaries"), domain("apiary_memberships"), domain("hives"),
 	domain("hive_location_history"), domain("hive_splits"), domain("queens"),
 	domain("queen_events"), domain("inspections"), domain("feedings"),
@@ -75,6 +76,7 @@ var omittedDomains = []OmittedDomain{
 	{Domain: "deletion_tombstones", Reason: "The sync engine stores only conflict projections; durable deletion tombstones do not exist."},
 	{Domain: "external_write_idempotency_keys", Reason: "Keys are derived at send time from externalID + contentHash and are not stored."},
 	{Domain: "schema_generation", Reason: "Schema generation is derived from the target migration chain; its applied_at timestamp is not portable domain data."},
+	{Domain: "domain_events", Reason: "The outbox is transient delivery state derived from committed domain writes, not portable domain history."},
 }
 
 func RegisteredDomains() []Domain {

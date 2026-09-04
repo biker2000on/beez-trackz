@@ -15,6 +15,7 @@ func TestRegistryCoversFormatVersionOneDomains(t *testing.T) {
 		"yard_scales", "scale_readings", "apiary_weather_cache", "immich_timeline_candidates", "immich_timeline_scans",
 		"photos", "media_files", "transcript_versions", "yard_labor_sessions", "ai_recommendations",
 		"apiary_memberships", "jar_sizes", "external_sync", "gnucash_sync_settings", "offline_mutation_receipts",
+		"user_preferences",
 	}
 	seen := make(map[string]bool, len(Domains))
 	for _, item := range Domains {
@@ -28,11 +29,20 @@ func TestRegistryCoversFormatVersionOneDomains(t *testing.T) {
 			t.Errorf("required domain %s is not registered", name)
 		}
 	}
-	for _, forbidden := range []string{"api_tokens", "oidc_identities", "ntfy_dispatches"} {
+	for _, forbidden := range []string{"api_tokens", "oidc_identities", "ntfy_dispatches", "domain_events"} {
 		if seen[forbidden] {
 			t.Errorf("secret/ephemeral domain %s must not be exported", forbidden)
 		}
 	}
+}
+
+func TestDomainEventsOutboxIsExplicitlyOmitted(t *testing.T) {
+	for _, omitted := range OmittedDomains() {
+		if omitted.Domain == "domain_events" && omitted.Reason != "" {
+			return
+		}
+	}
+	t.Fatal("domain_events must be explicitly omitted as transient outbox state")
 }
 
 func TestSchemaGenerationIsDerivedRatherThanExported(t *testing.T) {
