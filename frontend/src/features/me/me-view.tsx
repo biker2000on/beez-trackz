@@ -2,6 +2,7 @@
 
 import { KeyRound, Lock, MonitorSmartphone, SlidersHorizontal } from "lucide-react";
 
+import { useBrand } from "@/components/brand-provider";
 import { MyAccessSection } from "@/features/access/access-section";
 import { InstallSection } from "@/features/settings/install-section";
 import { PasswordSection } from "@/features/settings/password-section";
@@ -18,6 +19,8 @@ import { MePreferencesForm } from "./preferences-form";
  * lives in `user_preferences`, keyed by `app_users.id` (§6.4).
  */
 export function MeView() {
+  const brand = useBrand();
+
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-4">
       <div>
@@ -55,7 +58,7 @@ export function MeView() {
       </SettingsSection>
       <SettingsSection
         title="Install app"
-        description="Add Beez Trackz to your home screen."
+        description={`Add ${brand.displayName} to your home screen.`}
         icon={MonitorSmartphone}
         anchor="install"
         defaultOpen={false}

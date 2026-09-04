@@ -1286,6 +1286,63 @@ renaming anything:
   and hive-tag URLs, and the configured origins. Branding may change their visible
   copy and artwork, never their resolvability or embedded record identity.
 
+**Runtime brand contract (as implemented).** Both containers read the same
+environment variables; the server side is authoritative and only presentation
+values reach the browser. Every field falls back independently, so setting one
+variable never disturbs another. A variable that is unset, empty, or
+whitespace-only takes its default; a variable that is *present but invalid* is
+fatal and names itself in the error rather than being repaired or silently
+defaulted.
+
+| Variable | Default | Rule |
+| --- | --- | --- |
+| `BRAND_DISPLAY_NAME` | `Apiary Atlas` | 1–40 code points after trim |
+| `BRAND_SHORT_NAME` | derived from the display name | 1–12 code points after trim |
+| `BRAND_TAGLINE` | `Hive, harvest and honey records for a working apiary` | 1–120 code points after trim |
+| `BRAND_WORDMARK_URL` | unset — built-in wordmark (the name set in type) | asset URL |
+| `BRAND_MARK_URL` | unset — built-in Apiary Atlas mark | asset URL |
+| `BRAND_THEME_COLOR` | `#d97706` | `#rrggbb` |
+| `BRAND_BACKGROUND_COLOR` | `#fbf7ef` | `#rrggbb` |
+
+- **Product identity.** `Apiary Atlas` is a compile-time constant exposed as
+  `Brand.product`. It is never configurable and is used only as provenance
+  ("which product wrote this file"), never as a key or a rename.
+- **Text rules.** Lengths count Unicode code points, not UTF-16 units. C0/C1
+  control characters are rejected, as are `<` and `>`; brand text is rendered
+  as text everywhere, so this is defence in depth rather than the only guard.
+- **Short-name derivation.** When `BRAND_SHORT_NAME` is unset: a display name
+  of at most 12 code points is used whole; otherwise take the first 12 code
+  points, and if the next code point is a space use that window as-is,
+  else cut back to the last space inside it, else hard-cut. No ellipsis.
+  `Apiary Atlas` → `Apiary Atlas`; `GentleBee Atlas` → `GentleBee`;
+  `Sunny Meadow Apiary` → `Sunny Meadow`; `Thistledownbeekeeping` →
+  `Thistledownb`. An explicitly configured short name over 12 code points is
+  fatal.
+- **Asset URLs.** Exactly two accepted shapes: a same-origin absolute path
+  under `/brand/` (no `..`, backslash, whitespace, or control characters), or
+  an absolute `https://` URL that parses and embeds no credentials. `data:`,
+  `javascript:`, plain `http:`, and protocol-relative `//host/x` are fatal.
+  Validated URLs are placed only in `src`/`href`.
+- **Colors.** Only `#rrggbb`, normalised to lower case; `#rgb`, `#rrggbbaa`,
+  and named colors are fatal. Brand colors tint the light-mode browser theme
+  color and the manifest/app background only. The dark-mode theme color stays a
+  fixed app constant (`#1c1917`), and no brand color is ever applied to body
+  text, so contrast cannot regress in either mode.
+- **One resolution, two consumers.** The web app resolves the brand once per
+  server process (`frontend/src/lib/brand.ts`, `resolveBrand()`) and hands that
+  same object to client components through `BrandProvider`/`useBrand`
+  (`frontend/src/components/brand-provider.tsx`), so SSR and hydration cannot
+  disagree. The root layout and the manifest are `force-dynamic`: the brand is
+  a runtime value, and prerendering would bake the build's empty environment
+  into every deployment.
+- **PWA upgrade.** Cache-key prefixes (`beez-trackz-shell-`,
+  `beez-trackz-api-`) and the offline queue's IndexedDB name
+  (`beez-trackz-offline`) are machine identity and do not move with the brand.
+  Only the shell cache *generation* suffix is bumped, so the pre-brand shell is
+  evicted and queued field work is untouched. An already-installed launcher may
+  need a refresh — or a reinstall of the PWA — before the OS redraws the name
+  and icon.
+
 **Execution sequence.**
 
 1. Inventory every visible product-name, logo, icon, color, description, document

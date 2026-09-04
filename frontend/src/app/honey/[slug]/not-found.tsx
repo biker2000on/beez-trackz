@@ -1,6 +1,10 @@
 import Link from "next/link";
 
+import { resolveBrand } from "@/lib/brand";
+
 export default function HoneyStoryNotFound() {
+  const brand = resolveBrand();
+
   return (
     <main className="min-h-screen bg-[#fffaf0] text-stone-900">
       <div className="mx-auto max-w-3xl px-5 py-10 text-center sm:px-8 sm:py-16">
@@ -18,7 +22,7 @@ export default function HoneyStoryNotFound() {
           className="mt-8 inline-flex rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-50"
           href="/"
         >
-          Back to Beez Trackz
+          Back to {brand.displayName}
         </Link>
       </div>
     </main>

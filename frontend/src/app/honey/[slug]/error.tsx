@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import Link from "next/link";
 
+import { useBrand } from "@/components/brand-provider";
+
 export default function HoneyStoryError({
   error,
   reset,
@@ -16,6 +18,7 @@ export default function HoneyStoryError({
     console.error(error);
   }, [error]);
 
+  const brand = useBrand();
   const retry = unstable_retry ?? reset;
 
   return (
@@ -45,7 +48,7 @@ export default function HoneyStoryError({
             className="rounded-md px-4 py-2 text-sm font-semibold text-stone-500 transition hover:text-stone-800"
             href="/"
           >
-            Back to Beez Trackz
+            Back to {brand.displayName}
           </Link>
         </div>
       </div>

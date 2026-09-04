@@ -1,14 +1,33 @@
-import { cn } from "@/lib/utils";
+"use client";
 
-/** Beez Trackz mark: honeycomb hexagon with a bee-stripe core. */
-export function LogoMark({ className }: { className?: string }) {
+import { cn } from "@/lib/utils";
+import { useBrand } from "@/components/brand-provider";
+
+/**
+ * The built-in Apiary Atlas mark: honeycomb hexagon with a bee-stripe core.
+ *
+ * This is the fallback whenever a deployment supplies only a name. It is drawn
+ * from theme tokens (`--color-primary`, `--color-background`,
+ * `--color-foreground`) rather than fixed hex values, so it keeps its contrast
+ * in both light and dark mode. Brand colors never reach it.
+ */
+export function FallbackMark({
+  className,
+  label,
+}: {
+  className?: string;
+  label?: string;
+}) {
   return (
     <svg
       viewBox="0 0 48 48"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={cn("size-8", className)}
-      aria-hidden="true"
+      // The name goes on the drawn element itself. A wrapper with
+      // `display: contents` would carry the role but render no box, which is
+      // both an assistive-tech and a test-visibility hazard.
+      {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true as const })}
     >
       <path
         d="M24 3 L42 13.5 V34.5 L24 45 L6 34.5 V13.5 Z"
@@ -26,12 +45,73 @@ export function LogoMark({ className }: { className?: string }) {
   );
 }
 
+/**
+ * The deployment's mark: a configured `BRAND_MARK_URL` image when one is set,
+ * otherwise the built-in Apiary Atlas mark.
+ *
+ * The mark is decorative on its own — wherever it stands in for the product it
+ * is paired with the brand name as text, or given one by `Logo` below — so the
+ * image carries an empty `alt` and the SVG is `aria-hidden`. Callers that show
+ * the mark alone pass `label` to give it an accessible name.
+ *
+ * The URL is only ever placed in `src`, and only after `parseBrand` has proved
+ * it is a `/brand/` path or an `https://` URL. Configuration cannot inject
+ * markup here.
+ */
+export function LogoMark({
+  className,
+  label,
+}: {
+  className?: string;
+  label?: string;
+}) {
+  const brand = useBrand();
+
+  if (brand.markUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- runtime brand URL, not a build-time asset
+      <img
+        src={brand.markUrl}
+        alt={label ?? ""}
+        className={cn("size-8 object-contain", className)}
+      />
+    );
+  }
+
+  return <FallbackMark className={className} label={label} />;
+}
+
+/**
+ * The full lockup: mark plus wordmark.
+ *
+ * With `BRAND_WORDMARK_URL` set, the wordmark image replaces the type and
+ * carries the display name as its alt text, so a screen reader still hears the
+ * product name. Otherwise the display name is rendered as text — never as
+ * markup — in the app's own type and color tokens, which is what keeps
+ * contrast intact in light and dark mode regardless of the configured brand
+ * colors.
+ */
 export function Logo({ className }: { className?: string }) {
+  const brand = useBrand();
+
+  if (brand.wordmarkUrl) {
+    return (
+      <span className={cn("flex items-center gap-2.5", className)}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- runtime brand URL, not a build-time asset */}
+        <img
+          src={brand.wordmarkUrl}
+          alt={brand.displayName}
+          className="h-8 w-auto max-w-44 object-contain"
+        />
+      </span>
+    );
+  }
+
   return (
     <span className={cn("flex items-center gap-2.5", className)}>
       <LogoMark />
       <span className="text-lg font-bold tracking-tight">
-        Beez <span className="text-primary">Trackz</span>
+        {brand.displayName}
       </span>
     </span>
   );

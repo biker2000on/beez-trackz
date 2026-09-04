@@ -1,5 +1,5 @@
 /**
- * Typed fetch wrapper for the Beez Trackz Go API.
+ * Typed fetch wrapper for the Apiary Atlas Go API.
  *
  * All requests go to `/api/v1/...` on the same origin (Next.js rewrites proxy
  * them to the Go server), so session cookies flow automatically.

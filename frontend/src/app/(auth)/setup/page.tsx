@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { api, ApiError } from "@/lib/api";
+import { useBrand } from "@/components/brand-provider";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -35,6 +36,7 @@ const setupSchema = z
 type SetupValues = z.infer<typeof setupSchema>;
 
 export default function SetupPage() {
+  const brand = useBrand();
   const router = useRouter();
   const [serverError, setServerError] = React.useState<string | null>(null);
 
@@ -74,7 +76,7 @@ export default function SetupPage() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-xl">
           <Sparkles className="size-5 text-primary" />
-          Welcome to Beez Trackz
+          Welcome to {brand.displayName}
         </CardTitle>
         <CardDescription>
           Set up your beekeeper account to get started.

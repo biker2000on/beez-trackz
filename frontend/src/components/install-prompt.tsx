@@ -7,6 +7,7 @@ import { Download, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { navRootHrefs } from "@/components/shell/nav-items";
+import { useBrand } from "@/components/brand-provider";
 
 /** Chromium-only event fired when the PWA is installable. */
 export interface BeforeInstallPromptEvent extends Event {
@@ -254,6 +255,7 @@ function isCalmMoment(pathname: string): boolean {
 export function InstallPrompt() {
   const pathname = usePathname();
   const queryClient = useQueryClient();
+  const brand = useBrand();
   const { available, installed, standalone, snoozed, promptInstall } =
     useInstallPrompt();
 
@@ -311,11 +313,11 @@ export function InstallPrompt() {
     <div
       className="fixed inset-x-3 bottom-[calc(var(--bottom-nav-h)+0.75rem)] z-[90] mx-auto flex max-w-lg flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-3 shadow-lg lg:bottom-4"
       role="complementary"
-      aria-label="Install Beez Trackz"
+      aria-label={`Install ${brand.displayName}`}
     >
       <Download className="size-5 shrink-0 text-primary" />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium">Install Beez Trackz</p>
+        <p className="text-sm font-medium">Install {brand.displayName}</p>
         <p className="text-xs text-muted-foreground">
           Full screen, its own icon, and it keeps working out of signal range.
         </p>

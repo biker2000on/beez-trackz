@@ -16,8 +16,26 @@ function nextBuildId(): string {
 }
 const BUILD_ID = nextBuildId();
 
+/**
+ * Shell cache generation. Bump this when the *content* of a precached shell
+ * route changes in a way a build id alone would not catch — for example the
+ * runtime brand migration (roadmap P1 item 11), which changes the name and
+ * mark baked into every precached page.
+ *
+ * The cache *key prefix* ("beez-trackz-shell-") is machine identity and does
+ * not move with the brand; neither does the offline queue's IndexedDB name.
+ * Only the generation suffix changes, so activate() drops the previous shell
+ * and the queued field work in IndexedDB is untouched.
+ *
+ * Note for operators: an already-installed launcher keeps the name and icon
+ * the OS recorded at install time. Bumping this refreshes the cached HTML, but
+ * Android/iOS/desktop launchers may need a refresh — or a reinstall of the
+ * PWA — before they redraw the new brand name and icon.
+ */
+const SHELL_VERSION = "b2";
+
 const serviceWorker = String.raw`
-const SHELL_CACHE = "beez-trackz-shell-${BUILD_ID}";
+const SHELL_CACHE = "beez-trackz-shell-${BUILD_ID}-${SHELL_VERSION}";
 const DATA_CACHE = "beez-trackz-api-${BUILD_ID}";
 const OFFLINE_ROUTES = ${JSON.stringify(OFFLINE_ROUTE_MANIFEST)};
 const QUEUE_DB = "beez-trackz-offline";

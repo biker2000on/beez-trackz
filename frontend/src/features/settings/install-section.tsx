@@ -4,6 +4,7 @@ import { CheckCircle2, Download, Share } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useBrand } from "@/components/brand-provider";
 import {
   clearInstallPromptSnooze,
   useInstallPrompt,
@@ -12,17 +13,18 @@ import {
 export function InstallSection() {
   const { available, installed, ios, snoozed, standalone, promptInstall } =
     useInstallPrompt();
+  const brand = useBrand();
 
   async function handleInstall() {
     const outcome = await promptInstall();
-    if (outcome === "accepted") toast.success("Installing Beez Trackz…");
+    if (outcome === "accepted") toast.success(`Installing ${brand.displayName}…`);
   }
 
   if (installed || standalone) {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
         <CheckCircle2 className="size-4 text-success" />
-        Beez Trackz is installed on this device.
+        {brand.displayName} is installed on this device.
       </p>
     );
   }
@@ -31,7 +33,7 @@ export function InstallSection() {
     return (
       <div className="grid gap-3">
         <p className="text-sm text-muted-foreground">
-          Install Beez Trackz for a full-screen app with its own icon.
+          Install {brand.displayName} for a full-screen app with its own icon.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button className="min-h-11" onClick={() => void handleInstall()}>

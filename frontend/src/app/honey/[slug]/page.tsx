@@ -10,6 +10,7 @@ import {
   formatHoneyMass,
   resolveUnitsPreference,
 } from "@/lib/units";
+import { resolveBrand } from "@/lib/brand";
 
 type StoryPhoto = {
   id: string;
@@ -124,6 +125,7 @@ export default async function HoneyStoryPage({
   const story = await getStory(slug);
   if (!story) notFound();
 
+  const brand = resolveBrand();
   const region = story.apiaryRegion ?? story.sourceApiaries.join(", ");
   const harvestDate = story.harvestDate ? formatStoryDate(story.harvestDate) : null;
   const latestBottlingDate = story.bottlingRuns[0]?.bottledDate
@@ -275,10 +277,15 @@ export default async function HoneyStoryPage({
           )}
         </section>
 
+        {/*
+          Attribution only. The route, the slug, and the record identity behind
+          this page are a public contract — an old QR code on a jar must keep
+          resolving — so branding changes the words here and nothing else.
+        */}
         <footer className="mt-12 text-center text-xs text-stone-500">
           Traceability powered by{" "}
           <Link className="font-semibold text-amber-700" href="/">
-            Beez Trackz
+            {brand.displayName}
           </Link>
         </footer>
       </div>

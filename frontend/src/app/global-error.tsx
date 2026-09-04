@@ -27,9 +27,19 @@ export default function GlobalError({
             <h1 className="text-xl font-semibold tracking-tight">
               Something went wrong
             </h1>
+            {/*
+              Deliberately brand-neutral. `global-error` replaces the whole
+              document when the root layout itself fails, which is exactly the
+              case where the resolved brand did not reach the client — there is
+              no BrandProvider above this and no server render to read. Naming
+              the product here would mean either hardcoding a name a
+              white-labelled deployment does not use, or leaking a second,
+              unvalidated copy of the brand into the client bundle. Neither is
+              worth it for the one screen that only appears when nothing else
+              rendered.
+            */}
             <p className="text-sm text-muted-foreground">
-              Beez Trackz could not load. Retry, or go back to the sign-in
-              page.
+              The app could not load. Retry, or go back to the sign-in page.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               {retry ? (
