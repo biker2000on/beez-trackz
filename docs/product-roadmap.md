@@ -165,8 +165,9 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
     commands) and wave 4 (Production/Sales workbenches, named commands, first
     outbox consumers) are on main and deployed; waves 5 (route rewrite), 6
     (Settings split) and 7 (deletion sweep, minus the 30-day-gated API alias)
-    landed on main 2026-09-03/04 and await one deploy behind the snapshot
-    post-artifact-migration transform. Status detail:
+    landed on main 2026-09-03/04 and were deployed to production 2026-09-04
+    01:57Z (image `5c62e72`) behind the snapshot post-artifact-migration
+    transform. Status detail:
     `docs/plans/2026-09-03-workflow-reset-design.md` §7. Replace the
     module-first information architecture, add a use-case/application layer and
     stable workbench read models, introduce one apiary/hive observation and

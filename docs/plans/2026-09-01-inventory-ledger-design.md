@@ -977,8 +977,8 @@ Phase A blocker**:
    **Phase A blocker**. The pre-Phase-A snapshot export via `--legacy-source`
    worked (65 domains at migration 48).
 
-10. **Fixed on main 2026-09-03 (`20cfd9f`), deploy pending with the wave-6
-    UI.** Twin migration `00056/00003` re-adds `slug`, `customer_id`,
+10. **Closed — fixed on main 2026-09-03 (`20cfd9f`), deployed to production
+    2026-09-04 01:57Z with the wave-6 UI (image `5c62e72`).** Twin migration `00056/00003` re-adds `slug`, `customer_id`,
     `address`, `notes`, `deleted_at` to `inventory_locations`, drops the
     legacy-chain foreign keys from `sales.stock_location_id`,
     `consignment_settlements.location_id` and `external_sync.location_id`
