@@ -33,6 +33,8 @@ x-brand-env: &brand-env
 
 x-api-env: &api-env
   <<: *brand-env
+  # Production runs on the Phase B ledger baseline schema profile (2026-09-03).
+  BEEZ_SCHEMA_BASELINE: "1"
   DATABASE_URL: postgresql://${POSTGRES_USER:-beeztrackz}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-beeztrackz}
   REDIS_URL: redis://redis:6379
   MINIO_ENDPOINT: minio:9000
