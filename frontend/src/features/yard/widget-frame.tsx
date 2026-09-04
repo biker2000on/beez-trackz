@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
- * Shared dashboard widget chrome: icon + title header, then either a
+ * Shared status-widget chrome: icon + title header, then either a
  * skeleton (loading), an error line, or the widget body.
  */
 export function WidgetFrame({

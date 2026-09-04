@@ -29,7 +29,7 @@ const GUARD_POLL_MS = 1_000;
 
 /**
  * Routes where the user is browsing rather than doing: the seven area roots
- * plus the recommendations inbox. Detail, editing, transcription, auth and
+ * plus the recommendation filter. Detail, editing, transcription, auth and
  * public routes are deliberately absent — the prompt must never land on top
  * of in-progress field work.
  *

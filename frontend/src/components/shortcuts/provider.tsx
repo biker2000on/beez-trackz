@@ -273,7 +273,8 @@ export function ShortcutsProvider({
       }
     }
 
-    // Capture so `g` chords preventDefault before page listeners (dashboard d/s/r).
+    // Capture so `g` chords preventDefault before page listeners (the work
+    // surfaces' own d/s/r/x keys).
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);

@@ -186,11 +186,13 @@ export function useRunWorkCommand() {
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["work"] });
-      // The source domains still have their own views (the recommendations
-      // triage page, the feeding list); a command executed from Today must
-      // not leave them showing the pre-command world.
-      void queryClient.invalidateQueries({ queryKey: ["recommendations"] });
+      // The source domains still have their own views (the feeding list, the
+      // hive timeline); a command executed from Today must not leave them
+      // showing the pre-command world. The recommendation inbox is not among
+      // them any more — it was deleted in wave 7 and `/today/recommendations`
+      // is a filter over the `["work"]` key invalidated above.
       void queryClient.invalidateQueries({ queryKey: ["feedings"] });
+      void queryClient.invalidateQueries({ queryKey: ["hives"] });
       void queryClient.invalidateQueries({ queryKey: ["operations"] });
     },
   });

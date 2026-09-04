@@ -150,28 +150,6 @@ export interface EconomicsReport {
   }[];
 }
 
-export interface YardQueueItem {
-  kind: "lockout" | "recommendation" | "feeding" | "harvest_ready";
-  hiveId: string | null;
-  hiveName: string | null;
-  title: string;
-  detail: string;
-  priority: string;
-  href: string;
-  lockoutUntil?: string | null;
-}
-
-export interface YardQueueYard {
-  apiaryId: string;
-  apiaryName: string;
-  items: YardQueueItem[];
-}
-
-export interface YardQueue {
-  asOf: string;
-  yards: YardQueueYard[];
-}
-
 export interface FieldIncident {
   id: string;
   incidentType: "robbing" | "yellowjackets" | "bears" | "skunks" | "flood";
@@ -181,13 +159,6 @@ export interface FieldIncident {
   hiveId: string | null;
   hiveName: string | null;
   notes: string | null;
-}
-
-export function useYardQueue() {
-  return useQuery({
-    queryKey: ["operations", "yard-queue"],
-    queryFn: () => api.get<YardQueue>("/operations/yard-queue"),
-  });
 }
 
 export function useFieldIncidents() {
@@ -385,10 +356,12 @@ export function useEndTreatment() {
       ),
     onSuccess: (_data, input) => {
       void client.invalidateQueries({ queryKey: ["hives"] });
-      void client.invalidateQueries({ queryKey: ["operations", "yard-queue"] });
+      // The lockout is a WorkItem source, so ending a treatment changes what
+      // `/work/today` and `/work/yard` return. There is no second assembler
+      // to invalidate any more (design 2026-09-03 §4.1, wave 7).
+      void client.invalidateQueries({ queryKey: ["work"] });
       void client.invalidateQueries({ queryKey: ["analytics", "varroa"] });
       void client.invalidateQueries({ queryKey: ["inspections"] });
-      void client.invalidateQueries({ queryKey: ["recommendations"] });
       if (input.hiveId) {
         void client.invalidateQueries({
           queryKey: ["hives", "detail", input.hiveId],

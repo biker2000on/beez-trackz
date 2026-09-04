@@ -73,7 +73,7 @@ export function HoneyOverview() {
     <div className="mx-auto grid w-full max-w-5xl gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Honey</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Production</h1>
           <p className="text-sm text-muted-foreground">
             Bulk and packaged stock, and what needs doing next.
           </p>

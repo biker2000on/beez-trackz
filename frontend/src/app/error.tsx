@@ -31,7 +31,7 @@ export default function AppError({
           </h1>
           <p className="text-sm text-muted-foreground">
             This page hit an unexpected error. You can try again, or go back
-            to the dashboard.
+            to Today.
           </p>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
@@ -41,7 +41,7 @@ export default function AppError({
             </Button>
           ) : null}
           <Button asChild variant="outline">
-            <Link href="/today">Back to dashboard</Link>
+            <Link href="/today">Back to Today</Link>
           </Button>
         </div>
       </div>
