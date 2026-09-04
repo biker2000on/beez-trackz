@@ -10,6 +10,7 @@ import (
 const (
 	InventoryLocationsConsigneeAttrsTransform = "inventory-locations-consignee-attrs-v1"
 	UserPreferencesTransform                  = "user-preferences-v1"
+	HarvestLotVarietalNameTransform           = "harvest-lot-varietal-name-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -105,6 +106,30 @@ var PostArtifactMigrations = []PostArtifactMigration{
 			GeneratedColumns: []string{"created_at", "updated_at"},
 		}},
 	},
+	{
+		LegacyMigration: 58, BaselineMigration: 5,
+		Name: HarvestLotVarietalNameTransform,
+		// The free-text name is gone; the varietal (varietal_id, already a
+		// portable column) is the lot's only name. The migration's backfill
+		// runs on the target database before an older artifact is restored,
+		// so a restored lot carries only its varietal_id: a pre-00058 lot
+		// whose honey_variety text named no varietal restores unnamed.
+		RemovedColumns: map[string][]string{
+			"harvest_lots": {"honey_variety"},
+		},
+	},
+}
+
+// maxBaselineMigration is the newest post-reset baseline migration declared
+// above; baseline artifact versions up to it map onto legacy ceilings.
+func maxBaselineMigration() int64 {
+	ceiling := int64(0)
+	for _, migration := range PostArtifactMigrations {
+		if migration.BaselineMigration > ceiling {
+			ceiling = migration.BaselineMigration
+		}
+	}
+	return ceiling
 }
 
 func emptyNewDomains(names ...string) []NewDomainMigration {
@@ -117,9 +142,10 @@ func emptyNewDomains(names ...string) []NewDomainMigration {
 
 // EffectiveLegacyMigration maps a post-reset baseline artifact onto the
 // equivalent legacy-chain ceiling. The presence of a ledger domain
-// distinguishes baseline versions 1-4 from genuinely old legacy versions.
+// distinguishes baseline versions (1 through the newest declared baseline
+// migration) from genuinely old legacy versions.
 func EffectiveLegacyMigration(schemaMigration int64, hasLedgerDomain bool) int64 {
-	if schemaMigration >= LedgerSchemaMigration || schemaMigration > 4 || !hasLedgerDomain {
+	if schemaMigration >= LedgerSchemaMigration || schemaMigration > maxBaselineMigration() || !hasLedgerDomain {
 		return schemaMigration
 	}
 	ceiling := int64(0)

@@ -55,11 +55,20 @@ func newSerialFixture(t *testing.T) *serialFixture {
 	fixture.user = &principal{ID: userID, DisplayName: "Serial test", IsAdmin: true}
 
 	fixture.lotCode = "SER-" + suffix[:8]
+	// The lot's name is its varietal; reuse a Wildflower row when another
+	// test (or a prior run) already created it.
+	var varietalID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO honey_varietals (name) VALUES ('Wildflower')
+		ON CONFLICT (lower(name)) DO UPDATE SET name = EXCLUDED.name
+		RETURNING id`).Scan(&varietalID); err != nil {
+		t.Fatalf("insert varietal: %v", err)
+	}
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO harvest_lots
-			(lot_code, public_slug, extraction_date, honey_weight_lbs, honey_variety, season)
-		VALUES ($1,$2,'2026-07-01',120,'Wildflower','2026') RETURNING id`,
-		fixture.lotCode, "ser-"+suffix).Scan(&fixture.lotID); err != nil {
+			(lot_code, public_slug, extraction_date, honey_weight_lbs, varietal_id, season)
+		VALUES ($1,$2,'2026-07-01',120,$3,'2026') RETURNING id`,
+		fixture.lotCode, "ser-"+suffix, varietalID).Scan(&fixture.lotID); err != nil {
 		t.Fatalf("insert harvest lot: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
@@ -183,8 +192,8 @@ func TestJarSerialLookupWalksTheChainForAnUnsoldJar(t *testing.T) {
 	if item.HarvestLot.ID != fixture.lotID || item.HarvestLot.LotCode != fixture.lotCode {
 		t.Fatalf("harvestLot = %+v, want lot %v/%s", item.HarvestLot, fixture.lotID, fixture.lotCode)
 	}
-	if item.HarvestLot.Variety == nil || *item.HarvestLot.Variety != "Wildflower" {
-		t.Fatalf("harvestLot.variety = %v, want Wildflower", item.HarvestLot.Variety)
+	if item.HarvestLot.VarietalName == nil || *item.HarvestLot.VarietalName != "Wildflower" {
+		t.Fatalf("harvestLot.varietalName = %v, want Wildflower", item.HarvestLot.VarietalName)
 	}
 	if item.Sale != nil {
 		t.Fatalf("unsold jar reported a sale: %+v", item.Sale)

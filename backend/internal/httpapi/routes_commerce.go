@@ -96,8 +96,8 @@ type harvestLotPayload struct {
 	HoneyWeightEntered *string  `json:"honeyWeightEntered"`
 	// HoneyWeightSource lets the client ask for a derivation explicitly
 	// ("derived") or pin the typed number ("manual"). Omitted = infer.
-	HoneyWeightSource   *string        `json:"honeyWeightSource"`
-	HoneyVariety        *string        `json:"honeyVariety"`
+	HoneyWeightSource *string `json:"honeyWeightSource"`
+	// VarietalID names the honey; there is no free-text name beside it.
 	VarietalID          *uuid.UUID     `json:"varietalId"`
 	Season              *string        `json:"season"`
 	ApiaryRegion        *string        `json:"apiaryRegion"`
@@ -127,10 +127,11 @@ type harvestLotRow struct {
 	// HoneyWeightSource is 'manual' (operator typed it) or 'derived' (summed
 	// from the linked harvests). DerivedWeightLbs and LinkedHarvestCount are
 	// reported either way so the UI can show what the derivation would be.
-	HoneyWeightSource   string         `json:"honeyWeightSource"`
-	DerivedWeightLbs    float64        `json:"derivedWeightLbs"`
-	LinkedHarvestCount  int            `json:"linkedHarvestCount"`
-	HoneyVariety        *string        `json:"honeyVariety"`
+	HoneyWeightSource  string  `json:"honeyWeightSource"`
+	DerivedWeightLbs   float64 `json:"derivedWeightLbs"`
+	LinkedHarvestCount int     `json:"linkedHarvestCount"`
+	// VarietalName is the honey's name (honey_varietals.name via
+	// varietal_id); nil when the lot has no varietal assigned.
 	VarietalID          *uuid.UUID     `json:"varietalId"`
 	VarietalName        *string        `json:"varietalName"`
 	Season              *string        `json:"season"`
@@ -162,7 +163,7 @@ type harvestLotRow struct {
 
 const harvestLotSelect = `
 	SELECT lot.id, lot.lot_code, lot.public_slug, lot.extraction_date, lot.honey_weight_lbs,
-		lot.honey_weight_entered, lot.honey_weight_source, lot.honey_variety,
+		lot.honey_weight_entered, lot.honey_weight_source,
 		lot.varietal_id, varietal.name, lot.season, lot.apiary_region, lot.bloom_notes,
 		lot.beekeeper_story, COALESCE(lot.testing_data, '{}'::jsonb), lot.reorder_url, lot.is_public,
 		lot.moisture_pct, lot.bottling_moisture_pct,
@@ -443,7 +444,7 @@ func (s *Server) harvestLotRows(r *http.Request, where string, args ...any) ([]h
 		var item harvestLotRow
 		if err := rows.Scan(&item.ID, &item.LotCode, &item.PublicSlug, &item.ExtractionDate,
 			&item.HoneyWeightLbs, &item.HoneyWeightEntered, &item.HoneyWeightSource,
-			&item.HoneyVariety, &item.VarietalID, &item.VarietalName, &item.Season,
+			&item.VarietalID, &item.VarietalName, &item.Season,
 			&item.ApiaryRegion, &item.BloomNotes, &item.BeekeeperStory, &item.TestingData,
 			&item.ReorderURL, &item.IsPublic, &item.MoisturePct, &item.BottlingMoisturePct,
 			&item.MoistureOverrideReason, &item.MoistureOverrideAt,
@@ -666,7 +667,7 @@ func (s *Server) harvestLotCreate(w http.ResponseWriter, r *http.Request) {
 			return production.CreateLot(ctx, uow, production.LotInput{
 				ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,
 				HoneyWeightLbs: req.HoneyWeightLbs, HoneyWeightEntered: honeyTrimPtr(req.HoneyWeightEntered), HoneyWeightSource: req.HoneyWeightSource,
-				HoneyVariety: req.HoneyVariety, VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
+				VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
 				BloomNotes: req.BloomNotes, BeekeeperStory: req.BeekeeperStory, TestingData: req.TestingData, ReorderURL: reorderURL, IsPublic: public,
 				HarvestIDs: req.HarvestIDs, PhotoIDs: req.PhotoIDs, MoisturePct: req.MoisturePct, BottlingMoisturePct: req.BottlingMoisturePct,
 				MoistureOverrideReason: overrideReason, ClaimSpecies: claimSpecies, ClaimYear: claimYear, ClaimApiaryID: claimApiaryID,
@@ -729,7 +730,7 @@ func (s *Server) harvestLotUpdate(w http.ResponseWriter, r *http.Request) {
 		_, err := production.UpdateLot(ctx, uow, production.LotInput{
 			ID: id, LotCode: req.LotCode, PublicSlug: slug, ExtractionDate: date,
 			HoneyWeightLbs: req.HoneyWeightLbs, HoneyWeightEntered: honeyTrimPtr(req.HoneyWeightEntered), HoneyWeightSource: req.HoneyWeightSource,
-			HoneyVariety: req.HoneyVariety, VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
+			VarietalID: req.VarietalID, Season: req.Season, ApiaryRegion: req.ApiaryRegion,
 			BloomNotes: req.BloomNotes, BeekeeperStory: req.BeekeeperStory, TestingData: req.TestingData, ReorderURL: reorderURL, IsPublic: public,
 			HarvestIDs: req.HarvestIDs, PhotoIDs: req.PhotoIDs, MoisturePct: req.MoisturePct, BottlingMoisturePct: req.BottlingMoisturePct,
 			MoistureOverrideReason: overrideReason, ClaimSpecies: claimSpecies, ClaimYear: claimYear, ClaimApiaryID: claimApiaryID,
@@ -961,9 +962,11 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item := rows[0]
+	// The story is titled by the varietal; a lot with none assigned falls
+	// back to its lot code rather than an invented name.
 	name := item.LotCode
-	if item.HoneyVariety != nil {
-		name = *item.HoneyVariety
+	if item.VarietalName != nil && strings.TrimSpace(*item.VarietalName) != "" {
+		name = *item.VarietalName
 	}
 	publicPhotos := make([]map[string]any, 0, len(item.Photos))
 	for _, photo := range item.Photos {
@@ -982,7 +985,7 @@ func (s *Server) publicHoneyStory(w http.ResponseWriter, r *http.Request) {
 			"quantity":     run["quantity"],
 		})
 	}
-	floralSource := item.HoneyVariety
+	floralSource := item.VarietalName
 	if item.FloralClaim != "" {
 		floralSource = &item.FloralClaim
 	}

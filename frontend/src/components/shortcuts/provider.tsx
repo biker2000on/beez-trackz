@@ -394,7 +394,7 @@ export function ShortcutsProvider({
           label: `Production › Lots › ${lot.lotCode} story`,
           description: href,
           hint: "Lot",
-          searchText: `${lot.lotCode} ${lot.honeyVariety ?? ""} ${lot.season ?? ""} ${lot.apiaryRegion ?? ""} public story traceability`,
+          searchText: `${lot.lotCode} ${lot.varietalName ?? ""} ${lot.season ?? ""} ${lot.apiaryRegion ?? ""} public story traceability`,
           run: () => router.push(href),
         });
       }

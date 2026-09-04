@@ -121,13 +121,15 @@ func UpdateJarSize(ctx context.Context, uow *app.UnitOfWork, in UpdateJarSizeInp
 	return out, nil
 }
 
+// LotInput carries a harvest lot as the operator entered it. VarietalID names
+// the honey: honey_varietals.name is the lot's only name, titling the public
+// Honey Story and every operator-facing list; there is no free-text name.
 type LotInput struct {
 	ID                                               uuid.UUID
 	LotCode, PublicSlug                              string
 	ExtractionDate                                   time.Time
 	HoneyWeightLbs                                   *float64
 	HoneyWeightEntered, HoneyWeightSource            *string
-	HoneyVariety                                     *string
 	VarietalID                                       *uuid.UUID
 	Season, ApiaryRegion, BloomNotes, BeekeeperStory *string
 	TestingData                                      map[string]any
@@ -161,7 +163,7 @@ func CreateLot(ctx context.Context, uow *app.UnitOfWork, in LotInput) (CreateLot
 	if err != nil {
 		return out, err
 	}
-	if _, err := uow.Exec(ctx, `INSERT INTO harvest_lots(id,lot_code,public_slug,extraction_date,honey_weight_lbs,honey_weight_entered,honey_weight_source,honey_variety,season,apiary_region,bloom_notes,beekeeper_story,testing_data,reorder_url,is_public,moisture_pct,bottling_moisture_pct,claim_species,claim_year,claim_apiary_id,claim_elevation_m,varietal_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.HoneyVariety), trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, trim(in.ClaimSpecies), in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID, actorValue(uow)); err != nil {
+	if _, err := uow.Exec(ctx, `INSERT INTO harvest_lots(id,lot_code,public_slug,extraction_date,honey_weight_lbs,honey_weight_entered,honey_weight_source,season,apiary_region,bloom_notes,beekeeper_story,testing_data,reorder_url,is_public,moisture_pct,bottling_moisture_pct,claim_species,claim_year,claim_apiary_id,claim_elevation_m,varietal_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, trim(in.ClaimSpecies), in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID, actorValue(uow)); err != nil {
 		return out, classifyCommandDB(op, err)
 	}
 	if err := replaceLotLinks(ctx, uow, in); err != nil {
@@ -206,7 +208,7 @@ func UpdateLot(ctx context.Context, uow *app.UnitOfWork, in LotInput) (UpdateLot
 		}
 		return out, app.Precondition(op, "Lot weight cannot be below the %.2f lbs its bottling runs already used", used)
 	}
-	tag, err := uow.Exec(ctx, `UPDATE harvest_lots SET lot_code=$2,public_slug=$3,extraction_date=$4,honey_weight_lbs=$5,honey_weight_entered=$6,honey_weight_source=$7,honey_variety=$8,season=$9,apiary_region=$10,bloom_notes=$11,beekeeper_story=$12,testing_data=$13,reorder_url=$14,is_public=$15,moisture_pct=$16,bottling_moisture_pct=$17,claim_species=$18,claim_year=$19,claim_apiary_id=$20,claim_elevation_m=$21,varietal_id=$22 WHERE id=$1`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.HoneyVariety), trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, trim(in.ClaimSpecies), in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID)
+	tag, err := uow.Exec(ctx, `UPDATE harvest_lots SET lot_code=$2,public_slug=$3,extraction_date=$4,honey_weight_lbs=$5,honey_weight_entered=$6,honey_weight_source=$7,season=$8,apiary_region=$9,bloom_notes=$10,beekeeper_story=$11,testing_data=$12,reorder_url=$13,is_public=$14,moisture_pct=$15,bottling_moisture_pct=$16,claim_species=$17,claim_year=$18,claim_apiary_id=$19,claim_elevation_m=$20,varietal_id=$21 WHERE id=$1`, in.ID, strings.TrimSpace(in.LotCode), in.PublicSlug, in.ExtractionDate, weight, entered, source, trim(in.Season), trim(in.ApiaryRegion), trim(in.BloomNotes), trim(in.BeekeeperStory), in.TestingData, in.ReorderURL, in.IsPublic, in.MoisturePct, in.BottlingMoisturePct, trim(in.ClaimSpecies), in.ClaimYear, in.ClaimApiaryID, elevation, in.VarietalID)
 	if err != nil {
 		return out, classifyCommandDB(op, err)
 	}

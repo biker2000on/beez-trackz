@@ -696,7 +696,7 @@ type complianceLot struct {
 	LotCode        string    `json:"lotCode"`
 	ExtractionDate time.Time `json:"extractionDate"`
 	HoneyWeightLbs float64   `json:"honeyWeightLbs"`
-	HoneyVariety   *string   `json:"honeyVariety"`
+	VarietalName   *string   `json:"varietalName"`
 	Season         *string   `json:"season"`
 	MoisturePct    *float64  `json:"moisturePct"`
 	IsPublic       bool      `json:"isPublic"`
@@ -831,8 +831,8 @@ var compliancePrintTemplate = template.Must(template.New("compliance").Funcs(tem
 </tbody></table>
 
 <h2>Harvest lots ({{len .Lots}})</h2>
-<table><thead><tr><th>Record ID</th><th>Lot</th><th>Extraction date</th><th>Weight (canonical lb)</th><th>Variety</th><th>Season</th><th>Moisture %</th><th>Public</th></tr></thead><tbody>
-{{range .Lots}}<tr><td>{{.ID}}</td><td>{{.LotCode}}</td><td>{{date .ExtractionDate}}</td><td>{{printf "%.2f" .HoneyWeightLbs}}</td><td>{{text .HoneyVariety}}</td><td>{{text .Season}}</td><td>{{decimal .MoisturePct}}</td><td>{{yesno .IsPublic}}</td></tr>{{else}}<tr><td colspan="8">No harvest lots</td></tr>{{end}}
+<table><thead><tr><th>Record ID</th><th>Lot</th><th>Extraction date</th><th>Weight (canonical lb)</th><th>Varietal</th><th>Season</th><th>Moisture %</th><th>Public</th></tr></thead><tbody>
+{{range .Lots}}<tr><td>{{.ID}}</td><td>{{.LotCode}}</td><td>{{date .ExtractionDate}}</td><td>{{printf "%.2f" .HoneyWeightLbs}}</td><td>{{text .VarietalName}}</td><td>{{text .Season}}</td><td>{{decimal .MoisturePct}}</td><td>{{yesno .IsPublic}}</td></tr>{{else}}<tr><td colspan="8">No harvest lots</td></tr>{{end}}
 </tbody></table>
 
 <h2>Sales ({{len .Sales}})</h2>
@@ -913,10 +913,11 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 	}
 
 	lotRows, err := s.pool.Query(ctx, `
-		SELECT id, lot_code, extraction_date, honey_weight_lbs, honey_variety,
-			season, moisture_pct, is_public
-		FROM harvest_lots
-		ORDER BY extraction_date DESC, lot_code`)
+		SELECT lot.id, lot.lot_code, lot.extraction_date, lot.honey_weight_lbs, varietal.name,
+			lot.season, lot.moisture_pct, lot.is_public
+		FROM harvest_lots lot
+		LEFT JOIN honey_varietals varietal ON varietal.id = lot.varietal_id
+		ORDER BY lot.extraction_date DESC, lot.lot_code`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -925,7 +926,7 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 	for lotRows.Next() {
 		var lot complianceLot
 		if err := lotRows.Scan(&lot.ID, &lot.LotCode, &lot.ExtractionDate,
-			&lot.HoneyWeightLbs, &lot.HoneyVariety, &lot.Season,
+			&lot.HoneyWeightLbs, &lot.VarietalName, &lot.Season,
 			&lot.MoisturePct, &lot.IsPublic); err != nil {
 			lotRows.Close()
 			writeError(w, http.StatusInternalServerError, "database error")

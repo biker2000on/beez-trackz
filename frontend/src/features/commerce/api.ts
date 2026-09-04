@@ -21,8 +21,10 @@ export interface HarvestLot {
   /** What the linked harvests sum to, reported on manual lots too. */
   derivedWeightLbs: number;
   linkedHarvestCount: number;
-  honeyVariety: string | null;
-  /** The canonical varietal the balance rollups group this lot under. */
+  /**
+   * The varietal is the honey's name: it titles the public Honey Story and
+   * groups the balance rollups. Both are null for an unassigned lot.
+   */
   varietalId: string | null;
   varietalName: string | null;
   claimSpecies: string | null;
@@ -78,7 +80,6 @@ export interface HarvestLotInput {
   honeyWeightLbs?: number;
   honeyWeightSource?: "manual" | "derived";
   honeyWeightEntered?: string;
-  honeyVariety?: string;
   /** null clears the varietal; the PATCH writes this field absolutely. */
   varietalId?: string | null;
   claimSpecies?: string;
@@ -441,7 +442,7 @@ export interface JarSerialTrace {
   harvestLot: {
     id: string;
     lotCode: string;
-    variety: string | null;
+    varietalName: string | null;
     season: string | null;
     publicSlug: string;
   };

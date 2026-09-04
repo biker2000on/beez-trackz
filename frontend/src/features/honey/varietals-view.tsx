@@ -248,7 +248,7 @@ export function VarietalsView() {
             cellClassName: "text-sm text-muted-foreground",
           } satisfies DataGridColumnMeta,
           cell: ({ row }) =>
-            row.original.varietalName ?? row.original.honeyVariety ?? "—",
+            row.original.varietalName ?? "—",
         }),
         lotColumnHelper.display({
           id: "extractionDate",

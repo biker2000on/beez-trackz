@@ -136,8 +136,8 @@ function TraceChain({ trace }: { trace: JarSerialTrace }) {
         label="Harvest lot"
         title={harvestLot.lotCode}
         detail={
-          [harvestLot.variety, harvestLot.season].filter(Boolean).join(" · ") ||
-          "No variety recorded"
+          [harvestLot.varietalName, harvestLot.season].filter(Boolean).join(" · ") ||
+          "No varietal assigned"
         }
         action={
           <Button asChild size="sm" variant="outline">

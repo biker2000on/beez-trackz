@@ -130,7 +130,7 @@ func Workbench(ctx context.Context, q app.Querier, actor app.Actor, year int, no
 
 	rows, err = q.Query(ctx, `
 		WITH stock AS (
-		 SELECT hl.id,hl.lot_code,COALESCE(v.name,hl.honey_variety) varietal,
+		 SELECT hl.id,hl.lot_code,v.name varietal,
 		        COALESCE(SUM(a.available),0)::numeric(14,3)::text available
 		 FROM harvest_lots hl
 		 LEFT JOIN honey_varietals v ON v.id=hl.varietal_id

@@ -18,7 +18,6 @@ import (
 type honeyLotBalanceRow struct {
 	LotID          uuid.UUID  `json:"lotId"`
 	LotCode        string     `json:"lotCode"`
-	HoneyVariety   *string    `json:"honeyVariety"`
 	VarietalID     *uuid.UUID `json:"varietalId"`
 	VarietalName   *string    `json:"varietalName"`
 	ExtractionDate string     `json:"extractionDate"`
@@ -60,7 +59,7 @@ func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 			FROM classified c WHERE item_id = $1 AND lot_id IS NOT NULL
 			GROUP BY c.lot_id
 		)
-		SELECT hl.id, hl.lot_code, hl.honey_variety, hl.varietal_id, v.name,
+		SELECT hl.id, hl.lot_code, hl.varietal_id, v.name,
 		       to_char(hl.extraction_date, 'YYYY-MM-DD'),
 		       COALESCE(b.lot_lbs, 0), COALESCE(b.jarred_lbs, 0),
 		       COALESCE(b.bulk_used_lbs, 0), COALESCE(b.loss_lbs, 0),
@@ -77,7 +76,7 @@ func (s *Server) honeyLotBalances(w http.ResponseWriter, r *http.Request) {
 	lots := make([]honeyLotBalanceRow, 0)
 	for rows.Next() {
 		var row honeyLotBalanceRow
-		if err := rows.Scan(&row.LotID, &row.LotCode, &row.HoneyVariety,
+		if err := rows.Scan(&row.LotID, &row.LotCode,
 			&row.VarietalID, &row.VarietalName, &row.ExtractionDate, &row.LotLbs,
 			&row.JarredLbs, &row.BulkUsedLbs, &row.LossLbs, &row.OnHandLbs); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")

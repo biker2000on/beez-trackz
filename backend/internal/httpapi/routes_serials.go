@@ -37,11 +37,13 @@ type jarSerialRunJSON struct {
 }
 
 type jarSerialLotJSON struct {
-	ID         uuid.UUID `json:"id"`
-	LotCode    string    `json:"lotCode"`
-	Variety    *string   `json:"variety"`
-	Season     *string   `json:"season"`
-	PublicSlug string    `json:"publicSlug"`
+	ID      uuid.UUID `json:"id"`
+	LotCode string    `json:"lotCode"`
+	// VarietalName is the honey's name (honey_varietals.name); nil when the
+	// lot has no varietal assigned.
+	VarietalName *string `json:"varietalName"`
+	Season       *string `json:"season"`
+	PublicSlug   string  `json:"publicSlug"`
 }
 
 type jarSerialSaleJSON struct {
@@ -95,12 +97,13 @@ func (s *Server) jarSerialLookup(w http.ResponseWriter, r *http.Request) {
 	err := s.pool.QueryRow(r.Context(), `
 		SELECT js.serial_number, js.created_at,
 			br.id, br.bottled_date, jz.label, br.quantity,
-			lot.id, lot.lot_code, lot.honey_variety, lot.season, lot.public_slug,
+			lot.id, lot.lot_code, varietal.name, lot.season, lot.public_slug,
 			sale.id, sale.date, COALESCE(c.name, sale.customer_name),
 			sale.order_status, js.sold_at, linker.display_name
 		FROM jar_serials js
 		JOIN bottling_runs br ON br.id = js.bottling_run_id
 		JOIN harvest_lots lot ON lot.id = br.lot_id
+		LEFT JOIN honey_varietals varietal ON varietal.id = lot.varietal_id
 		LEFT JOIN jar_sizes jz ON jz.id = br.jar_size_id
 		LEFT JOIN sales sale ON sale.id = js.sale_id
 		LEFT JOIN customers c ON c.id = sale.customer_id
@@ -109,7 +112,7 @@ func (s *Server) jarSerialLookup(w http.ResponseWriter, r *http.Request) {
 		Scan(&item.SerialNumber, &item.CreatedAt,
 			&item.BottlingRun.ID, &item.BottlingRun.BottledDate,
 			&item.BottlingRun.JarSizeLabel, &item.BottlingRun.Quantity,
-			&item.HarvestLot.ID, &item.HarvestLot.LotCode, &item.HarvestLot.Variety,
+			&item.HarvestLot.ID, &item.HarvestLot.LotCode, &item.HarvestLot.VarietalName,
 			&item.HarvestLot.Season, &item.HarvestLot.PublicSlug,
 			&saleID, &saleDate, &customerName, &orderStatus, &soldAt, &linkedByName)
 	if errors.Is(err, pgx.ErrNoRows) {

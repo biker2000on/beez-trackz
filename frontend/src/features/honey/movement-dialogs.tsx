@@ -135,7 +135,7 @@ function LotField({
           {lots.map((lot) => (
             <SelectItem key={lot.id} value={lot.id}>
               {lot.lotCode}
-              {lot.honeyVariety ? ` · ${lot.honeyVariety}` : ""}
+              {lot.varietalName ? ` · ${lot.varietalName}` : ""}
             </SelectItem>
           ))}
         </SelectContent>
@@ -292,7 +292,7 @@ export function JarHoneyDialog({
           {selectedLot && (
             <p className="text-xs text-muted-foreground">
               These jars are recorded as a bottling run of {selectedLot.lotCode}
-              {selectedLot.honeyVariety ? ` (${selectedLot.honeyVariety})` : ""},
+              {selectedLot.varietalName ? ` (${selectedLot.varietalName})` : ""},
               so the lot follows them to serials and sales.
             </p>
           )}

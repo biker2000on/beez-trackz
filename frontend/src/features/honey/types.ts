@@ -287,7 +287,7 @@ export interface ApiaryOption {
 export interface HoneyLotBalance {
   lotId: string;
   lotCode: string;
-  honeyVariety: string | null;
+  /** The varietal is the honey's name; both are null for an unassigned lot. */
   varietalId: string | null;
   varietalName: string | null;
   extractionDate: string;

@@ -121,7 +121,7 @@ export function LotsTab() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={`/api/v1/harvest-lots/${lot.id}/qr`} alt={`QR code for ${lot.lotCode}`} className="size-[88px] rounded-md border bg-white p-1" />
                   <div className="grid content-start gap-1 text-sm">
-                    <p className="font-medium">{lot.floralClaim || (lot.honeyVariety ?? "Honey")}{lot.season ? ` · ${lot.season}` : ""}</p>
+                    <p className="font-medium">{lot.floralClaim || (lot.varietalName ?? "No varietal assigned")}{lot.season ? ` · ${lot.season}` : ""}</p>
                     <p className="text-xs text-muted-foreground">
                       {lot.apiaryRegion ?? (lot.sourceApiaries.join(", ") || "Region not published")}
                     </p>
@@ -219,9 +219,8 @@ function LotFormDialog({
   const [weightSource, setWeightSource] = React.useState<"manual" | "derived">(
     () => lot?.honeyWeightSource ?? "derived",
   );
-  const [variety, setVariety] = React.useState(lot?.honeyVariety ?? "");
-  // The canonical varietal drives the balance rollups; the free-text variety
-  // beside it stays the label copy for this one lot.
+  // The varietal is the honey's name: it titles the public Honey Story and
+  // groups the balance rollups. There is no free-text name beside it.
   const [varietalId, setVarietalId] = React.useState(lot?.varietalId ?? "");
   const varietals = useHoneyVarietals();
   const [claimSpecies, setClaimSpecies] = React.useState(
@@ -288,7 +287,6 @@ function LotFormDialog({
     setDate(todayISO());
     setWeight("");
     setWeightSource("derived");
-    setVariety("");
     setVarietalId("");
     setClaimSpecies("");
     setClaimYear("");
@@ -335,7 +333,6 @@ function LotFormDialog({
       claimYear: claimYearNumber,
       claimApiaryId: claimApiaryId || undefined,
       claimElevationM: elevation?.meters,
-      honeyVariety: variety.trim() || undefined,
       varietalId: varietalId || null,
       season: season.trim() || undefined,
       apiaryRegion: region.trim() || undefined,
@@ -467,7 +464,9 @@ function LotFormDialog({
               </Select>
             </div>
             <p className="text-xs text-muted-foreground sm:col-span-3">
-              The varietal rolls this lot&rsquo;s balances up on the varietals page.
+              The varietal is this honey&rsquo;s name: it titles the public
+              Honey Story and rolls the lot&rsquo;s balances up on the
+              varietals page. An unassigned lot is shown by its lot code.
             </p>
           </div>
           {moistureError ? (
@@ -505,7 +504,6 @@ function LotFormDialog({
             </p>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="grid gap-1.5"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} placeholder="Wildflower" /></div>
             <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
             <div className="grid gap-1.5"><Label>Approximate region</Label><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Western New York" /></div>
           </div>

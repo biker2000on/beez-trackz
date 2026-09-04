@@ -2567,8 +2567,8 @@ func TestJarringWithLotCreatesBottlingRunsAndRespectsLotWeight(t *testing.T) {
 	ctx := context.Background()
 	var lotID uuid.UUID
 	if err := server.pool.QueryRow(ctx, `
-		INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs, honey_variety)
-		VALUES ('LOT-BASSWOOD','lot-basswood',CURRENT_DATE, 40, 'Basswood') RETURNING id`).
+		INSERT INTO harvest_lots (lot_code, public_slug, extraction_date, honey_weight_lbs)
+		VALUES ('LOT-BASSWOOD','lot-basswood',CURRENT_DATE, 40) RETURNING id`).
 		Scan(&lotID); err != nil {
 		t.Fatalf("seed lot: %v", err)
 	}

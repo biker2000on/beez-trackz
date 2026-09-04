@@ -102,8 +102,9 @@ event type, and notes. Both feed the unified hive timeline.
 
 ### harvest_lots, bottling_runs, and jar_serials
 Harvest lots store unique lot code/public slug, extraction date and weight,
-variety, season, approximate region, bloom/story/testing data, reorder URL,
-and public flag. Join tables connect source `honey_harvests` and curated
+a varietal reference (`varietal_id` -> `honey_varietals`, the honey's only
+name; migration 00058 dropped the old free-text `honey_variety`), season,
+approximate region, bloom/story/testing data, reorder URL, and public flag. Join tables connect source `honey_harvests` and curated
 `photos`. Bottling runs connect a lot to a jar size, date, quantity, honey
 weight, and optional globally unique jar serials.
 
