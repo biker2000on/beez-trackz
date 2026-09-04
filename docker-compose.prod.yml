@@ -3,9 +3,10 @@
 # Go API + worker, Next.js web (view layer), Postgres, Redis, MinIO.
 # Traefik routes /api/* straight to the Go API and everything else to the
 # Next server. Primary host: https://atlas.gentlebeeapiary.com (Cloudflare
-# tunnel). https://beez.adventureintandem.com stays routed so QR codes
-# printed before the move keep resolving; the apex gentlebeeapiary.com
-# (Cloudflare Pages) proxies /honey/* here for public Honey Stories.
+# tunnel; trackz.gentlebeeapiary.com redirects there). The former
+# beez.adventureintandem.com host was dropped 2026-09-04 (no labels were ever
+# printed against it); the apex gentlebeeapiary.com worker proxies /honey/*
+# here for public Honey Stories.
 #
 # Required in .env (dockhand: .env.dockhand):
 #   POSTGRES_PASSWORD=<password>
@@ -83,12 +84,6 @@ services:
       traefik.enable: "true"
       # Keep the API route on a path-segment boundary so frontend routes such
       # as /apiaries are not captured by Traefik and sent to the Go service.
-      traefik.http.routers.beez-trackz-api.rule: Host(`beez.adventureintandem.com`) && PathPrefix(`/api/`)
-      traefik.http.routers.beez-trackz-api.entrypoints: websecure
-      traefik.http.routers.beez-trackz-api.tls: "true"
-      traefik.http.routers.beez-trackz-api.tls.certresolver: cloudflare
-      traefik.http.routers.beez-trackz-api.tls.domains[0].main: adventureintandem.com
-      traefik.http.routers.beez-trackz-api.tls.domains[0].sans: "*.adventureintandem.com"
       # Primary host (since 2026-09-04): atlas.gentlebeeapiary.com.
       traefik.http.routers.atlas-api.rule: Host(`atlas.gentlebeeapiary.com`) && PathPrefix(`/api/`)
       traefik.http.routers.atlas-api.entrypoints: websecure
@@ -144,12 +139,6 @@ services:
         condition: service_healthy
     labels:
       traefik.enable: "true"
-      traefik.http.routers.beez-trackz.rule: Host(`beez.adventureintandem.com`)
-      traefik.http.routers.beez-trackz.entrypoints: websecure
-      traefik.http.routers.beez-trackz.tls: "true"
-      traefik.http.routers.beez-trackz.tls.certresolver: cloudflare
-      traefik.http.routers.beez-trackz.tls.domains[0].main: adventureintandem.com
-      traefik.http.routers.beez-trackz.tls.domains[0].sans: "*.adventureintandem.com"
       # Primary host (since 2026-09-04).
       traefik.http.routers.atlas.rule: Host(`atlas.gentlebeeapiary.com`)
       traefik.http.routers.atlas.entrypoints: websecure
