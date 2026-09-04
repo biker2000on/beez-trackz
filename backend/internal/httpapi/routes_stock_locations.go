@@ -117,7 +117,7 @@ type stockLocationRow struct {
 }
 
 const stockLocationSelect = `
-	SELECT l.id, l.name, l.slug, l.is_home, l.is_consignment, l.customer_id, c.name,
+	SELECT l.id, l.name, COALESCE(l.slug, ''), l.is_home, l.is_consignment, l.customer_id, c.name,
 	       l.price_basis, l.commission_bps, l.wholesale_price_list_id, w.name,
 	       l.settlement_cadence, l.address, l.notes, l.is_active, l.created_at, l.updated_at
 	FROM inventory_locations l

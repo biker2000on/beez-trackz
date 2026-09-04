@@ -91,7 +91,7 @@ func TestStockLocationReadersServeABaselineDatabase(t *testing.T) {
 	// exact location; such rows have no legacy source_id to fall back to.
 	response, body = call(t, server.stockLocationSaleCreate,
 		baselineRequest(userID, http.MethodPost, "/stock-locations/"+standID.String()+"/sales", map[string]any{
-			"date": time.Now().UTC().Format("2006-01-02"), "channel": "farm_stand",
+			"date": time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02"), "channel": "farm_stand",
 			"orderStatus": "draft",
 			"lines":       []map[string]any{{"jarSizeId": jarID.String(), "quantity": 2, "unitPrice": 12.00}},
 		}, "id", standID.String()))
@@ -208,7 +208,7 @@ func baselineJarStock(t *testing.T, server *Server, userID uuid.UUID, quantity i
 	}
 	response, body := call(t, server.honeyRecordJarring,
 		baselineRequest(userID, http.MethodPost, "/honey/jarring", map[string]any{
-			"date": time.Now().UTC().Format("2006-01-02"), "lotId": lotID.String(),
+			"date": time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02"), "lotId": lotID.String(),
 			"lines": []map[string]any{{"jarSizeId": jarID.String(), "quantity": quantity}},
 		}))
 	baselineOK(t, "jar stock", response)
@@ -222,7 +222,7 @@ func baselineTransfer(t *testing.T, server *Server, userID, locationID, jarID uu
 	t.Helper()
 	response, _ := call(t, server.stockTransferCreate,
 		baselineRequest(userID, http.MethodPost, "/stock-locations/"+locationID.String()+"/transfers", map[string]any{
-			"date":  time.Now().UTC().Format("2006-01-02"),
+			"date":  time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02"),
 			"lines": []map[string]any{{"jarSizeId": jarID.String(), "quantity": quantity}},
 		}, "id", locationID.String()))
 	baselineOK(t, "transfer stock", response)
