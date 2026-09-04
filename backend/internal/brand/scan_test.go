@@ -34,7 +34,7 @@ func TestBrandLegacyNameScan(t *testing.T) {
 				return nil
 			}
 			if strings.HasSuffix(entry.Name(), "_test.go") || strings.Contains(entry.Name(), ".test.") ||
-				strings.Contains(entry.Name(), ".spec.") {
+				strings.Contains(entry.Name(), ".spec.") || !scannableSource(entry.Name()) {
 				return nil
 			}
 			file, err := os.Open(path)
@@ -43,6 +43,8 @@ func TestBrandLegacyNameScan(t *testing.T) {
 			}
 			defer file.Close()
 			scanner := bufio.NewScanner(file)
+			// Generated sources and fixtures can carry very long lines.
+			scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 			lineNumber := 0
 			for scanner.Scan() {
 				lineNumber++
@@ -61,4 +63,14 @@ func TestBrandLegacyNameScan(t *testing.T) {
 	if len(hits) > 0 {
 		t.Fatalf("legacy user-facing brand found outside the documented machine-identifier allowlist:\n%s", strings.Join(hits, "\n"))
 	}
+}
+
+// scannableSource limits the gate to human-authored source and templates;
+// binaries, fixtures and archives are not presentation surfaces.
+func scannableSource(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".go", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".css", ".html", ".tmpl", ".sql", ".yml", ".yaml", ".json", ".md", ".txt":
+		return true
+	}
+	return false
 }
