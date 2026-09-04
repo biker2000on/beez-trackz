@@ -164,7 +164,7 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
     wave 2 (Today / Yard Queue), wave 3 (idempotent runner, outbox, six
     commands) and wave 4 (Production/Sales workbenches, named commands, first
     outbox consumers) are on main and deployed; waves 5 (route rewrite), 6
-    (Settings split) and 7 (deletion sweep, minus the 30-day-gated API alias)
+    (Settings split) and 7 (deletion sweep; the 30-day-gated `/api/v1/honey/sales` alias was retired 2026-09-04 under an operator waiver)
     landed on main 2026-09-03/04 and were deployed to production 2026-09-04
     01:57Z (image `5c62e72`) behind the snapshot post-artifact-migration
     transform. Status detail:
@@ -185,6 +185,12 @@ queue) **shipped 2026-08-18** — see [`product-history.md`](./product-history.m
     image coordinates, public URLs, API paths/tokens, offline storage keys, and other
     machine contracts stable unless an explicit compatibility migration says
     otherwise. Detailed sequence and acceptance criteria are below.
+    *Shipped 2026-09-04:* runtime brand contract on both sides (`BRAND_*`
+    env, `GET /api/v1/brand`, `frontend/src/lib/brand.ts`), every
+    app-owned surface branded, scan gate in `backend/internal/brand`;
+    production runs as GentleBee Atlas (short name `GentleBee`, the
+    launcher label is capped at 12 code points). Machine identifiers,
+    public Honey Story URLs and offline keys unchanged.
 12. **P1 — Zebra label printing and physical traceability.** Starts after the
     inventory-ledger and workflow/application resets, so printed stock and
     serialized jars consume a single quantity authority through stable workflows.
@@ -1256,8 +1262,12 @@ workflow states are verified before the old pages are removed.
 
 ## P1 — Apiary Atlas brand and white-label migration
 
-**Requested 2026-09-03; execute after the workflow/application reset and before
-Zebra label templates.** The upstream product becomes **Apiary Atlas**. A fresh
+**Requested 2026-09-03; shipped 2026-09-04** (polyagent run
+20260904-item11-runA-bz01; frontend `61e28b2`, backend `689e506`, scan gate
+`9f4d64a`; production rolled out the same day with
+`BRAND_DISPLAY_NAME=GentleBee Atlas` and `BRAND_SHORT_NAME=GentleBee` in the
+stack `.env` — the 12-code-point short-name cap means the full display name
+cannot be the launcher label). The upstream product becomes **Apiary Atlas**. A fresh
 deployment displays that name without configuration; this operator's production
 deployment overrides it with **GentleBee Atlas**. White-labeling must be a
 supported runtime capability, not a search-and-replace fork or a value baked into
