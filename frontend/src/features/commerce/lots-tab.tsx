@@ -448,26 +448,7 @@ function LotFormDialog({
               <Label htmlFor="lot-bottle-moisture">Bottling moisture %</Label>
               <Input id="lot-bottle-moisture" type="number" min="0" max="100" step="0.1" value={bottlingMoisture} onChange={(e) => setBottlingMoisture(e.target.value)} placeholder="Optional" />
             </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="lot-varietal">Varietal</Label>
-              <Select
-                value={varietalId || "none"}
-                onValueChange={(value) => setVarietalId(value === "none" ? "" : value)}
-              >
-                <SelectTrigger id="lot-varietal"><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Unassigned</SelectItem>
-                  {(varietals.data ?? []).map((varietal) => (
-                    <SelectItem key={varietal.id} value={varietal.id}>{varietal.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <p className="text-xs text-muted-foreground sm:col-span-3">
-              The varietal is this honey&rsquo;s name: it titles the public
-              Honey Story and rolls the lot&rsquo;s balances up on the
-              varietals page. An unassigned lot is shown by its lot code.
-            </p>
+            <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
           </div>
           {moistureError ? (
             <p className="text-sm text-destructive">{moistureError}</p>
@@ -504,8 +485,27 @@ function LotFormDialog({
             </p>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
-            <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
+            <div className="grid gap-1.5 sm:col-span-2">
+              <Label htmlFor="lot-varietal">Varietal</Label>
+              <Select
+                value={varietalId || "none"}
+                onValueChange={(value) => setVarietalId(value === "none" ? "" : value)}
+              >
+                <SelectTrigger id="lot-varietal"><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {(varietals.data ?? []).map((varietal) => (
+                    <SelectItem key={varietal.id} value={varietal.id}>{varietal.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid gap-1.5"><Label>Approximate region</Label><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Western New York" /></div>
+            <p className="text-xs text-muted-foreground sm:col-span-3">
+              The varietal is this honey&rsquo;s name: it titles the public
+              Honey Story and rolls the lot&rsquo;s balances up on the
+              varietals page. An unassigned lot is shown by its lot code.
+            </p>
           </div>
           <fieldset className="grid gap-3 rounded-md border p-3">
             <legend className="px-1 text-sm font-medium">
