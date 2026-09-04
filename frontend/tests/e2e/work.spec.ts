@@ -386,6 +386,12 @@ test("arrow keys walk the rendered order and the armed-row guard holds", async (
   await expect
     .poll(() => commands)
     .toEqual([`/api/v1/recommendations/${REC}/dismiss`]);
+  // Letters stand down while a command is still running (busy guard), so
+  // wait for the dismiss receipt to settle before the next key.
+  await expect(page.getByTestId("work-receipt")).toHaveAttribute(
+    "data-phase",
+    "done",
+  );
 
   await page.keyboard.press("ArrowUp");
   await expect(page.getByTestId("work-item").nth(0)).toBeFocused();

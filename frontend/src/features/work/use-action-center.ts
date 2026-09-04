@@ -81,35 +81,44 @@ export function useActionCenter({
   const router = useRouter();
   const [focusedIndex, setFocusedIndex] = React.useState(-1);
   const revealFocused = React.useRef(false);
+  // The keydown listener is re-registered after each render, so a letter
+  // that lands between an arrow key and the next commit must not read a
+  // stale closure. The ref is updated synchronously in the handler and is
+  // the value the handler trusts; state only drives rendering.
+  const focusRef = React.useRef(-1);
 
   const focusIndex =
     focusedIndex < 0 || items.length === 0
       ? -1
       : Math.min(focusedIndex, items.length - 1);
   const focusedId = focusIndex >= 0 ? (items[focusIndex]?.id ?? null) : null;
+  focusRef.current = focusIndex;
 
   React.useEffect(() => {
+    const clamp = (index: number) =>
+      index < 0 || items.length === 0 ? -1 : Math.min(index, items.length - 1);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (keyboardBusy(event.target)) return;
       if (items.length === 0) return;
 
+      const live = clamp(focusRef.current);
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
-        const current =
-          focusIndex < 0 ? (direction > 0 ? -1 : items.length) : focusIndex;
+        const current = live < 0 ? (direction > 0 ? -1 : items.length) : live;
         const next = Math.max(
           0,
           Math.min(items.length - 1, current + direction),
         );
-        if (next !== focusIndex) revealFocused.current = true;
+        if (next !== live) revealFocused.current = true;
+        focusRef.current = next;
         setFocusedIndex(next);
         return;
       }
 
-      const focused = focusIndex >= 0 ? items[focusIndex] : undefined;
+      const focused = live >= 0 ? items[live] : undefined;
       if (!focused) return;
 
       if (event.key === "Enter" || event.key === "o") {
