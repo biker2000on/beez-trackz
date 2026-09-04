@@ -2,7 +2,7 @@
 #
 # Go API + worker, Next.js web (view layer), Postgres, Redis, MinIO.
 # Traefik routes /api/* straight to the Go API and everything else to the
-# Next server. Primary host: https://trackz.gentlebeeapiary.com (Cloudflare
+# Next server. Primary host: https://atlas.gentlebeeapiary.com (Cloudflare
 # tunnel). https://beez.adventureintandem.com stays routed so QR codes
 # printed before the move keep resolving; the apex gentlebeeapiary.com
 # (Cloudflare Pages) proxies /honey/* here for public Honey Stories.
@@ -42,7 +42,7 @@ x-api-env: &api-env
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required and must differ from SESSION_SECRET}
   MINIO_BUCKET: ${MINIO_BUCKET:-beeztrackz-media}
   SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
-  APP_URL: ${APP_URL:-https://trackz.gentlebeeapiary.com}
+  APP_URL: ${APP_URL:-https://atlas.gentlebeeapiary.com}
   # Public Honey Story links and QR codes mint against the apex marketing
   # domain, which proxies /honey/* back to this app. Auth stays on APP_URL.
   PUBLIC_STORY_BASE_URL: ${PUBLIC_STORY_BASE_URL:-https://gentlebeeapiary.com}
@@ -89,9 +89,16 @@ services:
       traefik.http.routers.beez-trackz-api.tls.certresolver: cloudflare
       traefik.http.routers.beez-trackz-api.tls.domains[0].main: adventureintandem.com
       traefik.http.routers.beez-trackz-api.tls.domains[0].sans: "*.adventureintandem.com"
-      # Primary host. Cert issuance needs the traefik CLOUDFLARE_DNS_API_TOKEN
-      # to cover the gentlebeeapiary.com zone; until then the tunnel's
-      # noTLSVerify still delivers traffic under Cloudflare's edge cert.
+      # Primary host (since 2026-09-04): atlas.gentlebeeapiary.com.
+      traefik.http.routers.atlas-api.rule: Host(`atlas.gentlebeeapiary.com`) && PathPrefix(`/api/`)
+      traefik.http.routers.atlas-api.entrypoints: websecure
+      traefik.http.routers.atlas-api.tls: "true"
+      traefik.http.routers.atlas-api.tls.certresolver: cloudflare
+      traefik.http.routers.atlas-api.tls.domains[0].main: gentlebeeapiary.com
+      traefik.http.routers.atlas-api.tls.domains[0].sans: "*.gentlebeeapiary.com"
+      # Previous host: the API keeps answering on trackz so installed PWAs and
+      # queued offline mutations on the old origin still land; the web router
+      # below redirects browsers to atlas.
       traefik.http.routers.trackz-api.rule: Host(`trackz.gentlebeeapiary.com`) && PathPrefix(`/api/`)
       traefik.http.routers.trackz-api.entrypoints: websecure
       traefik.http.routers.trackz-api.tls: "true"
@@ -143,12 +150,24 @@ services:
       traefik.http.routers.beez-trackz.tls.certresolver: cloudflare
       traefik.http.routers.beez-trackz.tls.domains[0].main: adventureintandem.com
       traefik.http.routers.beez-trackz.tls.domains[0].sans: "*.adventureintandem.com"
+      # Primary host (since 2026-09-04).
+      traefik.http.routers.atlas.rule: Host(`atlas.gentlebeeapiary.com`)
+      traefik.http.routers.atlas.entrypoints: websecure
+      traefik.http.routers.atlas.tls: "true"
+      traefik.http.routers.atlas.tls.certresolver: cloudflare
+      traefik.http.routers.atlas.tls.domains[0].main: gentlebeeapiary.com
+      traefik.http.routers.atlas.tls.domains[0].sans: "*.gentlebeeapiary.com"
+      # Previous host redirects to the primary host (permanent, path kept).
       traefik.http.routers.trackz.rule: Host(`trackz.gentlebeeapiary.com`)
       traefik.http.routers.trackz.entrypoints: websecure
       traefik.http.routers.trackz.tls: "true"
       traefik.http.routers.trackz.tls.certresolver: cloudflare
       traefik.http.routers.trackz.tls.domains[0].main: gentlebeeapiary.com
       traefik.http.routers.trackz.tls.domains[0].sans: "*.gentlebeeapiary.com"
+      traefik.http.routers.trackz.middlewares: trackz-to-atlas
+      traefik.http.middlewares.trackz-to-atlas.redirectregex.regex: '^https://trackz\.gentlebeeapiary\.com/(.*)'
+      traefik.http.middlewares.trackz-to-atlas.redirectregex.replacement: 'https://atlas.gentlebeeapiary.com/$${1}'
+      traefik.http.middlewares.trackz-to-atlas.redirectregex.permanent: "true"
       traefik.http.services.beez-trackz.loadbalancer.server.port: "3000"
 
   db:
