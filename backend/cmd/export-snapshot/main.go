@@ -19,6 +19,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
+	"github.com/biker2000on/beez-trackz/backend/internal/brand"
 	"github.com/biker2000on/beez-trackz/backend/internal/config"
 	"github.com/biker2000on/beez-trackz/backend/internal/db"
 	"github.com/biker2000on/beez-trackz/backend/internal/snapshot"
@@ -48,7 +49,7 @@ func main() {
 	defaultOutput := "snapshot-" + time.Now().UTC().Format("20060102T150405Z")
 	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "Postgres connection URL (or DATABASE_URL)")
 	output := flag.String("output", defaultOutput, "new snapshot directory")
-	appCommit := flag.String("app-commit", firstNonempty(os.Getenv("APP_COMMIT"), buildCommit()), "Beez Trackz source commit")
+	appCommit := flag.String("app-commit", firstNonempty(os.Getenv("APP_COMMIT"), buildCommit()), brand.Product+" source commit")
 	exporterVersion := flag.String("exporter-version", snapshot.ExporterVersion, "exporter build/version label")
 	businessTimezone := flag.String("business-timezone", firstNonempty(os.Getenv("BUSINESS_TIMEZONE"), "UTC"), "named timezone for date-only business meaning")
 	currency := flag.String("currency", firstNonempty(os.Getenv("CURRENCY_CODE"), "USD"), "ISO 4217 currency for integer money values")
@@ -66,6 +67,10 @@ func main() {
 	legacySource := flag.Bool("legacy-source", false,
 		"read a database of the PREVIOUS schema generation, read only (for the pre-reset export)")
 	flag.Parse()
+	resolvedBrand, err := brand.Load()
+	if err != nil {
+		log.Fatalf("brand config: %v", err)
+	}
 
 	if strings.TrimSpace(*databaseURL) == "" {
 		log.Fatal("DATABASE_URL or -database-url is required")
@@ -103,6 +108,7 @@ func main() {
 		OutputDirectory: *output, AppCommit: firstNonempty(*appCommit, "unknown"),
 		ExporterVersion: *exporterVersion, BusinessTimezone: *businessTimezone,
 		Currency: strings.ToUpper(*currency), HashMinIO: *hashMinIO, ObjectHasher: hasher,
+		Brand: resolvedBrand,
 	})
 	if err != nil {
 		log.Fatal(err)

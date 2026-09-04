@@ -96,7 +96,7 @@ func (s *Server) mcpPost(w http.ResponseWriter, r *http.Request) {
 				},
 				"serverInfo": map[string]any{
 					"name":    "beez-trackz",
-					"title":   "Beez Trackz",
+					"title":   s.resolvedBrand().DisplayName,
 					"version": "1.0.0",
 				},
 			},

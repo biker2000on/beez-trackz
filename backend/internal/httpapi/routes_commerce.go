@@ -2079,7 +2079,7 @@ func (s *Server) saleReceipt(w http.ResponseWriter, r *http.Request) {
 				balanceDue = 0
 			}
 			writeJSON(w, http.StatusOK, map[string]any{
-				"seller": "Beez Trackz Apiary", "sale": sale,
+				"seller": s.resolvedBrand().DisplayName, "sale": sale,
 				"balanceDue":   balanceDue,
 				"documentType": map[bool]string{true: "receipt", false: "invoice"}[sale.AmountPaid >= sale.TotalAmount],
 			})

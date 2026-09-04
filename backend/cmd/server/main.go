@@ -25,6 +25,7 @@ func main() {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
+	slog.Info("brand resolved", "displayName", cfg.Brand.DisplayName)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

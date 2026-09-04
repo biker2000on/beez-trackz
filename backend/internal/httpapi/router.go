@@ -63,6 +63,8 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store, que
 		r.Use(s.requireSameOrigin)
 		s.mountAuth(r)
 		s.mountPublicCommerce(r)
+		// Runtime presentation identity is public and does not require a session.
+		s.mountPublicRoutes(r)
 		// Authenticated API routes are mounted by domain in routes_*.go files.
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireSession)

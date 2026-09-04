@@ -9,10 +9,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/brand"
 )
 
 // Config holds all runtime configuration, sourced from environment variables.
 type Config struct {
+	// Human-facing deployment identity.
+	Brand brand.Brand
+
 	// HTTP
 	ListenAddr string
 
@@ -61,7 +66,12 @@ type Config struct {
 const defaultTrustedProxies = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 func Load() (*Config, error) {
+	resolvedBrand, err := brand.Load()
+	if err != nil {
+		return nil, fmt.Errorf("brand config: %w", err)
+	}
 	cfg := &Config{
+		Brand:               resolvedBrand,
 		ListenAddr:          getenv("LISTEN_ADDR", ":8080"),
 		DatabaseURL:         os.Getenv("DATABASE_URL"),
 		RedisURL:            getenv("REDIS_URL", "redis://localhost:6379"),

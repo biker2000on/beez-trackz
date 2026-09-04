@@ -26,6 +26,7 @@ func main() {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
+	slog.Info("brand resolved", "displayName", cfg.Brand.DisplayName)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -62,7 +63,7 @@ func main() {
 	eventClient := asynq.NewClient(redisOpt)
 	defer eventClient.Close()
 	eventConsumer := &domainEventConsumer{pool: pool,
-		notifier: notify.DomainEventPublisher{Pool: pool, Client: notify.New(nil)}}
+		notifier: notify.DomainEventPublisher{Pool: pool, Client: notify.New(nil), Brand: cfg.Brand}}
 	mux.Handle(domainEventTaskType, eventConsumer)
 	go runDomainEventDrain(ctx, pool, eventClient)
 	scheduler := asynq.NewScheduler(redisOpt, nil)

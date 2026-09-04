@@ -7,6 +7,18 @@
 #   PHOTO_STORAGE_BACKEND=
 #   IMMICH_BASE_URL=
 #   IMMICH_API_KEY=
+# The API and web development processes run on the host and read these same
+# BRAND_* values from the shell/.env. This reusable map documents the exact
+# container contract if either process is added to a local Compose override.
+x-brand-env: &brand-env
+  BRAND_DISPLAY_NAME: ${BRAND_DISPLAY_NAME:-Apiary Atlas}
+  BRAND_SHORT_NAME: ${BRAND_SHORT_NAME:-Apiary Atlas}
+  BRAND_TAGLINE: ${BRAND_TAGLINE:-Hive, harvest and honey records for a working apiary}
+  BRAND_WORDMARK_URL: ${BRAND_WORDMARK_URL:-}
+  BRAND_MARK_URL: ${BRAND_MARK_URL:-}
+  BRAND_THEME_COLOR: ${BRAND_THEME_COLOR:-#d97706}
+  BRAND_BACKGROUND_COLOR: ${BRAND_BACKGROUND_COLOR:-#fbf7ef}
+
 services:
   db:
     image: postgres:16-alpine

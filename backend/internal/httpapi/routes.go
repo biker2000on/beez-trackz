@@ -6,6 +6,12 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// mountPublicRoutes wires read-only presentation contracts that must be
+// available before session middleware.
+func (s *Server) mountPublicRoutes(r chi.Router) {
+	s.mountBrand(r)
+}
+
 // mountDomains wires all authenticated domain routes. Each domain lives in its
 // own routes_<domain>.go file.
 func (s *Server) mountDomains(r chi.Router) {

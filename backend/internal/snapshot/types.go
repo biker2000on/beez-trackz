@@ -65,11 +65,15 @@ type ExcludedConfiguration struct {
 }
 
 type Manifest struct {
-	FormatVersion         int                     `json:"formatVersion"`
-	ExportedAt            time.Time               `json:"exportedAt"`
-	AppCommit             string                  `json:"appCommit"`
-	SchemaMigration       int64                   `json:"schemaMigration"`
-	ExporterVersion       string                  `json:"exporterVersion"`
+	FormatVersion   int       `json:"formatVersion"`
+	ExportedAt      time.Time `json:"exportedAt"`
+	AppCommit       string    `json:"appCommit"`
+	SchemaMigration int64     `json:"schemaMigration"`
+	ExporterVersion string    `json:"exporterVersion"`
+	// Product and DeploymentBrand are provenance only. Snapshot readers and
+	// restore identity never use either field as a key.
+	Product               string                  `json:"product,omitempty"`
+	DeploymentBrand       string                  `json:"deploymentBrand,omitempty"`
 	Files                 []FileManifest          `json:"files"`
 	Canonical             CanonicalDeclarations   `json:"canonical"`
 	OmittedDomains        []OmittedDomain         `json:"omittedDomains"`

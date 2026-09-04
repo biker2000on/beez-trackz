@@ -648,12 +648,7 @@ func (s *Server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	err = s.ntfyClient().Publish(r.Context(), settings.cfg, notify.Message{
-		Title:    "Beez Trackz",
-		Body:     "Test notification from Beez Trackz.",
-		Priority: 3,
-		Tags:     "bee",
-	})
+	err = s.ntfyClient().Publish(r.Context(), settings.cfg, ntfyTestMessage(s.resolvedBrand().DisplayName))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"success": false,
@@ -662,6 +657,15 @@ func (s *Server) handleNtfyTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+func ntfyTestMessage(displayName string) notify.Message {
+	return notify.Message{
+		Title:    displayName,
+		Body:     fmt.Sprintf("Test notification from %s.", displayName),
+		Priority: 3,
+		Tags:     "bee",
+	}
 }
 
 type complianceHive struct {
@@ -733,6 +737,7 @@ type complianceWindow struct {
 }
 
 type compliancePacket struct {
+	Title             string                `json:"title"`
 	ExportedAt        time.Time             `json:"exportedAt"`
 	Hives             []complianceHive      `json:"hives"`
 	Treatments        []complianceTreatment `json:"treatments"`
@@ -792,7 +797,7 @@ var compliancePrintTemplate = template.Must(template.New("compliance").Funcs(tem
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Beez Trackz compliance packet</title>
+<title>{{.Title}}</title>
 <style>
   :root { color-scheme: light; font-family: Arial, sans-serif; font-size: 10pt; }
   body { margin: 0 auto; max-width: 11in; color: #111; }
@@ -813,7 +818,7 @@ var compliancePrintTemplate = template.Must(template.New("compliance").Funcs(tem
 </head>
 <body>
 <button class="print" onclick="window.print()">Print / save as PDF</button>
-<header><h1>Beez Trackz compliance packet</h1><p class="muted">Exported {{.ExportedAt.UTC.Format "2006-01-02 15:04 MST"}}</p></header>
+<header><h1>{{.Title}}</h1><p class="muted">Exported {{.ExportedAt.UTC.Format "2006-01-02 15:04 MST"}}</p></header>
 
 <h2>Hives ({{len .Hives}})</h2>
 <table><thead><tr><th>Record ID</th><th>Apiary</th><th>Hive</th><th>Status</th><th>Installed</th><th>Deadout</th><th>Archived</th></tr></thead><tbody>
@@ -1027,6 +1032,7 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 	}
 
 	packet := compliancePacket{
+		Title:      fmt.Sprintf("%s compliance packet", s.resolvedBrand().DisplayName),
 		ExportedAt: now, Hives: hives, Treatments: treatments, Lots: lots,
 		Sales: sales, WithdrawalWindows: windows,
 	}
@@ -1043,6 +1049,28 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Disposition",
-		`attachment; filename="beez-trackz-compliance-`+now.Format("2006-01-02")+`.json"`)
+		`attachment; filename="`+brandFilenameStem(s.resolvedBrand().DisplayName)+`-compliance-`+now.Format("2006-01-02")+`.json"`)
 	writeJSON(w, http.StatusOK, packet)
+}
+
+func brandFilenameStem(displayName string) string {
+	var result strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(displayName) {
+		isASCIIAlphanumeric := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+		if isASCIIAlphanumeric {
+			result.WriteRune(r)
+			lastHyphen = false
+			continue
+		}
+		if result.Len() > 0 && !lastHyphen {
+			result.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	stem := strings.Trim(result.String(), "-")
+	if stem == "" {
+		return "apiary-atlas"
+	}
+	return stem
 }

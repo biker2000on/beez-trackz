@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/brand"
 )
 
 // A finding is one observation the gate made. Failures fail the gate;
@@ -129,7 +131,7 @@ func (report gateReport) summary() string {
 	if report.Passed {
 		verdict = "PASSED"
 	}
-	fmt.Fprintf(&out, "Beez Trackz round-trip gate: %s\n", verdict)
+	fmt.Fprintf(&out, "%s round-trip gate: %s\n", brand.Product, verdict)
 	fmt.Fprintf(&out, "  started      %s\n", report.StartedAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(&out, "  finished     %s\n", report.FinishedAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(&out, "  family       %s\n", report.AggregateFamily)

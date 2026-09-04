@@ -1,4 +1,4 @@
-// Command migrate-legacy copies data from a legacy Beez Trackz database
+// Command migrate-legacy copies data from a legacy pre-Go application database
 // (Next.js/drizzle schema) into the new Go-owned schema, and uploads the
 // legacy filesystem media (./data/photos, ./data/audio) into MinIO.
 //

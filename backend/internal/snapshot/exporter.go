@@ -16,6 +16,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/brand"
 )
 
 type ObjectHasher interface {
@@ -31,6 +33,7 @@ type ExportOptions struct {
 	ExportedAt       time.Time
 	HashMinIO        bool
 	ObjectHasher     ObjectHasher
+	Brand            brand.Brand
 }
 
 type ExportResult struct {
@@ -70,6 +73,9 @@ func Export(ctx context.Context, pool *pgxpool.Pool, options ExportOptions) (*Ex
 		options.ExportedAt = time.Now()
 	}
 	options.ExportedAt = options.ExportedAt.UTC()
+	if options.Brand.DisplayName == "" {
+		options.Brand = brand.Default()
+	}
 	if options.HashMinIO && options.ObjectHasher == nil {
 		return nil, fmt.Errorf("snapshot export: MinIO hashing requested without an object hasher")
 	}
@@ -157,7 +163,8 @@ func Export(ctx context.Context, pool *pgxpool.Pool, options ExportOptions) (*Ex
 	manifest := Manifest{
 		FormatVersion: FormatVersion, ExportedAt: options.ExportedAt,
 		AppCommit: options.AppCommit, SchemaMigration: schemaMigration,
-		ExporterVersion: options.ExporterVersion, Files: files,
+		ExporterVersion: options.ExporterVersion, Product: brand.Product,
+		DeploymentBrand: options.Brand.DisplayName, Files: files,
 		Canonical: CanonicalDeclarations{
 			JSON: CanonicalizationVersion, Encoding: "UTF-8 without BOM", LineEnding: "LF",
 			Timestamps:          "RFC3339Nano UTC; timestamptz values end in Z; date-only business dates remain YYYY-MM-DD",

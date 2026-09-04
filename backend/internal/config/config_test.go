@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,17 @@ func TestLoadRequiresCoreSecrets(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	if _, err := Load(); err == nil {
 		t.Error("missing DATABASE_URL was accepted")
+	}
+}
+
+func TestBrandConfigFailsFast(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example/db")
+	t.Setenv("SESSION_SECRET", "test-secret")
+	t.Setenv("MINIO_ACCESS_KEY", "access")
+	t.Setenv("MINIO_SECRET_KEY", "secret")
+	t.Setenv("BRAND_DISPLAY_NAME", "<script>alert(1)</script>")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "brand config") {
+		t.Fatalf("invalid brand error = %v", err)
 	}
 }
 

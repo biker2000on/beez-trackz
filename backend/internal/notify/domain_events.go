@@ -2,8 +2,10 @@ package notify
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
+	"github.com/biker2000on/beez-trackz/backend/internal/brand"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,6 +16,7 @@ import (
 type DomainEventPublisher struct {
 	Pool   *pgxpool.Pool
 	Client *Client
+	Brand  brand.Brand
 }
 
 func (p DomainEventPublisher) Publish(ctx context.Context, event app.StoredEvent) error {
@@ -39,16 +42,27 @@ func (p DomainEventPublisher) Publish(ctx context.Context, event app.StoredEvent
 	if token != nil {
 		cfg.AccessToken = *token
 	}
-	msg := Message{Priority: 3, Tags: "bee"}
-	switch event.Type {
-	case "sale.recorded":
-		msg.Title = "Sale recorded"
-		msg.Body = "A sale was recorded in Beez Trackz."
-	case "harvest_entry.added":
-		msg.Title = "Harvest entry added"
-		msg.Body = "A harvest weight was added in Beez Trackz."
-	default:
+	msg, ok := messageForDomainEvent(p.Brand, event.Type)
+	if !ok {
 		return nil
 	}
 	return p.Client.Publish(ctx, cfg, msg)
+}
+
+func messageForDomainEvent(deployment brand.Brand, eventType string) (Message, bool) {
+	if deployment.DisplayName == "" {
+		deployment = brand.Default()
+	}
+	msg := Message{Priority: 3, Tags: "bee"}
+	switch eventType {
+	case "sale.recorded":
+		msg.Title = fmt.Sprintf("Sale recorded · %s", deployment.DisplayName)
+		msg.Body = fmt.Sprintf("A sale was recorded in %s.", deployment.DisplayName)
+	case "harvest_entry.added":
+		msg.Title = fmt.Sprintf("Harvest entry added · %s", deployment.DisplayName)
+		msg.Body = fmt.Sprintf("A harvest weight was added in %s.", deployment.DisplayName)
+	default:
+		return Message{}, false
+	}
+	return msg, true
 }

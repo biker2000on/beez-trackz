@@ -137,13 +137,27 @@ func TestOpsRoutesRequireAuthentication(t *testing.T) {
 func TestCompliancePrintTemplateRenders(t *testing.T) {
 	t.Parallel()
 	var out strings.Builder
-	packet := compliancePacket{ExportedAt: time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC)}
+	packet := compliancePacket{
+		Title:      "GentleBee Atlas compliance packet",
+		ExportedAt: time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC),
+	}
 	if err := compliancePrintTemplate.Execute(&out, packet); err != nil {
 		t.Fatalf("render empty packet: %v", err)
 	}
 	html := out.String()
-	if !strings.Contains(html, "<title>Beez Trackz compliance packet</title>") {
+	if !strings.Contains(html, "<title>GentleBee Atlas compliance packet</title>") {
 		t.Fatal("print view missing title")
+	}
+}
+
+func TestOpsNotificationAndComplianceNamesUseBrand(t *testing.T) {
+	t.Parallel()
+	message := ntfyTestMessage("Orchard Ledger")
+	if message.Title != "Orchard Ledger" || message.Body != "Test notification from Orchard Ledger." {
+		t.Fatalf("test notification = %#v", message)
+	}
+	if got := brandFilenameStem("GentleBee Atlas"); got != "gentlebee-atlas" {
+		t.Fatalf("filename stem = %q", got)
 	}
 }
 
