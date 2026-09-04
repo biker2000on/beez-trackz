@@ -442,15 +442,33 @@ function LotFormDialog({
               )}
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5">
               <Label htmlFor="lot-moisture">Extraction moisture %</Label>
               <Input id="lot-moisture" type="number" min="0" max="100" step="0.1" value={moisture} onChange={(e) => setMoisture(e.target.value)} placeholder="17.8" />
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="lot-bottle-moisture">Bottling moisture % (optional)</Label>
-              <Input id="lot-bottle-moisture" type="number" min="0" max="100" step="0.1" value={bottlingMoisture} onChange={(e) => setBottlingMoisture(e.target.value)} />
+              <Label htmlFor="lot-bottle-moisture">Bottling moisture %</Label>
+              <Input id="lot-bottle-moisture" type="number" min="0" max="100" step="0.1" value={bottlingMoisture} onChange={(e) => setBottlingMoisture(e.target.value)} placeholder="Optional" />
             </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-varietal">Varietal</Label>
+              <Select
+                value={varietalId || "none"}
+                onValueChange={(value) => setVarietalId(value === "none" ? "" : value)}
+              >
+                <SelectTrigger id="lot-varietal"><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {(varietals.data ?? []).map((varietal) => (
+                    <SelectItem key={varietal.id} value={varietal.id}>{varietal.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground sm:col-span-3">
+              The varietal rolls this lot&rsquo;s balances up on the varietals page.
+            </p>
           </div>
           {moistureError ? (
             <p className="text-sm text-destructive">{moistureError}</p>
@@ -486,23 +504,7 @@ function LotFormDialog({
                 : ""}
             </p>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="grid gap-1.5">
-              <Label>Varietal</Label>
-              <Select
-                value={varietalId || "none"}
-                onValueChange={(value) => setVarietalId(value === "none" ? "" : value)}
-              >
-                <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Unassigned</SelectItem>
-                  {(varietals.data ?? []).map((varietal) => (
-                    <SelectItem key={varietal.id} value={varietal.id}>{varietal.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Rolls this lot&rsquo;s balances up on the varietals page.</p>
-            </div>
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label>Variety</Label><Input value={variety} onChange={(e) => setVariety(e.target.value)} placeholder="Wildflower" /></div>
             <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
             <div className="grid gap-1.5"><Label>Approximate region</Label><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Western New York" /></div>
