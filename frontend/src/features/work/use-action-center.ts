@@ -92,7 +92,11 @@ export function useActionCenter({
       ? -1
       : Math.min(focusedIndex, items.length - 1);
   const focusedId = focusIndex >= 0 ? (items[focusIndex]?.id ?? null) : null;
-  focusRef.current = focusIndex;
+  // Keep the ref in step with committed state (e.g. the list shrank and the
+  // clamp moved the focus); arrow keys update it synchronously themselves.
+  React.useEffect(() => {
+    focusRef.current = focusIndex;
+  }, [focusIndex]);
 
   React.useEffect(() => {
     const clamp = (index: number) =>
