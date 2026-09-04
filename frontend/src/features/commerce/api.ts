@@ -10,6 +10,8 @@ export interface HarvestLot {
   lotCode: string;
   publicSlug: string;
   extractionDate: string;
+  /** The day the frames/supers came off the hives; the season's prefill anchor. */
+  pulledOn: string | null;
   honeyWeightLbs: number;
   honeyWeightEntered: string | null;
   /**
@@ -76,12 +78,15 @@ export interface HarvestLotInput {
   lotCode: string;
   publicSlug?: string;
   extractionDate: string;
+  /** YYYY-MM-DD; null clears it. */
+  pulledOn?: string | null;
   /** Omitted when the weight is derived from the linked harvests. */
   honeyWeightLbs?: number;
   honeyWeightSource?: "manual" | "derived";
   honeyWeightEntered?: string;
   /** null clears the varietal; the PATCH writes this field absolutely. */
   varietalId?: string | null;
+  /** Derived server-side from the varietal when omitted. */
   claimSpecies?: string;
   claimYear?: number;
   claimApiaryId?: string;
@@ -273,6 +278,63 @@ export function useUpdateHarvestLot() {
       api.patch(`/harvest-lots/${id}`, body),
     "Harvest lot updated",
   );
+}
+
+/**
+ * What the yard already knows about a pull window, so the lot dialog fills
+ * itself in from the season's notes instead of asking for them again.
+ */
+export interface LotPrefill {
+  season: string | null;
+  claimYear: number | null;
+  apiaryRegion: string | null;
+  elevationM: number | null;
+  bloomNotes: string | null;
+  suggestedVarietalId: string | null;
+  harvests: LotPrefillHarvest[];
+}
+
+export interface LotPrefillHarvest {
+  id: string;
+  hiveId: string;
+  hiveName: string;
+  sessionId: string | null;
+  date: string;
+  calculatedHoneyWeight: number;
+  directWeight: boolean;
+  /** Set when another lot already claims this harvest. */
+  inLotId: string | null;
+  /** Falls inside the pull window, so the dialog ticks it by default. */
+  suggested: boolean;
+}
+
+export function fetchLotPrefill(
+  params: { apiaryId: string; pulledOn: string; extractedOn: string },
+  signal?: AbortSignal,
+): Promise<LotPrefill> {
+  return api.get<LotPrefill>("/lots/prefill", { params, signal });
+}
+
+export interface LotStoryDraft {
+  story: string;
+  provider: string;
+  sources: {
+    inspections: number;
+    harvests: number;
+    bloomObservations: number;
+    weatherDays: number;
+  };
+}
+
+/** 503 (ApiError) when no AI provider is configured. */
+export function draftLotStory(body: {
+  apiaryId: string;
+  pulledOn: string;
+  extractedOn: string;
+  varietalId?: string;
+  harvestIds?: string[];
+}): Promise<LotStoryDraft> {
+  return api.post<LotStoryDraft>("/lots/story-draft", body);
 }
 
 export function useCreateBottlingRun(lotId: string) {

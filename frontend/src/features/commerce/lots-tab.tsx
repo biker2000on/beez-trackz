@@ -3,12 +3,16 @@
 import * as React from "react";
 import Link from "next/link";
 import {
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
+  Loader2,
   PackagePlus,
   Pencil,
   Plus,
   QrCode,
   ScanSearch,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -42,20 +46,27 @@ import {
   useHoneyVarietals,
   useJarInventory,
 } from "@/features/honey/hooks";
+import { ApiError } from "@/lib/api";
 import {
+  METERS_PER_FOOT,
   parseElevation,
   parseHoneyMassInput,
   parseMass,
   preferredElevationSuffix,
+  type UnitsSystem,
 } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 import { todayISO } from "@/features/honey/format";
 import {
+  draftLotStory,
+  fetchLotPrefill,
   useCreateBottlingRun,
   useCreateHarvestLot,
   useHarvestLots,
   useUpdateHarvestLot,
   type HarvestLot,
+  type LotPrefill,
+  type LotStoryDraft,
 } from "./api";
 
 function honeyStoryHref(slug: string) {
@@ -181,6 +192,28 @@ export function LotsTab() {
   );
 }
 
+/** Fields the yard prefill may write. Each one stops auto-filling once typed in. */
+type AutoField = "season" | "region" | "elevation" | "year" | "bloom" | "varietal";
+
+/** The elevation the way the operator types it, so the auto value reads like their own. */
+function elevationInput(meters: number, units: UnitsSystem): string {
+  return units === "us"
+    ? `${Math.round(meters / METERS_PER_FOOT)} ft`
+    : `${Math.round(meters)} m`;
+}
+
+function AutoHint({ on }: { on: boolean }) {
+  if (!on) return null;
+  return (
+    <span
+      data-testid="auto-hint"
+      className="rounded-sm bg-muted px-1 text-[10px] font-normal uppercase tracking-wide text-muted-foreground"
+    >
+      auto
+    </span>
+  );
+}
+
 /** Create a lot, or — when `lot` is set — edit it in place (same fields). */
 function LotFormDialog({
   open,
@@ -204,6 +237,11 @@ function LotFormDialog({
   const [date, setDate] = React.useState(
     () => lot?.extractionDate?.slice(0, 10) ?? todayISO(),
   );
+  // The day the supers came off. With the yard and the extraction date it
+  // bounds the window the prefill reads the season's notes from.
+  const [pulledOn, setPulledOn] = React.useState(
+    () => lot?.pulledOn?.slice(0, 10) ?? "",
+  );
   // Seed from the typed text only when it names its unit. A bare number
   // stored by one preference must not be re-parsed under another — that
   // would silently rewrite honey_weight_lbs (the bottling ceiling).
@@ -220,12 +258,10 @@ function LotFormDialog({
     () => lot?.honeyWeightSource ?? "derived",
   );
   // The varietal is the honey's name: it titles the public Honey Story and
-  // groups the balance rollups. There is no free-text name beside it.
+  // groups the balance rollups. There is no free-text name beside it. The
+  // claim species is derived from it server-side, so it is not asked twice.
   const [varietalId, setVarietalId] = React.useState(lot?.varietalId ?? "");
   const varietals = useHoneyVarietals();
-  const [claimSpecies, setClaimSpecies] = React.useState(
-    lot?.claimSpecies ?? "",
-  );
   const [claimYear, setClaimYear] = React.useState(
     lot?.claimYear != null ? String(lot.claimYear) : "",
   );
@@ -242,9 +278,13 @@ function LotFormDialog({
   const [bloom, setBloom] = React.useState(lot?.bloomNotes ?? "");
   const [story, setStory] = React.useState(lot?.beekeeperStory ?? "");
   const [reorder, setReorder] = React.useState(lot?.reorderUrl ?? "");
-  const [harvestIds, setHarvestIds] = React.useState<string[]>(
+  // Two selections: what the operator ticked, and what the prefill suggested.
+  // A later prefill may replace its own suggestions but never the operator's.
+  const [userHarvestIds, setUserHarvestIds] = React.useState<string[]>(
     () => lot?.sourceHarvestIds ?? [],
   );
+  const [autoHarvestIds, setAutoHarvestIds] = React.useState<string[]>([]);
+  const [showAllHarvests, setShowAllHarvests] = React.useState(false);
   const [photoIds, setPhotoIds] = React.useState(
     () => lot?.photos.map((photo) => photo.id).join(", ") ?? "",
   );
@@ -269,6 +309,163 @@ function LotFormDialog({
   );
   const [moistureError, setMoistureError] = React.useState<string | null>(null);
 
+  // --- Prefill from the yard --------------------------------------------
+  // A field the operator has typed in is theirs; the prefill only writes the
+  // others, and marks what it wrote so the "auto" hint can say so until the
+  // operator edits it.
+  const [touched, setTouched] = React.useState<ReadonlySet<AutoField>>(
+    () => new Set(),
+  );
+  const [autoFilled, setAutoFilled] = React.useState<ReadonlySet<AutoField>>(
+    () => new Set(),
+  );
+  const [prefill, setPrefill] = React.useState<LotPrefill | null>(null);
+  const touch = React.useCallback((field: AutoField) => {
+    setTouched((current) => new Set(current).add(field));
+    setAutoFilled((current) => {
+      if (!current.has(field)) return current;
+      const next = new Set(current);
+      next.delete(field);
+      return next;
+    });
+  }, []);
+  // The prefill effect reads these when its response lands, without
+  // re-running (and re-fetching) every time one of them changes.
+  const latest = React.useRef({ touched, autoFilled, varietalId, units: units.units });
+  React.useEffect(() => {
+    latest.current = { touched, autoFilled, varietalId, units: units.units };
+  }, [touched, autoFilled, varietalId, units.units]);
+
+  const prefillKey =
+    claimApiaryId && pulledOn && date ? `${claimApiaryId}|${pulledOn}|${date}` : "";
+  // An existing lot is not re-read on open: its fields are what was saved.
+  // Only a change of yard or dates after opening asks the yard again.
+  const lastPrefillKey = React.useRef(lot ? prefillKey : "");
+
+  React.useEffect(() => {
+    if (!prefillKey || prefillKey === lastPrefillKey.current) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      lastPrefillKey.current = prefillKey;
+      fetchLotPrefill(
+        { apiaryId: claimApiaryId, pulledOn, extractedOn: date },
+        controller.signal,
+      )
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          const { touched, autoFilled, varietalId, units } = latest.current;
+          const nextAuto = new Set(autoFilled);
+          const write = (
+            field: AutoField,
+            value: string | null,
+            set: (value: string) => void,
+          ) => {
+            if (touched.has(field)) return;
+            if (value) {
+              set(value);
+              nextAuto.add(field);
+            } else if (autoFilled.has(field)) {
+              // The previous yard's value does not belong to this one.
+              set("");
+              nextAuto.delete(field);
+            }
+          };
+          write("season", data.season, setSeason);
+          write("region", data.apiaryRegion, setRegion);
+          write(
+            "elevation",
+            data.elevationM != null ? elevationInput(data.elevationM, units) : null,
+            setClaimElevation,
+          );
+          write(
+            "year",
+            data.claimYear != null ? String(data.claimYear) : null,
+            setClaimYear,
+          );
+          write("bloom", data.bloomNotes, setBloom);
+          if (
+            !touched.has("varietal") &&
+            data.suggestedVarietalId &&
+            (!varietalId || autoFilled.has("varietal"))
+          ) {
+            setVarietalId(data.suggestedVarietalId);
+            nextAuto.add("varietal");
+          }
+          setAutoFilled(nextAuto);
+          setAutoHarvestIds(
+            data.harvests
+              .filter(
+                (harvest) =>
+                  harvest.suggested &&
+                  (harvest.inLotId == null || harvest.inLotId === lot?.id),
+              )
+              .map((harvest) => harvest.id),
+          );
+          setPrefill(data);
+        })
+        .catch((cause: unknown) => {
+          if (controller.signal.aborted) return;
+          toast.error(
+            cause instanceof Error && cause.message
+              ? `Could not read the yard's notes: ${cause.message}`
+              : "Could not read the yard's notes",
+          );
+        });
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [prefillKey, claimApiaryId, pulledOn, date, lot?.id]);
+
+  // --- Source harvests ---------------------------------------------------
+  const harvestIds = React.useMemo(
+    () => Array.from(new Set([...userHarvestIds, ...autoHarvestIds])),
+    [userHarvestIds, autoHarvestIds],
+  );
+  const prefillHarvests = React.useMemo(
+    () => new Map((prefill?.harvests ?? []).map((harvest) => [harvest.id, harvest])),
+    [prefill],
+  );
+  const harvestRows = React.useMemo(
+    () =>
+      (harvests ?? []).map((harvest) => {
+        const known = prefillHarvests.get(harvest.id);
+        const inLotId = known?.inLotId ?? null;
+        return {
+          ...harvest,
+          suggested: known?.suggested ?? false,
+          // The lot's own harvests are not "in another lot".
+          claimed: inLotId != null && inLotId !== lot?.id,
+        };
+      }),
+    [harvests, prefillHarvests, lot?.id],
+  );
+  const featuredRows = harvestRows.filter(
+    (row) => row.suggested || harvestIds.includes(row.id),
+  );
+  const visibleRows = showAllHarvests
+    ? [...featuredRows, ...harvestRows.filter((row) => !featuredRows.includes(row))]
+    : featuredRows;
+  const hiddenCount = harvestRows.length - featuredRows.length;
+  const apiaryNames = Array.from(new Set(visibleRows.map((row) => row.apiaryName)));
+  const groupedRows =
+    apiaryNames.length > 1
+      ? apiaryNames.map((name) => ({
+          name,
+          rows: visibleRows.filter((row) => row.apiaryName === name),
+        }))
+      : [{ name: null, rows: visibleRows }];
+
+  function toggleHarvest(id: string, checked: boolean) {
+    if (checked) {
+      setUserHarvestIds((current) => (current.includes(id) ? current : [...current, id]));
+    } else {
+      setUserHarvestIds((current) => current.filter((item) => item !== id));
+      setAutoHarvestIds((current) => current.filter((item) => item !== id));
+    }
+  }
+
   // Previewed client-side from the ticked harvests so the number moves with
   // the checkboxes; the server recomputes the same SUM on save.
   const selectedHarvests = (harvests ?? []).filter((harvest) =>
@@ -282,13 +479,56 @@ function LotFormDialog({
   const derivable = selectedHarvests.length > 0;
   const useDerived = weightSource === "derived" && derivable;
 
+  // --- Beekeeper story ---------------------------------------------------
+  const [drafting, setDrafting] = React.useState(false);
+  const [draftSources, setDraftSources] = React.useState<
+    LotStoryDraft["sources"] | null
+  >(null);
+  const canDraft = Boolean(claimApiaryId && pulledOn && date);
+
+  async function draftStory() {
+    if (!canDraft || drafting) return;
+    if (
+      story.trim() &&
+      !window.confirm("Replace the current beekeeper story with an AI draft?")
+    ) {
+      return;
+    }
+    setDrafting(true);
+    try {
+      const draft = await draftLotStory({
+        apiaryId: claimApiaryId,
+        pulledOn,
+        extractedOn: date,
+        varietalId: varietalId || undefined,
+        harvestIds: harvestIds.length > 0 ? harvestIds : undefined,
+      });
+      setStory(draft.story);
+      setDraftSources(draft.sources);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 503) {
+        toast.error(
+          "No AI provider is configured. Add one under Admin, then draft again.",
+        );
+      } else {
+        toast.error(
+          cause instanceof Error && cause.message
+            ? `Could not draft the story: ${cause.message}`
+            : "Could not draft the story",
+        );
+      }
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   function resetDraft() {
     setLotCode("");
     setDate(todayISO());
+    setPulledOn("");
     setWeight("");
     setWeightSource("derived");
     setVarietalId("");
-    setClaimSpecies("");
     setClaimYear("");
     setClaimApiaryId("");
     setClaimElevation("");
@@ -297,7 +537,9 @@ function LotFormDialog({
     setBloom("");
     setStory("");
     setReorder("");
-    setHarvestIds([]);
+    setUserHarvestIds([]);
+    setAutoHarvestIds([]);
+    setShowAllHarvests(false);
     setPhotoIds("");
     setMoisture("");
     setBottlingMoisture("");
@@ -305,6 +547,11 @@ function LotFormDialog({
     setOverrideAccepted(false);
     setOverrideReason("");
     setMoistureError(null);
+    setTouched(new Set());
+    setAutoFilled(new Set());
+    setPrefill(null);
+    setDraftSources(null);
+    lastPrefillKey.current = "";
   }
 
   function submit(resetAfter = false) {
@@ -317,6 +564,7 @@ function LotFormDialog({
     const payload = {
       lotCode: lotCode.trim(),
       extractionDate: date,
+      pulledOn: pulledOn || null,
       // A derived lot sends no weight at all: the server owns the number, and
       // shipping a stale client-side sum would defeat the point.
       honeyWeightSource: useDerived ? ("derived" as const) : ("manual" as const),
@@ -329,7 +577,6 @@ function LotFormDialog({
             ? weight.trim()
             : `${weight.trim()} ${units.units === "metric" ? "kg" : "lb"}`
           : undefined,
-      claimSpecies: claimSpecies.trim() || undefined,
       claimYear: claimYearNumber,
       claimApiaryId: claimApiaryId || undefined,
       claimElevationM: elevation?.meters,
@@ -378,6 +625,8 @@ function LotFormDialog({
     }
   }
 
+  const labelClass = "flex items-center gap-1.5";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
@@ -393,7 +642,6 @@ function LotFormDialog({
         >
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5"><Label htmlFor="lot-code">Lot code</Label><Input id="lot-code" value={lotCode} onChange={(e) => setLotCode(e.target.value)} /></div>
-            <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
             <div className="grid gap-1.5">
               <Label htmlFor="lot-weight">Extracted weight</Label>
               {useDerived ? (
@@ -438,17 +686,49 @@ function LotFormDialog({
                 </>
               )}
             </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5">
               <Label htmlFor="lot-moisture">Extraction moisture %</Label>
               <Input id="lot-moisture" type="number" min="0" max="100" step="0.1" value={moisture} onChange={(e) => setMoisture(e.target.value)} placeholder="17.8" />
+            </div>
+          </div>
+          {/* Where and when: the three inputs everything below is read from. */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-yard">Yard</Label>
+              <Select value={claimApiaryId || "none"} onValueChange={(value) => setClaimApiaryId(value === "none" ? "" : value)}>
+                <SelectTrigger id="lot-yard"><SelectValue placeholder="No yard claimed" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No yard claimed</SelectItem>
+                  {(apiaries.data ?? []).map((apiary) => (
+                    <SelectItem key={apiary.id} value={apiary.id}>{apiary.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-pulled">Frames pulled</Label>
+              <Input id="lot-pulled" type="date" value={pulledOn} max={date || undefined} onChange={(e) => setPulledOn(e.target.value)} />
+            </div>
+            <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+            <p className="text-xs text-muted-foreground sm:col-span-3">
+              Pick the yard and the pull date and the season, region, elevation,
+              bloom notes and harvests fill in from what is already logged there.
+              Anything you type stays yours.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-season" className={labelClass}>Season<AutoHint on={autoFilled.has("season")} /></Label>
+              <Input id="lot-season" value={season} onChange={(e) => { touch("season"); setSeason(e.target.value); }} placeholder="Summer 2026" />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="lot-region" className={labelClass}>Approximate region<AutoHint on={autoFilled.has("region")} /></Label>
+              <Input id="lot-region" value={region} onChange={(e) => { touch("region"); setRegion(e.target.value); }} placeholder="Western New York" />
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="lot-bottle-moisture">Bottling moisture %</Label>
               <Input id="lot-bottle-moisture" type="number" min="0" max="100" step="0.1" value={bottlingMoisture} onChange={(e) => setBottlingMoisture(e.target.value)} placeholder="Optional" />
             </div>
-            <div className="grid gap-1.5"><Label>Season</Label><Input value={season} onChange={(e) => setSeason(e.target.value)} placeholder="Summer 2026" /></div>
           </div>
           {moistureError ? (
             <p className="text-sm text-destructive">{moistureError}</p>
@@ -486,10 +766,10 @@ function LotFormDialog({
           ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5 sm:col-span-2">
-              <Label htmlFor="lot-varietal">Varietal</Label>
+              <Label htmlFor="lot-varietal" className={labelClass}>Varietal<AutoHint on={autoFilled.has("varietal")} /></Label>
               <Select
                 value={varietalId || "none"}
-                onValueChange={(value) => setVarietalId(value === "none" ? "" : value)}
+                onValueChange={(value) => { touch("varietal"); setVarietalId(value === "none" ? "" : value); }}
               >
                 <SelectTrigger id="lot-varietal"><SelectValue placeholder="Unassigned" /></SelectTrigger>
                 <SelectContent>
@@ -500,7 +780,6 @@ function LotFormDialog({
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid gap-1.5"><Label>Approximate region</Label><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Western New York" /></div>
             <p className="text-xs text-muted-foreground sm:col-span-3">
               The varietal is this honey&rsquo;s name: it titles the public
               Honey Story and rolls the lot&rsquo;s balances up on the
@@ -514,47 +793,112 @@ function LotFormDialog({
             <p className="text-xs text-muted-foreground">
               The declared source shared by the lot, the label, and the public
               Honey Story — e.g. &ldquo;Sourwood 2026, Yard B, 2100 ft&rdquo;.
+              The claim species is the varietal above; the yard is the one
+              chosen at the top.
             </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-1.5">
-                <Label htmlFor="claim-species">Species or blend</Label>
-                <Input id="claim-species" value={claimSpecies} onChange={(e) => setClaimSpecies(e.target.value)} placeholder="Sourwood" />
+                <Label htmlFor="claim-year" className={labelClass}>Year<AutoHint on={autoFilled.has("year")} /></Label>
+                <Input id="claim-year" type="number" min="1900" max="2100" value={claimYear} onChange={(e) => { touch("year"); setClaimYear(e.target.value); }} placeholder={String(new Date().getFullYear())} />
               </div>
               <div className="grid gap-1.5">
-                <Label htmlFor="claim-year">Year</Label>
-                <Input id="claim-year" type="number" min="1900" max="2100" value={claimYear} onChange={(e) => setClaimYear(e.target.value)} placeholder={String(new Date().getFullYear())} />
-              </div>
-              <div className="grid gap-1.5">
-                <Label>Yard</Label>
-                <Select value={claimApiaryId || "none"} onValueChange={(value) => setClaimApiaryId(value === "none" ? "" : value)}>
-                  <SelectTrigger><SelectValue placeholder="No yard claimed" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No yard claimed</SelectItem>
-                    {(apiaries.data ?? []).map((apiary) => (
-                      <SelectItem key={apiary.id} value={apiary.id}>{apiary.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="claim-elevation">Elevation ({preferredElevationSuffix(units.units)})</Label>
-                <Input id="claim-elevation" inputMode="decimal" value={claimElevation} onChange={(e) => setClaimElevation(e.target.value)} placeholder={units.units === "us" ? "2100 ft" : "640 m"} />
+                <Label htmlFor="claim-elevation" className={labelClass}>Elevation ({preferredElevationSuffix(units.units)})<AutoHint on={autoFilled.has("elevation")} /></Label>
+                <Input id="claim-elevation" inputMode="decimal" value={claimElevation} onChange={(e) => { touch("elevation"); setClaimElevation(e.target.value); }} placeholder={units.units === "us" ? "2100 ft" : "640 m"} />
               </div>
             </div>
           </fieldset>
-          <div className="grid gap-1.5">
-            <Label>Source hive harvests</Label>
-            <div className="grid max-h-36 gap-2 overflow-y-auto rounded-md border p-3 sm:grid-cols-2">
-              {(harvests ?? []).map((harvest) => (
-                <label key={harvest.id} className="flex items-center gap-2 text-sm">
-                  <Checkbox checked={harvestIds.includes(harvest.id)} onCheckedChange={(checked) => setHarvestIds((current) => checked ? [...current, harvest.id] : current.filter((id) => id !== harvest.id))} />
-                  {harvest.apiaryName} · {harvest.hiveName} · {formatLbs(harvest.calculatedHoneyWeight)}
-                </label>
-              ))}
+          <div className="grid gap-1.5" data-testid="lot-harvests">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Source hive harvests</Label>
+              <span className="text-xs text-muted-foreground">
+                {harvestIds.length} of {harvestRows.length} selected
+              </span>
             </div>
+            {harvestRows.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No harvests recorded yet.</p>
+            ) : (
+              <div className="grid gap-3 rounded-md border p-3">
+                {visibleRows.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {prefillKey
+                      ? "No harvests fall in this pull window."
+                      : "Pick a yard and pull date to suggest harvests, or show them all."}
+                  </p>
+                ) : null}
+                {groupedRows.map((group) => (
+                  <div key={group.name ?? "all"} className="grid gap-2">
+                    {group.name ? (
+                      <p className="text-xs font-medium text-muted-foreground">{group.name}</p>
+                    ) : null}
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {group.rows.map((row) => (
+                        <label
+                          key={row.id}
+                          data-testid="lot-harvest-option"
+                          className={`flex items-center gap-2 text-sm ${row.claimed ? "text-muted-foreground" : ""}`}
+                        >
+                          <Checkbox
+                            checked={harvestIds.includes(row.id)}
+                            disabled={row.claimed}
+                            onCheckedChange={(checked) => toggleHarvest(row.id, checked === true)}
+                          />
+                          <span className="truncate">
+                            {group.name ? "" : `${row.apiaryName} · `}
+                            {row.hiveName} · {formatDate(row.date)} · {formatLbs(row.calculatedHoneyWeight)}
+                            {row.claimed ? " · already in a lot" : ""}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {hiddenCount > 0 ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto justify-start p-0 text-xs"
+                    aria-expanded={showAllHarvests}
+                    onClick={() => setShowAllHarvests((current) => !current)}
+                  >
+                    {showAllHarvests ? (
+                      <><ChevronUp /> Show fewer</>
+                    ) : (
+                      <><ChevronDown /> Show all {harvestRows.length} harvests</>
+                    )}
+                  </Button>
+                ) : null}
+              </div>
+            )}
           </div>
-          <div className="grid gap-1.5"><Label>Bloom observations</Label><Textarea value={bloom} onChange={(e) => setBloom(e.target.value)} rows={2} /></div>
-          <div className="grid gap-1.5"><Label>Beekeeper story</Label><Textarea value={story} onChange={(e) => setStory(e.target.value)} rows={3} /></div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="lot-bloom" className={labelClass}>Bloom observations<AutoHint on={autoFilled.has("bloom")} /></Label>
+            <Textarea id="lot-bloom" value={bloom} onChange={(e) => { touch("bloom"); setBloom(e.target.value); }} rows={2} />
+          </div>
+          <div className="grid gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="lot-story">Beekeeper story</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!canDraft || drafting}
+                title={canDraft ? undefined : "Pick the yard and the pull date first"}
+                onClick={() => void draftStory()}
+              >
+                {drafting ? <Loader2 className="animate-spin" /> : <Sparkles />}
+                {drafting ? "Drafting…" : "Draft with AI"}
+              </Button>
+            </div>
+            <Textarea id="lot-story" value={story} onChange={(e) => setStory(e.target.value)} rows={3} />
+            {draftSources ? (
+              <p className="text-xs text-muted-foreground" data-testid="story-draft-sources">
+                AI draft from {draftSources.inspections} inspections,{" "}
+                {draftSources.harvests} harvests, {draftSources.bloomObservations} bloom
+                notes — edit before publishing
+              </p>
+            ) : null}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5"><Label>Reorder link</Label><Input type="url" value={reorder} onChange={(e) => setReorder(e.target.value)} placeholder="https://…" /></div>
             <div className="grid gap-1.5"><Label>Curated photo IDs</Label><Input value={photoIds} onChange={(e) => setPhotoIds(e.target.value)} placeholder="Optional, comma separated" /></div>
