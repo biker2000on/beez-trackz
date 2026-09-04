@@ -36,7 +36,6 @@ func (s *Server) mountOperations(r chi.Router) {
 	r.Get("/analytics/varroa", s.varroaAnalytics)
 	r.Get("/analytics/survival", s.survivalAnalytics)
 	r.Get("/analytics/yield", s.yieldAnalytics)
-	r.Get("/operations/yard-queue", s.yardQueue)
 	r.Get("/treatment-products", s.treatmentProductList)
 	r.With(s.requireAdmin).Patch("/treatment-products/{id}", s.treatmentProductUpdate)
 }

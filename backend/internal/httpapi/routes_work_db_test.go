@@ -4,16 +4,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app/work"
 )
 
-// The wave-1 acceptance criterion: /work/yard returns the same item set and
-// the same order as /operations/yard-queue for a seeded fixture, and every
-// item additionally carries a stable id. yard_queue.go is untouched this
-// wave precisely so the two can be compared here.
+// The wave-1 parity fixture was frozen before the old yard queue assembler
+// was deleted. Keep the expected item set and order explicit here so the
+// replacement cannot drift after its former comparison oracle is gone.
 
 // workParityKey is what the two payloads have in common: which yard, what
 // kind of work, on which hive, titled what, at what priority. The projection
@@ -68,6 +68,7 @@ func newWorkParityFixture(t *testing.T) *workParityFixture {
 			base.hiveA, base.hiveB)
 	})
 
+	treatmentDate := time.Now().UTC().AddDate(0, 0, -2)
 	seed := []struct {
 		into  *uuid.UUID
 		query string
@@ -93,8 +94,8 @@ func newWorkParityFixture(t *testing.T) *workParityFixture {
 			[]any{base.hiveA}},
 		{&f.treatment, `
 			INSERT INTO treatment_events (hive_id, date_applied, product, withdrawal_days)
-			VALUES ($1, now() - interval '2 days', 'Apivar', 42) RETURNING id`,
-			[]any{base.hiveB}},
+			VALUES ($1, $2, 'Apivar', 42) RETURNING id`,
+			[]any{base.hiveB, treatmentDate}},
 	}
 	for _, row := range seed {
 		if err := pool.QueryRow(ctx, row.query, row.args...).Scan(row.into); err != nil {
@@ -119,35 +120,6 @@ func (f *workParityFixture) mine(keys []workParityKey) []workParityKey {
 		}
 	}
 	return kept
-}
-
-func (f *workParityFixture) yardQueueKeys(t *testing.T) []workParityKey {
-	t.Helper()
-	response := f.call(t, f.server.yardQueue,
-		http.MethodGet, "/operations/yard-queue", nil, nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("yard-queue: status %d: %s", response.Code, response.Body.String())
-	}
-	var body struct {
-		Yards []yardQueueYard `json:"yards"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode yard-queue: %v", err)
-	}
-	keys := make([]workParityKey, 0)
-	for _, yard := range body.Yards {
-		for _, item := range yard.Items {
-			key := workParityKey{
-				apiary: yard.ApiaryID.String(), kind: item.Kind,
-				title: item.Title, priority: item.Priority,
-			}
-			if item.HiveID != nil {
-				key.hive = item.HiveID.String()
-			}
-			keys = append(keys, key)
-		}
-	}
-	return f.mine(keys)
 }
 
 func (f *workParityFixture) workYard(t *testing.T) work.YardResponse {
@@ -189,35 +161,25 @@ func workYardKeys(f *workParityFixture, body work.YardResponse) []workParityKey 
 	return f.mine(keys)
 }
 
-func TestWorkYardMatchesYardQueue(t *testing.T) {
+func TestWorkYardMatchesFrozenFixture(t *testing.T) {
 	fixture := newWorkParityFixture(t)
 
-	want := fixture.yardQueueKeys(t)
+	want := []workParityKey{
+		{apiary: fixture.apiaryA.String(), kind: "feeding", hive: fixture.hiveA.String(), title: "Verify and close", priority: "urgent"},
+		{apiary: fixture.apiaryA.String(), kind: "recommendation", hive: fixture.hiveA.String(), title: "Inspect this hive", priority: "high"},
+		{apiary: fixture.apiaryA.String(), kind: "harvest_ready", hive: fixture.hiveA.String(), title: "Pull honey", priority: "normal"},
+		{apiary: fixture.apiaryB.String(), kind: "lockout", hive: fixture.hiveB.String(), title: "This honey cannot be extracted/sold until 42 days after Apivar is removed", priority: "high"},
+	}
 	body := fixture.workYard(t)
 	got := workYardKeys(fixture, body)
 
-	if len(want) == 0 {
-		t.Fatal("the fixture produced no yard-queue items, so parity is vacuous")
-	}
 	if len(got) != len(want) {
-		t.Fatalf("item count: work/yard %d, yard-queue %d\n work: %+v\n queue: %+v",
+		t.Fatalf("item count: got %d, want %d\n got: %+v\n want: %+v",
 			len(got), len(want), got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("item %d differs:\n work:  %+v\n queue: %+v", i, got[i], want[i])
-		}
-	}
-
-	// Every source must have actually appeared, or the parity above only
-	// proves that two empty-ish lists match.
-	seen := map[string]bool{}
-	for _, key := range got {
-		seen[key.kind] = true
-	}
-	for _, kind := range []string{"lockout", "recommendation", "feeding", "harvest_ready"} {
-		if !seen[kind] {
-			t.Errorf("no %s item in the fixture: %+v", kind, got)
+			t.Fatalf("item %d differs:\n got:  %+v\n want: %+v", i, got[i], want[i])
 		}
 	}
 
@@ -281,8 +243,7 @@ func TestWorkYardIDsAreStableAcrossReads(t *testing.T) {
 
 // Section 4.6 end to end, and the reason wave 1 is a behaviour change: the
 // seeded feeder_check is suppressed while hive A has a feeding item, and
-// becomes visible the moment that feeding item goes away. The yard queue
-// never shows it in either state.
+// becomes visible the moment that feeding item goes away.
 func TestWorkFeederCheckRuleAgainstTheDatabase(t *testing.T) {
 	fixture := newWorkParityFixture(t)
 	feederItemID := "wi:recommendation:" + fixture.recFeeder.String()
@@ -329,14 +290,6 @@ func TestWorkFeederCheckRuleAgainstTheDatabase(t *testing.T) {
 	}
 	if orphan.Title != "Check the feeder" {
 		t.Errorf("title = %q", orphan.Title)
-	}
-
-	// The yard queue still shows neither, which is the delta this wave
-	// deliberately introduces.
-	for _, key := range fixture.yardQueueKeys(t) {
-		if key.title == "Check the feeder" || key.kind == "feeding" {
-			t.Errorf("yard queue unexpectedly shows %+v", key)
-		}
 	}
 }
 

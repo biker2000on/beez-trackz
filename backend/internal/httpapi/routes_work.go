@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,27 @@ import (
 	"github.com/biker2000on/beez-trackz/backend/internal/app/work"
 )
 
+const harvestReadyStores = 4
+
+func hiveLockoutDetail(st lockoutStatus) string {
+	product := st.Product
+	if product == "" {
+		product = "Treatment"
+	}
+	if st.TreatmentOn {
+		return product + " still on · date-on " + calendarDate(st.DateApplied).Format("2006-01-02")
+	}
+	if st.DateRemoved != nil && st.Until != nil {
+		return product + " off " + calendarDate(*st.DateRemoved).Format("2006-01-02") +
+			" · " + strconv.Itoa(st.WithdrawalDays) + "-day withdrawal"
+	}
+	return product
+}
+
+func storesLabel(stores int) string {
+	return strconv.Itoa(stores) + "/5"
+}
+
 // The WorkItem projection endpoints (design 2026-09-03, section 4.8). This
 // file is transport only: it reads the facts, hands them to app/work, and
 // writes the projection. Every rule — ids, the feeder_check behaviour,
@@ -19,9 +41,9 @@ import (
 // app/work, so Today and the yard queue cannot disagree about the same item
 // the way the two assemblers they replace do.
 //
-// yard_queue.go is deliberately left in place this wave so /work/yard and
-// /operations/yard-queue can be compared on a real database; the parity test
-// is routes_work_db_test.go.
+// The retired yard queue assembler is gone. routes_work_db_test.go pins the
+// replacement to the fixture expectation that was frozen while both read
+// models were available.
 
 func (s *Server) mountWork(r chi.Router) {
 	r.Get("/work/today", s.handleWorkToday)
