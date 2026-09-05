@@ -600,7 +600,8 @@ func stockLotQuantities(ctx context.Context, q inspectionQuerier) ([]stockLotQua
 		LEFT JOIN jar_sizes js ON js.item_id = a.item_id
 		LEFT JOIN product_catalog pc ON pc.item_id = a.item_id
 		LEFT JOIN inventory_lots lot ON lot.id = a.lot_id
-		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN product_batches pb ON pb.inventory_lot_id = lot.id
+		LEFT JOIN harvest_lots hl ON hl.id = COALESCE(CASE WHEN lot.source_type = 'harvest_lot' THEN lot.source_id END, pb.harvest_lot_id)
 		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
 		WHERE l.deleted_at IS NULL AND (l.is_home OR l.kind = 'consignee')
 		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
@@ -1029,7 +1030,8 @@ func (s *Server) stockMovementHistory(
 		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
 		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
 		LEFT JOIN inventory_lots lot ON lot.id = m.lot_id
-		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN product_batches pb ON pb.inventory_lot_id = lot.id
+		LEFT JOIN harvest_lots hl ON hl.id = COALESCE(CASE WHEN lot.source_type = 'harvest_lot' THEN lot.source_id END, pb.harvest_lot_id)
 		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
 		LEFT JOIN inventory_locations counterparty
 		       ON counterparty.id <> loc.id
@@ -1777,7 +1779,8 @@ func (s *Server) stockSettlementLines(
 		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
 		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
 		LEFT JOIN inventory_lots lot ON lot.id = m.lot_id
-		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN product_batches pb ON pb.inventory_lot_id = lot.id
+		LEFT JOIN harvest_lots hl ON hl.id = COALESCE(CASE WHEN lot.source_type = 'harvest_lot' THEN lot.source_id END, pb.harvest_lot_id)
 		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
 		WHERE cs.id = ANY($2)
 		GROUP BY cs.id, js.id, pc.id, js.label, pc.name, hl.id, hl.lot_code, hv.name

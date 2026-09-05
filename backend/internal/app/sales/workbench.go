@@ -131,7 +131,7 @@ func Workbench(ctx context.Context, q app.Querier, actor app.Actor, year int, no
 	// The same shelves split by varietal (lot -> harvest lot -> varietal), so
 	// the workbench can say "12 Sourwood · 5 Wildflower out". Named varietals
 	// first, then the unnamed remainder.
-	rows, err = q.Query(ctx, `SELECT b.location_id,hv.name,SUM(b.on_hand)::int FROM inventory_balances b JOIN inventory_locations il ON il.id=b.location_id AND il.kind='consignee' AND il.is_consignment AND il.deleted_at IS NULL LEFT JOIN inventory_lots lot ON lot.id=b.lot_id LEFT JOIN harvest_lots hl ON hl.id=lot.source_id AND lot.source_type='harvest_lot' LEFT JOIN honey_varietals hv ON hv.id=hl.varietal_id GROUP BY b.location_id,hv.name HAVING SUM(b.on_hand)<>0 ORDER BY b.location_id,hv.name NULLS LAST`)
+	rows, err = q.Query(ctx, `SELECT b.location_id,hv.name,SUM(b.on_hand)::int FROM inventory_balances b JOIN inventory_locations il ON il.id=b.location_id AND il.kind='consignee' AND il.is_consignment AND il.deleted_at IS NULL LEFT JOIN inventory_lots lot ON lot.id=b.lot_id LEFT JOIN product_batches pb ON pb.inventory_lot_id=lot.id LEFT JOIN harvest_lots hl ON hl.id=COALESCE(CASE WHEN lot.source_type='harvest_lot' THEN lot.source_id END,pb.harvest_lot_id) LEFT JOIN honey_varietals hv ON hv.id=hl.varietal_id GROUP BY b.location_id,hv.name HAVING SUM(b.on_hand)<>0 ORDER BY b.location_id,hv.name NULLS LAST`)
 	if err != nil {
 		return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
 	}

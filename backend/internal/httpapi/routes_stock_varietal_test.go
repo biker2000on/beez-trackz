@@ -406,3 +406,71 @@ func TestSalesWorkbenchSaysWhichVarietalsAreOut(t *testing.T) {
 			f.sourwoodShipped, f.sourwoodName, f.wildShipped, f.wildName)
 	}
 }
+
+// A value-added product carries the varietal of the honey its batch drew, so
+// hot honey made from the Sourwood lot reads as Sourwood on a consignee's
+// shelf, in the inventory matrix and in the movement history.
+func TestProductBatchCarriesItsHoneyVarietalToTheShelf(t *testing.T) {
+	server := honeyTestServer(t)
+	f := seedVarietalFixture(t, server)
+
+	response, body := call(t, server.productCreate, adminRequest(
+		http.MethodPost, "/api/v1/products", map[string]any{
+			"name": "Hot honey " + uuid.NewString()[:6], "kind": "hot_honey", "unit": "jar",
+			"defaultPrice": 15.00, "sizeLabel": "8 oz",
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create product = %d %v", response.Code, body)
+	}
+	productID := uuid.MustParse(body["id"].(string))
+	response, body = call(t, server.productBatchCreate, adminRequest(
+		http.MethodPost, "/api/v1/product-batches", map[string]any{
+			"kind": "hot_honey", "productId": productID.String(), "harvestLotId": f.sourwood.String(),
+			"startedAt": time.Now().Format("2006-01-02"), "honeyLbs": 4, "quantityOut": 6,
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create batch = %d %v", response.Code, body)
+	}
+	response, body = transferLines(t, server, f.shopID, []map[string]any{
+		{"productId": productID.String(), "quantity": 2},
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("product transfer = %d %v", response.Code, body)
+	}
+
+	shelf, _, err := server.stockLocationShelf(context.Background(), server.pool, f.shopID)
+	if err != nil {
+		t.Fatalf("shelf: %v", err)
+	}
+	var found *stockShelfRow
+	for i := range shelf {
+		if shelf[i].ProductID != nil && *shelf[i].ProductID == productID {
+			found = &shelf[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("product row missing from the shelf: %+v", shelf)
+	}
+	if found.OnHand != 2 {
+		t.Fatalf("product on hand = %d, want 2", found.OnHand)
+	}
+	if found.VarietalName == nil || *found.VarietalName != f.sourwoodName {
+		t.Fatalf("product varietal = %v, want %q", found.VarietalName, f.sourwoodName)
+	}
+	if found.LotCode == nil || *found.LotCode != f.sourwoodCode {
+		t.Fatalf("product lot code = %v, want %q", found.LotCode, f.sourwoodCode)
+	}
+	history, err := server.stockMovementHistory(context.Background(), f.shopID, 20)
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	var sawProduct bool
+	for _, row := range history {
+		if row.VarietalName != nil && *row.VarietalName == f.sourwoodName && row.Quantity == 2 && row.LotCode != nil && *row.LotCode == f.sourwoodCode {
+			sawProduct = true
+		}
+	}
+	if !sawProduct {
+		t.Fatalf("history rows lack the product's varietal: %+v", history)
+	}
+}
