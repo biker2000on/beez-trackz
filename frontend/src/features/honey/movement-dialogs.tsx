@@ -89,6 +89,7 @@ function LotField({
   value,
   onChange,
   lots,
+  remainingByLot,
   loading,
   remaining,
   error,
@@ -98,6 +99,8 @@ function LotField({
   value: string;
   onChange: (value: string) => void;
   lots: ReturnType<typeof useLotChoices>["list"];
+  /** Bulk pounds left per lot; lots with nothing left are not offered. */
+  remainingByLot: Map<string, number>;
   loading: boolean;
   remaining: number | undefined;
   error?: string;
@@ -105,6 +108,11 @@ function LotField({
   onNavigate: () => void;
 }) {
   const { formatHoney } = useUnits();
+  // Only lots that still hold bulk honey are worth choosing; the one already
+  // chosen stays listed so an edit never loses its value.
+  const choices = lots.filter(
+    (lot) => lot.id === value || (remainingByLot.get(lot.id) ?? 0) > 0,
+  );
   if (lots.length === 0 && !loading) {
     return (
       <div className="grid gap-1.5">
@@ -132,12 +140,20 @@ function LotField({
           <SelectValue placeholder={loading ? "Loading…" : "Choose a lot"} />
         </SelectTrigger>
         <SelectContent>
-          {lots.map((lot) => (
+          {choices.map((lot) => (
             <SelectItem key={lot.id} value={lot.id}>
               {lot.lotCode}
               {lot.varietalName ? ` · ${lot.varietalName}` : ""}
+              {remainingByLot.has(lot.id)
+                ? ` · ${formatHoney(remainingByLot.get(lot.id) ?? 0)} left`
+                : ""}
             </SelectItem>
           ))}
+          {choices.length === 0 && (
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+              No lot has bulk honey left.
+            </div>
+          )}
         </SelectContent>
       </Select>
       {remaining != null && (
@@ -193,11 +209,19 @@ export function JarHoneyDialog({
   const selectedLot = lots.list.find((lot) => lot.id === lotId);
   const remaining = lotId ? lots.remainingByLot.get(lotId) : undefined;
 
-  const estimatedLbs = lines.reduce((sum, line) => {
-    const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
-    const qty = parseNum(line.quantity) ?? 0;
-    return sum + (row?.honeyOz && qty > 0 ? (row.honeyOz * qty) / 16 : 0);
-  }, 0);
+  const totals = lines.reduce(
+    (acc, line) => {
+      const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
+      const qty = parseNum(line.quantity) ?? 0;
+      if (qty > 0) {
+        acc.jars += qty;
+        acc.oz += row?.honeyOz ? row.honeyOz * qty : 0;
+      }
+      return acc;
+    },
+    { jars: 0, oz: 0 },
+  );
+  const estimatedLbs = totals.oz / 16;
   // A warning, never a block: the jars are already filled, so the honest
   // record is the entry plus a nudge to check the lot's numbers.
   const overdrawn =
@@ -283,6 +307,7 @@ export function JarHoneyDialog({
                 setLotError(null);
               }}
               lots={lots.list}
+              remainingByLot={lots.remainingByLot}
               loading={lots.isPending}
               remaining={remaining}
               error={lotError ?? undefined}
@@ -298,11 +323,13 @@ export function JarHoneyDialog({
           )}
           <div className="grid gap-1.5">
             <JarLinesEditor rows={inventory} value={lines} onChange={setLines} />
-            {estimatedLbs > 0 && (
-              <p className="text-xs text-muted-foreground">
-                ≈ {formatHoney(estimatedLbs)} of bulk honey
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {totals.jars} {totals.jars === 1 ? "jar" : "jars"} ·{" "}
+              {Math.round(totals.oz * 10) / 10} oz ≈ {formatHoney(estimatedLbs)} of bulk honey
+              {remaining != null && estimatedLbs <= remaining
+                ? ` · leaves ${formatHoney(remaining - estimatedLbs)} in ${selectedLot?.lotCode ?? "the lot"}`
+                : ""}
+            </p>
             {overdrawn != null && (
               <p className="text-xs text-amber-700 dark:text-amber-400">
                 That is more than the {formatHoney(overdrawn)} left in{" "}
@@ -488,6 +515,7 @@ export function BulkMovementDialog({
               setLotError(null);
             }}
             lots={lots.list}
+            remainingByLot={lots.remainingByLot}
             loading={lots.isPending}
             remaining={remaining}
             error={lotError ?? undefined}

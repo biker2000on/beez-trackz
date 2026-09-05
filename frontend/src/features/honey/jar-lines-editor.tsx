@@ -108,7 +108,12 @@ export function JarLinesEditor({
         return (
           <div key={line.jarSizeId} className={gridClass}>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{row.label}</p>
+              <p className="truncate text-sm font-medium">
+                {row.label}
+                {row.honeyOz ? (
+                  <span className="font-normal text-muted-foreground"> · {row.honeyOz} oz</span>
+                ) : null}
+              </p>
               {showOnHand && (
                 <p className="text-xs text-muted-foreground">
                   {row.onHand} on hand
