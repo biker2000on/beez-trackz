@@ -259,6 +259,17 @@
     min-width: 44px;
   }
 
+  /* Text fields: 16px stops iOS from zooming the page on focus, and the
+     field is as tall as the buttons beside it. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  textarea,
+  select,
+  [data-slot="select-trigger"],
+  [role="combobox"] {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
   /* A checkbox is a `button` but must keep its square box: stretching it to
      44px tall turned it into a sliver. It grows a transparent hit area
      instead — see `components/ui/checkbox.tsx`. */
@@ -270,6 +281,14 @@
   label:has([role="checkbox"]) {
     min-height: 44px;
   }
+}
+
+/* Grid items default to min-width:auto, so one wide table (or a long
+   unbroken string) inside a card silently widens the whole page column and
+   pushes the header actions off a phone screen. Let grid items shrink; the
+   table wrapper's overflow-x-auto then scrolls the table instead. */
+.grid > * {
+  min-width: 0;
 }
 
 /* Wide comparison tables scroll sideways rather than crush their columns

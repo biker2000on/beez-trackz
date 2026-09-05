@@ -97,7 +97,9 @@ function DialogContent({
           // centred box has a symmetric margin, so both insets come off the height.
           "max-h-[calc(100dvh-2rem-var(--safe-top)-var(--safe-bottom))]",
           "overflow-y-auto rounded-xl border bg-card p-6 shadow-lg",
-          "max-sm:max-w-[calc(100%-2rem)]",
+          // Phones: a full-height sheet instead of a floating card, so long
+          // forms scroll inside a stable frame and the keyboard has room.
+          "max-sm:inset-0 max-sm:left-0 max-sm:top-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:border-0 max-sm:pt-[calc(1.5rem+var(--safe-top))] max-sm:pb-0 max-sm:[&:not(:has([data-slot=dialog-footer]))]:pb-[calc(1.5rem+var(--safe-bottom))]",
           "data-[state=open]:animate-dialog-in data-[state=closed]:animate-dialog-out",
           className,
         )}

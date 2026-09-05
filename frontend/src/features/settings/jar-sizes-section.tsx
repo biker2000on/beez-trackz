@@ -221,6 +221,7 @@ export function JarSizesSection() {
             >
               <Input
                 aria-label={`Label for ${jar.label}`}
+                className="min-w-40"
                 value={jarDraftValues(jar, drafts[jar.id]).label}
                 onChange={(e) => setDraft(jar.id, { label: e.target.value })}
               />

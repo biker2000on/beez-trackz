@@ -228,7 +228,7 @@ export function FacingDialog({
           }}
           onEscape={() => onOpenChange(false)}
         >
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {COMPASS_PRESETS.map((preset) => (
               <Button
                 type="button"

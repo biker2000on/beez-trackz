@@ -207,7 +207,7 @@ export function HiveFormDialog({
             )}
           </div>
 
-          <fieldset className="grid grid-cols-3 gap-3">
+          <fieldset className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-2">
               <Label htmlFor="hive-stand">Stand</Label>
               <Input

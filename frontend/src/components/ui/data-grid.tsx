@@ -262,7 +262,7 @@ export function DataGrid<
   return (
     <div
       ref={containerRef}
-      className={cn("relative w-full overflow-x-auto", className)}
+      className={cn("relative w-full min-w-0 max-w-full overflow-x-auto", className)}
     >
       {canSearch && (
         <div className="flex items-center gap-2 border-b px-3 py-2">

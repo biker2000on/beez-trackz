@@ -811,7 +811,7 @@ function AddBatchDialog({
                   </div>
                 </div>
                 {kind === "mead" && (
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <div className="grid gap-1.5">
                       <Label>Water (L)</Label>
                       <Input type="number" min="0" step="0.1" value={waterLiters} onChange={(event) => setWaterLiters(event.target.value)} />
