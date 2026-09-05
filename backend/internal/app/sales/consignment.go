@@ -58,12 +58,11 @@ func (s *Service) Transfer(
 		if line.Quantity <= 0 {
 			return uuid.Nil, app.Invalid(op, "quantity must be greater than zero")
 		}
-		allocations, method, err := production.AllocateFIFO(ctx, uow, "inventory_balances",
-			line.ItemID, input.From, line.Quantity, line.LotID)
+		allocations, err := allocateLine(ctx, uow, line.ItemID, input.From, line.Quantity, line.LotID)
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if method == production.MethodFIFOInferred {
+		if line.LotID == nil {
 			inferred = true
 		}
 		for _, allocation := range allocations {
@@ -131,12 +130,31 @@ func (s *Service) Transfer(
 	return recorded.Operation.ID, nil
 }
 
+// allocateLine chooses the lots one consignment line moves. A pinned lot is
+// honoured exactly (production.AllocateLot); a line with no lot takes the
+// location's oldest receipts first.
+func allocateLine(
+	ctx context.Context, uow *app.UnitOfWork,
+	itemID, locationID uuid.UUID, quantity int, lotID *uuid.UUID,
+) ([]production.Allocation, error) {
+	if lotID != nil {
+		return production.AllocateLot(ctx, uow, "inventory_balances",
+			itemID, locationID, quantity, *lotID)
+	}
+	allocations, _, err := production.AllocateFIFO(ctx, uow, "inventory_balances",
+		itemID, locationID, quantity, nil)
+	return allocations, err
+}
+
 // SettlementShrinkInput is the difference between what the operator thinks is
 // on a consignee's shelf and what the shop counted.
 type SettlementShrinkInput struct {
 	SettlementID uuid.UUID
 	LocationID   uuid.UUID
 	ItemID       uuid.UUID
+	// LotID pins the shrink (or the found stock) to one lot; nil takes the
+	// oldest receipts for a loss and the legacy-unassigned lot for a find.
+	LotID *uuid.UUID
 	// Quantity is positive for stock that has gone missing and negative for
 	// stock the shop found.
 	Quantity int
@@ -174,12 +192,11 @@ func (s *Service) RecordSettlementShrink(
 
 	var movements []inventory.Movement
 	if input.Quantity > 0 {
-		allocations, method, err := production.AllocateFIFO(ctx, uow, "inventory_balances",
-			input.ItemID, input.LocationID, input.Quantity, nil)
+		allocations, err := allocateLine(ctx, uow, input.ItemID, input.LocationID, input.Quantity, input.LotID)
 		if err != nil {
 			return uuid.Nil, err
 		}
-		details["lot_allocation"] = map[string]any{"method": method}
+		details["lot_allocation"] = map[string]any{"method": production.AllocationMethod(input.LotID == nil)}
 		for _, allocation := range allocations {
 			lotID := allocation.LotID
 			movements = append(movements, inventory.Movement{
@@ -191,11 +208,13 @@ func (s *Service) RecordSettlementShrink(
 			})
 		}
 	} else {
-		lotID, err := production.LegacyUnassignedLot(ctx, uow, input.ItemID)
-		if err != nil {
+		var lotID uuid.UUID
+		if input.LotID != nil {
+			lotID = *input.LotID
+		} else if lotID, err = production.LegacyUnassignedLot(ctx, uow, input.ItemID); err != nil {
 			return uuid.Nil, err
 		}
-		details["lot_allocation"] = map[string]any{"method": production.MethodFIFOInferred}
+		details["lot_allocation"] = map[string]any{"method": production.AllocationMethod(input.LotID == nil)}
 		movements = append(movements, inventory.Movement{
 			Tuple: inventory.Tuple{
 				ItemID: input.ItemID, LocationID: input.LocationID, LotID: &lotID,

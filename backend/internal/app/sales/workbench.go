@@ -26,12 +26,20 @@ type Draft struct {
 	LineCount    int              `json:"lineCount"`
 	Shortfalls   []DraftShortfall `json:"shortfalls"`
 }
+
+// ConsignmentVarietal is how many units of one varietal stand at a consignee.
+// VarietalName is nil for catalog products and legacy-unassigned jar lots.
+type ConsignmentVarietal struct {
+	VarietalName *string `json:"varietalName"`
+	Units        int     `json:"units"`
+}
 type ConsignmentLocation struct {
-	LocationID      uuid.UUID  `json:"locationId"`
-	Name            string     `json:"name"`
-	UnitsOut        int        `json:"unitsOut"`
-	SettlementDueAt *time.Time `json:"settlementDueAt"`
-	LastSettledAt   *time.Time `json:"lastSettledAt"`
+	LocationID      uuid.UUID             `json:"locationId"`
+	Name            string                `json:"name"`
+	UnitsOut        int                   `json:"unitsOut"`
+	ByVarietal      []ConsignmentVarietal `json:"byVarietal"`
+	SettlementDueAt *time.Time            `json:"settlementDueAt"`
+	LastSettledAt   *time.Time            `json:"lastSettledAt"`
 }
 type SellableItem struct {
 	ItemID          uuid.UUID `json:"itemId"`
@@ -105,13 +113,38 @@ func Workbench(ctx context.Context, q app.Querier, actor app.Actor, year int, no
 	if err != nil {
 		return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
 	}
+	consignmentIndex := map[uuid.UUID]int{}
 	for rows.Next() {
-		var x ConsignmentLocation
+		x := ConsignmentLocation{ByVarietal: []ConsignmentVarietal{}}
 		if err := rows.Scan(&x.LocationID, &x.Name, &x.UnitsOut, &x.SettlementDueAt, &x.LastSettledAt); err != nil {
 			rows.Close()
 			return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
 		}
+		consignmentIndex[x.LocationID] = len(v.Consignment)
 		v.Consignment = append(v.Consignment, x)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
+	}
+	rows.Close()
+	// The same shelves split by varietal (lot -> harvest lot -> varietal), so
+	// the workbench can say "12 Sourwood · 5 Wildflower out". Named varietals
+	// first, then the unnamed remainder.
+	rows, err = q.Query(ctx, `SELECT b.location_id,hv.name,SUM(b.on_hand)::int FROM inventory_balances b JOIN inventory_locations il ON il.id=b.location_id AND il.kind='consignee' AND il.is_consignment AND il.deleted_at IS NULL LEFT JOIN inventory_lots lot ON lot.id=b.lot_id LEFT JOIN harvest_lots hl ON hl.id=lot.source_id AND lot.source_type='harvest_lot' LEFT JOIN honey_varietals hv ON hv.id=hl.varietal_id GROUP BY b.location_id,hv.name HAVING SUM(b.on_hand)<>0 ORDER BY b.location_id,hv.name NULLS LAST`)
+	if err != nil {
+		return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
+	}
+	for rows.Next() {
+		var locationID uuid.UUID
+		var x ConsignmentVarietal
+		if err := rows.Scan(&locationID, &x.VarietalName, &x.Units); err != nil {
+			rows.Close()
+			return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
+		}
+		if idx, ok := consignmentIndex[locationID]; ok {
+			v.Consignment[idx].ByVarietal = append(v.Consignment[idx].ByVarietal, x)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

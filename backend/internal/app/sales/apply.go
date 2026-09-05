@@ -108,17 +108,29 @@ func (s *Service) Apply(ctx context.Context, uow *app.UnitOfWork, input ApplyInp
 			})
 			needed[*line.ItemID] = 0
 		case line.ItemID != nil:
-			allocated, method, err := production.AllocateFIFO(ctx, uow, "inventory_balances",
-				*line.ItemID, location, line.Quantity, line.LotID)
+			// sale_items.inventory_lot_id is only recorded provenance when the
+			// line names the bottling run it came off or the sale names its
+			// harvest lot: then the draw is pinned to that lot and a short
+			// lot is a refusal. Otherwise it is the reservation's FIFO guess,
+			// and drawing from the lot it guessed does not turn the guess
+			// into a fact (review A3).
+			var allocated []production.Allocation
+			var method string
+			pinned, err := line.Pinned(ctx, uow)
 			if err != nil {
 				return err
 			}
-			// sale_items.inventory_lot_id is only recorded provenance when the
-			// line names the bottling run it came off. Otherwise it is the
-			// reservation's FIFO guess, and drawing from the lot it guessed
-			// does not turn the guess into a fact (review A3).
-			if line.BottlingRunID == nil {
+			if pinned {
+				allocated, err = production.AllocateLot(ctx, uow, "inventory_balances",
+					*line.ItemID, location, line.Quantity, *line.LotID)
+				method = production.MethodRecorded
+			} else {
+				allocated, _, err = production.AllocateFIFO(ctx, uow, "inventory_balances",
+					*line.ItemID, location, line.Quantity, line.LotID)
 				method = production.MethodFIFOInferred
+			}
+			if err != nil {
+				return err
 			}
 			if method == production.MethodFIFOInferred {
 				inferred = true

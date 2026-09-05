@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,8 +37,15 @@ import (
 //
 //   - never recognise revenue on a transfer  -> stockTransfer writes movements
 //     and nothing else; no sale row, no money column is touched.
-//   - never let home stock-validation count consigned jars -> honeyLockJarSizes
-//     subtracts stockAwayJarTotals.
+//   - never let home stock-validation count consigned jars -> every shelf,
+//     home included, is its own location's balance (stockLotQuantities).
+//
+// Consignment stock is tracked by varietal: a consignee's shelf is read lot by
+// lot (lot -> harvest lot -> varietal), and every write — transfer, return,
+// settlement, location sale — can pin a harvestLotId so the jars moved are the
+// varietal the operator named. A pinned lot that is short is refused rather
+// than quietly topped up from another lot; an unpinned line takes the oldest
+// receipts first (FIFO).
 //   - every movement idempotent and reversible -> inventory_operations carries
 //     a unique idempotency key and reversal pointer whose negation nets the
 //     pair to zero.
@@ -471,14 +479,21 @@ func (s *Server) stockLocationDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- shelves ---------------------------------------------------------------
 
-// stockShelfRow is one finished-goods SKU standing at one location.
+// stockShelfRow is one finished-goods SKU standing at one location, lot by
+// lot: a jar size that arrived from two harvest lots is two rows, each naming
+// its lot code and varietal. HarvestLotID, LotCode and VarietalName are null
+// for catalog products and for jars in the legacy-unassigned lot, and those
+// collapse into one row per SKU.
 type stockShelfRow struct {
-	JarSizeID *uuid.UUID `json:"jarSizeId"`
-	ProductID *uuid.UUID `json:"productId"`
-	Label     string     `json:"label"`
-	Kind      string     `json:"kind"`
-	UnitPrice *money     `json:"unitPrice"`
-	OnHand    int        `json:"onHand"`
+	JarSizeID    *uuid.UUID `json:"jarSizeId"`
+	ProductID    *uuid.UUID `json:"productId"`
+	Label        string     `json:"label"`
+	Kind         string     `json:"kind"`
+	UnitPrice    *money     `json:"unitPrice"`
+	OnHand       int        `json:"onHand"`
+	HarvestLotID *uuid.UUID `json:"harvestLotId"`
+	LotCode      *string    `json:"lotCode"`
+	VarietalName *string    `json:"varietalName"`
 }
 
 func (row stockShelfRow) key() string {
@@ -561,9 +576,91 @@ func stockLoadSKUs(ctx context.Context, q inspectionQuerier) (stockSKUCatalog, e
 	return catalog, productRows.Err()
 }
 
+// stockLotQuantity is one SKU's count in one lot at one location.
+type stockLotQuantity struct {
+	LocationID   uuid.UUID
+	JarSizeID    *uuid.UUID
+	ProductID    *uuid.UUID
+	HarvestLotID *uuid.UUID
+	LotCode      *string
+	VarietalName *string
+	Quantity     int
+}
+
+// stockLotQuantities is THE per-lot shelf formula: every home or consignee
+// location's available count per (SKU, harvest lot), read from
+// inventory_available so a sale scoped to a shelf takes the jars off it the
+// moment its line is saved. Lots that are not harvest lots (product batches,
+// the legacy-unassigned bucket) are folded into one unnamed row per SKU.
+func stockLotQuantities(ctx context.Context, q inspectionQuerier) ([]stockLotQuantity, error) {
+	rows, err := q.Query(ctx, `
+		SELECT l.id, js.id, pc.id, hl.id, hl.lot_code, hv.name, SUM(a.available)::int
+		FROM inventory_available a
+		JOIN inventory_locations l ON l.id = a.location_id
+		LEFT JOIN jar_sizes js ON js.item_id = a.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = a.item_id
+		LEFT JOIN inventory_lots lot ON lot.id = a.lot_id
+		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
+		WHERE l.deleted_at IS NULL AND (l.is_home OR l.kind = 'consignee')
+		  AND (js.id IS NOT NULL OR pc.id IS NOT NULL)
+		GROUP BY 1, 2, 3, 4, 5, 6
+		HAVING SUM(a.available) <> 0
+		ORDER BY 1, 2, 3, hv.name NULLS LAST, hl.lot_code NULLS LAST`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]stockLotQuantity, 0)
+	for rows.Next() {
+		var row stockLotQuantity
+		if err := rows.Scan(&row.LocationID, &row.JarSizeID, &row.ProductID, &row.HarvestLotID,
+			&row.LotCode, &row.VarietalName, &row.Quantity); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// stockLotKey identifies a lot row within one SKU; every unnamed lot shares
+// the empty key so products and legacy jars stay one row per SKU.
+func stockLotKey(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return id.String()
+}
+
+// stockLessLot orders lot rows within one SKU: varietal, then lot code, with
+// the unnamed remainder last.
+func stockLessLot(aVarietal, aCode, bVarietal, bCode *string) bool {
+	text := func(value *string) (string, bool) {
+		if value == nil {
+			return "", false
+		}
+		return strings.ToLower(*value), true
+	}
+	av, aok := text(aVarietal)
+	bv, bok := text(bVarietal)
+	if aok != bok {
+		return aok
+	}
+	if av != bv {
+		return av < bv
+	}
+	ac, aok := text(aCode)
+	bc, bok := text(bCode)
+	if aok != bok {
+		return aok
+	}
+	return ac < bc
+}
+
 // stockLocationShelf reports what is standing at one location, in catalog
-// order, skipping SKUs that are not there. Home is answered as the residual so
-// this function has one meaning for every location.
+// order and then by varietal and lot code, skipping SKUs that are not there.
+// Every location, home included, is read straight off its own balances: home
+// is no longer a residual of the global count.
 func (s *Server) stockLocationShelf(
 	ctx context.Context,
 	q inspectionQuerier,
@@ -573,101 +670,97 @@ func (s *Server) stockLocationShelf(
 	if err != nil {
 		return nil, catalog, err
 	}
-	homeID, err := stockHomeLocationID(ctx, q)
+	quantities, err := stockLotQuantities(ctx, q)
 	if err != nil {
 		return nil, catalog, err
 	}
-	jars := make(map[uuid.UUID]int)
-	products := make(map[uuid.UUID]int)
-
-	if locationID == homeID {
-		globalJars, err := honeyJarInventoryWithQuerier(ctx, q)
-		if err != nil {
-			return nil, catalog, err
-		}
-		awayJars, err := stockAwayJarTotals(ctx, q)
-		if err != nil {
-			return nil, catalog, err
-		}
-		for _, row := range globalJars {
-			jars[row.JarSizeID] = row.OnHand - awayJars[row.JarSizeID]
-		}
-		globalProducts, err := productInventoryQuery(ctx, q)
-		if err != nil {
-			return nil, catalog, err
-		}
-		awayProducts, err := stockAwayProductTotals(ctx, q)
-		if err != nil {
-			return nil, catalog, err
-		}
-		for _, row := range globalProducts {
-			products[row.ID] = row.OnHand - awayProducts[row.ID]
-		}
-	} else {
-		quantities, err := stockAwayQuantities(ctx, q)
-		if err != nil {
-			return nil, catalog, err
-		}
-		for _, row := range quantities {
-			if row.LocationID != locationID {
-				continue
+	jars := make(map[uuid.UUID][]stockShelfRow)
+	products := make(map[uuid.UUID][]stockShelfRow)
+	add := func(rows []stockShelfRow, row stockLotQuantity) []stockShelfRow {
+		key := stockLotKey(row.HarvestLotID)
+		for i := range rows {
+			if stockLotKey(rows[i].HarvestLotID) == key {
+				rows[i].OnHand += row.Quantity
+				return rows
 			}
-			if row.JarSizeID != nil {
-				jars[*row.JarSizeID] += row.Quantity
-			}
-			if row.ProductID != nil {
-				products[*row.ProductID] += row.Quantity
-			}
+		}
+		return append(rows, stockShelfRow{
+			OnHand: row.Quantity, HarvestLotID: row.HarvestLotID,
+			LotCode: row.LotCode, VarietalName: row.VarietalName,
+		})
+	}
+	for _, row := range quantities {
+		if row.LocationID != locationID {
+			continue
+		}
+		if row.JarSizeID != nil {
+			jars[*row.JarSizeID] = add(jars[*row.JarSizeID], row)
+		} else if row.ProductID != nil {
+			products[*row.ProductID] = add(products[*row.ProductID], row)
 		}
 	}
 
 	out := make([]stockShelfRow, 0, len(jars)+len(products))
-	for _, id := range catalog.JarOrder {
-		quantity, ok := jars[id]
-		if !ok || quantity == 0 {
-			continue
+	emit := func(rows []stockShelfRow, fill func(*stockShelfRow)) {
+		sort.SliceStable(rows, func(i, j int) bool {
+			return stockLessLot(rows[i].VarietalName, rows[i].LotCode,
+				rows[j].VarietalName, rows[j].LotCode)
+		})
+		for _, row := range rows {
+			if row.OnHand == 0 {
+				continue
+			}
+			fill(&row)
+			out = append(out, row)
 		}
+	}
+	for _, id := range catalog.JarOrder {
 		jarID := id
-		out = append(out, stockShelfRow{
-			JarSizeID: &jarID, Label: catalog.JarLabels[id], Kind: saleKindJar,
-			UnitPrice: catalog.JarPrices[id], OnHand: quantity,
+		emit(jars[id], func(row *stockShelfRow) {
+			row.JarSizeID, row.Label, row.Kind = &jarID, catalog.JarLabels[id], saleKindJar
+			row.UnitPrice = catalog.JarPrices[id]
 		})
 	}
 	for _, id := range catalog.ProductOrder {
-		quantity, ok := products[id]
-		if !ok || quantity == 0 {
-			continue
-		}
 		productID := id
 		price := catalog.ProductPrice[id]
-		out = append(out, stockShelfRow{
-			ProductID: &productID, Label: catalog.ProductNames[id],
-			Kind: catalog.ProductKinds[id], UnitPrice: &price, OnHand: quantity,
+		emit(products[id], func(row *stockShelfRow) {
+			row.ProductID, row.Label, row.Kind = &productID, catalog.ProductNames[id], catalog.ProductKinds[id]
+			row.UnitPrice = &price
 		})
 	}
 	return out, catalog, nil
 }
 
+// stockInventoryLot is one harvest lot of one SKU across every location, so
+// the transfer dialog can show what is at home per varietal.
+type stockInventoryLot struct {
+	HarvestLotID *uuid.UUID     `json:"harvestLotId"`
+	LotCode      *string        `json:"lotCode"`
+	VarietalName *string        `json:"varietalName"`
+	Total        int            `json:"total"`
+	ByLocation   map[string]int `json:"byLocation"`
+}
+
 // stockInventoryRow is one SKU across every location: what the honey and sales
-// inventory views show as "on hand by location, and a total".
+// inventory views show as "on hand by location, and a total", plus the same
+// numbers split by harvest lot.
 type stockInventoryRow struct {
-	JarSizeID  *uuid.UUID     `json:"jarSizeId"`
-	ProductID  *uuid.UUID     `json:"productId"`
-	Label      string         `json:"label"`
-	Kind       string         `json:"kind"`
-	UnitPrice  *money         `json:"unitPrice"`
-	Total      int            `json:"total"`
-	ByLocation map[string]int `json:"byLocation"`
+	JarSizeID  *uuid.UUID          `json:"jarSizeId"`
+	ProductID  *uuid.UUID          `json:"productId"`
+	Label      string              `json:"label"`
+	Kind       string              `json:"kind"`
+	UnitPrice  *money              `json:"unitPrice"`
+	Total      int                 `json:"total"`
+	ByLocation map[string]int      `json:"byLocation"`
+	Lots       []stockInventoryLot `json:"lots"`
 }
 
 // GET /stock-locations/inventory — every SKU across every location.
 //
-// The away-from-home ledger already answers all of it in ONE pass
-// (stockAwayQuantities returns per-location, per-SKU quantities for every
-// location at once), so this builds the matrix from that plus the two global
-// inventory formulas. It used to call stockLocationShelf once per location,
-// which re-read the whole ledger each time — fine at two locations, quadratic
-// at twenty.
+// One pass over the per-lot ledger read (stockLotQuantities answers every
+// location at once) builds both the per-SKU matrix and its per-lot split, so
+// the matrix and a single shelf can never disagree.
 func (s *Server) stockInventoryHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	locations, err := s.stockLoadLocations(ctx,
@@ -682,94 +775,110 @@ func (s *Server) stockInventoryHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	globalJars, err := honeyJarInventoryWithQuerier(ctx, s.pool)
+	quantities, err := stockLotQuantities(ctx, s.pool)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	globalProducts, err := productInventoryQuery(ctx, s.pool)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	away, err := stockAwayQuantities(ctx, s.pool)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	var homeID uuid.UUID
+	// The matrix is keyed by the location id the client navigates with,
+	// which for a pre-ledger consignee is the stock_locations id its ledger
+	// row was created from.
+	locationKey := make(map[uuid.UUID]string, len(locations))
 	for _, location := range locations {
-		if location.IsHome {
-			homeID = location.ID
-		}
+		locationKey[location.ID] = location.ID.String()
 	}
 
-	// Home is the residual: the global count minus everything standing away.
-	homeJars := make(map[uuid.UUID]int, len(globalJars))
-	for _, row := range globalJars {
-		homeJars[row.JarSizeID] = row.OnHand
-	}
-	homeProducts := make(map[uuid.UUID]int, len(globalProducts))
-	for _, row := range globalProducts {
-		homeProducts[row.ID] = row.OnHand
-	}
-	awayJars := make(map[uuid.UUID]map[string]int)
-	awayProducts := make(map[uuid.UUID]map[string]int)
-	for _, row := range away {
-		if row.Quantity == 0 {
+	jars := make(map[uuid.UUID]*stockInventoryRow)
+	products := make(map[uuid.UUID]*stockInventoryRow)
+	for _, row := range quantities {
+		key, ok := locationKey[row.LocationID]
+		if !ok || row.Quantity == 0 {
 			continue
 		}
-		if row.JarSizeID != nil {
-			if awayJars[*row.JarSizeID] == nil {
-				awayJars[*row.JarSizeID] = map[string]int{}
+		var target *stockInventoryRow
+		switch {
+		case row.JarSizeID != nil:
+			if jars[*row.JarSizeID] == nil {
+				jars[*row.JarSizeID] = &stockInventoryRow{ByLocation: map[string]int{}, Lots: []stockInventoryLot{}}
 			}
-			awayJars[*row.JarSizeID][row.LocationID.String()] += row.Quantity
-			homeJars[*row.JarSizeID] -= row.Quantity
+			target = jars[*row.JarSizeID]
+		case row.ProductID != nil:
+			if products[*row.ProductID] == nil {
+				products[*row.ProductID] = &stockInventoryRow{ByLocation: map[string]int{}, Lots: []stockInventoryLot{}}
+			}
+			target = products[*row.ProductID]
+		default:
+			continue
 		}
-		if row.ProductID != nil {
-			if awayProducts[*row.ProductID] == nil {
-				awayProducts[*row.ProductID] = map[string]int{}
+		target.ByLocation[key] += row.Quantity
+		target.Total += row.Quantity
+		lotKey := stockLotKey(row.HarvestLotID)
+		found := false
+		for i := range target.Lots {
+			if stockLotKey(target.Lots[i].HarvestLotID) == lotKey {
+				target.Lots[i].ByLocation[key] += row.Quantity
+				target.Lots[i].Total += row.Quantity
+				found = true
+				break
 			}
-			awayProducts[*row.ProductID][row.LocationID.String()] += row.Quantity
-			homeProducts[*row.ProductID] -= row.Quantity
+		}
+		if !found {
+			target.Lots = append(target.Lots, stockInventoryLot{
+				HarvestLotID: row.HarvestLotID, LotCode: row.LotCode, VarietalName: row.VarietalName,
+				Total: row.Quantity, ByLocation: map[string]int{key: row.Quantity},
+			})
 		}
 	}
 
 	// Catalog order, jars then products — the order stockLocationShelf reports,
 	// so the matrix and a single shelf agree about what comes first.
-	items := make([]stockInventoryRow, 0, len(catalog.JarOrder)+len(catalog.ProductOrder))
-	appendRow := func(row stockInventoryRow, home int, elsewhere map[string]int) {
-		if home != 0 {
-			row.ByLocation[homeID.String()] = home
-			row.Total += home
+	items := make([]stockInventoryRow, 0, len(jars)+len(products))
+	appendRow := func(row *stockInventoryRow) {
+		if row == nil {
+			return
 		}
-		for locationID, quantity := range elsewhere {
+		for key, quantity := range row.ByLocation {
 			if quantity == 0 {
-				continue
+				delete(row.ByLocation, key)
 			}
-			row.ByLocation[locationID] += quantity
-			row.Total += quantity
 		}
 		if len(row.ByLocation) == 0 {
 			return
 		}
-		items = append(items, row)
+		lots := row.Lots[:0]
+		for _, lot := range row.Lots {
+			for key, quantity := range lot.ByLocation {
+				if quantity == 0 {
+					delete(lot.ByLocation, key)
+				}
+			}
+			if len(lot.ByLocation) > 0 {
+				lots = append(lots, lot)
+			}
+		}
+		sort.SliceStable(lots, func(i, j int) bool {
+			return stockLessLot(lots[i].VarietalName, lots[i].LotCode,
+				lots[j].VarietalName, lots[j].LotCode)
+		})
+		row.Lots = lots
+		items = append(items, *row)
 	}
 	for _, id := range catalog.JarOrder {
 		jarID := id
-		appendRow(stockInventoryRow{
-			JarSizeID: &jarID, Label: catalog.JarLabels[id], Kind: saleKindJar,
-			UnitPrice: catalog.JarPrices[id], ByLocation: map[string]int{},
-		}, homeJars[id], awayJars[id])
+		if row := jars[id]; row != nil {
+			row.JarSizeID, row.Label, row.Kind = &jarID, catalog.JarLabels[id], saleKindJar
+			row.UnitPrice = catalog.JarPrices[id]
+		}
+		appendRow(jars[id])
 	}
 	for _, id := range catalog.ProductOrder {
 		productID := id
 		price := catalog.ProductPrice[id]
-		appendRow(stockInventoryRow{
-			ProductID: &productID, Label: catalog.ProductNames[id],
-			Kind: catalog.ProductKinds[id], UnitPrice: &price,
-			ByLocation: map[string]int{},
-		}, homeProducts[id], awayProducts[id])
+		if row := products[id]; row != nil {
+			row.ProductID, row.Label, row.Kind = &productID, catalog.ProductNames[id], catalog.ProductKinds[id]
+			row.UnitPrice = &price
+		}
+		appendRow(products[id])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"locations": locations,
@@ -876,6 +985,7 @@ type stockMovementRow struct {
 	Quantity     int        `json:"quantity"`
 	Counterparty *string    `json:"counterpartyName"`
 	LotCode      *string    `json:"lotCode"`
+	VarietalName *string    `json:"varietalName"`
 	Reason       *string    `json:"reason"`
 	Notes        *string    `json:"notes"`
 	IsReversal   bool       `json:"isReversal"`
@@ -906,6 +1016,7 @@ func (s *Server) stockMovementHistory(
 		       SUM(m.quantity)::int,
 		       MIN(counterparty.name),
 		       MIN(hl.lot_code),
+		       MIN(hv.name),
 		       NULLIF(o.details ->> 'reason_text', ''),
 		       NULLIF(o.details ->> 'notes', ''),
 		       o.reverses_operation_id IS NOT NULL,
@@ -919,6 +1030,7 @@ func (s *Server) stockMovementHistory(
 		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
 		LEFT JOIN inventory_lots lot ON lot.id = m.lot_id
 		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
 		LEFT JOIN inventory_locations counterparty
 		       ON counterparty.id <> loc.id
 		      AND counterparty.id IN (
@@ -936,7 +1048,7 @@ func (s *Server) stockMovementHistory(
 	for rows.Next() {
 		var row stockMovementRow
 		if err := rows.Scan(&row.ID, &row.Date, &row.Kind, &row.Label, &row.Quantity,
-			&row.Counterparty, &row.LotCode, &row.Reason, &row.Notes, &row.IsReversal,
+			&row.Counterparty, &row.LotCode, &row.VarietalName, &row.Reason, &row.Notes, &row.IsReversal,
 			&row.ReversedBy, &row.SettlementID); err != nil {
 			return nil, err
 		}
@@ -948,9 +1060,12 @@ func (s *Server) stockMovementHistory(
 // --- transfers -------------------------------------------------------------
 
 type stockTransferLine struct {
-	JarSizeID      *uuid.UUID `json:"jarSizeId"`
-	ProductID      *uuid.UUID `json:"productId"`
-	Quantity       int        `json:"quantity"`
+	JarSizeID *uuid.UUID `json:"jarSizeId"`
+	ProductID *uuid.UUID `json:"productId"`
+	Quantity  int        `json:"quantity"`
+	// HarvestLotID pins a jar line to one harvest lot (one varietal). The
+	// move draws from that lot only; a lot that is short is refused. Nil
+	// takes the source's oldest receipts.
 	HarvestLotID   *uuid.UUID `json:"harvestLotId"`
 	BottlingRunID  *uuid.UUID `json:"bottlingRunId"`
 	ProductBatchID *uuid.UUID `json:"productBatchId"`
@@ -1105,20 +1220,34 @@ func (s *Server) stockWriteMovements(
 		if err != nil {
 			return err
 		}
-		// A line that names a bottling run travels on that run's lot, so
-		// Honey Story still answers after the jars have moved.
+		// A line that names a harvest lot, or a bottling run, travels on
+		// that lot only, so the varietal on the shop's shelf is the one the
+		// operator sent and Honey Story still answers after the jars moved.
 		var lotID *uuid.UUID
+		harvestLotID := line.HarvestLotID
 		if line.BottlingRunID != nil && line.JarSizeID != nil {
-			var harvestLotID uuid.UUID
+			var runLot uuid.UUID
 			if err := uow.QueryRow(ctx,
 				`SELECT lot_id FROM bottling_runs WHERE id=$1`, line.BottlingRunID).
-				Scan(&harvestLotID); err != nil {
+				Scan(&runLot); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return stockBadRequest("invalid bottlingRunId")
 				}
 				return err
 			}
-			resolved, err := production.EnsureJarLotForHarvestLot(ctx, uow, itemID, harvestLotID)
+			if harvestLotID != nil && *harvestLotID != runLot {
+				return stockBadRequest("bottlingRunId does not belong to harvestLotId")
+			}
+			harvestLotID = &runLot
+		}
+		if harvestLotID != nil {
+			if line.JarSizeID == nil {
+				return stockBadRequest("catalog products are not tracked by harvest lot")
+			}
+			resolved, err := production.EnsureJarLotForHarvestLot(ctx, uow, itemID, *harvestLotID)
+			if app.IsKind(err, app.KindNotFound) {
+				return stockBadRequest("invalid harvestLotId")
+			}
 			if err != nil {
 				return err
 			}
@@ -1601,6 +1730,73 @@ type stockSettlementRow struct {
 	CreatedAt   time.Time  `json:"createdAt"`
 	VoidedAt    *time.Time `json:"voidedAt"`
 	VoidReason  *string    `json:"voidReason"`
+	// Lines is what the report moved, per SKU and harvest lot, read back off
+	// the ledger operations the settlement wrote (a voided report keeps its
+	// original lines; only the reversals are excluded).
+	Lines []stockSettlementLineRow `json:"lines"`
+}
+
+// stockSettlementLineRow is one (SKU, lot) of a recorded settlement.
+type stockSettlementLineRow struct {
+	JarSizeID    *uuid.UUID `json:"jarSizeId"`
+	ProductID    *uuid.UUID `json:"productId"`
+	Label        string     `json:"label"`
+	HarvestLotID *uuid.UUID `json:"harvestLotId"`
+	LotCode      *string    `json:"lotCode"`
+	VarietalName *string    `json:"varietalName"`
+	Sold         int        `json:"sold"`
+	Returned     int        `json:"returned"`
+	// Shrink is positive for stock that went missing, negative for stock
+	// the shop found.
+	Shrink int `json:"shrink"`
+}
+
+// stockSettlementLines reads the per-lot lines of the given settlements as
+// the ledger recorded them at the location: the settlement sale's consume,
+// its returns home, and its shrink or found adjustments.
+func (s *Server) stockSettlementLines(
+	ctx context.Context, locationID uuid.UUID, ids []uuid.UUID,
+) (map[uuid.UUID][]stockSettlementLineRow, error) {
+	out := make(map[uuid.UUID][]stockSettlementLineRow, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT cs.id, js.id, pc.id, COALESCE(js.label, pc.name, 'unknown'),
+		       hl.id, hl.lot_code, hv.name,
+		       COALESCE(SUM(-m.quantity) FILTER (WHERE o.kind = 'sale_consume'), 0)::int,
+		       COALESCE(SUM(-m.quantity) FILTER (WHERE o.kind = 'return'), 0)::int,
+		       COALESCE(SUM(-m.quantity) FILTER (WHERE o.kind IN ('shrink', 'count_adjust')), 0)::int
+		FROM consignment_settlements cs
+		JOIN inventory_operations o
+		  ON o.reverses_operation_id IS NULL
+		 AND ((o.source_type = 'sale' AND o.source_id = cs.sale_id)
+		   OR (o.source_type IN ('consignment_settlement', 'consignment_settlement_return')
+		       AND o.source_id = cs.id))
+		JOIN inventory_movements m ON m.operation_id = o.id AND m.location_id = $1
+		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
+		LEFT JOIN inventory_lots lot ON lot.id = m.lot_id
+		LEFT JOIN harvest_lots hl ON hl.id = lot.source_id AND lot.source_type = 'harvest_lot'
+		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
+		WHERE cs.id = ANY($2)
+		GROUP BY cs.id, js.id, pc.id, js.label, pc.name, hl.id, hl.lot_code, hv.name
+		ORDER BY cs.id, 4, hv.name NULLS LAST, hl.lot_code NULLS LAST`, locationID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var line stockSettlementLineRow
+		if err := rows.Scan(&id, &line.JarSizeID, &line.ProductID, &line.Label,
+			&line.HarvestLotID, &line.LotCode, &line.VarietalName,
+			&line.Sold, &line.Returned, &line.Shrink); err != nil {
+			return nil, err
+		}
+		out[id] = append(out[id], line)
+	}
+	return out, rows.Err()
 }
 
 func (s *Server) stockSettlementRows(
@@ -1635,9 +1831,26 @@ func (s *Server) stockSettlementRows(
 		}
 		row.PeriodStart = start.Format("2006-01-02")
 		row.PeriodEnd = end.Format("2006-01-02")
+		row.Lines = []stockSettlementLineRow{}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, 0, len(out))
+	for _, row := range out {
+		ids = append(ids, row.ID)
+	}
+	lines, err := s.stockSettlementLines(ctx, locationID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if found := lines[out[i].ID]; found != nil {
+			out[i].Lines = found
+		}
+	}
+	return out, nil
 }
 
 // GET /stock-locations/{id}/settlements
@@ -1667,6 +1880,10 @@ func (s *Server) stockSettlementList(w http.ResponseWriter, r *http.Request) {
 type stockSettlementLineInput struct {
 	JarSizeID *uuid.UUID `json:"jarSizeId"`
 	ProductID *uuid.UUID `json:"productId"`
+	// HarvestLotID pins the line to one harvest lot (one varietal): what
+	// sold, what came back, and the shelf count all refer to that lot. Nil
+	// is the whole SKU, oldest receipts first.
+	HarvestLotID *uuid.UUID `json:"harvestLotId"`
 	// What the shop says they sold, and what they are handing back.
 	QuantitySold     int `json:"quantitySold"`
 	QuantityReturned int `json:"quantityReturned"`
@@ -1792,7 +2009,7 @@ func (s *Server) stockSettlementCreate(w http.ResponseWriter, r *http.Request) {
 			unitPrice = &value
 		}
 		commandLines = append(commandLines, sales.SettlementLine{
-			JarSizeID: line.JarSizeID, ProductID: line.ProductID,
+			JarSizeID: line.JarSizeID, ProductID: line.ProductID, HarvestLotID: line.HarvestLotID,
 			QuantitySold: line.QuantitySold, QuantityReturned: line.QuantityReturned,
 			UnitPriceCents: unitPrice, CountOnShelf: line.CountOnShelf,
 		})
@@ -1912,6 +2129,14 @@ const stockSaleDeprecationNote = `deprecated: POST /sales accepts stockLocationI
 	`this route will be removed after the next release`
 
 // POST /stock-locations/{id}/sales
+//
+// A sale-level harvestLotId is honoured by the consume: when that harvest
+// lot's jars stand at the location, sales.LinkLines pins every jar line that
+// names no bottling run to that lot and sales.Apply draws from it only
+// (production.AllocateLot), so the varietal taken off the shelf is the one
+// the sale named and a lot that is short refuses the sale rather than
+// spilling to another lot. A harvestLotId whose jars are not at the location
+// stays what it always was — the Honey Story reference — and the lines FIFO.
 //
 // Deprecated: use POST /sales with stockLocationId. The body is identical
 // apart from that field, so this rewrites the decoded body to carry the id

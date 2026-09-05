@@ -89,7 +89,11 @@ type CancelSaleResult struct {
 }
 
 type SettlementLine struct {
-	JarSizeID, ProductID           *uuid.UUID
+	JarSizeID, ProductID *uuid.UUID
+	// HarvestLotID pins the line to one harvest lot (one varietal): the sold,
+	// returned, and shrink movements all draw from that lot and the shelf
+	// count is that lot's alone. Nil takes the location's oldest receipts.
+	HarvestLotID                   *uuid.UUID
 	QuantitySold, QuantityReturned int
 	UnitPriceCents                 *int64
 	CountOnShelf                   *int
@@ -153,6 +157,8 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		available, sold, returned int
 		price                     int64
 		count                     *int
+		lot                       *uuid.UUID
+		lotCode                   string
 	}
 	preparedLines := []prepared{}
 	seen := map[string]bool{}
@@ -181,11 +187,23 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 			return out, err
 		}
 		key := p.item.String()
+		if line.HarvestLotID != nil {
+			if p.jar == nil {
+				return out, app.Invalid(op, "%s: catalog products are not tracked by harvest lot", p.label)
+			}
+			lotID, err := production.EnsureJarLotForHarvestLot(ctx, uow, p.item, *line.HarvestLotID)
+			if err != nil {
+				return out, err
+			}
+			p.lot, p.lotCode = &lotID, production.LotCode(ctx, uow, lotID)
+			p.label += " (lot " + p.lotCode + ")"
+			key += "/" + lotID.String()
+		}
 		if seen[key] {
 			return out, app.Invalid(op, "%s is listed twice; combine it into one line", p.label)
 		}
 		seen[key] = true
-		if err := uow.QueryRow(ctx, `SELECT COALESCE(SUM(available),0)::int FROM inventory_available WHERE item_id=$1 AND location_id=$2`, p.item, location).Scan(&p.available); err != nil {
+		if err := uow.QueryRow(ctx, `SELECT COALESCE(SUM(available),0)::int FROM inventory_available WHERE item_id=$1 AND location_id=$2 AND ($3::uuid IS NULL OR lot_id=$3)`, p.item, location, p.lot).Scan(&p.available); err != nil {
 			return out, dbError(op, err)
 		}
 		if p.sold+p.returned > p.available {
@@ -245,17 +263,29 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,order_status,order_number,notes,created_by,stock_location_id,physical_applied_at) VALUES($1,$2,$3,$4,$4,'consignment',$5,$6,0,$7,$8,$9,$10,$11,$12,now())`, saleID, in.ReportedAt, customer, name, in.PaymentMethod, owed, in.AmountPaidCents, status, order, trim(in.Notes), actorValue(uow), location); err != nil {
 			return out, dbError(op, err)
 		}
+		pinned := map[uuid.UUID]uuid.UUID{}
 		for _, p := range preparedLines {
 			if p.sold == 0 {
 				continue
 			}
-			if _, err := uow.Exec(ctx, `INSERT INTO sale_items(sale_id,kind,jar_size_id,product_id,quantity,unit_price_cents,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)`, saleID, p.kind, p.jar, p.product, p.sold, p.price, actorValue(uow)); err != nil {
+			var itemID uuid.UUID
+			if err := uow.QueryRow(ctx, `INSERT INTO sale_items(sale_id,kind,jar_size_id,product_id,quantity,unit_price_cents,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, saleID, p.kind, p.jar, p.product, p.sold, p.price, actorValue(uow)).Scan(&itemID); err != nil {
 				return out, dbError(op, err)
+			}
+			if p.lot != nil {
+				pinned[itemID] = *p.lot
 			}
 		}
 		svc := New()
 		if err := svc.LinkLines(ctx, uow, saleID, location); err != nil {
 			return out, err
+		}
+		// LinkLines guessed a FIFO lot for each line; a line the report pinned
+		// to one varietal overrides the guess so Apply draws from that lot.
+		for itemID, lotID := range pinned {
+			if _, err := uow.Exec(ctx, `UPDATE sale_items SET inventory_lot_id=$2 WHERE id=$1`, itemID, lotID); err != nil {
+				return out, dbError(op, err)
+			}
 		}
 		if err := svc.Apply(ctx, uow, ApplyInput{SaleID: saleID, Date: in.ReportedAt, LocationID: location}); err != nil {
 			return out, err
@@ -268,7 +298,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 	}
 	for i, p := range preparedLines {
 		if p.returned > 0 {
-			if _, err := New().Transfer(ctx, uow, TransferInput{TransferID: settlementID, SourceType: "consignment_settlement_return", Returning: true, From: location, To: homeLocation, Date: in.ReportedAt, Lines: []TransferLine{{ItemID: p.item, Quantity: p.returned}}, Notes: trim(in.Notes)}); err != nil {
+			if _, err := New().Transfer(ctx, uow, TransferInput{TransferID: settlementID, SourceType: "consignment_settlement_return", Returning: true, From: location, To: homeLocation, Date: in.ReportedAt, Lines: []TransferLine{{ItemID: p.item, LotID: p.lot, Quantity: p.returned}}, Notes: trim(in.Notes)}); err != nil {
 				return out, err
 			}
 		}
@@ -279,7 +309,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 				if difference < 0 {
 					reason = "extra stock counted at " + name
 				}
-				if _, err := New().RecordSettlementShrink(ctx, uow, SettlementShrinkInput{SettlementID: settlementID, LocationID: location, ItemID: p.item, Quantity: difference, Date: in.ReportedAt, Reason: &reason, Index: i}); err != nil {
+				if _, err := New().RecordSettlementShrink(ctx, uow, SettlementShrinkInput{SettlementID: settlementID, LocationID: location, ItemID: p.item, LotID: p.lot, Quantity: difference, Date: in.ReportedAt, Reason: &reason, Index: i}); err != nil {
 					return out, err
 				}
 			}

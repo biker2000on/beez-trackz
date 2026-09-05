@@ -133,6 +133,46 @@ func AllocateFIFO(
 	return allocations, method, nil
 }
 
+// AllocateLot draws a whole-unit withdrawal from exactly one lot: the one the
+// operator pinned. Nothing spills to another lot — a pinned lot that is short
+// is a refusal naming the lot code, so a consignment write can never quietly
+// move a different varietal than the one asked for.
+func AllocateLot(
+	ctx context.Context, q app.Querier, relation string,
+	itemID, locationID uuid.UUID, quantity int, lotID uuid.UUID,
+) ([]Allocation, error) {
+	const op = "allocate lot"
+	if quantity <= 0 {
+		return nil, app.Invalid(op, "quantity must be greater than zero")
+	}
+	lots, err := LotsFIFO(ctx, q, relation, itemID, locationID)
+	if err != nil {
+		return nil, err
+	}
+	available := 0
+	for _, lot := range lots {
+		if lot.LotID == lotID {
+			available = ratToWholeUnits(lot.OnHand)
+			break
+		}
+	}
+	if available < quantity {
+		return nil, app.Precondition(op, "lot %s has only %d of the %d units requested at this location",
+			LotCode(ctx, q, lotID), available, quantity)
+	}
+	return []Allocation{{LotID: lotID, Quantity: quantity}}, nil
+}
+
+// LotCode is the operator-facing code of an inventory lot, falling back to
+// the id when the lot cannot be read, so a refusal can always name it.
+func LotCode(ctx context.Context, q app.Querier, lotID uuid.UUID) string {
+	var code string
+	if err := q.QueryRow(ctx, `SELECT code FROM inventory_lots WHERE id=$1`, lotID).Scan(&code); err != nil || code == "" {
+		return lotID.String()
+	}
+	return code
+}
+
 // ratToWholeUnits floors a balance to whole units. Count items always store
 // integers, so this only guards against a corrupted row.
 func ratToWholeUnits(value *big.Rat) int {
