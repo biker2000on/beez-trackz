@@ -343,10 +343,10 @@ test("a sale hides sizes and lots with nothing at the selling shelf and totals u
   // Pints are at home with their ounces; quarts are all gone, so no row.
   await expect(dialog.getByText("Pint · 22 oz")).toBeVisible();
   await expect(dialog.getByText("12 on hand at home")).toBeVisible();
-  await expect(dialog.getByRole("spinbutton", { name: "Quart quantity" })).toHaveCount(0);
+  await expect(dialog.getByRole("textbox", { name: "Quart quantity" })).toHaveCount(0);
 
   // Units and dollars follow the quantity as it is typed.
-  await dialog.getByRole("spinbutton", { name: "Pint quantity" }).fill("2");
+  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("2");
   await expect(dialog.getByText("2 jars · $20.00")).toBeVisible();
   await expect(dialog.getByText("2 units · subtotal $20.00")).toBeVisible();
 
@@ -359,7 +359,7 @@ test("a sale hides sizes and lots with nothing at the selling shelf and totals u
   await expect(dialog.getByText("12 jars of 2026-CLOVER-01 at home · leaves 10")).toBeVisible();
 
   // Asking for more than the shelf holds warns; the API is what refuses.
-  await dialog.getByRole("spinbutton", { name: "Pint quantity" }).fill("15");
+  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("15");
   await expect(dialog.getByText(/More Pint than at home/)).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Record sale" })).toBeEnabled();
 });
@@ -377,13 +377,13 @@ test("giving jars away shows on hand and ounces per size and totals jars · oz",
 
   await expect(dialog.getByText("Pint · 22 oz")).toBeVisible();
   await expect(dialog.getByText("12 on hand")).toBeVisible();
-  await expect(dialog.getByRole("spinbutton", { name: "Quart quantity" })).toHaveCount(0);
+  await expect(dialog.getByRole("textbox", { name: "Quart quantity" })).toHaveCount(0);
 
   await expect(dialog.getByText("0 jars · 0 oz")).toBeVisible();
-  await dialog.getByRole("spinbutton", { name: "Pint quantity" }).fill("6");
+  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("6");
   await expect(dialog.getByText("6 jars · 132 oz")).toBeVisible();
 
-  await dialog.getByRole("spinbutton", { name: "Pint quantity" }).fill("13");
+  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("13");
   await expect(dialog.getByText(/More Pint than on hand/)).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Record give-away" })).toBeEnabled();
 });

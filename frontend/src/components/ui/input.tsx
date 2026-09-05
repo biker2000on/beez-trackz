@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
+import { evaluateNumericInput } from "@/lib/math-input";
 
 function localISODate(date: Date) {
   const year = date.getFullYear();
@@ -25,13 +26,41 @@ function setNativeInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+/**
+ * Numeric fields accept arithmetic ("12+12+12", "3*12 lb") and evaluate it
+ * on blur or Enter, so counting boxes and multiplying by jars per box is one
+ * entry. `type="number"` is rendered as a text field with a decimal keyboard
+ * because the native number input refuses the operator characters; min/max/
+ * step still travel as attributes for anything that reads them.
+ */
+function isNumeric(type: string | undefined, inputMode: string | undefined) {
+  return type === "number" || inputMode === "decimal" || inputMode === "numeric";
+}
+
+function evaluateField(input: HTMLInputElement) {
+  const evaluated = evaluateNumericInput(input.value);
+  if (evaluated !== null && evaluated !== input.value) {
+    setNativeInputValue(input, evaluated);
+  }
+}
+
 function Input({
   className,
   type,
+  inputMode,
   onKeyDown,
+  onBlur,
   ...props
 }: React.ComponentProps<"input">) {
+  const numeric = isNumeric(type, inputMode);
+  function handleBlur(event: React.FocusEvent<HTMLInputElement>) {
+    if (numeric) evaluateField(event.currentTarget);
+    onBlur?.(event);
+  }
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (numeric && event.key === "Enter" && !event.defaultPrevented) {
+      evaluateField(event.currentTarget);
+    }
     onKeyDown?.(event);
     if (
       event.defaultPrevented ||
@@ -57,7 +86,9 @@ function Input({
 
   return (
     <input
-      type={type}
+      type={numeric && type === "number" ? "text" : type}
+      inputMode={inputMode ?? (type === "number" ? "decimal" : undefined)}
+      data-numeric={numeric ? "true" : undefined}
       data-slot="input"
       data-date-shortcuts={type === "date" ? "true" : undefined}
       className={cn(
@@ -70,6 +101,7 @@ function Input({
         className,
       )}
       onKeyDown={handleKeyDown}
+      onBlur={handleBlur}
       {...props}
     />
   );

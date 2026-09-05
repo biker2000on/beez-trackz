@@ -317,7 +317,7 @@ test("sending stock picks a lot with its home count and posts harvestLotId; any 
   await page.getByRole("option", { name: /Sourwood · 2026-SOURWOOD-01/ }).click();
 
   // Quantity is capped at that lot's home count, not the SKU's.
-  const qty = dialog.getByRole("spinbutton", { name: "Line 1 quantity" });
+  const qty = dialog.getByRole("textbox", { name: "Line 1 quantity" });
   await expect(qty).toHaveAttribute("max", "12");
   await qty.fill("30");
   await expect(dialog.getByRole("button", { name: "Send 12 units" })).toBeVisible();
@@ -327,11 +327,11 @@ test("sending stock picks a lot with its home count and posts harvestLotId; any 
   await dialog.getByRole("button", { name: "Add a line" }).click();
   await dialog.getByRole("combobox", { name: "Line 2 size" }).click();
   await page.getByRole("option", { name: /Quart/ }).click();
-  await expect(dialog.getByRole("spinbutton", { name: "Line 2 quantity" })).toHaveAttribute(
+  await expect(dialog.getByRole("textbox", { name: "Line 2 quantity" })).toHaveAttribute(
     "max",
     "20",
   );
-  await dialog.getByRole("spinbutton", { name: "Line 2 quantity" }).fill("2");
+  await dialog.getByRole("textbox", { name: "Line 2 quantity" }).fill("2");
 
   await dialog.getByRole("button", { name: "Send 8 units" }).click();
 
@@ -359,7 +359,7 @@ test("bringing stock home is one count per shelf row and posts the row's harvest
   const dialog = page.getByRole("dialog", { name: /Bring stock home/ });
   await expect(dialog).toBeVisible();
 
-  const wildflower = dialog.getByRole("spinbutton", {
+  const wildflower = dialog.getByRole("textbox", {
     name: "Quart · Wildflower · 2026-WILDFLOWER-01 coming home",
   });
   await expect(wildflower).toHaveAttribute("max", "5");
@@ -387,7 +387,7 @@ test("their report is one row per lot, refuses an over-count by varietal, and po
   const grid = dialog.getByRole("table", { name: "Corner market report lines" });
   await expect(grid.locator("tbody tr")).toHaveCount(5);
 
-  const sourwoodQt = dialog.getByRole("spinbutton", {
+  const sourwoodQt = dialog.getByRole("textbox", {
     name: "Quart · Sourwood · 2026-SOURWOOD-01 sold",
   });
   await expect(sourwoodQt).toHaveAttribute("max", "8");
@@ -402,7 +402,7 @@ test("their report is one row per lot, refuses an over-count by varietal, and po
 
   await sourwoodQt.fill("3");
   await dialog
-    .getByRole("spinbutton", { name: "Quart · Wildflower · 2026-WILDFLOWER-01 returned" })
+    .getByRole("textbox", { name: "Quart · Wildflower · 2026-WILDFLOWER-01 returned" })
     .fill("2");
   // 3 × $18 less the 30% cut.
   await expect(dialog.getByText("$37.80")).toBeVisible();
