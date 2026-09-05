@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatDate, formatMoney } from "@/features/honey/format";
 
 import { useSalesWorkbench } from "./api";
-import { shortfallExplanations } from "./types";
+import { shortfallExplanations, type ConsignmentLocation } from "./types";
 import { useWorkbenchCommands } from "./use-workbench-commands";
 import { WorkbenchCommands, WorkbenchExplanations } from "./workbench-command";
 import {
@@ -31,6 +31,19 @@ import {
  *
  * Deep links point at the routes that exist today; wave 5 rewrites them.
  */
+/**
+ * "12 Sourwood · 5 Wildflower out" when the body says what is out by
+ * varietal; the plain unit count when it does not (an older body, or a
+ * location holding only unattributed stock).
+ */
+function consignmentOut(location: ConsignmentLocation): string {
+  const byVarietal = (location.byVarietal ?? []).filter((row) => row.units > 0);
+  if (byVarietal.length === 0) return `${location.unitsOut} out`;
+  return `${byVarietal
+    .map((row) => `${row.units} ${row.varietalName ?? "unassigned"}`)
+    .join(" · ")} out`;
+}
+
 export function SalesWorkbench({ year }: { year?: number } = {}) {
   const workbench = useSalesWorkbench(year);
   const commands = useWorkbenchCommands();
@@ -184,8 +197,11 @@ export function SalesWorkbench({ year }: { year?: number } = {}) {
               </>
             }
             facts={
-              <p className="text-xs text-muted-foreground">
-                {location.unitsOut} out
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="workbench-consignment-out"
+              >
+                {consignmentOut(location)}
                 {location.lastSettledAt
                   ? ` · last settled ${formatDate(location.lastSettledAt)}`
                   : " · never settled"}

@@ -376,6 +376,10 @@ function salesWorkbenchBody() {
         locationId: LOCATION,
         name: "Corner market",
         unitsOut: 24,
+        byVarietal: [
+          { varietalName: "Sourwood", units: 16 },
+          { varietalName: "Wildflower", units: 8 },
+        ],
         settlementDueAt: "2026-09-30",
         lastSettledAt: "2026-08-31",
         commands: [],
@@ -413,7 +417,31 @@ const OBJECT_READS: Record<string, unknown> = {
     balanceDue: 0,
     breakdown: [],
   },
-  "/api/v1/stock-locations/inventory": { locations: [], items: [] },
+  // Consignment stock is tracked by varietal: every per-SKU row carries its
+  // `lots` split, and the shelf is one row per (SKU, lot).
+  "/api/v1/stock-locations/inventory": {
+    locations: [],
+    items: [
+      {
+        jarSizeId: "jar-qt",
+        productId: null,
+        label: "Quart",
+        kind: "jar",
+        unitPrice: 18,
+        total: 16,
+        byLocation: { [LOCATION]: 16 },
+        lots: [
+          {
+            harvestLotId: LOT,
+            lotCode: "2026-SOURWOOD-01",
+            varietalName: "Sourwood",
+            total: 16,
+            byLocation: { [LOCATION]: 16 },
+          },
+        ],
+      },
+    ],
+  },
   [`/api/v1/stock-locations/${LOCATION}`]: {
     location: {
       id: LOCATION,
@@ -436,9 +464,48 @@ const OBJECT_READS: Record<string, unknown> = {
       onHandUnits: 24,
       outstandingBalance: 0,
     },
-    shelf: [],
+    shelf: [
+      {
+        jarSizeId: "jar-qt",
+        productId: null,
+        label: "Quart",
+        kind: "jar",
+        unitPrice: 18,
+        onHand: 16,
+        harvestLotId: LOT,
+        lotCode: "2026-SOURWOOD-01",
+        varietalName: "Sourwood",
+      },
+      {
+        jarSizeId: "jar-qt",
+        productId: null,
+        label: "Quart",
+        kind: "jar",
+        unitPrice: 18,
+        onHand: 8,
+        harvestLotId: "99999999-3333-4333-8333-999999999999",
+        lotCode: "2026-WILDFLOWER-01",
+        varietalName: "Wildflower",
+      },
+    ],
     unsettled: [],
-    movements: [],
+    movements: [
+      {
+        id: "mv-1",
+        date: "2026-09-01",
+        kind: "transfer",
+        label: "Quart",
+        quantity: 16,
+        counterpartyName: "Home",
+        lotCode: "2026-SOURWOOD-01",
+        varietalName: "Sourwood",
+        reason: null,
+        notes: null,
+        isReversal: false,
+        reversedByMovementId: null,
+        settlementId: null,
+      },
+    ],
     settlements: [],
   },
   [`/api/v1/sales/${SALE}/receipt`]: {
@@ -811,6 +878,14 @@ test("§3.3 a sale and its settlement live under /sales, with margin read-only i
     await expectCanonical(page, visited, step);
     await expectAppShell(page);
   }
+
+  // The shop's shelf is read by varietal: one row per (SKU, lot), grouped
+  // under the varietal's name. consignment.spec.ts owns the dialogs.
+  await page.goto(`/sales/consignment/${LOCATION}`);
+  const shelf = page.getByRole("table", { name: "Stock on shelf" });
+  await expect(shelf.getByText("Sourwood", { exact: true })).toHaveCount(2);
+  await expect(shelf.getByText("Wildflower", { exact: true })).toHaveCount(2);
+  await expect(shelf.getByText("2026-SOURWOOD-01")).toBeVisible();
 
   // Step 7 — margin and reconciliation are Insights, and stay read-only:
   // Insights owns no expense or customer editor.

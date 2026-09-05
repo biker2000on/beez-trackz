@@ -48,13 +48,33 @@ export interface StockLocation {
   outstandingBalance: number;
 }
 
-export interface StockShelfRow {
+/**
+ * Which honey lot a row of stock came from. Consignment is tracked by
+ * varietal: a shop holding twelve Sourwood quarts and five Wildflower quarts
+ * has two shelf rows, not one row of seventeen. Catalog products and stock
+ * never attributed to a lot carry nulls.
+ */
+export interface StockLotRef {
+  harvestLotId: string | null;
+  lotCode: string | null;
+  varietalName: string | null;
+}
+
+/** One row per (SKU, lot) standing at a location. */
+export interface StockShelfRow extends StockLotRef {
   jarSizeId: string | null;
   productId: string | null;
   label: string;
   kind: string;
   unitPrice: number | null;
   onHand: number;
+}
+
+/** A SKU's stock split by lot, each with its own per-location breakdown. */
+export interface StockInventoryLot extends StockLotRef {
+  total: number;
+  /** Keyed by location id; absent means none of this lot is there. */
+  byLocation: Record<string, number>;
 }
 
 export interface StockInventoryRow {
@@ -66,6 +86,8 @@ export interface StockInventoryRow {
   total: number;
   /** Keyed by location id; absent means none of this SKU is there. */
   byLocation: Record<string, number>;
+  /** The same units split by lot; a product with no lots has an empty list. */
+  lots: StockInventoryLot[];
 }
 
 export interface StockInventory {
@@ -82,6 +104,7 @@ export interface StockMovement {
   quantity: number;
   counterpartyName: string | null;
   lotCode: string | null;
+  varietalName: string | null;
   reason: string | null;
   notes: string | null;
   isReversal: boolean;
@@ -99,6 +122,16 @@ export interface StockUnsettledSale {
   balanceDue: number;
 }
 
+/** What one report said about one (SKU, lot) shelf row. */
+export interface StockSettlementLine extends StockLotRef {
+  jarSizeId: string | null;
+  productId: string | null;
+  label: string;
+  quantitySold: number;
+  quantityReturned: number;
+  unitPrice: number | null;
+}
+
 export interface StockSettlement {
   id: string;
   locationId: string;
@@ -114,6 +147,8 @@ export interface StockSettlement {
   createdAt: string;
   voidedAt: string | null;
   voidReason: string | null;
+  /** Per-lot counts the report was made of; older rows may not carry them. */
+  lines?: StockSettlementLine[];
 }
 
 export interface StockLocationDetail {
@@ -171,6 +206,7 @@ export interface StockTransferLineBody {
   jarSizeId?: string;
   productId?: string;
   quantity: number;
+  /** Omitted means "any lot, oldest first": the server picks. */
   harvestLotId?: string;
   bottlingRunId?: string;
   productBatchId?: string;
@@ -181,6 +217,8 @@ export interface StockSettlementLineBody {
   productId?: string;
   quantitySold: number;
   quantityReturned: number;
+  /** Which shelf row this line is about; omitted for stock with no lot. */
+  harvestLotId?: string;
   unitPrice?: number;
   /** Their count of what is left; the difference becomes shrink there. */
   countOnShelf?: number;

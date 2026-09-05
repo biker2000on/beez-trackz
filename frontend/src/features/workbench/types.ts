@@ -128,6 +128,11 @@ export interface ConsignmentLocation {
   locationId: string;
   name: string;
   unitsOut: number;
+  /**
+   * The same units split by varietal, so the row can say "12 Sourwood · 5
+   * Wildflower out". Absent from older bodies: fall back to `unitsOut`.
+   */
+  byVarietal?: { varietalName: string | null; units: number }[];
   settlementDueAt: string | null;
   lastSettledAt: string | null;
   commands?: WorkCommand[];
