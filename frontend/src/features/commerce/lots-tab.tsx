@@ -268,11 +268,12 @@ function LotFormDialog({
   const [claimApiaryId, setClaimApiaryId] = React.useState(
     lot?.claimApiaryId ?? "",
   );
+  const units = useUnits();
+  // Seed the field in the operator's own units so it reads like the label.
   const [claimElevation, setClaimElevation] = React.useState(
-    lot?.claimElevationM != null ? `${Math.round(lot.claimElevationM)} m` : "",
+    lot?.claimElevationM != null ? elevationInput(lot.claimElevationM, units.units) : "",
   );
   const apiaries = useApiaryOptions();
-  const units = useUnits();
   const [season, setSeason] = React.useState(lot?.season ?? "");
   const [region, setRegion] = React.useState(lot?.apiaryRegion ?? "");
   const [bloom, setBloom] = React.useState(lot?.bloomNotes ?? "");

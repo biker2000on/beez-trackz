@@ -204,10 +204,19 @@ func operatorUnitsSystem(ctx context.Context, q inspectionQuerier) string {
 
 func formatClaimElevation(meters float64, units string) string {
 	if units == "metric" {
-		return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(meters, 'f', 1, 64), "0"), ".") + " m"
+		return trimFraction(strconv.FormatFloat(meters, 'f', 1, 64)) + " m"
 	}
 	feet := meters / metersPerFoot
-	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(feet, 'f', 0, 64), "0"), ".") + " ft"
+	return strconv.FormatFloat(feet, 'f', 0, 64) + " ft"
+}
+
+// trimFraction drops a trailing ".0"-style fraction only; it never touches
+// integer zeros (1050 stays 1050).
+func trimFraction(number string) string {
+	if !strings.Contains(number, ".") {
+		return number
+	}
+	return strings.TrimRight(strings.TrimRight(number, "0"), ".")
 }
 
 // formatFloralClaim builds the declared source shared by lot, label, and
