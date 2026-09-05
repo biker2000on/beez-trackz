@@ -37,7 +37,10 @@ import {
   useHarvestLots,
   useWholesalePriceLists,
 } from "@/features/commerce/api";
-import { useStockLocations } from "@/features/commerce/stock-locations-api";
+import {
+  useStockInventory,
+  useStockLocations,
+} from "@/features/commerce/stock-locations-api";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { useEquipmentStock } from "@/features/equipment/hooks";
@@ -160,6 +163,67 @@ export function RecordSaleDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
 
+  // --- what is on the shelf the sale comes off ---
+  //
+  // The inventory matrix is the one derivation of where every jar stands.
+  // Home is the residual of everything consigned out, so the merged figure on
+  // an inventory row is not what can be sold from here.
+  const stockInventory = useStockInventory(open);
+  const stockLocationId = form.watch("stockLocationId");
+  const homeId = stockInventory.data?.locations.find((row) => row.isHome)?.id;
+  const sellingFrom = stockLocationId === "home" ? homeId : stockLocationId;
+  const sellingFromName =
+    stockLocationId === "home"
+      ? "at home"
+      : `at ${stockLocations.data?.find((row) => row.id === stockLocationId)?.name ?? "that shelf"}`;
+  const matrixItems = Array.isArray(stockInventory.data?.items)
+    ? stockInventory.data.items
+    : null;
+  // Until the matrix has landed the inventory row's own count stands in.
+  const onHandBySize = React.useMemo(() => {
+    if (!matrixItems || !sellingFrom) return undefined;
+    const map = new Map<string, number>();
+    for (const item of matrixItems) {
+      if (item.jarSizeId) map.set(item.jarSizeId, item.byLocation[sellingFrom] ?? 0);
+    }
+    return map;
+  }, [matrixItems, sellingFrom]);
+  const onHandOf = (row: HoneyInventoryRow) =>
+    onHandBySize ? (onHandBySize.get(row.jarSizeId) ?? 0) : row.onHand;
+  // Jars of each harvest lot standing at the selling location, summed across
+  // sizes: what the lot picker shows and what it hides when zero.
+  const jarsByLot = React.useMemo(() => {
+    const map = new Map<string, number>();
+    if (!matrixItems || !sellingFrom) return null;
+    for (const item of matrixItems) {
+      if (!item.jarSizeId) continue;
+      for (const lot of item.lots ?? []) {
+        if (!lot.harvestLotId) continue;
+        map.set(
+          lot.harvestLotId,
+          (map.get(lot.harvestLotId) ?? 0) + (lot.byLocation[sellingFrom] ?? 0),
+        );
+      }
+    }
+    return map;
+  }, [matrixItems, sellingFrom]);
+  const harvestLotId = form.watch("harvestLotId");
+  const lotChoices = (lots.data ?? []).filter(
+    (lot) =>
+      lot.id === harvestLotId ||
+      jarsByLot == null ||
+      (jarsByLot.get(lot.id) ?? 0) > 0,
+  );
+
+  const jarUnits = lines.reduce(
+    (sum, line) => sum + Math.max(0, parseNum(line.quantity) ?? 0),
+    0,
+  );
+  const overSold = lines.flatMap((line) => {
+    const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
+    const qty = parseNum(line.quantity) ?? 0;
+    return row && qty > onHandOf(row) ? [row.label] : [];
+  });
   const jarSubtotal = lines.reduce((sum, line) => {
     const qty = parseNum(line.quantity) ?? 0;
     const price = parseNum(line.unitPrice ?? "") ?? 0;
@@ -187,6 +251,15 @@ export function RecordSaleDialog({
     const price = parseNum(line.unitPrice) ?? 0;
     return sum + (qty > 0 ? qty * price : 0);
   }, 0);
+  const productUnits = productLines.reduce(
+    (sum, line) => sum + Math.max(0, parseNum(line.quantity) ?? 0),
+    0,
+  );
+  const stockUnits = stockLines.reduce(
+    (sum, line) => sum + Math.max(0, parseNum(line.quantity) ?? 0),
+    0,
+  );
+  const totalUnits = jarUnits + productUnits + stockUnits + colonies.length;
   const subtotal = jarSubtotal + colonySubtotal + hiveEquipmentSubtotal + stockSubtotal + productSubtotal;
   const discountAmount = Math.min(subtotal, Math.max(0, parseNum(form.watch("discountAmount")) ?? 0));
   const total = subtotal - discountAmount;
@@ -487,7 +560,20 @@ export function RecordSaleDialog({
               onChange={setLines}
               showPrice
               showOnHand
+              onHandBySize={onHandBySize}
+              onHandWhere={sellingFromName}
+              hideEmpty
+              warnOverdraw
             />
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {jarUnits} {jarUnits === 1 ? "jar" : "jars"} · {formatMoney(jarSubtotal)}
+            </p>
+            {overSold.length > 0 && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                More {overSold.join(", ")} than {sellingFromName} — the sale
+                will be refused unless the count is corrected first.
+              </p>
+            )}
             <FieldError message={lineError ?? undefined} />
           </div>
           <ColonyEquipmentFields
@@ -551,20 +637,36 @@ export function RecordSaleDialog({
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">Unassigned</SelectItem>
-                {(lots.data ?? []).map((lot) => (
+                {lotChoices.map((lot) => (
                   <SelectItem key={lot.id} value={lot.id} disabled={lot.lockout?.locked}>
                     {lot.lotCode}{lot.season ? ` · ${lot.season}` : ""}
+                    {jarsByLot?.has(lot.id)
+                      ? ` · ${jarsByLot.get(lot.id)} jars ${sellingFromName}`
+                      : ""}
                     {lot.lockout?.locked ? " · locked" : ""}
                   </SelectItem>
                 ))}
+                {jarsByLot != null && lotChoices.length === 0 && (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    No lot has jars {sellingFromName}.
+                  </div>
+                )}
               </SelectContent>
             </Select>
             {(() => {
-              const selected = (lots.data ?? []).find((lot) => lot.id === form.watch("harvestLotId"));
+              const selected = (lots.data ?? []).find((lot) => lot.id === harvestLotId);
               if (!selected?.lockout?.locked) {
+                const lotJars = selected ? jarsByLot?.get(selected.id) : undefined;
                 return (
-                  <p className="text-xs text-muted-foreground">
-                    Assigning a lot enables batch and season profitability.
+                  <p className="text-xs text-muted-foreground" aria-live="polite">
+                    {selected && lotJars != null
+                      ? `${lotJars} jars of ${selected.lotCode} ${sellingFromName}` +
+                        (jarUnits > 0
+                          ? lotJars - jarUnits >= 0
+                            ? ` · leaves ${lotJars - jarUnits}`
+                            : ` · ${jarUnits - lotJars} more than that`
+                          : "")
+                      : "Assigning a lot enables batch and season profitability."}
                   </p>
                 );
               }
@@ -609,8 +711,14 @@ export function RecordSaleDialog({
               {...form.register("notes")}
             />
           </div>
-          <div className="flex items-center justify-between rounded-md bg-muted px-3 py-2">
-            <span className="text-sm text-muted-foreground">Subtotal {formatMoney(subtotal)}{discountAmount > 0 ? ` · discount ${formatMoney(discountAmount)}` : ""}</span>
+          <div
+            className="flex items-center justify-between rounded-md bg-muted px-3 py-2"
+            aria-live="polite"
+          >
+            <span className="text-sm text-muted-foreground">
+              {totalUnits} {totalUnits === 1 ? "unit" : "units"} · subtotal {formatMoney(subtotal)}
+              {discountAmount > 0 ? ` · discount ${formatMoney(discountAmount)}` : ""}
+            </span>
             <span className="text-base font-semibold tabular-nums">{formatMoney(total)}</span>
           </div>
           <DialogFooter>

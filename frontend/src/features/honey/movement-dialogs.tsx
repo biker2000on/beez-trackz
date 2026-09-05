@@ -521,6 +521,16 @@ export function BulkMovementDialog({
             error={lotError ?? undefined}
             onNavigate={() => onOpenChange(false)}
           />
+          {enteredLbs != null && enteredLbs > 0 && remaining != null && (
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {isLoss ? "Losing" : "Using"} {formatHoney(enteredLbs)}
+              {overdrawn == null
+                ? ` leaves ${formatHoney(remaining - enteredLbs)} in ${
+                    lots.list.find((lot) => lot.id === lotId)?.lotCode ?? "the lot"
+                  }`
+                : ""}
+            </p>
+          )}
           {overdrawn != null && (
             <p className="text-xs text-amber-700 dark:text-amber-400">
               That is more than the {formatHoney(overdrawn)} that lot still
@@ -604,6 +614,26 @@ export function GiveAwayDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
 
+  const giveTotals = lines.reduce(
+    (acc, line) => {
+      const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
+      const qty = parseNum(line.quantity) ?? 0;
+      if (qty > 0) {
+        acc.jars += qty;
+        acc.oz += row?.honeyOz ? row.honeyOz * qty : 0;
+      }
+      return acc;
+    },
+    { jars: 0, oz: 0 },
+  );
+  // Sizes asked for beyond what is on hand. A warning, not a block: the API
+  // is the one that refuses, and it says so inline.
+  const giveOver = lines.flatMap((line) => {
+    const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
+    const qty = parseNum(line.quantity) ?? 0;
+    return row && qty > row.onHand ? [row.label] : [];
+  });
+
   const submitGiveAway = (resetAfter: boolean) => form.handleSubmit((values) => {
     const jarLines = lines
       .map((line) => ({
@@ -662,7 +692,19 @@ export function GiveAwayDialog({
               value={lines}
               onChange={setLines}
               showOnHand
+              hideEmpty
+              warnOverdraw
             />
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {giveTotals.jars} {giveTotals.jars === 1 ? "jar" : "jars"} ·{" "}
+              {Math.round(giveTotals.oz * 10) / 10} oz
+            </p>
+            {giveOver.length > 0 && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                More {giveOver.join(", ")} than on hand — the ledger will refuse
+                this unless the counts are corrected first.
+              </p>
+            )}
             <FieldError message={lineError ?? undefined} />
           </div>
           <div className="grid gap-1.5">
@@ -731,6 +773,15 @@ export function AdjustJarsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, inventory]);
 
+  // "Pint 12 → 9": the counts this entry leaves behind, one per touched size.
+  const adjustSummary = lines.flatMap((line) => {
+    const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
+    const delta = parseNum(line.quantity) ?? 0;
+    return row && delta !== 0
+      ? [`${row.label} ${row.onHand} → ${row.onHand + delta}`]
+      : [];
+  });
+
   const submitAdjustment = (resetAfter: boolean) => form.handleSubmit((values) => {
     const deltas = lines
       .map((line) => ({
@@ -791,6 +842,11 @@ export function AdjustJarsDialog({
               allowNegative
               showNewTotal
             />
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {adjustSummary.length > 0
+                ? adjustSummary.join(" · ")
+                : "No counts change yet."}
+            </p>
             <FieldError message={lineError ?? undefined} />
           </div>
           <div className="grid gap-1.5">

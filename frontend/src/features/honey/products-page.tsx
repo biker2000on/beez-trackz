@@ -57,6 +57,7 @@ import {
   useCreateProductBatch,
   useCreatePropolisHarvest,
   useHiveOptions,
+  useHoneyLotBalances,
   useProductBatches,
   useProductCatalog,
   usePropolisHarvests,
@@ -411,7 +412,10 @@ export function HiveProductsPage() {
               Cost is the linked ingredient expenses plus the honey those pounds cost to make.
             </p>
           </div>
-          <AddBatchDialog products={catalog.data?.items ?? []} />
+          <AddBatchDialog
+            products={catalog.data?.items ?? []}
+            propolisOnHandGrams={propolisOnHandGrams}
+          />
         </div>
         {batches.data.length === 0 ? (
           <p className="text-sm text-muted-foreground">No batches recorded yet.</p>
@@ -673,15 +677,19 @@ function AddPropolisDialog() {
 
 function AddBatchDialog({
   products,
+  propolisOnHandGrams,
 }: {
-  products: { id: string; name: string; kind: string; sizeLabel: string | null }[];
+  products: { id: string; name: string; kind: string; unit: string; sizeLabel: string | null }[];
+  /** Raw propolis on hand across every harvest (the catalog's one figure). */
+  propolisOnHandGrams: number;
 }) {
-  const { units, honeySuffix, propolisSuffix, formatPropolis } = useUnits();
+  const { units, honeySuffix, propolisSuffix, formatHoney, formatPropolis } = useUnits();
   const create = useCreateProductBatch();
   const lots = useHarvestLots();
   const harvests = usePropolisHarvests();
   const expenses = useExpenses();
   const [open, setOpen] = React.useState(false);
+  const balances = useHoneyLotBalances(open);
   const [kind, setKind] = React.useState("creamed_honey");
   const [productId, setProductId] = React.useState("");
   const [lotId, setLotId] = React.useState("none");
@@ -701,6 +709,36 @@ function AddBatchDialog({
   const selectedProductId = matching.some((product) => product.id === productId)
     ? productId
     : (matching[0]?.id ?? "");
+  const selectedProduct = matching.find((product) => product.id === selectedProductId);
+
+  // Bulk pounds left per lot, from the same balance the jarring dialog reads.
+  // Lots with nothing left are not offered; the one chosen stays listed.
+  const remainingByLot = React.useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of balances.data?.lots ?? []) map.set(row.lotId, row.onHandLbs);
+    return map;
+  }, [balances.data]);
+  const lotChoices = (lots.data ?? []).filter(
+    (lot) => lot.id === lotId || !balances.data || (remainingByLot.get(lot.id) ?? 0) > 0,
+  );
+  const lotRemaining = lotId !== "none" ? remainingByLot.get(lotId) : undefined;
+  const honeyUsed = honeyKind ? parseHoneyWeight(honeyLbs, units) : null;
+  const honeyOver =
+    lotRemaining != null && honeyUsed != null && honeyUsed > lotRemaining
+      ? lotRemaining
+      : null;
+
+  const selectedHarvest = (harvests.data ?? []).find((row) => row.id === propolisHarvestId);
+  const harvestGrams = selectedHarvest
+    ? selectedHarvest.unit === "ounces"
+      ? selectedHarvest.amount * GRAMS_PER_OUNCE
+      : selectedHarvest.amount
+    : null;
+  const propolisUsed = kind === "tincture" ? parsePropolisMassInput(propolisAmount, units) : null;
+  const outCount = parseNum(quantityOut);
+  const outUnit = selectedProduct
+    ? `${selectedProduct.unit}${selectedProduct.sizeLabel ? ` · ${selectedProduct.sizeLabel}` : ""}`
+    : "";
 
   function submit() {
     const out = parseNum(quantityOut);
@@ -789,8 +827,9 @@ function AddBatchDialog({
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="grid gap-1.5">
-                    <Label>Honey ({honeySuffix})</Label>
+                    <Label htmlFor="batch-honey">Honey ({honeySuffix})</Label>
                     <Input
+                      id="batch-honey"
                       inputMode="decimal"
                       value={honeyLbs}
                       onChange={(event) => setHoneyLbs(event.target.value)}
@@ -798,18 +837,47 @@ function AddBatchDialog({
                     />
                   </div>
                   <div className="grid gap-1.5">
-                    <Label>Harvest lot{kind === "creamed_honey" ? "" : " (optional)"}</Label>
+                    <Label htmlFor="batch-lot">Harvest lot{kind === "creamed_honey" ? "" : " (optional)"}</Label>
                     <Select value={lotId} onValueChange={setLotId}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="batch-lot"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">Unassigned</SelectItem>
-                        {(lots.data ?? []).map((lot) => (
-                          <SelectItem key={lot.id} value={lot.id}>{lot.lotCode}</SelectItem>
+                        {lotChoices.map((lot) => (
+                          <SelectItem key={lot.id} value={lot.id}>
+                            {lot.lotCode}
+                            {lot.varietalName ? ` · ${lot.varietalName}` : ""}
+                            {remainingByLot.has(lot.id)
+                              ? ` · ${formatHoney(remainingByLot.get(lot.id) ?? 0)} left`
+                              : ""}
+                          </SelectItem>
                         ))}
+                        {balances.data && lotChoices.length === 0 && (
+                          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                            No lot has bulk honey left.
+                          </div>
+                        )}
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
+                <p className="text-xs text-muted-foreground" aria-live="polite">
+                  {honeyUsed != null && honeyUsed > 0
+                    ? `Uses ${formatHoney(honeyUsed)}`
+                    : "Uses no honey yet"}
+                  {lotRemaining != null
+                    ? honeyOver == null
+                      ? ` · leaves ${formatHoney(lotRemaining - (honeyUsed ?? 0))} in ${
+                          lots.data?.find((lot) => lot.id === lotId)?.lotCode ?? "the lot"
+                        }`
+                      : ""
+                    : ""}
+                </p>
+                {honeyOver != null && (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    That is more than the {formatHoney(honeyOver)} left in that lot.
+                    Saved anyway — check the lot’s numbers if this looks wrong.
+                  </p>
+                )}
                 {kind === "mead" && (
                   <div className="grid gap-3 sm:grid-cols-3">
                     <div className="grid gap-1.5">
@@ -854,6 +922,23 @@ function AddBatchDialog({
                     placeholder={`e.g. 10 ${propolisSuffix}`}
                   />
                 </div>
+                <p className="col-span-2 text-xs text-muted-foreground" aria-live="polite">
+                  {harvestGrams != null
+                    ? `${formatPropolis(harvestGrams)} in that harvest · `
+                    : ""}
+                  {formatPropolis(propolisOnHandGrams)} propolis on hand in all
+                  {propolisUsed != null && propolisUsed > 0
+                    ? ` · uses ${formatPropolis(propolisUsed)}, leaves ${formatPropolis(
+                        Math.max(0, propolisOnHandGrams - propolisUsed),
+                      )}`
+                    : ""}
+                </p>
+                {propolisUsed != null && propolisUsed > propolisOnHandGrams && (
+                  <p className="col-span-2 text-xs text-amber-700 dark:text-amber-400">
+                    That is more propolis than is on hand. Saved anyway if the
+                    ledger accepts it — check the harvests if this looks wrong.
+                  </p>
+                )}
               </div>
             )}
             {(kind === "hot_honey" || kind === "tincture" || kind === "mead") && (
@@ -873,8 +958,16 @@ function AddBatchDialog({
               </div>
             )}
             <div className="grid gap-1.5">
-              <Label>Quantity out</Label>
-              <Input type="number" min="1" value={quantityOut} onChange={(event) => setQuantityOut(event.target.value)} />
+              <Label htmlFor="batch-out">Quantity out{outUnit ? ` (${outUnit})` : ""}</Label>
+              <Input id="batch-out" type="number" min="1" value={quantityOut} onChange={(event) => setQuantityOut(event.target.value)} />
+              {outCount != null && outCount > 0 && selectedProduct && (
+                <p className="text-xs text-muted-foreground" aria-live="polite">
+                  {outCount} × {selectedProduct.name}
+                  {selectedProduct.sizeLabel ? ` ${selectedProduct.sizeLabel}` : ""}
+                  {" "}({selectedProduct.unit}
+                  {outCount === 1 ? "" : "s"})
+                </p>
+              )}
             </div>
             <div className="grid gap-1.5">
               <Label>Notes</Label>

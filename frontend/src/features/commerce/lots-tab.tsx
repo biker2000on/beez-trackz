@@ -39,10 +39,11 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { formatDate, formatLbs } from "@/features/honey/format";
+import { formatDate, formatLbs, parseHoneyWeight } from "@/features/honey/format";
 import {
   useApiaryOptions,
   useHarvests,
+  useHoneyLotBalances,
   useHoneyVarietals,
   useJarInventory,
 } from "@/features/honey/hooks";
@@ -913,6 +914,8 @@ function LotFormDialog({
 
 function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: boolean; onOpenChange: (open: boolean) => void }) {
   const inventory = useJarInventory();
+  const balances = useHoneyLotBalances(open);
+  const { formatHoney, units: unitsSystem, honeySuffix } = useUnits();
   const create = useCreateBottlingRun(lot.id);
   const [date, setDate] = React.useState(todayISO());
   const [jarSizeId, setJarSizeId] = React.useState("");
@@ -932,6 +935,17 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
     setMoisture(lot.bottlingMoisturePct != null ? String(lot.bottlingMoisturePct) : "");
   }
 
+  // What the run draws against: the lot's bulk still on hand, from the same
+  // per-lot balance the jarring dialog reads. Sizes with no ounces configured
+  // are still offered — the run then records only the jar count.
+  const remaining = balances.data?.lots.find((row) => row.lotId === lot.id)?.onHandLbs;
+  const size = (inventory.data ?? []).find((row) => row.jarSizeId === jarSizeId);
+  const jars = Math.max(0, Math.trunc(Number(quantity) || 0));
+  const ounces = size?.honeyOz ? size.honeyOz * jars : 0;
+  const typedLbs = parseHoneyWeight(pounds, unitsSystem);
+  const drawLbs = typedLbs != null && typedLbs > 0 ? typedLbs : ounces / 16;
+  const overdrawn = remaining != null && drawLbs > remaining ? remaining : null;
+
   function submit(resetAfter = false) {
     const qty = Number(quantity);
     if (!Number.isInteger(qty) || qty <= 0) return;
@@ -944,7 +958,7 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
       bottledDate: date,
       jarSizeId,
       quantity: qty,
-      honeyLbs: pounds.trim() ? Number(pounds) : undefined,
+      honeyLbs: typedLbs != null && typedLbs > 0 ? typedLbs : undefined,
       serialize,
       moisturePct: moisture.trim() ? Number(moisture) : undefined,
     }, {
@@ -967,14 +981,59 @@ function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: bo
           onSubmitAndReset={() => submit(true)}
           onEscape={() => onOpenChange(false)}
         >
+          {remaining != null && (
+            <p className="text-xs text-muted-foreground">
+              {formatHoney(remaining)} of bulk honey left in {lot.lotCode}
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
-            <div className="grid gap-1.5"><Label>Jar size</Label><Select value={jarSizeId || undefined} onValueChange={setJarSizeId}><SelectTrigger><SelectValue placeholder="Select size" /></SelectTrigger><SelectContent>{(inventory.data ?? []).map((row) => <SelectItem key={row.jarSizeId} value={row.jarSizeId}>{row.label}</SelectItem>)}</SelectContent></Select></div>
+            <div className="grid gap-1.5"><Label htmlFor="bottling-date">Date</Label><Input id="bottling-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="bottling-size">Jar size</Label>
+              <Select value={jarSizeId || undefined} onValueChange={setJarSizeId}>
+                <SelectTrigger id="bottling-size"><SelectValue placeholder="Select size" /></SelectTrigger>
+                <SelectContent>
+                  {(inventory.data ?? []).map((row) => (
+                    <SelectItem key={row.jarSizeId} value={row.jarSizeId}>
+                      {row.label}
+                      {row.honeyOz ? ` · ${row.honeyOz} oz` : " · size not set"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5"><Label>Jars</Label><Input type="number" min="1" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} /></div>
-            <div className="grid gap-1.5"><Label>Honey used (lb)</Label><Input type="number" min="0" step="0.1" value={pounds} onChange={(e) => setPounds(e.target.value)} /></div>
+            <div className="grid gap-1.5"><Label htmlFor="bottling-jars">Jars</Label><Input id="bottling-jars" type="number" min="1" step="1" value={quantity} onChange={(e) => setQuantity(e.target.value)} /></div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="bottling-honey">Honey used ({honeySuffix}, optional)</Label>
+              <Input
+                id="bottling-honey"
+                inputMode="decimal"
+                value={pounds}
+                placeholder={ounces > 0 ? `≈ ${formatHoney(ounces / 16)}` : `0 ${honeySuffix}`}
+                onChange={(e) => setPounds(e.target.value)}
+              />
+            </div>
           </div>
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {jars} {jars === 1 ? "jar" : "jars"}
+            {size?.honeyOz
+              ? ` · ${Math.round(ounces * 10) / 10} oz ≈ ${formatHoney(ounces / 16)}`
+              : size
+                ? " · no honey size on this jar, so no weight is estimated"
+                : ""}
+            {typedLbs != null && typedLbs > 0 ? ` · ${formatHoney(typedLbs)} typed` : ""}
+            {remaining != null && drawLbs > 0 && overdrawn == null
+              ? ` · leaves ${formatHoney(remaining - drawLbs)} in ${lot.lotCode}`
+              : ""}
+          </p>
+          {overdrawn != null && (
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              That is more than the {formatHoney(overdrawn)} left in {lot.lotCode}.
+              Saved anyway — check the lot&rsquo;s extracted weight if this looks wrong.
+            </p>
+          )}
           <div className="grid gap-1.5">
             <Label>Bottling moisture % (optional)</Label>
             <Input type="number" min="0" max="100" step="0.1" value={moisture} onChange={(e) => setMoisture(e.target.value)} />

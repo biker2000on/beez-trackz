@@ -704,14 +704,20 @@ function NewHarvestDialog({
               <FieldError message={errors.harvestedWeight?.message} />
             </div>
           )}
-          {calculated != null && (
-            <Badge
-              variant={calculated < 0 ? "destructive" : "accent"}
-              className="justify-self-start tabular-nums"
-            >
-              Honey: {formatHoney(calculated)}
-            </Badge>
-          )}
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {calculated != null ? (
+              <Badge
+                variant={calculated < 0 ? "destructive" : "accent"}
+                className="tabular-nums"
+              >
+                Honey: {formatHoney(calculated)}
+              </Badge>
+            ) : mode === "supers" ? (
+              "Honey = super weight before − after; it fills in as you type."
+            ) : (
+              "Type the weight of the extracted honey."
+            )}
+          </p>
           <div className="grid gap-1.5">
             <Label htmlFor="harvest-notes">Notes</Label>
             <Textarea

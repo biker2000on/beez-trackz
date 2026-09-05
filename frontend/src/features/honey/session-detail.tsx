@@ -720,9 +720,13 @@ function AddEntriesCard({
               ? "Saving…"
               : `Save ${filledLines.length || ""} ${filledLines.length === 1 ? "entry" : "entries"}`.replace("  ", " ")}
           </Button>
-          {filledLines.length > 1 && (
-            <span className="text-sm text-muted-foreground tabular-nums">
-              Total {formatHoney(total)}
+          {filledLines.length > 0 && (
+            <span
+              className="text-sm text-muted-foreground tabular-nums"
+              aria-live="polite"
+            >
+              {filledLines.length === 1 ? "Honey" : "Session total"}{" "}
+              {formatHoney(total)}
             </span>
           )}
         </div>

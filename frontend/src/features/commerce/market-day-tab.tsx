@@ -243,7 +243,7 @@ export function MarketDayTab({
               <Card key={key} className={quantity > 0 ? "border-primary" : ""}>
                 <CardContent className="grid gap-3 p-4">
                   <button type="button" className="grid min-h-20 place-items-center rounded-md bg-amber-500/10 p-3 text-center hover:bg-amber-500/20" onClick={() => adjust(key, 1, row.onHand)} disabled={row.onHand <= quantity}>
-                    <span><span className="block text-lg font-bold">{row.label}</span><span className="text-sm text-muted-foreground">{row.defaultPrice && row.defaultPrice > 0 ? formatMoney(row.defaultPrice) : "No price"} · {row.onHand} left</span></span>
+                    <span><span className="block text-lg font-bold">{row.label}</span><span className="text-sm text-muted-foreground">{row.honeyOz ? `${row.honeyOz} oz · ` : ""}{row.defaultPrice && row.defaultPrice > 0 ? formatMoney(row.defaultPrice) : "No price"} · {row.onHand} left</span></span>
                   </button>
                   <div className="flex items-center justify-between">
                     <Button size="icon-sm" variant="outline" aria-label={`Remove one ${row.label}`} onClick={() => adjust(key, -1, row.onHand)} disabled={quantity === 0}><Minus /></Button>

@@ -183,11 +183,11 @@ export function FeedingDialog({
               </Select>
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="feeding-quantity">Quantity</Label>
+              <Label htmlFor="feeding-quantity">Quantity ({watched.quantityUnit})</Label>
               <Input
                 id="feeding-quantity"
                 inputMode="decimal"
-                placeholder="e.g. 2 kg or 2 L"
+                placeholder={`e.g. 2 ${watched.quantityUnit}, 2 kg or 2 L`}
                 aria-invalid={
                   form.formState.errors.quantity ? true : undefined
                 }

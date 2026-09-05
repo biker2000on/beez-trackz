@@ -48,6 +48,21 @@ interface JarLinesEditorProps {
   allowNegative?: boolean;
   /** Show the resulting on-hand total per line (jar adjustments). */
   showNewTotal?: boolean;
+  /**
+   * On-hand counts that override each row's own (e.g. the jars standing at
+   * the shelf a sale comes off). A size missing from the map counts as zero.
+   */
+  onHandBySize?: Map<string, number>;
+  /** Where the on-hand count is measured, e.g. "at Corner market". */
+  onHandWhere?: string;
+  /**
+   * Leave out sizes with nothing on hand. A row the operator has already
+   * typed a quantity into stays, so a shelf that empties mid-entry never
+   * swallows the line.
+   */
+  hideEmpty?: boolean;
+  /** Flag a quantity above on hand in amber; never blocks the submit. */
+  warnOverdraw?: boolean;
   disabled?: boolean;
 }
 
@@ -59,9 +74,15 @@ export function JarLinesEditor({
   showOnHand = false,
   allowNegative = false,
   showNewTotal = false,
+  onHandBySize,
+  onHandWhere,
+  hideEmpty = false,
+  warnOverdraw = false,
   disabled = false,
 }: JarLinesEditorProps) {
   const bySize = new Map(rows.map((row) => [row.jarSizeId, row]));
+  const onHandOf = (row: HoneyInventoryRow) =>
+    onHandBySize ? (onHandBySize.get(row.jarSizeId) ?? 0) : row.onHand;
 
   function update(index: number, patch: Partial<JarLineValue>) {
     onChange(
@@ -93,6 +114,21 @@ export function JarLinesEditor({
         : "grid-cols-[1fr_5.5rem]",
   );
 
+  const visible = value.filter((line) => {
+    const row = bySize.get(line.jarSizeId);
+    if (!row) return false;
+    if (!hideEmpty) return true;
+    return onHandOf(row) > 0 || (parseNum(line.quantity) ?? 0) !== 0;
+  });
+
+  if (visible.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No jars on hand{onHandWhere ? ` ${onHandWhere}` : ""}.
+      </p>
+    );
+  }
+
   return (
     <div className="grid gap-2">
       <div className={cn(gridClass, "text-xs font-medium text-muted-foreground")}>
@@ -101,10 +137,13 @@ export function JarLinesEditor({
         {showPrice && <span>Unit price</span>}
         {showNewTotal && <span className="text-right">New</span>}
       </div>
-      {value.map((line, index) => {
+      {visible.map((line) => {
+        const index = value.indexOf(line);
         const row = bySize.get(line.jarSizeId);
         if (!row) return null;
         const delta = parseNum(line.quantity) ?? 0;
+        const onHand = onHandOf(row);
+        const over = warnOverdraw && delta > onHand;
         return (
           <div key={line.jarSizeId} className={gridClass}>
             <div className="min-w-0">
@@ -115,8 +154,16 @@ export function JarLinesEditor({
                 ) : null}
               </p>
               {showOnHand && (
-                <p className="text-xs text-muted-foreground">
-                  {row.onHand} on hand
+                <p
+                  className={cn(
+                    "text-xs",
+                    over
+                      ? "text-amber-700 dark:text-amber-400"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {onHand} on hand{onHandWhere ? ` ${onHandWhere}` : ""}
+                  {over ? ` · ${delta - onHand} more than that` : ""}
                 </p>
               )}
             </div>
@@ -171,7 +218,7 @@ export function JarLinesEditor({
                     : "text-muted-foreground",
                 )}
               >
-                {row.onHand + delta}
+                {onHand + delta}
               </p>
             )}
           </div>

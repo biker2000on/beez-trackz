@@ -725,6 +725,10 @@ function SendStockDialog({
               </div>
             </div>
           )}
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {totalUnits} {totalUnits === 1 ? "unit" : "units"} leaving home for{" "}
+            {location.name}
+          </p>
           <div className="grid gap-1">
             <Label htmlFor="transfer-notes">Notes</Label>
             <Textarea
@@ -870,6 +874,11 @@ function BringHomeDialog({
               );
             })}
           </div>
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {totalUnits} {totalUnits === 1 ? "unit" : "units"} coming home ·{" "}
+            {rows.reduce((sum, row) => sum + row.onHand, 0) - totalUnits} staying on
+            their shelf
+          </p>
           <div className="grid gap-1">
             <Label htmlFor="return-notes">Notes</Label>
             <Textarea
@@ -1218,6 +1227,10 @@ function RecordReportDialog({
               </span>
               <span className="text-2xl font-bold tabular-nums">
                 {formatMoney(owed)}
+              </span>
+              <span className="text-xs text-muted-foreground" aria-live="polite">
+                {lines.reduce((sum, line) => sum + line.quantitySold, 0)} sold ·{" "}
+                {lines.reduce((sum, line) => sum + line.quantityReturned, 0)} returned
               </span>
             </div>
           </div>
