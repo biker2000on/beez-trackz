@@ -34,7 +34,9 @@ The UI can therefore explain one operation from several viewpoints without inven
 
 This does **not** mean every action already has a safe generic Undo button. Reversal controls must respect domain rules and later dependent work. Nor does it mean unified field observations already exist: inspection/visit unification and any combined-save orchestration are proposed product experiences that still need underlying work. A single atomic visit save is not an existing capability established by this review.
 
-## Five homes with clear ownership
+## Five navigation groups with clear ownership
+
+These are **five groups, not five giant pages**. Distinct jobs retain distinct, visibly named pages. Do not hide pages behind tabs inside other pages or use nested tabs as primary navigation. Desktop navigation exposes destination links within each group; mobile provides a clearly labeled **Pages** menu/list with those same destinations. Each page has a stable URL and supports bookmarking, deep links, and browser Back/Forward.
 
 | Home | Primary purpose | Main surface |
 |---|---|---|
@@ -42,26 +44,28 @@ This does **not** mean every action already has a safe generic Undo button. Reve
 | Apiaries | Understand colonies and conduct visits | Apiary roster, colony status, visit mode, and contextual history |
 | Production | Turn harvests into finished goods | Active batches with stage, remaining material, requirements, and next action |
 | Sales | Manage promises, fulfilment, and money | Orders with separate fulfilment and payment states; fast market mode |
-| Stock | Know what exists, where it is, and what is usable | Equipment, bulk, packaged goods, and supplies as consistent filtered views |
+| Stock | Know what exists, where it is, and what is usable | Named Equipment, Bulk honey, Packaging, and Finished goods pages with shared quantity semantics |
+
+For example, Stock may expose `/stock/equipment`, `/stock/bulk`, `/stock/packaging`, and `/stock/finished`. Sales exposes Orders/register, Market day, Consignment, and Customers as named destinations. Production exposes Batches, Harvest history, and Lots where each serves a distinct job. These are illustrative route choices, not a mandatory route-renaming specification. Apiary Map/List switches and genuine status filters over the same data are appropriate view controls; they must not become a way to conceal different pages.
 
 Insights and setup become secondary utilities. Catalogs, equipment types, bills of materials, and varietals remain available under setup or contextual management; they do not compete with daily work.
 
 | Current destination | Proposed destination |
 |---|---|
 | Today, Recommendations, Yard queue | One Today work source, with a Field filter reused in visit planning |
-| Yard dashboard, Apiaries, Hives, Queens | Apiaries workspace; hive and queen details stay contextual |
+| Yard dashboard, Apiaries, Hives, Queens | Apiaries group with named pages and full hive, equipment, and queen detail routes |
 | Production dashboard, overview, workbench | One Production home; completed batches in History |
-| Harvests, sessions, bottling, products | Batch workflows selected by what is being made |
-| Jars, varietal balances, equipment stock | Stock views with item, location, lot, and condition filters |
-| Lots & QR, serial lookup | Traceability within lot/batch detail plus global lookup |
-| Sales register, sales workbench | One Sales home with active work and searchable history |
-| Market day | Specialized fast-selling mode within Sales |
-| Consignment | Location detail shared by Stock and Sales; settlements in Sales |
+| Harvests, sessions, bottling, products | Named Batches and Harvest history pages, with contextual workflows |
+| Jars, varietal balances, equipment stock | Named Stock pages: Equipment, Bulk honey, Packaging, and Finished goods; shared filters and semantics |
+| Lots & QR, serial lookup | Named Lots destination, full lot detail, and global lookup |
+| Sales register, sales workbench | Orders/register destination combining useful active work and searchable history |
+| Market day | Named Market day page with specialized fast-selling controls |
+| Consignment, Customers | Named Consignment and Customers destinations; linked location detail and settlement work |
 | Expenses and finance reports | Money/reporting utility, linked from relevant operations |
 
 ## One interaction language, specialized working modes
 
-Every workspace uses the same page anatomy: title and scope, one primary action, relevant work/list, contextual detail. Selecting a hive, lot, item, or order opens a consistent detail surface with Summary, Activity, and Related records. Deep links preserve that selection.
+Every workspace uses the same page anatomy: title and scope, one primary action, relevant work/list, contextual detail. Hive, lot, item, and order records have full routes. Substantial history, hive equipment, and queen work also require full destinations with visible navigation links. A record drawer can supplement these pages with a quick summary or action and an Open full record link; it cannot replace their navigation. Summary, activity, and related information should use readable sections or named destinations as appropriate, not another hierarchy of hidden tabs. Deep links preserve context.
 
 Actions inherit context. A bottling action from a lot starts with that lot selected. A stock transfer begins with the selected item and source. A shortage on an order opens production planning with the required item and quantity carried forward.
 
@@ -116,6 +120,8 @@ Traceability must distinguish missing records from established origin. Where imp
 
 These requirements are part of the initial redesign, not optional enhancements or a later mobile phase. They apply across **Today, Apiaries, Production, Sales, and Stock**.
 
+**Visible page navigation is also a hard requirement:** all distinct destinations must be discoverable as desktop links and in the labeled mobile Pages list, retain their own URLs, and work with browser history. No nested-tab navigation or drawer-only substantial records.
+
 ### Phone-first across the entire application
 
 - Verify every workspace and its forms at 320 px, 390 px, and 768 px viewport widths. Navigation, filters, details, receipts, and primary actions must remain usable without unintended page-wide horizontal scrolling. A map can pan inside its own viewport.
@@ -137,6 +143,8 @@ The existing canvas map is a required operational surface. Retain hive placement
 - Preserve existing supported queue/retry behavior and implement recoverable offline capture as needed for the field workflow. The current recorder uploads audio and polls a service; this review has not established durable offline audio persistence today. Offline capture persistence and recovery must therefore be verified or implemented, not claimed as inherited capability. Do not promise offline AI transcription. When transcription requires connectivity, explain that it is pending and allow the user to resume safely after reconnection without losing captured work or duplicating submission.
 
 ### Required regression journeys
+
+At 320 px, 390 px, and 768 px, verify **named page → full record → Back → Forward → refresh bookmarked URL** preserves the destination and record context. Verify every distinct destination appears in visible desktop navigation links and in the labeled mobile Pages list; no destination may depend on discovering a hidden tab or opening a drawer first.
 
 1. At each target viewport, open the actual apiary map, pan/zoom, select a hive, switch to the list and back, and confirm placement and selection are preserved.
 2. Complete **map → dictate inspection → review uncertain fields → correct/re-record → explicitly submit → next hive** without keyboard entry. Verify the selected hive, saved values, original account under current retention policy, and submission status.
