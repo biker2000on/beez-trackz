@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/ai"
+	"github.com/biker2000on/beez-trackz/backend/internal/audioformat"
 )
 
 // transcriptionAlreadyComplete is true when a later asynq delivery must not
@@ -196,7 +197,13 @@ func (h *Handlers) handleTranscribeAudio(ctx context.Context, t *asynq.Task) err
 		return fail(err)
 	}
 
-	text, err := provider.Transcribe(ctx, audio, "audio/webm")
+	// Inspect bytes as older uploads were stored with a .webm key regardless
+	// of their real container. This also survives missing object MIME metadata.
+	format, err := audioformat.Detect(audio)
+	if err != nil {
+		return fail(err)
+	}
+	text, err := provider.Transcribe(ctx, audio, format.MIME)
 	if err != nil {
 		return fail(err)
 	}

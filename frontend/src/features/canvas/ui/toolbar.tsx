@@ -30,6 +30,7 @@ import { STAND_MAX_DIM, STAND_MIN_DIM } from "../lib/types";
 export type SaveState = "saved" | "dirty" | "saving";
 
 interface CanvasToolbarProps {
+  readOnly?: boolean;
   editMode: boolean;
   saveState: SaveState;
   hasLocation: boolean;
@@ -54,6 +55,7 @@ const clampDim = (raw: string) =>
   Math.min(STAND_MAX_DIM, Math.max(STAND_MIN_DIM, parseInt(raw, 10) || STAND_MIN_DIM));
 
 export function CanvasToolbar({
+  readOnly,
   editMode,
   saveState,
   hasLocation,
@@ -84,6 +86,7 @@ export function CanvasToolbar({
           variant={editMode ? "default" : "outline"}
           size="sm"
           onClick={onToggleEditMode}
+          disabled={readOnly}
           title={editMode ? "Switch to view mode" : "Switch to edit mode"}
         >
           {editMode ? <Unlock /> : <Lock />}
@@ -188,7 +191,7 @@ export function CanvasToolbar({
           variant={saveState === "dirty" ? "default" : "outline"}
           size="sm"
           onClick={onSave}
-          disabled={saveState !== "dirty"}
+          disabled={readOnly || saveState !== "dirty"}
           title="Save layout"
         >
           <Save />
@@ -205,6 +208,7 @@ export function CanvasToolbar({
           variant="outline"
           size="sm"
           onClick={onSetLocation}
+          disabled={readOnly}
           title="Set yard location"
         >
           <MapPin />

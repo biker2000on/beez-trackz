@@ -155,21 +155,21 @@ test.beforeEach(async ({ page }) => {
   await mockApp(page);
 });
 
-test("detail pages expose no more than three peer tabs and preserve URL state", async ({
+test("detail pages expose named record destinations and preserve URL state", async ({
   page,
 }) => {
   await page.goto("/yard/apiaries/a1");
-  await expect(page.getByRole("tab")).toHaveCount(2);
-  await page.getByRole("tab", { name: "Layout" }).click();
-  await expect(page).toHaveURL(/tab=layout/);
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await page.getByRole("navigation",{name:"Apiary pages"}).getByRole("link", { name: "Map", exact:true }).click();
+  await expect(page).toHaveURL(/\/layout/);
 
   await page.goto("/yard/apiaries/a1?tab=photos");
   await expect(page).toHaveURL("/yard/apiaries/a1/photos");
 
   await page.goto("/yard/hives/h1");
-  await expect(page.getByRole("tab")).toHaveCount(3);
-  await page.getByRole("tab", { name: "Timeline" }).click();
-  await expect(page).toHaveURL(/tab=timeline/);
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await page.getByRole("navigation",{name:"Hive pages"}).getByRole("link", { name: "Timeline" }).click();
+  await expect(page).toHaveURL(/\/timeline/);
 
   await page.goto("/yard/hives/h1?tab=queen");
   await expect(page).toHaveURL("/yard/hives/h1/queen");
@@ -179,16 +179,14 @@ test("Production keeps the same workflow groups on hidden detail routes", async 
   page,
 }) => {
   await page.goto("/production");
-  const nav = page.getByRole("navigation", { name: "Production sections" });
+  const nav = page.getByRole("navigation", { name: "Production pages" });
   await expect(nav.getByRole("link")).toHaveText([
-    "Overview",
-    "Production",
+    "Active batches", "Harvest history", "Bottling", "Lots & labels", "Hive products", "Activity", "Serial lookup",
   ]);
 
   await page.goto("/production/activity");
   await expect(nav.getByRole("link")).toHaveText([
-    "Overview",
-    "Production",
+    "Active batches", "Harvest history", "Bottling", "Lots & labels", "Hive products", "Activity", "Serial lookup",
   ]);
 });
 
@@ -248,7 +246,7 @@ test("Today and Yard remain pinned in the mobile bottom bar", async ({
   await page.goto("/production/activity");
   const mainNav = page.getByRole("navigation", { name: "Mobile navigation" });
   await expect(mainNav.getByRole("link", { name: "Today" })).toBeVisible();
-  await expect(mainNav.getByRole("link", { name: "Yard" })).toBeVisible();
+  await expect(mainNav.getByRole("link", { name: "Apiaries" })).toBeVisible();
 });
 
 test("command palette follows keyboard selection without horizontal overflow", async ({

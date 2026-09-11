@@ -425,7 +425,7 @@ export function RecordSaleDialog({
         channel: values.channel as "direct",
         paymentMethod: values.paymentMethod as "cash",
         discountAmount,
-        amountPaid: values.amountPaid.trim() ? Number(values.amountPaid) : values.orderStatus === "paid" || values.orderStatus === "fulfilled" ? total : 0,
+        amountPaid: values.amountPaid.trim() ? Number(values.amountPaid) : values.orderStatus === "paid" ? total : 0,
         orderStatus: values.orderStatus as "paid",
         dueDate: values.dueDate || undefined,
         wholesalePriceListId: values.wholesalePriceListId === "none" ? undefined : values.wholesalePriceListId,
@@ -453,8 +453,7 @@ export function RecordSaleDialog({
         <DialogHeader>
           <DialogTitle>Record a sale</DialogTitle>
           <DialogDescription>
-            One customer, one payment, one receipt. Mix jars, hive products,
-            colonies, and equipment. Past dates are allowed.
+            Choose products, review the total, and record a sale or reserve a future order.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm
@@ -542,10 +541,10 @@ export function RecordSaleDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="grid gap-1.5">
-              <Label>Order status</Label>
+              <Label>Delivery</Label>
               <Select value={form.watch("orderStatus")} onValueChange={(value) => form.setValue("orderStatus", value)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{["draft", "pending", "paid", "fulfilled"].map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent>
+                <SelectContent>{[["paid", "Sell now: paid & handed over"], ["pending", "Order: deliver later"], ["draft", "Draft: reserve stock"], ["fulfilled", "Deliver now: payment recorded below"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="grid gap-1.5">
@@ -576,6 +575,7 @@ export function RecordSaleDialog({
             )}
             <FieldError message={lineError ?? undefined} />
           </div>
+          <details className="rounded-md border p-3"><summary className="min-h-11 cursor-pointer text-sm font-medium">Add colonies or equipment</summary>
           <ColonyEquipmentFields
             colonies={colonies}
             setColonies={setColonies}
@@ -590,6 +590,7 @@ export function RecordSaleDialog({
             hiveOptions={hives.data ?? []}
             stockRows={stock.data ?? []}
           />
+          </details>
           <CatalogProductFields
             products={catalog.data?.items ?? []}
             productLines={productLines}

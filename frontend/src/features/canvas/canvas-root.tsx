@@ -14,7 +14,7 @@ import { useApiary, useApiaryHives } from "./lib/use-canvas-data";
  * then mounts the canvas. The canvas keeps the layout in local state, so
  * it is keyed by apiary and only mounted once both queries have resolved.
  */
-export default function CanvasRoot({ apiaryId }: { apiaryId: string }) {
+export default function CanvasRoot({ apiaryId, onHiveSelect }: { apiaryId: string; onHiveSelect?: (hiveId: string) => void }) {
   const apiary = useApiary(apiaryId);
   const hives = useApiaryHives(apiaryId);
 
@@ -55,6 +55,7 @@ export default function CanvasRoot({ apiaryId }: { apiaryId: string }) {
       apiary={apiary.data}
       hives={hives.data}
       initialLayout={initialLayout}
+      onHiveSelect={onHiveSelect}
     />
   );
 }

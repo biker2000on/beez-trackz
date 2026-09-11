@@ -1217,7 +1217,7 @@ type honeyInventoryRow struct {
 }
 
 // honeyJarInventory derives jar counts from the inventory ledger's
-// projections: onHand is inventory_available, and the breakdown columns are
+// projections: onHand is physical inventory on hand, and the breakdown columns are
 // operation history. A reversal nets to zero on its own because it is
 // classified through the operation it negates.
 func (s *Server) honeyJarInventory(ctx context.Context) ([]honeyInventoryRow, error) {
@@ -1225,15 +1225,9 @@ func (s *Server) honeyJarInventory(ctx context.Context) ([]honeyInventoryRow, er
 }
 
 func honeyJarInventoryWithQuerier(ctx context.Context, queryer inspectionQuerier) ([]honeyInventoryRow, error) {
-	// onHand is inventory_available summed across every location: what the
-	// operator could still sell anywhere. The history buckets are classified
-	// by ledger semantics, never live-only provenance: jarred is every net
-	// transform output for a jar item, adjusted is net count_adjust plus
-	// opening_balance, and givenAway is shrink reason give_away. Therefore
-	// onHand = jarred + adjusted - sold - givenAway exactly, because a
-	// non-cancelled sale line is either an applied consumption (in the balance)
-	// or a reservation (subtracted by the view), never both and never neither
-	// (review OV1).
+	// This legacy summary is all-location physical stock. New Stock pages use
+	// tuple-scoped quantities and expose reserved/available separately.
+	// Sold remains the order register total and may include unfulfilled orders.
 	//
 	// Inactive sizes are listed only while they still hold stock. Filtering on
 	// is_active alone turned deactivating a size into an invisible inventory
@@ -1249,7 +1243,7 @@ func honeyJarInventoryWithQuerier(ctx context.Context, queryer inspectionQuerier
 			FROM classified GROUP BY item_id
 		),
 		available AS (
-			SELECT item_id, COALESCE(SUM(available), 0)::int AS available
+			SELECT item_id, COALESCE(SUM(on_hand), 0)::int AS available
 			FROM inventory_available GROUP BY item_id
 		),
 		sold AS (

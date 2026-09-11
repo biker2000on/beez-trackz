@@ -44,7 +44,7 @@ function consignmentOut(location: ConsignmentLocation): string {
     .join(" · ")} out`;
 }
 
-export function SalesWorkbench({ year }: { year?: number } = {}) {
+export function SalesWorkbench({ year, embedded = false }: { year?: number; embedded?: boolean } = {}) {
   const workbench = useSalesWorkbench(year);
   const commands = useWorkbenchCommands();
   const data = workbench.data;
@@ -54,9 +54,11 @@ export function SalesWorkbench({ year }: { year?: number } = {}) {
   const consignment = data?.consignment ?? [];
   const sellable = data?.sellable ?? [];
 
+  if (embedded) return <section aria-label="Sales work" className="atlas-records"><div className="atlas-record"><h2 className="font-semibold">Next in Sales</h2>{workbench.isPending?<p className="mt-2 text-sm">Checking orders and settlements...</p>:workbench.isError?<p className="mt-2 text-sm">Could not load current work. <button className="underline" onClick={()=>workbench.refetch()}>Retry</button></p>:<><p className="mt-1 text-sm text-muted-foreground">{drafts.length} open orders / {consignment.filter(l=>l.settlementDueAt).length} scheduled settlements</p><div className="mt-3 grid gap-2">{drafts.filter(d=>d.shortfalls.length>0).map(d=><Link className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-md border px-3 text-sm" key={d.saleId} href={`/sales/${d.saleId}`}><span>{d.customerName??"Walk-in order"}</span><span className="text-destructive">Review {d.shortfalls.length} stock shortages</span></Link>)}</div>{data?.freshness.stale&&<p className="mt-2 text-xs">Cached work. Refresh when connected before fulfilling orders.</p>}</>}</div></section>;
+
   return (
     <WorkbenchShell
-      title="Sales"
+      title={embedded ? "Orders needing attention" : "Sales"}
       description="Today's takings, drafts with what they are short of, consignment stock still out, and settlements due — one read, with the source command beside each."
       freshness={data?.freshness}
       asOf={data?.asOf}
@@ -102,14 +104,14 @@ export function SalesWorkbench({ year }: { year?: number } = {}) {
             }
             facts={
               <p className="text-xs text-muted-foreground">
-                Ring up the next one on{" "}
+                Record the next sale on{" "}
                 <Link
                   href="/sales/market-day"
                   className="underline-offset-4 hover:underline"
                 >
                   Market day
                 </Link>
-                , the offline-critical screen.
+                .
               </p>
             }
           />

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   createColumnHelper,
   useTable,
@@ -245,7 +246,7 @@ export function HiveProductsPage() {
             dimIfVoided(
               row.voidedAt != null,
               <>
-                {row.productName}
+                <Link className="underline-offset-4 hover:underline" href={`/production/products/batches/${row.id}`}>{row.productName}</Link>
                 <span className="ml-1 text-xs text-muted-foreground">
                   {kindLabel(row.kind)}
                 </span>

@@ -16,6 +16,6 @@ const CanvasRoot = dynamic(() => import("./canvas-root"), {
   loading: () => <Skeleton className="h-[400px] w-full rounded-lg" />,
 });
 
-export default function ApiaryCanvas({ apiaryId }: { apiaryId: string }) {
-  return <CanvasRoot apiaryId={apiaryId} />;
+export default function ApiaryCanvas({ apiaryId, onHiveSelect }: { apiaryId: string; onHiveSelect?: (hiveId: string) => void }) {
+  return <CanvasRoot apiaryId={apiaryId} onHiveSelect={onHiveSelect} />;
 }

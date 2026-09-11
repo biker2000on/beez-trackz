@@ -161,12 +161,14 @@ func (s *Service) Deploy(ctx context.Context, uow *app.UnitOfWork, c DeployComma
 	if c.Quantity <= 0 || c.HiveID == uuid.Nil {
 		return inventory.Recorded{}, app.Invalid("deploy equipment", "positive quantity and hive are required")
 	}
-	var exists bool
-	if err := uow.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM hives WHERE id=$1)`, c.HiveID).Scan(&exists); err != nil {
+	var apiaryID uuid.UUID
+	if err := uow.QueryRow(ctx, `SELECT apiary_id FROM hives WHERE id=$1 FOR KEY SHARE`, c.HiveID).Scan(&apiaryID); errors.Is(err, pgx.ErrNoRows) {
+		return inventory.Recorded{}, app.NotFound("deploy equipment", "hive %s does not exist", c.HiveID)
+	} else if err != nil {
 		return inventory.Recorded{}, app.Internal("deploy equipment", err)
 	}
-	if !exists {
-		return inventory.Recorded{}, app.NotFound("deploy equipment", "hive %s does not exist", c.HiveID)
+	if uow.Actor().Kind() == app.ActorUser && !uow.Actor().MayEditApiary(apiaryID) {
+		return inventory.Recorded{}, app.Forbidden("deploy equipment", "apiary editor access is required")
 	}
 	toHive := c.HiveID
 	b := base(uow, c.Command, c.HiveID, "hive")
@@ -177,7 +179,7 @@ func (s *Service) Deploy(ctx context.Context, uow *app.UnitOfWork, c DeployComma
 	if err != nil {
 		return inventory.Recorded{}, app.Invalid("deploy equipment", "%v", err)
 	}
-	return s.inventory.Record(ctx, uow, op)
+	return s.inventory.RecordAvailable(ctx, uow, op)
 }
 
 func (s *Service) Return(ctx context.Context, uow *app.UnitOfWork, deploymentID uuid.UUID, quantity int, c Command) (inventory.Recorded, error) {
@@ -192,6 +194,17 @@ func (s *Service) Return(ctx context.Context, uow *app.UnitOfWork, deploymentID 
 		return inventory.Recorded{}, app.NotFound(action, "deployment %s does not exist", deploymentID)
 	}
 	if err != nil {
+		return inventory.Recorded{}, app.Internal(action, err)
+	}
+	var apiaryID uuid.UUID
+	if err := uow.QueryRow(ctx, `SELECT apiary_id FROM hives WHERE id=$1 FOR KEY SHARE`, hiveID).Scan(&apiaryID); err != nil {
+		return inventory.Recorded{}, app.Internal(action, err)
+	}
+	if uow.Actor().Kind() == app.ActorUser && !uow.Actor().MayEditApiary(apiaryID) {
+		return inventory.Recorded{}, app.Forbidden(action, "apiary editor access is required")
+	}
+	// Serialize returns before reading remaining quantity.
+	if _, err := uow.Exec(ctx, `SELECT id FROM inventory_operations WHERE id=$1 FOR UPDATE`, deploymentID); err != nil {
 		return inventory.Recorded{}, app.Internal(action, err)
 	}
 	var returned int
@@ -219,7 +232,7 @@ func (s *Service) Return(ctx context.Context, uow *app.UnitOfWork, deploymentID 
 	if err != nil {
 		return inventory.Recorded{}, app.Invalid(action, "%v", err)
 	}
-	return s.inventory.Record(ctx, uow, op)
+	return s.inventory.RecordAvailable(ctx, uow, op)
 }
 
 func (s *Service) Assembly(ctx context.Context, uow *app.UnitOfWork, c AssemblyCommand) (inventory.Recorded, error) {

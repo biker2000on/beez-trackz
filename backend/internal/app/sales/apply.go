@@ -121,11 +121,11 @@ func (s *Service) Apply(ctx context.Context, uow *app.UnitOfWork, input ApplyInp
 				return err
 			}
 			if pinned {
-				allocated, err = production.AllocateLot(ctx, uow, "inventory_balances",
+				allocated, err = production.AllocateLot(ctx, uow, "inventory_available",
 					*line.ItemID, location, line.Quantity, *line.LotID)
 				method = production.MethodRecorded
 			} else {
-				allocated, _, err = production.AllocateFIFO(ctx, uow, "inventory_balances",
+				allocated, _, err = production.AllocateFIFO(ctx, uow, "inventory_available",
 					*line.ItemID, location, line.Quantity, line.LotID)
 				method = production.MethodFIFOInferred
 			}
@@ -175,7 +175,7 @@ func (s *Service) Apply(ctx context.Context, uow *app.UnitOfWork, input ApplyInp
 			}
 		}
 		operation.Lines = consume
-		if _, err := s.inventory.Record(ctx, uow, operation); err != nil {
+		if _, err := s.inventory.RecordAvailable(ctx, uow, operation); err != nil {
 			return err
 		}
 	}
@@ -219,7 +219,7 @@ func (s *Service) recordGearReturns(
 		if err != nil {
 			return app.Invalid("return colony gear", "%v", err)
 		}
-		if _, err := s.inventory.Record(ctx, uow, operation); err != nil {
+		if _, err := s.inventory.RecordAvailable(ctx, uow, operation); err != nil {
 			return err
 		}
 	}
@@ -310,7 +310,7 @@ func (s *Service) markHiveSold(ctx context.Context, uow *app.UnitOfWork, hiveID,
 func (s *Service) drawPropolis(
 	ctx context.Context, uow *app.UnitOfWork, home uuid.UUID, grams float64,
 ) ([]inventory.Movement, string, error) {
-	lots, err := production.LotsFIFO(ctx, uow, "inventory_balances", production.PropolisItemID, home)
+	lots, err := production.LotsFIFO(ctx, uow, "inventory_available", production.PropolisItemID, home)
 	if err != nil {
 		return nil, "", err
 	}

@@ -40,253 +40,48 @@ export interface NavItem extends NavRoute {
  * per-user surface reached from the account menu, not an eighth area.
  */
 export const NAV_ITEMS: NavItem[] = [
-  {
-    label: "Today",
-    shortLabel: "Today",
-    href: "/today",
-    icon: Sun,
-    shortcutKey: "t",
-    keywords: ["home", "work", "what needs doing"],
-    children: [
-      {
-        label: "Recommendations",
-        href: "/today/recommendations",
-        keywords: ["actions priorities triage snoozed dismissed"],
-      },
-    ],
-  },
-  {
-    label: "Yard",
-    shortLabel: "Yard",
-    href: "/yard",
-    icon: MapPin,
-    shortcutKey: "y",
-    keywords: ["field", "apiary", "apiarty", "yards", "colonies"],
-    children: [
-      {
-        label: "Queue",
-        href: "/yard/queue",
-        keywords: ["saturday", "field work", "lockout", "harvest"],
-      },
-      {
-        label: "Apiaries",
-        href: "/yard/apiaries",
-        keywords: ["yards apiary apiarty"],
-      },
-      { label: "Hives", href: "/yard/hives", keywords: ["colonies"] },
-      { label: "Queens", href: "/yard/queens", keywords: ["genealogy lineage"] },
-      {
-        label: "Voice recording",
-        href: "/yard/transcribe",
-        keywords: ["batch transcription record apiary voice inspection"],
-        requiresEdit: true,
-      },
-    ],
-  },
-  {
-    label: "Production",
-    shortLabel: "Production",
-    href: "/production",
-    icon: Droplets,
-    shortcutKey: "p",
-    adminOnly: true,
-    keywords: ["honey extraction bottling"],
-    children: [
-      {
-        label: "Workbench",
-        href: "/production/workbench",
-        keywords: ["open sessions bulk on hand awaiting bottling jar par"],
-      },
-      {
-        label: "Activity",
-        href: "/production/activity",
-        keywords: ["ledger", "timeline"],
-      },
-      {
-        label: "Production",
-        href: "/production/overview",
-        matches: [
-          "/production/harvests",
-          "/production/jars",
-          "/production/lots",
-          "/production/serials",
-          "/production/sessions",
-          "/production/products",
-          "/production/varietals",
-        ],
-        children: [
-          {
-            label: "Harvests",
-            href: "/production/harvests",
-            keywords: ["extraction sessions"],
-          },
-          {
-            label: "Jars",
-            href: "/production/jars",
-            keywords: ["bottling stock"],
-          },
-          {
-            label: "Hive products",
-            href: "/production/products",
-            keywords: ["creamed honey hot honey mead propolis tincture catalog"],
-          },
-          {
-            label: "Varietals",
-            href: "/production/varietals",
-            keywords: ["varietal lot balances bulk on hand rollup"],
-          },
-          {
-            label: "Lots & QR",
-            href: "/production/lots",
-            keywords: ["traceability labels"],
-            children: [
-              {
-                label: "Serial lookup",
-                href: "/production/serials",
-                keywords: ["jar qr lookup"],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-  {
-    label: "Sales",
-    shortLabel: "Sales",
-    href: "/sales",
-    icon: Receipt,
-    shortcutKey: "c",
-    adminOnly: true,
-    keywords: ["orders receipts colonies equipment creamed mead propolis"],
-    children: [
-      {
-        label: "Workbench",
-        href: "/sales/workbench",
-        keywords: ["takings drafts shortfall settlements due"],
-      },
-      {
-        label: "Market day",
-        href: "/sales/market-day",
-        keywords: ["point of sale pos"],
-      },
-      {
-        label: "Consignment",
-        href: "/sales/consignment",
-        keywords: ["bike shop stock locations transfers settlement"],
-      },
-      {
-        label: "Customers & wholesale",
-        href: "/sales/customers",
-        keywords: ["customer list reorder reminders wholesale price lists"],
-      },
-      {
-        label: "Expenses",
-        href: "/sales/expenses",
-        keywords: ["money out spend assignable to lots and hives"],
-      },
-    ],
-  },
-  {
-    label: "Equipment",
-    shortLabel: "Gear",
-    href: "/equipment",
-    icon: Package,
-    shortcutKey: "e",
-    adminOnly: true,
-    // "inventory" is ledger vocabulary now (design §2.3) and is deliberately
-    // not a search keyword for hive gear.
-    keywords: ["equipment gear stock"],
-    children: [
-      {
-        label: "Types & BOMs",
-        href: "/equipment/types",
-        keywords: ["equipment types catalog bill of materials assemble variants"],
-      },
-    ],
-  },
-  {
-    label: "Insights",
-    shortLabel: "Insights",
-    href: "/insights",
-    icon: ChartNoAxesCombined,
-    shortcutKey: "i",
-    keywords: ["reports analytics"],
-    children: [
-      {
-        label: "Outcomes",
-        href: "/insights/outcomes",
-        matches: ["/insights/survival", "/insights/yield"],
-        children: [
-          { label: "Winter survival", href: "/insights/survival" },
-          { label: "Honey yield", href: "/insights/yield" },
-        ],
-      },
-      {
-        label: "Finance",
-        href: "/insights/finance",
-        adminOnly: true,
-        matches: ["/insights/economics", "/insights/profitability"],
-        children: [
-          {
-            label: "Apiary economics",
-            href: "/insights/economics",
-            adminOnly: true,
-          },
-          {
-            label: "Profitability",
-            href: "/insights/profitability",
-            adminOnly: true,
-          },
-        ],
-      },
-      {
-        label: "Sales & planning",
-        href: "/insights/sales-planning",
-        adminOnly: true,
-        matches: ["/insights/bottling"],
-        children: [
-          { label: "Bottle next", href: "/insights/bottling", adminOnly: true },
-        ],
-      },
-      {
-        // Two reports that used to be Settings accordions (design §6.3, S5
-        // and S6). They are generated output, not configuration.
-        label: "Compliance packet",
-        href: "/insights/compliance",
-        adminOnly: true,
-        keywords: ["inspector market manager export treatments withdrawal"],
-      },
-      {
-        label: "GnuCash reconciliation",
-        href: "/insights/reconciliation",
-        adminOnly: true,
-        keywords: ["sync conflicts pushed failed folio book"],
-      },
-    ],
-  },
-  {
-    // Two surfaces, one area (design §6.2, §6.3): `/admin` is credentials and
-    // access, `/admin/setup` is how the operation runs. Per-user preferences
-    // are neither, and live at `/me`.
-    label: "Admin",
-    shortLabel: "Admin",
-    href: "/admin",
-    icon: Settings,
-    shortcutKey: "a",
-    adminOnly: true,
-    keywords: ["integrations access api users gnucash ntfy storage ai"],
-    children: [
-      {
-        label: "Operation setup",
-        href: "/admin/setup",
-        adminOnly: true,
-        keywords: [
-          "jar sizes treatment withdrawals thresholds labor catalogs policy",
-        ],
-      },
-    ],
-  },
+  { label: "Today", shortLabel: "Today", href: "/today", icon: Sun, shortcutKey: "t", children: [
+    { label: "Recommendations", href: "/today/recommendations" },
+  ] },
+  { label: "Apiaries", shortLabel: "Apiaries", href: "/yard", icon: MapPin, shortcutKey: "y", keywords: ["yard field colonies"], children: [
+    { label: "Apiary roster", href: "/yard/apiaries" }, { label: "Hives", href: "/yard/hives" },
+    { label: "Visit queue", href: "/yard/queue" }, { label: "Queens", href: "/yard/queens" },
+    { label: "Voice recording", href: "/yard/transcribe", requiresEdit: true },
+  ] },
+  { label: "Production", shortLabel: "Production", href: "/production", icon: Droplets, shortcutKey: "p", adminOnly: true, children: [
+    { label: "Active batches", href: "/production", exact: true },
+    { label: "Harvest history", href: "/production/harvests" },
+    { label: "Bottling", href: "/production/jars" },
+    { label: "Lots & labels", href: "/production/lots" },
+    { label: "Hive products", href: "/production/products" },
+    { label: "Activity", href: "/production/activity" },
+    { label: "Serial lookup", href: "/production/serials" },
+  ] },
+  { label: "Sales", shortLabel: "Sales", href: "/sales", icon: Receipt, shortcutKey: "c", adminOnly: true, children: [
+    { label: "Orders & register", href: "/sales", exact: true },
+    { label: "Market day", href: "/sales/market-day" },
+    { label: "Consignment", href: "/sales/consignment" },
+    { label: "Customers & wholesale", href: "/sales/customers" },
+    { label: "Expenses", href: "/sales/expenses" },
+  ] },
+  { label: "Stock", shortLabel: "Stock", href: "/stock", icon: Package, shortcutKey: "e", adminOnly: true, matches: ["/equipment"], keywords: ["inventory equipment gear"], children: [
+    { label: "Equipment", href: "/stock/equipment" },
+    { label: "Bulk honey", href: "/stock/bulk" },
+    { label: "Packaging", href: "/stock/packaging" },
+    { label: "Finished goods", href: "/stock/finished" },
+    { label: "Counts & equipment actions", href: "/equipment", exact: true },
+  ] },
+  { label: "Insights", shortLabel: "Insights", href: "/insights", icon: ChartNoAxesCombined, shortcutKey: "i", children: [
+    { label: "Outcomes", href: "/insights/outcomes" }, { label: "Winter survival", href: "/insights/survival" },
+    { label: "Honey yield", href: "/insights/yield" }, { label: "Finance", href: "/insights/finance", adminOnly: true },
+    { label: "Apiary economics", href: "/insights/economics", adminOnly: true }, { label: "Profitability", href: "/insights/profitability", adminOnly: true },
+    { label: "Sales & planning", href: "/insights/sales-planning", adminOnly: true }, { label: "Bottle next", href: "/insights/bottling", adminOnly: true },
+    { label: "Compliance packet", href: "/insights/compliance", adminOnly: true }, { label: "GnuCash reconciliation", href: "/insights/reconciliation", adminOnly: true },
+  ] },
+  { label: "Setup", shortLabel: "Setup", href: "/admin", icon: Settings, shortcutKey: "a", adminOnly: true, children: [
+    { label: "Operation setup", href: "/admin/setup" }, { label: "Equipment types & BOMs", href: "/equipment/types" },
+    { label: "Varietals", href: "/production/varietals" },
+  ] },
 ];
 
 /** Context-only destinations that need a real apiary or hive id. */
@@ -298,15 +93,17 @@ export function contextualNavRoutes(
   if (parentHref === "/yard/apiaries" && apiary) {
     const base = `/yard/apiaries/${apiary}`;
     return [
-      { label: "Overview", href: base, exact: true },
-      { label: "Layout", href: `${base}?tab=layout`, exact: true },
+      { label: "Overview", href: `${base}/overview`, exact: true },
+      { label: "Apiary observations", href: `${base}/inspections` },
+      { label: "Record visit", href: `${base}/visit`, requiresEdit: true },
+      { label: "Layout", href: `${base}/layout`, exact: true },
       { label: "Flora", href: `${base}/flora`, keywords: ["blooms forage"] },
       { label: "Photos", href: `${base}/photos` },
       { label: "Print tags", href: `${base}/labels`, keywords: ["labels qr"] },
       { label: "Bulk record", href: `${base}/bulk`, requiresEdit: true },
       {
         label: "Voice walkthrough",
-        href: `/yard/transcribe?apiary=${apiary}`,
+        href: `${base}/visit?scope=batch`,
         requiresEdit: true,
       },
     ];
@@ -319,11 +116,11 @@ export function contextualNavRoutes(
       { label: "Overview", href: base, exact: true },
       {
         label: "Timeline",
-        href: `${base}?tab=timeline`,
+        href: `${base}/timeline`,
         exact: true,
         keywords: ["inspections feedings treatments mites splits moves harvests"],
       },
-      { label: "Health", href: `${base}?tab=health`, keywords: ["varroa inspections"], exact: true },
+      { label: "Health", href: `${base}/health`, keywords: ["varroa inspections"], exact: true },
       { label: "Equipment", href: `${base}/equipment` },
       { label: "Queen", href: `${base}/queen`, keywords: ["lineage genealogy"] },
       { label: "Photos", href: `${base}/photos` },
@@ -364,7 +161,7 @@ export function navRouteChildren(
   pathname: string,
   isAdmin: boolean,
   canEdit: boolean,
-) {
+): NavRoute[] {
   const contextual = contextualNavRoutes(route.href, pathname);
   const contextualLabels = new Set(contextual.map((child) => child.label));
   const staticChildren = (route.children ?? []).filter(
@@ -374,7 +171,7 @@ export function navRouteChildren(
     [...staticChildren, ...contextual],
     isAdmin,
     canEdit,
-  );
+  ).map((child) => ({ ...child, children: child.href === route.href ? child.children : navRouteChildren(child, pathname, isAdmin, canEdit) }));
 }
 
 /** Backward-compatible name used by top-level navigation callers. */
@@ -445,7 +242,7 @@ const MOBILE_PRIORITY = [
   "/yard",
   "/production",
   "/sales",
-  "/equipment",
+  "/stock",
   "/insights",
   "/admin",
 ];
@@ -456,7 +253,7 @@ export function primaryMobileItems(isAdmin: boolean): NavItem[] {
     visible.find((item) => item.href === href),
   )
     .filter((item): item is NavItem => item != null)
-    .slice(0, 4);
+    .slice(0, 5);
 }
 
 export function overflowMobileItems(isAdmin: boolean): NavItem[] {

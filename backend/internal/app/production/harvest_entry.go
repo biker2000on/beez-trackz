@@ -2,10 +2,12 @@ package production
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // HarvestEntryInput is one validated hive measurement in a session command.
@@ -49,6 +51,20 @@ func AddHarvestEntry(ctx context.Context, uow *app.UnitOfWork, input AddHarvestE
 	const op = "add harvest entry"
 	if input.SessionID == uuid.Nil || input.SessionDate.IsZero() || len(input.Entries) == 0 {
 		return nil, app.Invalid(op, "session, date, and at least one entry are required")
+	}
+	// Serialize entry creation with explicit closure and authoritative true-up.
+	var closedAt *time.Time
+	var extracted *float64
+	if err := uow.QueryRow(ctx, `SELECT closed_at,total_extracted_weight FROM harvest_sessions WHERE id=$1 FOR UPDATE`, input.SessionID).Scan(&closedAt, &extracted); errors.Is(err, pgx.ErrNoRows) {
+		return nil, app.NotFound(op, "session not found")
+	} else if err != nil {
+		return nil, app.Internal(op, err)
+	}
+	if closedAt != nil {
+		return nil, app.Conflict(op, "extraction is closed; no new entries can be added")
+	}
+	if extracted != nil && *extracted != 0 {
+		return nil, app.Conflict(op, "extraction has an authoritative true-up; no new entries can be added")
 	}
 	actorID := uow.Actor().AuditUserID()
 	var actor any

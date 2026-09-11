@@ -1,7 +1,7 @@
 # Beez Trackz UI system
 
-Beez Trackz is a field tool first: quick to scan in sunlight, usable with one
-hand, and dense only where comparison helps a decision.
+Beez Trackz manages inventory and apiary inspections: quick to scan in sunlight,
+usable with one hand, and dense only where comparison helps a decision.
 
 ## Product principles
 
@@ -34,13 +34,14 @@ hand, and dense only where comparison helps a decision.
 ## Layout and responsive behavior
 
 - Desktop uses a persistent sidebar and compact comparison tables.
-- Mobile uses a five-item bottom bar, card views, sticky bulk toolbars, and
-  safe-area padding.
-- Record tabs within one page (apiary, hive) stay a horizontally scrollable
-  strip on mobile. Route-level section navigation (Honey, Reports) collapses to
-  a `<Select>` instead: those lists are long enough that a scroll strip hid
-  whichever sections did not fit, and the select also flattens report-to-report
-  jumps. `SectionNav` is the single implementation of that rule.
+- Today, Apiaries, Production, Sales, and Stock are the five primary groups.
+  Mobile exposes all five directly, with a sixth Pages control for named
+  destinations and Insights/Setup. Use safe-area padding and sticky actions.
+- Apiary, hive, lot, bottling run, product batch, and stock records have full
+  URLs. Section navigation uses named links, including in the mobile Pages
+  sheet. Do not nest record tabs or hide navigation in select inputs.
+- Map/list views and same-data filters may change presentation in place.
+  Preserve the actual apiary canvas, keyboard controls, and layout editing.
 - Tables that must preserve column comparison scroll horizontally rather than
   crushing content.
 - Empty, loading, error, and offline states always include a useful next step.
@@ -51,9 +52,18 @@ hand, and dense only where comparison helps a decision.
   signals; avoid decorative charts.
 - Apiary: layout canvas, flora, local forecast/bloom intelligence, bulk
   records, photos, and printable hive tags share one detail workflow.
-- Hive: inspection, voice capture, feeding, photo, split, and equipment actions
-  stay available above the record tabs.
+- Visits: voice is primary for both apiary observations and hive inspections.
+  Review each hive in place; confirm observations and accepted equipment
+  changes atomically, then continue to the next hive. Manual entry uses the
+  same domain commands. Missing queen observations remain unknown.
+- Recordings and editable drafts persist on the device, partitioned by account.
+  Freeze upload identity after an attempt; retry with the same identity. Queued
+  writes are pending until a server receipt confirms them. Preserve original
+  audio, transcript versions, and observation times during correction/recovery.
 - Honey: quick ledger actions use memorable keys and all multi-line movements
   are committed once.
-- Inventory: owned, deployed, available, and frame capacity are visible before
-  stock editing; yearly counts are a single bulk operation.
+- Inventory: show on hand, reserved, and available for the exact item, unit,
+  location, lot, condition, and hive tuple. Holds and unknown counts remain
+  explicit. The ledger is the only quantity authority.
+- Payment and fulfillment are independent facts. Extraction completion is an
+  explicit domain action; remaining stock does not imply an active session.

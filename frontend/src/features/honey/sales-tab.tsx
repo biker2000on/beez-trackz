@@ -10,6 +10,7 @@ import {
   useTable,
 } from "@tanstack/react-table";
 import { Ban, Check, FileText, PackageCheck } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   AlertDialog,
@@ -30,11 +31,12 @@ import {
   dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError } from "@/lib/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ApiError, OfflineQueuedError, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { formatDate, formatMoney } from "./format";
-import { useDeleteSale, useHoneySales, useUpdateSale } from "./hooks";
+import { useDeleteSale, useHoneySales } from "./hooks";
 import type { HoneySale } from "./types";
 
 const gridFeatures = dataGridFeatures;
@@ -63,7 +65,25 @@ export function SalesTab() {
   const router = useRouter();
   const sales = useHoneySales();
   const deleteSale = useDeleteSale();
-  const updateSale = useUpdateSale();
+  const client = useQueryClient();
+  const updateSale = useMutation({
+    mutationFn: ({ id, orderStatus, amountPaid, paymentMethod }: { id: string; orderStatus: string; amountPaid: number; paymentMethod?: string }) =>
+      orderStatus === "paid"
+        ? api.post(`/sales/${id}/payment`, { amountPaidCents: Math.round(amountPaid * 100), paymentMethod })
+        : api.post(`/sales/${id}/fulfill`, {}),
+    onSuccess: () => {
+      toast.success("Order updated");
+      for (const key of ["honey", "commerce", "workbench", "stock", "stock-locations"])
+        void client.invalidateQueries({ queryKey: [key] });
+    },
+    onError: (error) => {
+      if (error instanceof OfflineQueuedError) {
+        toast.info("Saved offline — will sync when you reconnect");
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "Could not update this order");
+    },
+  });
   const [confirmSale, setConfirmSale] = React.useState<HoneySale | null>(null);
 
   const data = React.useMemo(() => sales.data ?? [], [sales.data]);
@@ -171,8 +191,9 @@ export function SalesTab() {
                   }
                   className="capitalize"
                 >
-                  {sale.orderStatus}
+                  {sale.orderStatus === "cancelled" ? "Cancelled" : sale.physicalAppliedAt ? "Fulfilled" : "Awaiting fulfillment"}
                 </Badge>
+                <Badge variant="outline">{sale.amountPaid >= sale.totalAmount ? "Paid" : sale.amountPaid > 0 ? "Partially paid" : "Unpaid"}</Badge>
               </div>
               {sale.orderStatus !== "cancelled" &&
                 sale.amountPaid < sale.totalAmount && (
@@ -228,8 +249,7 @@ export function SalesTab() {
                   </Button>
                 )}
               {sale.orderStatus !== "cancelled" &&
-                sale.amountPaid >= sale.totalAmount &&
-                sale.orderStatus !== "fulfilled" && (
+                !sale.physicalAppliedAt && (
                   <Button
                     type="button"
                     variant="ghost"

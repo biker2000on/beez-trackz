@@ -22,6 +22,7 @@ import (
 
 func (s *Server) mountHarvestSessions(r chi.Router) {
 	r.Get("/harvest-sessions", s.hsList)
+	r.With(s.requireEntityParamRole("harvest_session", true)).Post("/harvest-sessions/{id}/close", s.hsClose)
 	r.Post("/harvest-sessions", s.hsCreate)
 	r.With(s.requireEntityParamRole("harvest_session", false)).
 		Get("/harvest-sessions/{id}", s.hsDetail)
@@ -54,7 +55,7 @@ func hsIsFKViolation(err error) bool {
 // GET /harvest-sessions — list with entryCount + calculatedTotal.
 func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT hs.id, hs.date, hs.total_extracted_weight, hs.notes, hs.moisture_pct, a.name,
+		SELECT hs.id, hs.date, hs.total_extracted_weight, hs.notes, hs.moisture_pct, a.name, hs.closed_at,
 		       COUNT(hh.id)::int, COALESCE(SUM(hh.calculated_honey_weight), 0)
 		FROM harvest_sessions hs
 		JOIN apiaries a ON a.id = hs.apiary_id
@@ -72,20 +73,21 @@ func (s *Server) hsList(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type sessionRow struct {
-		ID                   uuid.UUID `json:"id"`
-		Date                 time.Time `json:"date"`
-		TotalExtractedWeight *float64  `json:"totalExtractedWeight"`
-		Notes                *string   `json:"notes"`
-		MoisturePct          *float64  `json:"moisturePct"`
-		ApiaryName           string    `json:"apiaryName"`
-		EntryCount           int       `json:"entryCount"`
-		CalculatedTotal      float64   `json:"calculatedTotal"`
+		ID                   uuid.UUID  `json:"id"`
+		Date                 time.Time  `json:"date"`
+		TotalExtractedWeight *float64   `json:"totalExtractedWeight"`
+		Notes                *string    `json:"notes"`
+		MoisturePct          *float64   `json:"moisturePct"`
+		ApiaryName           string     `json:"apiaryName"`
+		ClosedAt             *time.Time `json:"closedAt"`
+		EntryCount           int        `json:"entryCount"`
+		CalculatedTotal      float64    `json:"calculatedTotal"`
 	}
 	out := make([]sessionRow, 0)
 	for rows.Next() {
 		var row sessionRow
 		if err := rows.Scan(&row.ID, &row.Date, &row.TotalExtractedWeight, &row.Notes,
-			&row.MoisturePct, &row.ApiaryName, &row.EntryCount, &row.CalculatedTotal); err != nil {
+			&row.MoisturePct, &row.ApiaryName, &row.ClosedAt, &row.EntryCount, &row.CalculatedTotal); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -184,14 +186,15 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 	var (
 		apiaryID             uuid.UUID
 		date, createdAt      time.Time
+		closedAt             *time.Time
 		totalExtractedWeight *float64
 		notes                *string
 		moisturePct          *float64
 	)
 	err = s.pool.QueryRow(ctx, `
-		SELECT apiary_id, date, total_extracted_weight, notes, moisture_pct, created_at
+		SELECT apiary_id, date, total_extracted_weight, notes, moisture_pct, created_at, closed_at
 		FROM harvest_sessions WHERE id = $1`, id).
-		Scan(&apiaryID, &date, &totalExtractedWeight, &notes, &moisturePct, &createdAt)
+		Scan(&apiaryID, &date, &totalExtractedWeight, &notes, &moisturePct, &createdAt, &closedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
@@ -264,6 +267,7 @@ func (s *Server) hsDetail(w http.ResponseWriter, r *http.Request) {
 		"notes":                notes,
 		"moisturePct":          moisturePct,
 		"createdAt":            createdAt,
+		"closedAt":             closedAt,
 		"entries":              entries,
 		"calculatedTotal":      calculatedTotal,
 		"difference":           difference,
@@ -695,4 +699,24 @@ func (s *Server) hsDeleteEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "softDeleted": true})
+}
+
+// Closing is an explicit operator decision, independent of stock remaining.
+func (s *Server) hsClose(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, 400, "invalid session")
+		return
+	}
+	var closedAt time.Time
+	err = s.pool.QueryRow(r.Context(), `UPDATE harvest_sessions SET closed_at=COALESCE(closed_at,now()) WHERE id=$1 RETURNING closed_at`, id).Scan(&closedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, 404, "session not found")
+		return
+	}
+	if err != nil {
+		writeCommandError(w, app.Internal("close extraction", err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "closedAt": closedAt})
 }

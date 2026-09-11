@@ -33,7 +33,7 @@ import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { useSearchParamState, useSetSearchParams } from "@/lib/url-state";
+import { useSearchParamState } from "@/lib/url-state";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import {
   AlertDialog,
@@ -64,12 +64,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+
 import { FeedingDialog } from "@/features/feedings/feeding-dialog";
 import { useUnits } from "@/lib/use-units";
 import {
@@ -128,7 +123,7 @@ const TIMELINE_FILTERS: {
 
 const FILTER_VALUES = TIMELINE_FILTERS.map((filter) => filter.value);
 
-export function HiveDetailPage({ hiveId }: { hiveId: string }) {
+export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: "overview" | "timeline" | "health" }) {
   const router = useRouter();
   const hive = useHive(hiveId);
   const access = useAccessProfile();
@@ -138,9 +133,10 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
       apiaryRole(access.data, hive.data.apiaryId) ?? "",
     );
 
-  const [tab, setTab] = useSearchParamState("tab", "overview", HIVE_TABS);
+  const [legacyTab] = useSearchParamState("tab", "overview", HIVE_TABS);
+  const tab = section ?? legacyTab;
   const [filter, setFilter] = useSearchParamState("view", "all", FILTER_VALUES);
-  const setSearchParams = useSetSearchParams();
+
 
   const [editOpen, setEditOpen] = React.useState(false);
   const [inspectionOpen, setInspectionOpen] = React.useState(false);
@@ -160,7 +156,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
   useShortcut(
     "r",
     "Record inspection by voice",
-    () => router.push(`/yard/transcribe?hive=${hiveId}`),
+    () => router.push(`/yard/apiaries/${hive.data?.apiaryId}/visit?hive=${hiveId}`),
     editable,
   );
   useShortcut("f", "Record feeding", () => setFeedOpen(true), editable);
@@ -257,7 +253,8 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
 
       {canEdit ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={() => setInspectionOpen(true)}>
+          <Button asChild><Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}><Mic className="size-4"/>Record inspection</Link></Button>
+          <Button size="sm" variant="outline" onClick={() => setInspectionOpen(true)}>
             <ClipboardList className="size-4" />
             New inspection
           </Button>
@@ -278,7 +275,7 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
               <DropdownMenuItem asChild>
-                <Link href={`/yard/transcribe?hive=${data.id}`}>
+                <Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}>
                   <Mic className="size-4" />
                   Record inspection by voice
                 </Link>
@@ -325,29 +322,14 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
         </div>
       ) : null}
 
-      <Tabs value={tab} onValueChange={setTab}>
-        {/* Record tabs stay a scroll strip on mobile (DESIGN.md). `py-1 -my-1`
-            keeps the focus ring from being clipped by the scroll container. */}
-        <div className="-my-1 -mx-4 snap-x scroll-px-4 overflow-x-auto px-4 py-1 md:mx-0 md:px-0">
-          <TabsList className="min-w-max">
-            <TabsTrigger value="overview" className="snap-start">
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="timeline" className="snap-start">
-              Timeline
-            </TabsTrigger>
-            <TabsTrigger value="health" className="snap-start">
-              Health
-            </TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="overview" className="pt-4">
+      <nav aria-label="Hive pages" className="flex flex-wrap gap-x-4 gap-y-1 border-b">{[["", "Overview"], ["/timeline", "Timeline"], ["/health", "Health"], ["/equipment", "Equipment"], ["/queen", "Queen"], ["/photos", "Photos"]].map(([suffix,label])=><Link key={label} href={`/yard/hives/${data.id}${suffix}`} className="inline-flex min-h-11 items-center text-sm font-medium underline-offset-4 hover:underline">{label}</Link>)}</nav>
+        {tab === "overview" && <section className="pt-1">
           <HiveOverviewTab hiveId={data.id} canEdit={canEdit} />
-        </TabsContent>
-        <TabsContent value="timeline" className="flex min-w-0 flex-col gap-4 pt-4">
-          <div className="relative -mx-4 min-w-0 md:mx-0">
+        </section>}
+        {tab === "timeline" && <section className="flex min-w-0 flex-col gap-4 pt-1">
+          <div className="relative min-w-0">
             <div
-              className="-my-1 flex snap-x scroll-px-4 gap-1.5 overflow-x-auto px-4 py-1 md:flex-wrap md:px-0"
+              className="-my-1 flex snap-x gap-1.5 overflow-x-auto py-1 md:flex-wrap"
               role="group"
               aria-label="Filter the timeline"
             >
@@ -389,19 +371,19 @@ export function HiveDetailPage({ hiveId }: { hiveId: string }) {
           ) : (
             <HiveTimeline hiveId={data.id} types={activeFilter.types} />
           )}
-        </TabsContent>
-        <TabsContent value="health" className="grid gap-5 pt-4">
+        </section>}
+        {tab === "health" && <section className="grid gap-5 pt-1">
           <VarroaPanel hiveId={data.id} canEdit={canEdit} />
           <InspectionSummary
             hiveId={data.id}
             canEdit={canEdit}
             onSeeAll={() => {
-              setSearchParams({ tab: "timeline", view: "inspections" });
+              router.push(`/yard/hives/${data.id}/timeline?view=inspections`);
             }}
           />
           <HivePhotoStrip hiveId={data.id} canEdit={canEdit} />
-        </TabsContent>
-      </Tabs>
+        </section>}
+
 
       {data.notes && (
         <div className="rounded-xl border bg-card p-4 text-sm">

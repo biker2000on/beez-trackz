@@ -9,15 +9,6 @@
  */
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 export interface SectionLink {
@@ -77,55 +68,16 @@ export function SectionNav({
   mobileSections?: readonly SectionLink[];
   mobileRootHref?: string;
 }) {
-  const router = useRouter();
   const active = activeSection(sections, rootHref, pathname);
-  const selectSections = mobileSections ?? sections;
-  const selectRoot = mobileRootHref ?? rootHref;
-  const selectActive = mobileSections
-    ? activeSection(selectSections, selectRoot, pathname)
-    : active;
-
-  return (
-    <nav aria-label={label} className="min-w-0">
-      <div className="md:hidden">
-        <Select
-          value={selectActive?.href ?? selectRoot}
-          onValueChange={(href) => router.push(`${href}${hrefSuffix}`)}
-        >
-          <SelectTrigger aria-label={label} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {selectSections.map((section) => (
-              <SelectItem key={section.href} value={section.href}>
-                {section.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <ul className="hidden items-center gap-1 rounded-lg bg-muted p-1 md:inline-flex">
-        {sections.map((section) => {
-          const isActive = section.href === active?.href;
-          return (
-            <li key={section.href}>
-              <Link
-                href={`${section.href}${hrefSuffix}`}
-                aria-current={isActive ? "page" : undefined}
-                className={cn(
-                  "inline-flex items-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  isActive
-                    ? "bg-card text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {section.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
+  const mobile = mobileSections ?? sections;
+  const mobileActive = activeSection(mobile, mobileRootHref ?? rootHref, pathname);
+  const links = (items: readonly SectionLink[], selected: SectionLink | undefined) => (
+    <ul className="flex flex-wrap gap-x-4 gap-y-1">
+      {items.map((section) => <li key={section.href}><Link href={`${section.href}${hrefSuffix}`} aria-current={section.href === selected?.href ? "page" : undefined} className={cn("inline-flex min-h-11 items-center border-b-2 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", section.href === selected?.href ? "border-primary font-semibold text-foreground" : "border-transparent text-muted-foreground hover:text-foreground")}>{section.label}</Link></li>)}
+    </ul>
   );
+  return <nav aria-label={label} className="min-w-0 border-b">
+    <details className="md:hidden"><summary className="min-h-11 cursor-pointer py-3 text-sm font-medium">Pages · {mobileActive?.label ?? "Choose page"}</summary>{links(mobile, mobileActive)}</details>
+    <div className="hidden md:block">{links(sections, active)}</div>
+  </nav>;
 }

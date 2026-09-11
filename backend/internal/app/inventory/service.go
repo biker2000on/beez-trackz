@@ -31,6 +31,15 @@ type itemRules struct {
 // Record writes op inside uow after taking every affected tuple lock in the
 // global order documented by this package.
 func (s *Service) Record(ctx context.Context, uow *app.UnitOfWork, op Operation) (Recorded, error) {
+	return s.record(ctx, uow, op, false)
+}
+
+// RecordAvailable protects commitments under the same globally ordered tuple locks as the write.
+func (s *Service) RecordAvailable(ctx context.Context, uow *app.UnitOfWork, op Operation) (Recorded, error) {
+	return s.record(ctx, uow, op, true)
+}
+
+func (s *Service) record(ctx context.Context, uow *app.UnitOfWork, op Operation, protectReservations bool) (Recorded, error) {
 	const action = "record inventory operation"
 	if uow == nil || !uow.Actor().Valid() {
 		return Recorded{}, app.Forbidden(action, "an active unit of work with an actor is required")
@@ -63,6 +72,17 @@ func (s *Service) Record(ctx context.Context, uow *app.UnitOfWork, op Operation)
 		return Recorded{}, classifyDB(action, err)
 	} else if found {
 		return compareReplay(existing, hash)
+	}
+	if protectReservations {
+		var needs []TupleQuantity
+		for _, delta := range deltas {
+			if delta.quantity.Sign() < 0 {
+				needs = append(needs, TupleQuantity{Tuple: delta.tuple, Quantity: decimal(new(big.Rat).Neg(delta.quantity))})
+			}
+		}
+		if err := s.CheckAvailable(ctx, uow, needs); err != nil {
+			return Recorded{}, err
+		}
 	}
 	if err := s.checkResultingBalances(ctx, uow, op.Lines, deltas); err != nil {
 		return Recorded{}, err

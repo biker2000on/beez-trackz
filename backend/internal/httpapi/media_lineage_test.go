@@ -164,7 +164,7 @@ func TestConfirmWritesLineageAndRefusesSilentRewrite(t *testing.T) {
 		t.Fatalf("feeding lineage = %s %s", gotMedia, gotVersion)
 	}
 
-	resp, _ = call(t, server.handleTranscriptionConfirm, adminRequest(
+	resp, body = call(t, server.handleTranscriptionConfirm, adminRequest(
 		http.MethodPost, "/api/v1/transcriptions/"+mediaID.String()+"/confirm",
 		map[string]any{
 			"mode": "single",
@@ -173,8 +173,12 @@ func TestConfirmWritesLineageAndRefusesSilentRewrite(t *testing.T) {
 				"notes":  "second walkthrough",
 			}},
 		}, "id", mediaID.String()))
-	if resp.Code != http.StatusConflict {
-		t.Fatalf("second confirm = %d %s, want 409", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusOK || body["success"] != false {
+		t.Fatalf("second confirm = %d %s, want a rejected per-item outcome", resp.Code, resp.Body.String())
+	}
+	outcomes, ok := body["outcomes"].([]any)
+	if !ok || len(outcomes) != 1 || outcomes[0].(map[string]any)["status"] != "failed" {
+		t.Fatalf("missing failed outcome: %#v", body)
 	}
 
 	var inspectionID uuid.UUID

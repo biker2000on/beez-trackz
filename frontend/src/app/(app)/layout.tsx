@@ -61,7 +61,7 @@ export default function AppLayout({
         </React.Suspense>
         <div className="flex flex-1 flex-col lg:pl-60">
           <OfflineBanner />
-          <main className="flex-1 px-4 py-6 pb-24 lg:px-8 lg:pb-8">
+          <main className="atlas-main min-w-0 flex-1 px-3 py-4 pb-[calc(var(--bottom-nav-h)+1.25rem)] sm:px-5 lg:px-8 lg:py-6 lg:pb-8">
             {children}
           </main>
         </div>

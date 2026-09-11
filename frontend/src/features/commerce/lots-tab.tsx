@@ -107,7 +107,7 @@ export function LotsTab() {
             <Card key={lot.id}>
               <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
                 <div>
-                  <CardTitle className="text-base">{lot.lotCode}</CardTitle>
+                  <CardTitle className="text-base"><Link href={`/production/lots/${lot.id}`} className="hover:underline">{lot.lotCode}</Link></CardTitle>
                   <p className="text-xs text-muted-foreground">
                     {formatDate(lot.extractionDate)} · {formatLbs(lot.honeyWeightLbs)}
                     {lot.honeyWeightSource === "derived"
@@ -912,7 +912,7 @@ function LotFormDialog({
   );
 }
 
-function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function BottlingDialog({ lot, open, onOpenChange }: { lot: HarvestLot; open: boolean; onOpenChange: (open: boolean) => void }) {
   const inventory = useJarInventory();
   const balances = useHoneyLotBalances(open);
   const { formatHoney, units: unitsSystem, honeySuffix } = useUnits();

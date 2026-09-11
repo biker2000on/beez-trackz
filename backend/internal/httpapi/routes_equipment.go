@@ -69,9 +69,9 @@ func (s *Server) mountEquipment(r chi.Router) {
 	// 'physical_count' adjustments out, unresolvable lines reported as errors.
 	admin.Post("/equipment/physical-count", s.equipPhysicalCount)
 
-	admin.Post("/equipment/deployments", s.equipDeploy)
-	admin.Post("/equipment/deployments/{id}/remove", s.equipReturnDeployment)
-	admin.Post("/equipment/deployments/{id}/return", s.equipReturnDeployment)
+	r.Post("/equipment/deployments", s.equipDeploy)
+	r.Post("/equipment/deployments/{id}/remove", s.equipReturnDeployment)
+	r.Post("/equipment/deployments/{id}/return", s.equipReturnDeployment)
 	admin.Get("/equipment/deployments/active", s.equipActiveDeployments)
 	r.With(s.requireHiveParamRole(false)).
 		Get("/hives/{id}/deployments", s.equipHiveDeployments)
@@ -261,7 +261,7 @@ func equipAppActor(r *http.Request) app.Actor {
 	if user == nil || user.ID == uuid.Nil {
 		return app.Actor{}
 	}
-	return app.UserActor(user.ID, user.DisplayName)
+	return appActor(r)
 }
 
 func (s *Server) equipInUOW(w http.ResponseWriter, r *http.Request, action func(context.Context, *app.UnitOfWork) (map[string]any, error)) {

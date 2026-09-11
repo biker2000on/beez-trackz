@@ -10,6 +10,8 @@ import { formatDate, formatMoney } from "@/features/honey/format";
 import type { HoneySale } from "@/features/honey/types";
 import { api } from "@/lib/api";
 
+import Link from "next/link";
+import { OrderActions } from "./order-actions";
 import { SaleSerials } from "./sale-serials";
 
 interface Receipt {
@@ -33,11 +35,13 @@ export function ReceiptView({ saleId }: { saleId: string }) {
   const { sale } = receipt.data;
   return (
     <div className="mx-auto grid max-w-2xl gap-4">
-      <div className="flex justify-end print:hidden">
+      <header className="atlas-heading print:hidden"><div><p className="atlas-eyebrow">Sales / Order record</p><h1 className="text-2xl font-semibold">{sale.orderNumber ?? "Order"}</h1><Link href="/sales" className="text-sm underline">Orders & register</Link></div><div>
         <Button variant="outline" onClick={() => window.print()}>
           <Printer /> Print
         </Button>
       </div>
+      </header>
+      <OrderActions sale={sale}/>
       <Card className="print:border-0 print:shadow-none">
         <CardHeader className="border-b">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-primary">

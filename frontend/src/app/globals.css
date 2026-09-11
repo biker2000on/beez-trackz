@@ -320,3 +320,20 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Atlas operational surfaces: quiet paper, strong quantities, compact chrome. */
+.atlas-main { max-width: 110rem; width: 100%; margin-inline: auto; }
+.atlas-main h1 { letter-spacing: -0.035em; line-height: 1.15; }
+.atlas-main h2 { letter-spacing: -0.02em; }
+.atlas-main [data-slot="card"] { box-shadow: none; }
+.atlas-workspace { display: grid; gap: 1.25rem; min-width: 0; }
+.atlas-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: .75rem; }
+.atlas-heading h1 { font-size: clamp(1.65rem, 3vw, 2.15rem); font-weight: 650; }
+.atlas-eyebrow { font-size: .6875rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted-foreground); margin-bottom: .35rem; }
+.atlas-records { border: 1px solid var(--border); border-radius: .75rem; overflow: hidden; background: var(--card); }
+.atlas-record { padding: 1rem; border-bottom: 1px solid var(--border); }
+.atlas-record:last-child { border-bottom: 0; }
+.atlas-quantities { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .75rem; font-variant-numeric: tabular-nums; }
+.atlas-quantities dt { font-size: .7rem; color: var(--muted-foreground); }
+.atlas-quantities dd { font-size: 1.1rem; font-weight: 600; overflow-wrap: anywhere; }
+@media(max-width:767px) { .atlas-main input, .atlas-main textarea, .atlas-main select { font-size: 16px; } .atlas-record { padding: .875rem; } }

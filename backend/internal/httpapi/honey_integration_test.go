@@ -2742,7 +2742,7 @@ func equipDeployForTest(
 	t.Helper()
 	var operationID uuid.UUID
 	if err := app.NewRunner(server.pool).Run(context.Background(),
-		app.UserActor(testUserID, "Test Admin"),
+		app.UserActor(testUserID, "Test Admin").WithAccess(true, nil),
 		func(ctx context.Context, uow *app.UnitOfWork) error {
 			recorded, err := equipment.NewService().Deploy(ctx, uow, equipment.DeployCommand{
 				Command: equipment.Command{

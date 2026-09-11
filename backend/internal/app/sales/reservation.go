@@ -119,16 +119,9 @@ func (s *Service) AvailableUnits(
 // which is what "does this sale still fit?" means for a sale that is already
 // on the books.
 //
-// The credit is exact where the reservation is exact. inventory_reservations
-// keys on (item, location, lot, NULL condition, container), so:
-//
-//   - a need that pins a lot is credited that lot's stored quantity;
-//   - a need that pins a CONDITION (equipment sells serviceable) is credited
-//     nothing, because the reservation sits on the condition-null tuple and
-//     never offset that need in the first place;
-//   - an unpinned need is credited what the sale holds of that item anywhere
-//     at this location, because an unpinned need is by definition satisfied
-//     from any of the location's lots, oldest first.
+// The credit matches stored lot assignments and serviceable equipment. Unpinned
+// needs share the per-item credit pool after pinned needs have consumed theirs.
+// Non-serviceable conditions never consume serviceable order credit.
 //
 // What is left after the credit goes through CheckAvailability, so the tuple
 // locks, the FIFO spread, and the refusal message are the ordinary ones. A
@@ -159,7 +152,7 @@ func (s *Service) CheckAvailabilityExcluding(
 		if need.Quantity <= 0 || (need.LotID != nil && need.Condition == nil) {
 			continue
 		}
-		if need.Condition == nil {
+		if need.Condition == nil || *need.Condition == production.ConditionServiceable {
 			need.Quantity -= credit.spendItem(need.ItemID, need.Quantity)
 		}
 		if need.Quantity > 0 {

@@ -56,9 +56,10 @@ export function workbenchQueryKey(model: "production" | "sales", year?: number) 
   return ["workbench", model, year ?? "current"] as const;
 }
 
-export function useProductionWorkbench(year?: number) {
+export function useProductionWorkbench(year?: number, enabled = true) {
   return useQuery({
     queryKey: workbenchQueryKey("production", year),
+    enabled,
     queryFn: async () => {
       const result = await api.getWithMeta<ProductionWorkbenchResponse>(
         "/production/workbench",
@@ -69,9 +70,10 @@ export function useProductionWorkbench(year?: number) {
   });
 }
 
-export function useSalesWorkbench(year?: number) {
+export function useSalesWorkbench(year?: number, enabled = true) {
   return useQuery({
     queryKey: workbenchQueryKey("sales", year),
+    enabled,
     queryFn: async () => {
       const result = await api.getWithMeta<SalesWorkbenchResponse>(
         "/sales/workbench",

@@ -25,6 +25,20 @@ export const OFFLINE_ROUTE_MANIFEST: OfflineRouteManifest = {
       "prefix": "/api/v1/inspections"
     },
     {
+      "prefix": "/api/v1/inspection-visits",
+      "exact": true,
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "prefix": "/api/v1/apiary-inspections",
+      "exact": true,
+      "methods": [
+        "POST"
+      ]
+    },
+    {
       "prefix": "/api/v1/feedings"
     },
     {
