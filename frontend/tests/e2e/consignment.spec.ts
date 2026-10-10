@@ -270,10 +270,10 @@ test("the shelf is one row per lot, grouped by varietal and sorted varietal → 
   const rows = shelf.locator("tbody tr");
   await expect(rows).toHaveText([
     /^Sourwood$/,
-    /Sourwood2026-SOURWOOD-01Pint4\$10\.00/,
-    /Sourwood2026-SOURWOOD-01Quart8\$18\.00/,
+    /Sourwood2026-SOURWOOD-01Pint4—$10\.00/,
+    /Sourwood2026-SOURWOOD-01Quart8—$18\.00/,
     /^Wildflower$/,
-    /Wildflower2026-WILDFLOWER-01Quart5\$18\.00/,
+    /Wildflower2026-WILDFLOWER-01Quart5—$18\.00/,
   ]);
 
   // The summary still adds up across lots.
