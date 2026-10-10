@@ -124,6 +124,10 @@ export interface Expense {
   quantity: number | null;
   unit: string | null;
   notes: string | null;
+  /** "folio" when the Folio history import created it (migration 00064). */
+  source?: "atlas" | "folio";
+  folioImportId?: string | null;
+  folioState?: string | null;
 }
 
 export interface Customer {
@@ -170,6 +174,12 @@ export interface Profitability {
   expenses: number;
   grossMargin: number;
   marginPercent: number;
+  /** Categorized income imported from Folio that is not an Atlas sale. */
+  otherIncome?: number;
+  /** Imported income still waiting for a category (not counted). */
+  uncategorizedIncome?: number;
+  /** revenue + otherIncome - expenses. */
+  netIncome?: number;
   harvestedPounds: number;
   costPerHarvestedPound: number;
   costPerJarSold: number;

@@ -49,6 +49,12 @@ function ConflictRow({
         <span className="text-xs text-muted-foreground">{row.externalId}</span>
       </div>
       <p className="text-xs text-muted-foreground">{row.lastError}</p>
+      {row.bookRetired ? (
+        <p className="text-xs text-muted-foreground">
+          Belongs to retired book {row.bookLabel}. Atlas no longer writes
+          there, so it can only be ignored here.
+        </p>
+      ) : null}
       {row.remoteEnterDate ? (
         <p className="text-xs text-muted-foreground">
           Changed in Folio {formatTimestamp(row.remoteEnterDate)}
@@ -59,7 +65,7 @@ function ConflictRow({
           type="button"
           size="sm"
           variant="outline"
-          disabled={busy || !canPush}
+          disabled={busy || !canPush || row.bookRetired}
           title={
             canPush
               ? undefined
@@ -233,6 +239,56 @@ function ReconciliationReport() {
                 ),
               )}
             </dl>
+
+            {rows.data?.imports && rows.data.imports.imported > 0 ? (
+              <div className="grid gap-2 rounded-md border p-3 text-sm">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h2 className="font-medium">Imported from Folio</h2>
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/sales/expenses">
+                      Categorize
+                      <ArrowRight />
+                    </Link>
+                  </Button>
+                </div>
+                <dl className="flex flex-wrap gap-4">
+                  {(
+                    [
+                      ["Imported", rows.data.imports.imported],
+                      ["To categorize", rows.data.imports.toCategorize],
+                      ["Changed or deleted in Folio", rows.data.imports.conflicts],
+                    ] as const
+                  ).map(([label, value]) => (
+                    <div key={label} className="grid">
+                      <dt className="text-xs text-muted-foreground">{label}</dt>
+                      <dd className="font-medium tabular-nums">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {rows.data.imports.conflicts > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Imported entries Folio changed after you categorized them,
+                    or deleted, are resolved on the Expenses page.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {(rows.data?.retiredBooks ?? []).length > 0 ? (
+              <div className="grid gap-1 text-sm">
+                <h2 className="font-medium">Retired books</h2>
+                <ul className="grid gap-1 text-xs text-muted-foreground">
+                  {(rows.data?.retiredBooks ?? []).map((book) => (
+                    <li key={book.bookId}>
+                      {book.label}: {book.pushed} pushed and {book.imported}{" "}
+                      imported entries stay linked to it. Atlas no longer
+                      pushes to or pulls from it; editing one of them in Atlas
+                      changes Atlas only.
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
             {conflicts.length > 0 ? (
               <div className="grid gap-2">

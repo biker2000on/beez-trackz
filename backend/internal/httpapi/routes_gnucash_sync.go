@@ -48,9 +48,14 @@ func (s *Server) mountGnuCashSync(r chi.Router) {
 	admin.Get("/settings/gnucash/accounts", s.handleGnuCashAccounts)
 	admin.Post("/settings/gnucash/sync", s.handleGnuCashSyncNow)
 	admin.Post("/settings/gnucash/restore", s.handleGnuCashRestore)
+	admin.Post("/settings/gnucash/import", s.handleGnuCashImport)
+	admin.Get("/settings/gnucash/books", s.handleGnuCashBooks)
+	admin.Put("/settings/gnucash/books/{id}", s.handleGnuCashBookPut)
+	admin.Post("/settings/gnucash/books/switch", s.handleGnuCashBookSwitch)
 	admin.Get("/insights/reconciliation", s.handleGnuCashRows)
 	admin.Post("/insights/reconciliation/{id}/push", s.handleGnuCashRowPush)
 	admin.Post("/insights/reconciliation/{id}/ignore", s.handleGnuCashRowIgnore)
+	s.mountFolioImports(r)
 }
 
 // --- settings ---------------------------------------------------------------
@@ -77,6 +82,22 @@ type gnucashSettings struct {
 	// constants below: it is the durable replacement for what used to be
 	// guessed from "cursor present and sync off".
 	RestoreState string
+
+	// ActiveBookID is gnucash_sync_settings.active_book_id (00064/00011): the
+	// gnucash_books row these credentials belong to. Nil until the first
+	// tested connection creates it (ensureActiveBook).
+	ActiveBookID *uuid.UUID
+	// ImportAccounts are the Folio accounts the history import reads from.
+	// Empty means "the accounts the category mapping uses".
+	ImportAccounts []string
+	// ImportStartDate is "Import history from": Folio transactions posted
+	// before it are not imported. Nil means the import has not been set up.
+	ImportStartDate *time.Time
+	// ImportCursor is the history import's own change-feed cursor. It is kept
+	// apart from ChangesCursor (the push-conflict pull) so that widening the
+	// import window can rescan the book without disturbing conflict detection.
+	ImportCursor string
+	LastImportAt *time.Time
 }
 
 // The three values of gnucash_sync_settings.restore_state (00049).
@@ -138,16 +159,19 @@ func scanGnuCashSettings(
 	var (
 		out                                         gnucashSettings
 		token, bookGUID, bookName, currency, cursor *string
-		mappingJSON                                 []byte
+		importCursor                                *string
+		mappingJSON, importAccountsJSON             []byte
 	)
 	err := q.QueryRow(ctx, `
 		SELECT base_url, api_token, book_guid, book_name, root_currency,
 			changes_cursor, sync_enabled, account_mapping, last_synced_at,
-			restore_state
+			restore_state, active_book_id, import_account_guids,
+			import_start_date, import_cursor, last_import_at
 		FROM gnucash_sync_settings WHERE id = true`+lock).
 		Scan(&out.BaseURL, &token, &bookGUID, &bookName, &currency,
 			&cursor, &out.SyncEnabled, &mappingJSON, &out.LastSyncAttemptAt,
-			&out.RestoreState)
+			&out.RestoreState, &out.ActiveBookID, &importAccountsJSON,
+			&out.ImportStartDate, &importCursor, &out.LastImportAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The unconfigured singleton is restore_state 'none', not "".
 		return gnucashSettings{RestoreState: restoreStateNone}, nil
@@ -160,6 +184,13 @@ func scanGnuCashSettings(
 	out.BookName = derefString(bookName)
 	out.RootCurrency = derefString(currency)
 	out.ChangesCursor = derefString(cursor)
+	out.ImportCursor = derefString(importCursor)
+	if len(importAccountsJSON) > 0 {
+		if err := json.Unmarshal(importAccountsJSON, &out.ImportAccounts); err != nil {
+			return gnucashSettings{}, fmt.Errorf("decode import accounts: %w", err)
+		}
+	}
+	out.ImportAccounts = gnucashsync.NormalizeGUIDList(out.ImportAccounts)
 	if len(mappingJSON) > 0 {
 		if err := json.Unmarshal(mappingJSON, &out.Mapping); err != nil {
 			return gnucashSettings{}, fmt.Errorf("decode account mapping: %w", err)
@@ -287,14 +318,41 @@ func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	var activeBook *gnucashBook
+	if settings.ActiveBookID != nil {
+		book, found, err := loadGnuCashBook(r.Context(), s.pool, *settings.ActiveBookID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
+		if found {
+			activeBook = &book
+		}
+	}
+	var importStart *string
+	if settings.ImportStartDate != nil {
+		formatted := settings.ImportStartDate.Format("2006-01-02")
+		importStart = &formatted
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"baseUrl":        settings.BaseURL,
-		"hasToken":       settings.Token != "",
-		"bookGuid":       settings.BookGUID,
-		"bookName":       settings.BookName,
-		"rootCurrency":   settings.RootCurrency,
-		"syncEnabled":    settings.SyncEnabled,
-		"accountMapping": settings.Mapping,
+		// The book connection these credentials belong to (00064/00011);
+		// null until the first tested connection.
+		"activeBook": activeBook,
+		// The history import: configured accounts (empty = use the mapping's
+		// category accounts, which effectiveImportAccountGuids spells out),
+		// the start date, and when it last ran.
+		"importAccountGuids":          settings.ImportAccounts,
+		"effectiveImportAccountGuids": settings.effectiveImportAccounts(),
+		"importStartDate":             importStart,
+		"lastImportAt":                settings.LastImportAt,
+		"hasImportCursor":             settings.ImportCursor != "",
+		"baseUrl":                     settings.BaseURL,
+		"hasToken":                    settings.Token != "",
+		"bookGuid":                    settings.BookGUID,
+		"bookName":                    settings.BookName,
+		"rootCurrency":                settings.RootCurrency,
+		"syncEnabled":                 settings.SyncEnabled,
+		"accountMapping":              settings.Mapping,
 		// Two names for one column. lastSyncedAt is what the existing client
 		// reads; lastSyncAttemptAt is what the value actually means — the run
 		// is stamped even when its pull failed and nothing was pushed. New
@@ -330,6 +388,12 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 		// Without it a credential change that would wipe a pending restore is
 		// refused instead of performed.
 		DiscardRestore bool `json:"discardRestore"`
+		// The history import. importAccountGuids replaces the list ([] means
+		// "use the mapping's category accounts"); importStartDate is
+		// YYYY-MM-DD, "" clears it. Widening either (an earlier date, an added
+		// account) clears the import cursor so the next import rescans.
+		ImportAccountGUIDs *[]string `json:"importAccountGuids"`
+		ImportStartDate    *string   `json:"importStartDate"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -389,6 +453,7 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 			if identityChanged || req.DiscardRestore {
 				settings.BookGUID, settings.BookName, settings.RootCurrency = "", "", ""
 				settings.ChangesCursor = ""
+				settings.ImportCursor = ""
 				// The restored state went with the identity it belonged to.
 				settings.RestoreState = restoreStateNone
 			}
@@ -417,8 +482,33 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 				}
 				settings.SyncEnabled = *req.SyncEnabled
 			}
+			before := settings.effectiveImportAccounts()
 			if req.AccountMapping != nil {
 				settings.Mapping = req.AccountMapping.Normalize()
+			}
+			if req.ImportAccountGUIDs != nil {
+				settings.ImportAccounts = gnucashsync.NormalizeGUIDList(*req.ImportAccountGUIDs)
+			}
+			if gnucashImportWidened(before, settings.effectiveImportAccounts()) {
+				settings.ImportCursor = ""
+			}
+			if req.ImportStartDate != nil {
+				raw := strings.TrimSpace(*req.ImportStartDate)
+				if raw == "" {
+					settings.ImportStartDate = nil
+				} else {
+					parsed, err := parseDate(raw)
+					if err != nil {
+						return app.Invalid("gnucash settings", "importStartDate must be YYYY-MM-DD").
+							WithField("importStartDate")
+					}
+					day := time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.UTC)
+					if settings.ImportStartDate == nil || day.Before(*settings.ImportStartDate) {
+						// Newly in-range history sits behind the cursor.
+						settings.ImportCursor = ""
+					}
+					settings.ImportStartDate = &day
+				}
 			}
 			return app.Internal("save gnucash settings", saveGnuCashSettings(ctx, uow, settings))
 		})
@@ -427,6 +517,21 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// gnucashImportWidened reports an import account in after that was not in
+// before: its history has never been read.
+func gnucashImportWidened(before, after []string) bool {
+	known := make(map[string]bool, len(before))
+	for _, guid := range before {
+		known[guid] = true
+	}
+	for _, guid := range after {
+		if !known[guid] {
+			return true
+		}
+	}
+	return false
 }
 
 // gnucashActor is the application-layer identity for a settings command. It
@@ -447,13 +552,23 @@ func saveGnuCashSettings(ctx context.Context, q app.Querier, settings gnucashSet
 	if err != nil {
 		return err
 	}
+	importAccountsJSON, err := json.Marshal(gnucashsync.NormalizeGUIDList(settings.ImportAccounts))
+	if err != nil {
+		return err
+	}
 	_, err = q.Exec(ctx, `
 		INSERT INTO gnucash_sync_settings
 			(id, base_url, api_token, book_guid, book_name, root_currency,
 			 changes_cursor, sync_enabled, account_mapping, last_synced_at,
-			 restore_state)
-		VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 restore_state, active_book_id, import_account_guids,
+			 import_start_date, import_cursor, last_import_at)
+		VALUES (true, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT (id) DO UPDATE SET
+			active_book_id = EXCLUDED.active_book_id,
+			import_account_guids = EXCLUDED.import_account_guids,
+			import_start_date = EXCLUDED.import_start_date,
+			import_cursor = EXCLUDED.import_cursor,
+			last_import_at = EXCLUDED.last_import_at,
 			base_url = EXCLUDED.base_url,
 			api_token = EXCLUDED.api_token,
 			book_guid = EXCLUDED.book_guid,
@@ -467,7 +582,9 @@ func saveGnuCashSettings(ctx context.Context, q app.Querier, settings gnucashSet
 		settings.BaseURL, nullIfBlank(settings.Token), nullIfBlank(settings.BookGUID),
 		nullIfBlank(settings.BookName), nullIfBlank(settings.RootCurrency),
 		nullIfBlank(settings.ChangesCursor), settings.SyncEnabled, mappingJSON,
-		settings.LastSyncAttemptAt, settings.normalizedRestoreState())
+		settings.LastSyncAttemptAt, settings.normalizedRestoreState(),
+		settings.ActiveBookID, importAccountsJSON, settings.ImportStartDate,
+		nullIfBlank(settings.ImportCursor), settings.LastImportAt)
 	return err
 }
 
@@ -500,6 +617,17 @@ func (s *Server) handleGnuCashTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"error": gnucashUserMessage(err)})
 		return
 	}
+	// A token that opens a different book than the active connection's is
+	// an implicit book switch; once that book has history it is refused and
+	// the operator is pointed at the switch flow (routes_folio_books.go).
+	if err := checkTestedIdentity(ctx, s.pool, settings, status); err != nil {
+		if app.KindOf(err) == app.KindConflict {
+			writeJSON(w, http.StatusOK, map[string]any{"error": appMessage(err)})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	settings.BookGUID = status.BookGUID
 	settings.BookName = status.BookName
 	settings.RootCurrency = status.RootCurrency
@@ -507,7 +635,17 @@ func (s *Server) handleGnuCashTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	book, err := ensureActiveBook(ctx, s.pool, &settings)
+	if err != nil {
+		if app.KindOf(err) == app.KindConflict {
+			writeJSON(w, http.StatusOK, map[string]any{"error": appMessage(err)})
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"bookLabel":    book.Label,
 		"success":      true,
 		"bookGuid":     status.BookGUID,
 		"bookName":     status.BookName,
@@ -575,6 +713,19 @@ type gnucashRow struct {
 	LastSyncedAt    *time.Time `json:"lastSyncedAt"`
 	RemoteEnterDate *time.Time `json:"remoteEnterDate"`
 	Summary         string     `json:"summary"`
+	// BookLabel names the book connection the entry is pinned to; BookRetired
+	// marks one Atlas no longer writes to (it can only be ignored).
+	BookLabel   *string `json:"bookLabel"`
+	BookRetired bool    `json:"bookRetired"`
+}
+
+// gnucashRetiredBookRows is one retired book on the reconciliation report.
+type gnucashRetiredBookRows struct {
+	BookID    uuid.UUID `json:"bookId"`
+	Label     string    `json:"label"`
+	RetiredAt time.Time `json:"retiredAt"`
+	Pushed    int       `json:"pushed"`
+	Imported  int       `json:"imported"`
 }
 
 // GET /settings/gnucash/rows — counts by state plus the rows that need a
@@ -582,9 +733,13 @@ type gnucashRow struct {
 func (s *Server) handleGnuCashRows(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	counts := map[string]int{"pending": 0, "synced": 0, "failed": 0, "ignored": 0}
+	// The state counts describe the active book (and entries not pushed
+	// anywhere yet); entries of retired books are summarised separately.
 	rows, err := s.pool.Query(ctx, `
-		SELECT sync_state, count(*) FROM external_sync
-		WHERE system = $1 GROUP BY sync_state`, SyncSystemGnuCashWeb)
+		SELECT es.sync_state, count(*) FROM external_sync es
+		LEFT JOIN gnucash_books b ON b.id = es.book_id
+		WHERE es.system = $1 AND (es.book_id IS NULL OR b.retired_at IS NULL)
+		GROUP BY es.sync_state`, SyncSystemGnuCashWeb)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -615,11 +770,52 @@ func (s *Server) handleGnuCashRows(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	retired, err := s.gnucashRetiredBookRows(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	imports, err := folioImportCounts(ctx, s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"counts":    counts,
 		"conflicts": conflicts,
 		"failures":  failures,
+		// Entries linked to book connections that were switched away from.
+		// They stay linked and are never pushed again.
+		"retiredBooks": retired,
+		// What the history import brought in, how much still needs a
+		// category, and how many imported entries Folio changed or deleted.
+		"imports": imports,
 	})
+}
+
+func (s *Server) gnucashRetiredBookRows(ctx context.Context) ([]gnucashRetiredBookRows, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT b.id, b.label, b.retired_at,
+			(SELECT count(*) FROM external_sync es
+			 WHERE es.system = $1 AND es.book_id = b.id
+			   AND (es.external_id IS NOT NULL OR es.remote_transaction_guid IS NOT NULL)),
+			(SELECT count(*) FROM folio_imports fi WHERE fi.book_id = b.id)
+		FROM gnucash_books b
+		WHERE b.retired_at IS NOT NULL
+		ORDER BY b.retired_at DESC`, SyncSystemGnuCashWeb)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []gnucashRetiredBookRows{}
+	for rows.Next() {
+		var row gnucashRetiredBookRows
+		if err := rows.Scan(&row.BookID, &row.Label, &row.RetiredAt, &row.Pushed, &row.Imported); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // gnucashAttentionRows lists either the conflicted rows or the failed ones,
@@ -642,10 +838,12 @@ func (s *Server) gnucashAttentionRows(ctx context.Context, conflicted bool) ([]g
 			COALESCE(
 				NULLIF(concat_ws(' — ', s.order_number, s.customer_name), ''),
 				NULLIF(e.description, ''),
-				'')
+				''),
+			b.label, COALESCE(b.retired_at IS NOT NULL, false)
 		FROM external_sync es
 		LEFT JOIN sales s ON s.id = es.entity_id AND es.entity_type = 'sale'
 		LEFT JOIN expenses e ON e.id = es.entity_id AND es.entity_type = 'expense'
+		LEFT JOIN gnucash_books b ON b.id = es.book_id
 		WHERE es.system = $1 AND ` + filter + `
 		ORDER BY es.updated_at DESC
 		LIMIT 200`
@@ -662,7 +860,7 @@ func (s *Server) gnucashAttentionRows(ctx context.Context, conflicted bool) ([]g
 		)
 		if err := rows.Scan(&row.ID, &row.EntityType, &row.EntityID, &externalID,
 			&row.SyncState, &conflictState, &lastErr, &row.LastSyncedAt,
-			&row.RemoteEnterDate, &row.Summary); err != nil {
+			&row.RemoteEnterDate, &row.Summary, &row.BookLabel, &row.BookRetired); err != nil {
 			return nil, err
 		}
 		row.ExternalID = derefString(externalID)
@@ -719,13 +917,23 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 			"Map a cash account before syncing")
 		return
 	}
+	// Every push lands in the active book connection and is pinned to it.
+	book, err := ensureActiveBook(ctx, s.pool, &settings)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	if err := pinUnassignedPushedRows(ctx, s.pool, book.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 
 	report := &gnucashSyncReport{Errors: []string{}}
 	if err := s.gnucashScan(ctx, report); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	cursor, pullComplete, pullErr := s.gnucashPull(ctx, client, settings.ChangesCursor, report)
+	cursor, pullComplete, pullErr := s.gnucashPull(ctx, client, book.ID, settings.ChangesCursor, report)
 	switch {
 	case pullErr != nil:
 		report.Errors = append(report.Errors,
@@ -737,7 +945,7 @@ func (s *Server) handleGnuCashSyncNow(w http.ResponseWriter, r *http.Request) {
 		report.Errors = append(report.Errors,
 			"pull incomplete - run sync again to continue draining. Nothing was pushed this run.")
 	default:
-		if err := s.gnucashPush(ctx, client, settings.Mapping, report); err != nil {
+		if err := s.gnucashPush(ctx, client, book.ID, settings.Mapping, report); err != nil {
 			report.Errors = append(report.Errors, err.Error())
 		}
 	}
@@ -779,9 +987,12 @@ func (s *Server) gnucashScan(ctx context.Context, report *gnucashSyncReport) err
 		return err
 	}
 
+	// An expense imported from Folio already IS a Folio transaction: pushing
+	// it would book the same money twice.
 	const unsyncedExpenses = `
 		SELECT e.id FROM expenses e
 		WHERE e.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM folio_imports fi WHERE fi.expense_id = e.id)
 		  AND NOT EXISTS (
 			SELECT 1 FROM external_sync es
 			WHERE es.system = $1 AND es.entity_type = $2 AND es.entity_id = e.id)`
@@ -833,9 +1044,13 @@ type gnucashWorkRow struct {
 // gnucashPush walks every row that is not ignored and not in conflict, and
 // makes folio agree with beez. Conflicted rows are deliberately skipped: the
 // operator resolves them from the settings page.
+//
+// Only rows of the active book, or rows never pushed anywhere, are pushed: an
+// entity linked to a retired book stays in that book and is not re-pushed.
 func (s *Server) gnucashPush(
 	ctx context.Context,
 	client *gnucashsync.Client,
+	bookID uuid.UUID,
 	mapping gnucashsync.AccountMapping,
 	report *gnucashSyncReport,
 ) error {
@@ -846,8 +1061,9 @@ func (s *Server) gnucashPush(
 		  AND entity_type IN ($2, $3)
 		  AND sync_state <> 'ignored'
 		  AND (conflict_state IS NULL OR conflict_state = 'none')
+		  AND (book_id IS NULL OR book_id = $4)
 		ORDER BY created_at`,
-		SyncSystemGnuCashWeb, SyncEntitySale, SyncEntityExpense)
+		SyncSystemGnuCashWeb, SyncEntitySale, SyncEntityExpense, bookID)
 	if err != nil {
 		return err
 	}
@@ -875,7 +1091,7 @@ func (s *Server) gnucashPush(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.gnucashPushRow(ctx, client, mapping, row, false, report); err != nil {
+		if err := s.gnucashPushRow(ctx, client, bookID, mapping, row, false, report); err != nil {
 			report.Errors = append(report.Errors,
 				fmt.Sprintf("%s %s: %v", row.EntityType, row.EntityID, err))
 		}
@@ -892,6 +1108,7 @@ func (s *Server) gnucashPush(
 func (s *Server) gnucashPushRow(
 	ctx context.Context,
 	client *gnucashsync.Client,
+	bookID uuid.UUID,
 	mapping gnucashsync.AccountMapping,
 	row gnucashWorkRow,
 	force bool,
@@ -976,7 +1193,7 @@ func (s *Server) gnucashPushRow(
 	} else {
 		report.Updated++
 	}
-	return s.gnucashMarkSynced(ctx, row.ID, externalID, hash, result)
+	return s.gnucashMarkSynced(ctx, row.ID, bookID, externalID, hash, result)
 }
 
 // gnucashWrite performs the create/update dance, including the two recoveries
@@ -1175,11 +1392,12 @@ func (s *Server) gnucashLoadExpense(
 // --- row state transitions --------------------------------------------------
 
 func (s *Server) gnucashMarkSynced(
-	ctx context.Context, rowID uuid.UUID, externalID, hash string,
+	ctx context.Context, rowID, bookID uuid.UUID, externalID, hash string,
 	result gnucashsync.WriteResult,
 ) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE external_sync SET
+			book_id = $6,
 			external_id = $2,
 			sync_state = 'synced',
 			conflict_state = NULL,
@@ -1190,7 +1408,7 @@ func (s *Server) gnucashMarkSynced(
 			last_synced_at = now()
 		WHERE id = $1`,
 		rowID, externalID, hash, nullIfBlank(result.TransactionGUID),
-		gnucashParseTime(result.EnterDate))
+		gnucashParseTime(result.EnterDate), bookID)
 	return err
 }
 
@@ -1270,6 +1488,7 @@ func gnucashParseTime(raw string) *time.Time {
 func (s *Server) gnucashPull(
 	ctx context.Context,
 	client *gnucashsync.Client,
+	bookID uuid.UUID,
 	cursor string,
 	report *gnucashSyncReport,
 ) (string, bool, error) {
@@ -1297,7 +1516,7 @@ func (s *Server) gnucashPull(
 		}
 		for _, item := range result.Items {
 			report.PulledItems++
-			flagged, err := s.gnucashReconcileItem(ctx, item)
+			flagged, err := s.gnucashReconcileItem(ctx, bookID, item)
 			if err != nil {
 				// Stop before advancing the cursor so the unprocessed part
 				// of this page is re-read next run.
@@ -1325,9 +1544,13 @@ func (s *Server) gnucashPull(
 }
 
 // gnucashReconcileItem applies one change item. Items whose externalId beez
-// does not own are folio-native activity and are ignored by design.
+// does not own are folio-native activity and are ignored by design here; the
+// history import (routes_folio_import.go) reads them on its own cursor.
+//
+// Only rows of the book being pulled (or not pinned to any book yet) can be
+// flagged: an entity that lives in a retired book is not this book's concern.
 func (s *Server) gnucashReconcileItem(
-	ctx context.Context, item gnucashsync.Change,
+	ctx context.Context, bookID uuid.UUID, item gnucashsync.Change,
 ) (bool, error) {
 	if item.ExternalID == nil || *item.ExternalID == "" {
 		return false, nil
@@ -1339,8 +1562,8 @@ func (s *Server) gnucashReconcileItem(
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, sync_state, remote_enter_date FROM external_sync
-		WHERE system = $1 AND external_id = $2`,
-		SyncSystemGnuCashWeb, *item.ExternalID).Scan(&rowID, &syncState, &stored)
+		WHERE system = $1 AND external_id = $2 AND (book_id IS NULL OR book_id = $3)`,
+		SyncSystemGnuCashWeb, *item.ExternalID, bookID).Scan(&rowID, &syncState, &stored)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -1414,16 +1637,23 @@ func (s *Server) handleGnuCashRowPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	book, err := ensureActiveBook(ctx, s.pool, &settings)
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+
 	var (
 		row                     gnucashWorkRow
 		externalID, contentHash *string
+		rowBook                 *uuid.UUID
 	)
 	err = s.pool.QueryRow(ctx, `
-		SELECT id, entity_type, entity_id, external_id, sync_state, content_hash
+		SELECT id, entity_type, entity_id, external_id, sync_state, content_hash, book_id
 		FROM external_sync WHERE id = $1 AND system = $2`,
 		rowID, SyncSystemGnuCashWeb).
 		Scan(&row.ID, &row.EntityType, &row.EntityID, &externalID,
-			&row.SyncState, &contentHash)
+			&row.SyncState, &contentHash, &rowBook)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "sync row not found")
 		return
@@ -1434,6 +1664,15 @@ func (s *Server) handleGnuCashRowPush(w http.ResponseWriter, r *http.Request) {
 	}
 	row.ExternalID = derefString(externalID)
 	row.ContentHash = derefString(contentHash)
+	if rowBook != nil && *rowBook != book.ID {
+		label := "a retired book"
+		if retired, found, err := loadGnuCashBook(ctx, s.pool, *rowBook); err == nil && found {
+			label = "retired book " + retired.Label
+		}
+		writeAppError(w, app.Conflict("gnucash push",
+			"This entry belongs to %s. Atlas no longer writes to it; ignore the entry here instead.", label))
+		return
+	}
 
 	// Clear the conflict first: the push either succeeds (and clears it for
 	// good) or records the new failure, and either way the stale flag must
@@ -1445,7 +1684,7 @@ func (s *Server) handleGnuCashRowPush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	report := &gnucashSyncReport{Errors: []string{}}
-	if err := s.gnucashPushRow(ctx, client, settings.Mapping, row, true, report); err != nil {
+	if err := s.gnucashPushRow(ctx, client, book.ID, settings.Mapping, row, true, report); err != nil {
 		writeError(w, http.StatusBadGateway, gnucashUserMessage(err))
 		return
 	}
@@ -1904,6 +2143,17 @@ func (s *Server) gnucashInstallRestore(
 	settings.RestoreState = restoreStateInstalled
 	result.RestoreState = restoreStateInstalled
 	if err := saveGnuCashSettings(ctx, uow, settings); err != nil {
+		return app.Internal(op, err)
+	}
+	// The restored rows carry no book connection (the restore payload
+	// predates 00064/00011). The identity was just proven, so they belong to
+	// the active book connection for it, created here if the database has
+	// none. A database already connected to a DIFFERENT book is refused.
+	book, err := ensureActiveBook(ctx, uow, &settings)
+	if err != nil {
+		return err
+	}
+	if err := pinUnassignedPushedRows(ctx, uow, book.ID); err != nil {
 		return app.Internal(op, err)
 	}
 	result.CursorInstalled = strings.TrimSpace(req.ChangesCursor) != ""

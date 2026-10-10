@@ -49,6 +49,8 @@ type folioFake struct {
 	// stuckCursor makes GET changes claim hasMore while refusing to advance:
 	// "" returns no nextCursor at all, "repeat" echoes the one it was given.
 	stuckCursor string
+	// bookGUID, when set, is the book GET status reports instead of book-1.
+	bookGUID string
 
 	posts, puts, deletes, changeCalls int
 	unbalanced                        []gnucashsync.Transaction
@@ -110,8 +112,14 @@ func (f *folioFake) route(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/integrations/beez")
 	switch {
 	case r.Method == http.MethodGet && path == "/status":
+		// bookGUID lets a test stand the fake up as a different book (the
+		// book-switch tests); the default is the book every fixture tests.
+		bookGUID, bookName := "book-1", "Yard Books"
+		if f.bookGUID != "" {
+			bookGUID, bookName = f.bookGUID, "Bee Business"
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": true, "bookGuid": "book-1", "bookName": "Yard Books", "rootCurrency": "USD",
+			"ok": true, "bookGuid": bookGUID, "bookName": bookName, "rootCurrency": "USD",
 		})
 	case r.Method == http.MethodGet && path == "/accounts":
 		writeJSON(w, http.StatusOK, map[string]any{"accounts": []map[string]any{
@@ -381,6 +389,15 @@ func gnucashTestServer(t *testing.T, fake *folioFake, mapping gnucashsync.Accoun
 	if _, err := server.pool.Exec(context.Background(),
 		`DELETE FROM gnucash_sync_settings`); err != nil {
 		t.Fatalf("reset gnucash settings: %v", err)
+	}
+	// Book connections and imports (00064/00011) outlive the honey reset;
+	// every fixture starts with none, so the first sync creates the book.
+	if _, err := server.pool.Exec(context.Background(), `
+		DELETE FROM folio_imports;
+		DELETE FROM other_income;
+		UPDATE external_sync SET book_id = NULL WHERE book_id IS NOT NULL;
+		DELETE FROM gnucash_books`); err != nil {
+		t.Fatalf("reset folio books: %v", err)
 	}
 	// The book identity is what POST /test caches; sync refuses to run
 	// without it, so every fixture starts from a tested connection.

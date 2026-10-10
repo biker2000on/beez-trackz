@@ -11,6 +11,7 @@ import {
   PlanningPanel,
   ProfitabilityPanel,
 } from "@/features/commerce/business-reports";
+import { FolioToCategorize } from "@/features/commerce/folio-to-categorize";
 
 import {
   EconomicsReport,
@@ -99,6 +100,8 @@ export function ExpensesView() {
         year={year}
         onYearChange={setYear}
       />
+      {/* Imported from Folio and awaiting a category (all years). */}
+      <FolioToCategorize />
       <ExpensesPanel year={year} />
     </div>
   );

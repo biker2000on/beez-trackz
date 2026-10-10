@@ -342,6 +342,12 @@ export function ProfitabilityPanel({ year }: { year: number }) {
         <Metric label="Expenses" value={formatMoney(data.expenses)} />
         <Metric label="Gross margin" value={formatMoney(data.grossMargin)} detail={`${data.marginPercent.toFixed(0)}%`} />
         <Metric label="Inventory value" value={formatMoney(data.inventoryValue)} />
+        {(data.otherIncome ?? 0) > 0 || (data.uncategorizedIncome ?? 0) > 0 ? (
+          <>
+            <Metric label="Other income" value={formatMoney(data.otherIncome ?? 0)} detail={(data.uncategorizedIncome ?? 0) > 0 ? `${formatMoney(data.uncategorizedIncome ?? 0)} from Folio not yet categorized` : "Imported from Folio, not Atlas sales"} />
+            <Metric label="Net income" value={formatMoney(data.netIncome ?? 0)} detail="Revenue + other income - expenses" />
+          </>
+        ) : null}
         <Metric label="Cost / harvested lb" value={formatMoney(data.costPerHarvestedPound)} />
         <Metric label="Cost / jar sold" value={formatMoney(data.costPerJarSold)} />
         <Metric label="Harvested" value={formatLbs(data.harvestedPounds)} />
@@ -444,7 +450,14 @@ function ExpensesTable({
           id: "category",
           header: "Category",
           meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
-          cell: ({ row }) => row.original.category.replaceAll("_", " "),
+          cell: ({ row }) => (
+            <span className="inline-flex flex-wrap items-center gap-1">
+              {row.original.category.replaceAll("_", " ")}
+              {row.original.source === "folio" ? (
+                <Badge variant="outline" className="normal-case">Folio</Badge>
+              ) : null}
+            </span>
+          ),
         }),
         expenseHelper.display({
           id: "description",

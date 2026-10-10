@@ -95,6 +95,67 @@ func TestUserPreferencesSplitDoesNotApplyAtMigration57(t *testing.T) {
 	}
 }
 
+// TestFolioBooksAndImportsLeavesOlderSyncStateUnassigned: an artifact taken
+// before 00064 restores its sync singleton and pushed rows unchanged (the new
+// columns become NULL / their default on insert, nothing is fabricated) and
+// the three new domains empty. The guarded restore attaches the rows to the
+// proven book afterwards.
+func TestFolioBooksAndImportsLeavesOlderSyncStateUnassigned(t *testing.T) {
+	settingsID := true
+	rowID := "20000000-0000-4000-8000-000000000001"
+	settingsData := map[string]any{"id": settingsID, "base_url": "https://folio.example", "book_guid": "book-1"}
+	settingsJSON, err := snapshot.MarshalCanonical(settingsData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idJSON, _ := snapshot.MarshalCanonical(settingsID)
+	artifact := &snapshot.Artifact{
+		Manifest: snapshot.Manifest{SchemaMigration: 63},
+		Records: map[string][]snapshot.RecordEnvelope{
+			"gnucash_sync_settings": {{
+				Domain: "gnucash_sync_settings", ID: idJSON, Data: settingsJSON,
+				Digest:                  snapshot.SHA256Hex(settingsJSON),
+				CanonicalizationVersion: snapshot.CanonicalizationVersion,
+				DigestAlgorithm:         snapshot.DigestAlgorithmVersion,
+			}},
+			"external_sync": {testEnvelope(t, "external_sync", rowID, map[string]any{
+				"id": rowID, "system": "gnucash_web", "entity_type": "sale",
+				"external_id": "sale:x", "sync_state": "synced",
+			})},
+		},
+	}
+	applied, err := snapshot.ApplyPostArtifactMigrations(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folio *snapshot.AppliedPostArtifactMigration
+	for i := range applied {
+		if applied[i].Name == snapshot.FolioBooksAndImportsTransform {
+			folio = &applied[i]
+		}
+	}
+	if folio == nil || folio.Migration != 64 {
+		t.Fatalf("folio transform not applied: %+v", applied)
+	}
+	for _, domain := range []string{"external_sync", "gnucash_sync_settings", "gnucash_books", "other_income", "folio_imports"} {
+		found := false
+		for _, name := range folio.Domains {
+			found = found || name == domain
+		}
+		if !found {
+			t.Errorf("folio transform domains %v lack %s", folio.Domains, domain)
+		}
+	}
+	for _, domain := range []string{"gnucash_books", "other_income", "folio_imports"} {
+		if records, present := artifact.Records[domain]; !present || len(records) != 0 {
+			t.Errorf("%s = %v (present %v), want an empty record set", domain, records, present)
+		}
+	}
+	if _, present := decodeEnvelope(t, artifact.Records["external_sync"][0])["book_id"]; present {
+		t.Fatal("book_id was fabricated for an older external_sync row")
+	}
+}
+
 // withoutEmptyNewDomains drops applied migrations that only added a newer,
 // empty domain (e.g. consignment_location_prices at 00060): an older artifact
 // gains an empty record set for it, which is not the transform under test.

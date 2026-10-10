@@ -287,6 +287,73 @@ export interface GnuCashSettings {
    * from the database CHECK lists. */
   saleLineKinds: string[];
   expenseCategories: string[];
+  /** The book connection these credentials belong to (migration 00064);
+   * null until the first tested connection. */
+  activeBook: GnuCashBook | null;
+  /** Accounts the history import reads; [] = the mapping's category accounts. */
+  importAccountGuids: string[];
+  /** What the import actually uses: the list above, or the default. */
+  effectiveImportAccountGuids: string[];
+  /** "Import history from", YYYY-MM-DD; null until set. */
+  importStartDate: string | null;
+  lastImportAt: string | null;
+  hasImportCursor: boolean;
+}
+
+/** One Folio book connection (gnucash_books). */
+export interface GnuCashBook {
+  id: string;
+  label: string;
+  baseUrl: string;
+  bookGuid: string;
+  bookName: string;
+  rootCurrency: string;
+  connectedAt: string;
+  retiredAt: string | null;
+}
+
+export interface GnuCashBookSummary extends GnuCashBook {
+  active: boolean;
+  /** Entries Atlas pushed into this book. */
+  pushed: number;
+  /** Transactions imported from this book. */
+  imported: number;
+}
+
+export interface GnuCashBookSwitchPayload {
+  label: string;
+  baseUrl: string;
+  apiToken: string;
+  /** YYYY-MM-DD; defaults to the switch day on the server. */
+  importStartDate?: string;
+}
+
+export interface GnuCashBookSwitchResult {
+  success: boolean;
+  retiredBook: GnuCashBook | null;
+  activeBook: GnuCashBook;
+  importStartDate: string;
+  nextSteps: string[];
+}
+
+/** POST /settings/gnucash/import. */
+export interface FolioImportReport {
+  full: boolean;
+  scanComplete: boolean;
+  pulled: number;
+  importedExpenses: number;
+  importedIncome: number;
+  updated: number;
+  unchanged: number;
+  conflicts: number;
+  deleted: number;
+  skippedPushedByAtlas: number;
+  skippedBeforeStart: number;
+  skippedTransfers: number;
+  skippedUnrepresentable: number;
+  outOfScope: number;
+  errors: string[];
+  lastImportAt?: string;
 }
 
 /** PUT /settings/gnucash: omit apiToken to keep the stored one, "" to clear. */
@@ -301,6 +368,10 @@ export interface GnuCashSettingsPayload {
    * refused rather than performed.
    */
   discardRestore?: boolean;
+  /** History import accounts; [] = use the mapping's category accounts. */
+  importAccountGuids?: string[];
+  /** "Import history from", YYYY-MM-DD; "" clears it. */
+  importStartDate?: string;
 }
 
 /** POST /settings/gnucash/restore with markReconciled. */
@@ -331,12 +402,32 @@ export interface GnuCashRow {
   lastSyncedAt: string | null;
   remoteEnterDate: string | null;
   summary: string;
+  /** The book connection the entry is pinned to, if any. */
+  bookLabel: string | null;
+  /** Pinned to a retired book: Atlas no longer writes there. */
+  bookRetired: boolean;
+}
+
+export interface FolioImportCounts {
+  imported: number;
+  toCategorize: number;
+  expensesToCategorize: number;
+  incomeToCategorize: number;
+  conflicts: number;
 }
 
 export interface GnuCashRows {
   counts: Record<string, number>;
   conflicts: GnuCashRow[];
   failures: GnuCashRow[];
+  retiredBooks: {
+    bookId: string;
+    label: string;
+    retiredAt: string;
+    pushed: number;
+    imported: number;
+  }[];
+  imports: FolioImportCounts;
 }
 
 export interface GnuCashSyncReport {
@@ -443,6 +534,58 @@ export function useIgnoreGnuCashRow() {
       api.post<{ success: boolean }>(`/insights/reconciliation/${id}/ignore`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+export function useGnuCashBooks() {
+  return useQuery({
+    queryKey: ["settings", "gnucash", "books"],
+    queryFn: () =>
+      api.get<{ books: GnuCashBookSummary[] }>("/settings/gnucash/books"),
+  });
+}
+
+export function useRenameGnuCashBook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, label }: { id: string; label: string }) =>
+      api.put<{ success: boolean }>(`/settings/gnucash/books/${id}`, { label }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+/**
+ * Retire the active book connection and start a new one. History linked to
+ * the old book stays with it; the new connection starts unmapped, with sync
+ * disabled, and needs a connection test.
+ */
+export function useSwitchGnuCashBook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: GnuCashBookSwitchPayload) =>
+      api.post<GnuCashBookSwitchResult>(
+        "/settings/gnucash/books/switch",
+        payload,
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+    },
+  });
+}
+
+/** Run the Folio history import; full rescans the whole book. */
+export function useRunFolioImport() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (full: boolean) =>
+      api.post<FolioImportReport>("/settings/gnucash/import", { full }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
+      queryClient.invalidateQueries({ queryKey: ["folio-imports"] });
+      queryClient.invalidateQueries({ queryKey: ["commerce"] });
     },
   });
 }

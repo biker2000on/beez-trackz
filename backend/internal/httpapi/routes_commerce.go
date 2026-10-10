@@ -1165,8 +1165,10 @@ func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT e.id, e.expense_date, e.category, e.description, e.amount_cents,
 			e.apiary_id, a.name, e.hive_id, h.position_label, e.harvest_lot_id,
-			hl.lot_code, e.season, e.vendor, e.quantity, e.unit, e.notes
+			hl.lot_code, e.season, e.vendor, e.quantity, e.unit, e.notes,
+			fi.id, fi.state
 		FROM expenses e
+		LEFT JOIN folio_imports fi ON fi.expense_id=e.id
 		LEFT JOIN apiaries a ON a.id=e.apiary_id
 		LEFT JOIN hives h ON h.id=e.hive_id
 		LEFT JOIN harvest_lots hl ON hl.id=e.harvest_lot_id
@@ -1197,11 +1199,20 @@ func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 		var apiaryID, hiveID, lotID *uuid.UUID
 		var apiaryName, hiveName, lotCode, season, vendor, unit, notes *string
 		var quantity *float64
+		var folioImportID *uuid.UUID
+		var folioState *string
 		if err := rows.Scan(&id, &date, &category, &description, &amount,
 			&apiaryID, &apiaryName, &hiveID, &hiveName, &lotID, &lotCode,
-			&season, &vendor, &quantity, &unit, &notes); err != nil {
+			&season, &vendor, &quantity, &unit, &notes,
+			&folioImportID, &folioState); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
+		}
+		// source is "folio" for an expense the history import created
+		// (00064/00011); folioImportId is its /folio-imports id.
+		source := "atlas"
+		if folioImportID != nil {
+			source = "folio"
 		}
 		out = append(out, map[string]any{
 			"id": id, "expenseDate": date, "category": category, "description": description,
@@ -1209,6 +1220,7 @@ func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 			"hiveId": hiveID, "hiveName": hiveName, "harvestLotId": lotID,
 			"lotCode": lotCode, "season": season, "vendor": vendor,
 			"quantity": quantity, "unit": unit, "notes": notes,
+			"source": source, "folioImportId": folioImportID, "folioState": folioState,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1538,6 +1550,23 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	// Other income (00064/00011): money in that Atlas did not record as a
+	// sale, imported from Folio. An entry linked to an Atlas sale, or
+	// categorized as a deposit of Atlas sales, is that sale's revenue and is
+	// left out so it is not counted twice; uncategorized entries are reported
+	// apart until someone decides what they are.
+	var otherIncome, uncategorizedIncome money
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT
+			COALESCE(SUM(amount_cents) FILTER (WHERE category NOT IN ('uncategorized', 'sales_deposit')), 0),
+			COALESCE(SUM(amount_cents) FILTER (WHERE category = 'uncategorized'), 0)
+		FROM other_income
+		WHERE EXTRACT(YEAR FROM income_date)::integer = $1
+		  AND deleted_at IS NULL AND sale_id IS NULL`, year).
+		Scan(&otherIncome, &uncategorizedIncome); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	inventory, err := s.honeyJarInventory(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -1780,6 +1809,8 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		"year": year, "revenue": revenue, "invoicedRevenue": revenue,
 		"collectedRevenue": collected, "unpaidRevenue": revenue - collected,
 		"expenses": expenses, "grossMargin": margin,
+		"otherIncome": otherIncome, "uncategorizedIncome": uncategorizedIncome,
+		"netIncome":       revenue + otherIncome - expenses,
 		"marginPercent":   safePercent(margin.Dollars(), revenue.Dollars()),
 		"harvestedPounds": harvested, "costPerHarvestedPound": costPerPound,
 		"costPerJarSold": safeDivide(expenses.Dollars(), float64(jarsSold)),

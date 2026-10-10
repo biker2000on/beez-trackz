@@ -29,6 +29,12 @@ import {
   humanize,
 } from "@/features/settings/gnucash-format";
 
+import {
+  FolioBookPanel,
+  FolioImportPanel,
+  OneAccountShortcut,
+} from "./folio-book-panels";
+
 /** Human labels for the slots that are not a sale kind or expense category. */
 const LEDGER_SLOTS: { key: LedgerSlot; label: string; hint: string }[] = [
   { key: "cash", label: "Cash / bank", hint: "Required. Funds every entry." },
@@ -187,11 +193,15 @@ export function GnuCashSection() {
     <div className="grid gap-5" data-config-editor="gnucash">
       <p className="text-sm text-muted-foreground">
         Push sales and expenses into a Folio book, as balanced
-        double-entry transactions. Beez stays authoritative for physical
-        quantities — jars, colonies, and equipment. Nothing read back from
-        Folio ever changes a beez record; a book edited behind us shows up
-        as a conflict on the reconciliation report for you to resolve.
+        double-entry transactions, and import the book&apos;s history as
+        expenses and other income to categorize here. Beez stays
+        authoritative for physical quantities — jars, colonies, and
+        equipment: nothing read back from Folio ever creates a sale or moves
+        stock, and a pushed entry edited in the book shows up as a conflict
+        on the reconciliation report for you to resolve.
       </p>
+
+      <FolioBookPanel data={data} />
 
       {/* --- connection --- */}
       <div className="grid gap-4">
@@ -412,6 +422,14 @@ export function GnuCashSection() {
           </p>
         ) : null}
 
+        <OneAccountShortcut
+          data={data}
+          mapping={mapping}
+          accounts={accountList}
+          disabled={busy}
+          onApply={(next) => save({ accountMapping: next }, "Every category now maps to one account")}
+        />
+
         <div className="grid gap-3">
           {LEDGER_SLOTS.map((slot) => (
             <div key={slot.key} className="grid gap-1 sm:grid-cols-2 sm:items-center">
@@ -466,6 +484,15 @@ export function GnuCashSection() {
           ))}
         </div>
       </div>
+
+      <Separator />
+
+      <FolioImportPanel
+        data={data}
+        accounts={accountList}
+        busy={busy}
+        save={save}
+      />
 
       <Separator />
 

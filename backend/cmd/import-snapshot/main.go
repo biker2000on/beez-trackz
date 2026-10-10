@@ -670,7 +670,11 @@ func documentedPriority() map[string]int {
 		{"sales", "consignment_settlements", "bottling_runs", "transcript_versions"},
 		{"equipment_stock", "equipment_stock_adjustments", "equipment_state_changes"},
 		{"honey_movements", "stock_movements", "jar_serials", "harvest_lot_photos"},
+		// Book connections first: external_sync.book_id, the singleton's
+		// active_book_id and folio_imports.book_id all reference them.
+		{"gnucash_books"},
 		{"external_sync", "gnucash_sync_settings"},
+		{"other_income", "folio_imports"},
 	}
 	out := map[string]int{}
 	for i, group := range groups {
