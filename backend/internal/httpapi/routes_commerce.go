@@ -1683,11 +1683,10 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	jarRows.Close()
 
 	lotRows, err := s.pool.Query(r.Context(), `
-		WITH lot_revenue AS (
-			SELECT harvest_lot_id, SUM(total_amount_cents) revenue
-			FROM sales
-			WHERE EXTRACT(YEAR FROM date)::integer=$1
-				AND order_status <> 'cancelled' AND harvest_lot_id IS NOT NULL
+		WITH `+saleLineLotRevenueSQL+`, lot_revenue AS (
+			SELECT harvest_lot_id, SUM(revenue) revenue
+			FROM sale_line_lots
+			WHERE harvest_lot_id IS NOT NULL
 			GROUP BY harvest_lot_id
 		), lot_cost AS (
 			SELECT harvest_lot_id, SUM(amount_cents) expenses
@@ -1729,11 +1728,10 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	lotRows.Close()
 
 	seasonRows, err := s.pool.Query(r.Context(), `
-		WITH revenue AS (
-			SELECT COALESCE(lot.season,'Unassigned') season, SUM(s.total_amount_cents) revenue
-			FROM sales s
-			LEFT JOIN harvest_lots lot ON lot.id=s.harvest_lot_id
-			WHERE EXTRACT(YEAR FROM s.date)::integer=$1 AND s.order_status <> 'cancelled'
+		WITH `+saleLineLotRevenueSQL+`, revenue AS (
+			SELECT COALESCE(lot.season,'Unassigned') season, SUM(l.revenue) revenue
+			FROM sale_line_lots l
+			LEFT JOIN harvest_lots lot ON lot.id=l.harvest_lot_id
 			GROUP BY 1
 		), costs AS (
 			SELECT COALESCE(lot.season,e.season,'Unassigned') season, SUM(e.amount_cents) expenses
@@ -2224,3 +2222,23 @@ func (s *Server) saleReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	writeError(w, http.StatusNotFound, "sale not found")
 }
+
+// saleLineLotRevenueSQL is a CTE (sale_line_lots) crediting each sale line of
+// year $1 to the harvest lot it came from: the line's own lot, else the lot of
+// the stock it drew (a jar lot or a product batch), else the sale-level lot.
+// Lots are per line since jars became lot-linked, so a sale can span lots; the
+// sale-level lot alone credits a two-varietal sale to one lot and a line-pinned
+// sale to none. Each line's revenue is net of its share of the sale discount,
+// so the lines of a sale still add up to its total.
+const saleLineLotRevenueSQL = `sale_line_lots AS (
+			SELECT COALESCE(si.harvest_lot_id,
+					CASE WHEN il.source_type = 'harvest_lot' THEN il.source_id END,
+					pb.harvest_lot_id, s.harvest_lot_id) AS harvest_lot_id,
+				ROUND(si.quantity * si.unit_price_cents * s.total_amount_cents::numeric
+					/ NULLIF(SUM(si.quantity * si.unit_price_cents) OVER (PARTITION BY s.id), 0))::bigint AS revenue
+			FROM sales s
+			JOIN sale_items si ON si.sale_id = s.id
+			LEFT JOIN inventory_lots il ON il.id = si.inventory_lot_id
+			LEFT JOIN product_batches pb ON pb.inventory_lot_id = il.id
+			WHERE EXTRACT(YEAR FROM s.date)::integer = $1 AND s.order_status <> 'cancelled'
+		)`

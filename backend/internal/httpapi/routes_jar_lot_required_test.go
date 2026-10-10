@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -326,4 +327,39 @@ func TestGiveAwayNeedsALotAndDrawsOnlyFromIt(t *testing.T) {
 				shelf[w.lotOld].OnHand, shelf[w.lotNew].OnHand)
 		}
 	})
+}
+
+// Profitability credits each line to the lot it drew from, so a sale spanning
+// two lots splits its revenue (net of the discount) between them instead of
+// landing on one lot or on "Unassigned".
+func TestProfitabilityCreditsEachLineToItsLot(t *testing.T) {
+	server := honeyTestServer(t)
+	w := seedTwoLotWorld(t, server, 10, 10)
+	response, body := call(t, server.honeyRecordSale, adminRequest(
+		http.MethodPost, "/api/v1/sales", map[string]any{
+			"date":           time.Now().Format("2006-01-02"),
+			"discountAmount": 4,
+			"lines": []map[string]any{
+				{"jarSizeId": w.jarSizeID.String(), "harvestLotId": w.lotOld.String(), "quantity": 1, "unitPrice": 10},
+				{"jarSizeId": w.jarSizeID.String(), "harvestLotId": w.lotNew.String(), "quantity": 3, "unitPrice": 10},
+			},
+		}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("sale = %d %v", response.Code, body)
+	}
+	response, body = call(t, server.profitabilityAnalytics, adminRequest(http.MethodGet,
+		"/api/v1/analytics/profitability?year="+strconv.Itoa(time.Now().Year()), nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("profitability = %d %v", response.Code, body)
+	}
+	revenue := map[string]float64{}
+	lots, _ := body["byHarvestLot"].([]any)
+	for _, raw := range lots {
+		lot := raw.(map[string]any)
+		revenue[lot["lotCode"].(string)] = lot["revenue"].(float64)
+	}
+	// $40 of lines less a $4 discount: the old lot's quarter is $9, the new $27.
+	if revenue[w.codeOld] != 9 || revenue[w.codeNew] != 27 {
+		t.Errorf("lot revenue = old %v new %v, want 9 and 27 (%v)", revenue[w.codeOld], revenue[w.codeNew], revenue)
+	}
 }
