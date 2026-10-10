@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { YearSelect } from "@/components/ui/year-select";
 import { formatDate, formatLbs, parseHoneyWeight } from "@/features/honey/format";
 import {
   useApiaryOptions,
@@ -721,7 +722,7 @@ function LotFormDialog({
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label htmlFor="claim-year" className={labelClass}>Year<AutoHint on={autoFilled.has("year")} /></Label>
-                <Input id="claim-year" type="number" min="1900" max="2100" value={claimYear} onChange={(e) => { touch("year"); setClaimYear(e.target.value); }} placeholder={String(new Date().getFullYear())} />
+                <YearSelect id="claim-year" className="w-full" allowNone value={claimYear.trim() ? Number(claimYear) : null} onValueChange={(next) => { touch("year"); setClaimYear(next == null ? "" : String(next)); }} />
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="claim-elevation" className={labelClass}>Elevation ({preferredElevationSuffix(units.units)})<AutoHint on={autoFilled.has("elevation")} /></Label>

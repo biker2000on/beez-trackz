@@ -211,7 +211,8 @@ test("yard and dates fill the season, claim and harvests from the yard's notes",
   await expect(dialog.getByLabel("Approximate region")).toHaveValue("Western New York");
   // 640.08 m, shown in the operator's own units.
   await expect(dialog.getByLabel("Elevation")).toHaveValue("2100 ft");
-  await expect(dialog.getByLabel("Year")).toHaveValue("2026");
+  // The claim year is a dropdown of season years, prefilled from the yard.
+  await expect(dialog.getByRole("combobox", { name: /^Year/ })).toHaveText("2026");
   await expect(dialog.getByLabel("Bloom observations")).toHaveValue(
     "Goldenrod opening along the north fence; knapweed fading.",
   );

@@ -28,7 +28,7 @@ import {
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
-import { Input } from "@/components/ui/input";
+import { YearSelect } from "@/components/ui/year-select";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/features/hives/lib";
@@ -99,14 +99,12 @@ export function ReportYearPicker({
       <Label htmlFor="report-year" className="text-xs">
         Season year
       </Label>
-      <Input
+      <YearSelect
         id="report-year"
-        type="number"
-        min="2000"
-        max="2200"
-        className="w-28"
         value={year}
-        onChange={(event) => onYearChange(Number(event.target.value))}
+        onValueChange={(next) => {
+          if (next != null) onYearChange(next);
+        }}
       />
     </div>
   );

@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { YearSelect } from "@/components/ui/year-select";
 
 import { parseCents, parseNum } from "./format";
 import { useCreateStock, useCreateType, useEquipmentTypes } from "./hooks";
@@ -96,6 +97,10 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
   const form = useForm<StockValues>({
     resolver: zodResolver(stockSchema),
     defaultValues: EMPTY_STOCK,
+  });
+  const firstDeployedYear = useWatch({
+    control: form.control,
+    name: "firstDeployedYear",
   });
 
   React.useEffect(() => {
@@ -225,13 +230,19 @@ export function AddStockDialog({ open, onOpenChange }: AddDialogProps) {
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="stock-first-deployed">First deployed year</Label>
-              <Input
+              <YearSelect
                 id="stock-first-deployed"
-                type="number"
-                min={1900}
-                max={new Date().getFullYear() + 1}
-                placeholder="e.g. 2022"
-                {...form.register("firstDeployedYear")}
+                className="w-full"
+                allowNone
+                ahead={1}
+                earliest={new Date().getFullYear() - 30}
+                value={firstDeployedYear === "" ? null : Number(firstDeployedYear)}
+                onValueChange={(year) =>
+                  form.setValue("firstDeployedYear", year == null ? "" : String(year), {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  })
+                }
               />
               <FieldError message={errors.firstDeployedYear?.message} />
             </div>

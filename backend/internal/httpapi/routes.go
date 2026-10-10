@@ -19,6 +19,7 @@ func (s *Server) mountDomains(r chi.Router) {
 		writeJSON(w, http.StatusOK, principalFrom(r))
 	})
 	s.mountMe(r)
+	s.mountMeta(r)
 	s.mountAdmin(r)
 	s.mountAccess(r)
 	s.mountApiaries(r)

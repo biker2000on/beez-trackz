@@ -9,7 +9,7 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { YearSelect } from "@/components/ui/year-select";
 
 import { formatCents, formatDate, parseCents, parseNum, todayISO } from "./format";
 import {
@@ -897,6 +898,10 @@ export function EditDetailsDialog({
     resolver: zodResolver(detailsSchema),
     defaultValues: defaults,
   });
+  const firstDeployedYear = useWatch({
+    control: form.control,
+    name: "firstDeployedYear",
+  });
 
   React.useEffect(() => {
     if (!open) return;
@@ -980,13 +985,19 @@ export function EditDetailsDialog({
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="stock-first-year">First deployed year</Label>
-              <Input
+              <YearSelect
                 id="stock-first-year"
-                type="number"
-                min={1900}
-                max={new Date().getFullYear() + 1}
-                placeholder="e.g. 2022"
-                {...form.register("firstDeployedYear")}
+                className="w-full"
+                allowNone
+                ahead={1}
+                earliest={new Date().getFullYear() - 30}
+                value={firstDeployedYear === "" ? null : Number(firstDeployedYear)}
+                onValueChange={(year) =>
+                  form.setValue("firstDeployedYear", year == null ? "" : String(year), {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  })
+                }
               />
               <FieldError message={errors.firstDeployedYear?.message} />
             </div>
