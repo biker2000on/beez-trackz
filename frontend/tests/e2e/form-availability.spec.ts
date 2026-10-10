@@ -369,7 +369,7 @@ test("a sale is lines of size and lot: empty sizes and lots hidden, a lone lot p
   // The price comes from the size; units and dollars follow the quantity.
   await expect(dialog.getByRole("textbox", { name: "Line 1 unit price" })).toHaveValue("10");
   await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("2");
-  await expect(dialog.getByTestId("sale-total")).toHaveText(/2 jars · $20.00/);
+  await expect(dialog.getByTestId("sale-total")).toHaveText(/2 jars · \$20\.00/);
 
   // Asking for more than the lot holds is refused before the server is asked.
   await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("15");
@@ -438,7 +438,7 @@ test("market day lists one row per varietal × size × lot with stock and posts 
 
   await row.getByRole("button", { name: /Add one Clover · Pint/ }).click();
   await row.getByRole("button", { name: "Add one more Clover · Pint" }).click();
-  await expect(page.getByTestId("market-total")).toHaveText(/2 items · $20.00/);
+  await expect(page.getByTestId("market-total")).toHaveText(/2 items · \$20\.00/);
 
   await page.getByRole("button", { name: "Complete sale" }).click();
   await expect.poll(() => posted.length).toBe(1);

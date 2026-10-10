@@ -7,8 +7,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * shelf rows, is sent stock lot by lot, reports sales lot by lot and hands
  * jars back lot by lot. This spec pins the frontend half of that contract
  * against mocked reads — `GET /stock-locations/{id}` with one shelf row per
- * (SKU, lot), `GET /stock-locations/inventory` with each SKU's `lots` split,
- * and the sales workbench's `byVarietal` — and asserts what the page *posts*:
+ * (SKU, lot), `GET /stock-locations/inventory` with each SKU's `lots` split —
+ * and asserts what the page *posts*:
  * a transfer or settlement line names its `harvestLotId`, and the "any lot"
  * escape hatch names none.
  */
@@ -168,39 +168,6 @@ function inventory() {
   };
 }
 
-function salesWorkbench() {
-  return {
-    asOf: AS_OF,
-    freshness: { origin: "server", cachedAt: null, stale: false },
-    todayTakings: { salesCount: 0, revenueCents: 0 },
-    drafts: [],
-    consignment: [
-      {
-        locationId: LOCATION,
-        name: "Corner market",
-        unitsOut: 17,
-        byVarietal: [
-          { varietalName: "Sourwood", units: 12 },
-          { varietalName: "Wildflower", units: 5 },
-        ],
-        settlementDueAt: "2026-09-30",
-        lastSettledAt: "2026-08-31",
-        commands: [],
-      },
-      {
-        locationId: "77777777-1111-4111-8111-777777777777",
-        name: "Old body",
-        unitsOut: 3,
-        settlementDueAt: null,
-        lastSettledAt: null,
-        commands: [],
-      },
-    ],
-    sellable: [],
-    commands: [],
-  };
-}
-
 interface Posted {
   path: string;
   body: unknown;
@@ -247,9 +214,6 @@ async function mockApp(page: Page, posted: Posted[]) {
     }
     if (path === "/api/v1/stock-locations/inventory") {
       return route.fulfill({ json: inventory() });
-    }
-    if (path.endsWith("/sales/workbench")) {
-      return route.fulfill({ json: salesWorkbench() });
     }
     return route.fulfill({ json: [] });
   });
@@ -421,17 +385,4 @@ test("their report is one row per lot, refuses an over-count by varietal, and po
       { jarSizeId: JAR_QT, harvestLotId: LOT_WILDFLOWER, quantitySold: 0, quantityReturned: 2 },
     ],
   });
-});
-
-test("the sales workbench says what is out by varietal, and falls back to the unit total", async ({
-  page,
-}) => {
-  const posted: Posted[] = [];
-  await mockApp(page, posted);
-  await page.goto("/sales/workbench");
-
-  const out = page.getByTestId("workbench-consignment-out");
-  await expect(out).toHaveCount(2);
-  await expect(out.nth(0)).toContainText("12 Sourwood · 5 Wildflower out");
-  await expect(out.nth(1)).toContainText("3 out");
 });

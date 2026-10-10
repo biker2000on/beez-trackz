@@ -446,9 +446,15 @@ export function LotLinesEditor({
                 ) : (
                   <Select
                     value={line.lot === ANY_LOT && allowAnyLot ? "any" : line.lot}
-                    onValueChange={(value) =>
-                      state.patchLine(line.id, { lot: value === "any" ? ANY_LOT : value })
-                    }
+                    onValueChange={(value) => {
+                      // Radix's hidden native <select> reports "" when the
+                      // value is set (a preselected lone lot) in the same
+                      // render its option first appears. No item has the
+                      // value "", so "" is never a choice: ignore it rather
+                      // than wipe the preselection.
+                      if (value === "") return;
+                      state.patchLine(line.id, { lot: value === "any" ? ANY_LOT : value });
+                    }}
                     disabled={!sku}
                   >
                     <SelectTrigger

@@ -409,6 +409,20 @@ const OBJECT_READS: Record<string, unknown> = {
     difference: null,
     trueUpHistory: [],
   },
+  // The Folio history import's "To categorize" list on /sales/expenses
+  // (00064/00011); nothing imported yet.
+  "/api/v1/folio-imports": {
+    items: [],
+    counts: {
+      imported: 0,
+      toCategorize: 0,
+      expensesToCategorize: 0,
+      incomeToCategorize: 0,
+      conflicts: 0,
+    },
+    expenseCategories: [],
+    otherIncomeCategories: [],
+  },
   "/api/v1/market-day/reconciliation": {
     date: "2026-09-03",
     orderCount: 4,
@@ -605,6 +619,13 @@ const OBJECT_READS: Record<string, unknown> = {
     restorePending: false,
     saleLineKinds: [],
     expenseCategories: [],
+    // The Folio book and history-import fields (00064/00011).
+    activeBook: null,
+    importAccountGuids: [],
+    effectiveImportAccountGuids: [],
+    importStartDate: null,
+    lastImportAt: null,
+    hasImportCursor: false,
   },
 };
 
@@ -758,19 +779,23 @@ test("§3.1 field day starts at /today on the phone and never leaves Today or Ya
   await expect(page.getByTestId("work-item")).toHaveCount(3);
   await expectCanonical(page, visited, "/today");
 
-  // The phone bar is the four role-filtered pins plus More, and Yard is
-  // pinned second for every role (nav-items.ts MOBILE_PRIORITY).
+  // The phone bar is the five role-filtered pins plus Pages (Atlas: Today,
+  // Apiaries, Production, Sales and Stock are directly reachable on mobile),
+  // and Apiaries (/yard) is pinned second for every role
+  // (nav-items.ts MOBILE_PRIORITY).
   const bar = page.getByRole("navigation", { name: "Mobile navigation" });
-  await expect(bar.locator("li")).toHaveCount(5);
+  await expect(bar.locator("li")).toHaveCount(6);
   await expect(bar.getByRole("link")).toHaveText([
     "Today",
-    "Yard",
+    "Apiaries",
     "Production",
     "Sales",
+    "Stock",
   ]);
+  await expect(bar.getByRole("button", { name: "Pages" })).toBeVisible();
 
-  // Step 2 — tap Yard, then the queue: the same projection grouped by apiary.
-  await bar.getByRole("link", { name: "Yard" }).click();
+  // Step 2 — tap Apiaries, then the queue: the same projection grouped by apiary.
+  await bar.getByRole("link", { name: "Apiaries" }).click();
   await expectCanonical(page, visited, "/yard");
   await page.getByRole("link", { name: "Yard queue" }).first().click();
   await expect(page.getByTestId("work-item")).toHaveCount(3);
@@ -820,12 +845,11 @@ test("§3.2 production runs hive to finished stock without leaving /production",
   ).toBeVisible();
   await expectCanonical(page, visited, "/production");
 
-  const nav = page.getByRole("navigation", { name: "Main navigation" });
-
-  // Steps 2–4 — the workbench, then the session it opens.
-  await nav.getByRole("link", { name: "Workbench" }).click();
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(5);
-  await expectCanonical(page, visited, "/production/workbench");
+  // Steps 2–4 — the workbench is the Production landing page itself (Atlas:
+  // /production/workbench redirects here), then the session it opens. This
+  // fixture has no product batches, and Atlas leaves that panel out when
+  // empty, so the four journey panels remain.
+  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
 
   await page.goto(`/production/sessions/${SESSION}`);
   await expectCanonical(page, visited, `/production/sessions/${SESSION}`);
@@ -860,10 +884,11 @@ test("§3.3 a sale and its settlement live under /sales, with margin read-only i
   ).toBeVisible();
   await expectCanonical(page, visited, "/sales");
 
-  const nav = page.getByRole("navigation", { name: "Main navigation" });
-  await nav.getByRole("link", { name: "Workbench" }).click();
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
-  await expectCanonical(page, visited, "/sales/workbench");
+  // The sales work summary sits on /sales itself (Atlas: /sales/workbench
+  // redirects here), read from the one sales workbench call.
+  const work = page.getByRole("region", { name: "Sales work" });
+  await expect(work).toContainText("Next in Sales");
+  await expect(work).toContainText("0 open orders / 1 scheduled settlements");
 
   // Steps 2–6 — market day, consignment settlement, the receipt, and the
   // money-out surfaces the design moved into Sales (S11, S12).
@@ -892,7 +917,11 @@ test("§3.3 a sale and its settlement live under /sales, with margin read-only i
   await page.goto("/insights/profitability");
   await expectCanonical(page, visited, "/insights/profitability");
   await expectAppShell(page);
-  await expect(page.getByRole("link", { name: "Expenses" })).toHaveCount(0);
+  // The page itself, that is: the Atlas sidebar lists every area's pages,
+  // Sales › Expenses included, on every route.
+  await expect(
+    page.getByRole("main").getByRole("link", { name: "Expenses" }),
+  ).toHaveCount(0);
 });
 
 // --- §3.4 Equipment task ---------------------------------------------------

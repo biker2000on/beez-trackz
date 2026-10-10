@@ -354,10 +354,17 @@ test("the sales workbench is assembled from exactly one call", async ({
 }) => {
   const reads: string[] = [];
   await mockApp(page, { reads });
+  // Atlas: the sales workbench is the "Next in Sales" summary on /sales
+  // (/sales/workbench redirects there). The orders register beside it has its
+  // own reads; the summary itself is one read model, not a call per widget.
   await page.goto("/sales/workbench");
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
+  await expect(page).toHaveURL(/\/sales$/);
+  const work = page.getByRole("region", { name: "Sales work" });
+  await expect(work).toContainText("1 open orders / 1 scheduled settlements");
 
-  expect(dataReads(reads)).toEqual(["/api/v1/sales/workbench"]);
+  expect(
+    dataReads(reads).filter((path) => path.includes("workbench")),
+  ).toEqual(["/api/v1/sales/workbench"]);
 });
 
 test("production follows the journey in order, hive to finished stock", async ({
@@ -430,33 +437,18 @@ test("a locked-out lot explains itself before its command refuses", async ({
   await expect(open.getByTestId("workbench-command")).toBeEnabled();
 });
 
-test("a draft states its shortfall before the order is refused", async ({
+test("a draft that is short of stock is called out on /sales before anyone applies it", async ({
   page,
 }) => {
   await mockApp(page);
-  await page.goto("/sales/workbench");
+  // Atlas: the sales summary on /sales lists only drafts with a shortfall,
+  // each linking to the order where it is fixed.
+  await page.goto("/sales");
 
-  const draft = page
-    .getByTestId("workbench-row")
-    .filter({ hasText: "Bike shop" });
-
-  // CheckAvailability surfaced as a read (§4.8), in the server's numbers.
-  const shortfall = draft.getByTestId("workbench-explanation");
-  await expect(shortfall).toHaveAttribute("data-kind", "shortfall");
-  await expect(shortfall).toContainText(
-    "16 oz: 12 wanted, 8 available at home — short 4",
-  );
-
-  const order = await draft
-    .locator(
-      '[data-testid="workbench-explanation"], [data-testid="workbench-command-reason"]',
-    )
-    .evaluateAll((nodes) =>
-      nodes.map((node) => node.getAttribute("data-testid")),
-    );
-  expect(order[0]).toBe("workbench-explanation");
-
-  await expect(draft.getByTestId("workbench-command")).toBeDisabled();
+  const work = page.getByRole("region", { name: "Sales work" });
+  const draft = work.getByRole("link", { name: /Bike shop/ });
+  await expect(draft).toContainText("Review 1 stock shortages");
+  await expect(draft).toHaveAttribute("href", `/sales/${DRAFT}`);
 });
 
 test("a forbidden command is disabled and states its reason", async ({
@@ -466,24 +458,31 @@ test("a forbidden command is disabled and states its reason", async ({
   await mockApp(page, {
     onCommand: (route) => commands.push(new URL(route.request().url()).pathname),
   });
-  await page.goto("/sales/workbench");
+  // The sales summary carries no commands since the Atlas rewrite; the
+  // production workbench still renders the server's refusals per row.
+  await page.goto("/production/workbench");
 
-  const settle = page
+  const locked = page
+    .getByTestId("workbench-row")
+    .filter({ hasText: "2026-WILDFLOWER-02" });
+  const bottle = locked
     .getByTestId("workbench-command")
-    .filter({ hasText: "Settle" });
-  await expect(settle).toBeDisabled();
-  await expect(settle).toHaveAttribute("data-blocked", "forbidden");
-  await expect(settle).toHaveAttribute(
+    .filter({ hasText: "Bottle this lot" });
+  await expect(bottle).toBeDisabled();
+  await expect(bottle).toHaveAttribute("data-blocked", "forbidden");
+  await expect(bottle).toHaveAttribute(
     "aria-label",
-    /admin access is required to settle consignment/,
+    /lot 2026-WILDFLOWER-02 is locked out until 2026-09-20/,
   );
   // Visible, not only a tooltip: a disabled control that does not say why is
   // indistinguishable from a broken one.
   await expect(
-    page.getByTestId("workbench-command-reason").filter({ hasText: "Settle" }),
-  ).toContainText("admin access is required to settle consignment");
+    locked
+      .getByTestId("workbench-command-reason")
+      .filter({ hasText: "Bottle this lot" }),
+  ).toContainText("lot 2026-WILDFLOWER-02 is locked out until 2026-09-20");
 
-  await settle.click({ force: true }).catch(() => undefined);
+  await bottle.click({ force: true }).catch(() => undefined);
   expect(commands).toEqual([]);
 });
 
@@ -568,7 +567,9 @@ test("a stale cached workbench is rendered as stale", async ({ page }) => {
 
 test("a live workbench is not marked stale", async ({ page }) => {
   await mockApp(page, { stale: false });
-  await page.goto("/sales/workbench");
+  // The full workbench shell (and its freshness badge) is Production's since
+  // the Atlas rewrite folded the sales workbench into a summary on /sales.
+  await page.goto("/production/workbench");
 
   const freshness = page.getByTestId("work-freshness");
   await expect(freshness).toHaveAttribute("data-state", "server");

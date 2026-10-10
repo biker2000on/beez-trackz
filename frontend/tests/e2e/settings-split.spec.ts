@@ -65,6 +65,13 @@ const GNUCASH_SETTINGS = {
   restorePending: false,
   saleLineKinds: ["jar"],
   expenseCategories: ["feed"],
+  // The Folio book and history-import fields (00064/00011).
+  activeBook: null,
+  importAccountGuids: [],
+  effectiveImportAccountGuids: [],
+  importStartDate: null,
+  lastImportAt: null,
+  hasImportCursor: false,
 };
 
 function policyBody() {

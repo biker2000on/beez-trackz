@@ -82,7 +82,7 @@ export function OperationWork() {
           </button>
         </p>
       ) : null}
-      {production.data?.freshness.stale || sales.data?.freshness.stale ? (
+      {production.data?.freshness?.stale || sales.data?.freshness?.stale ? (
         <p className="mb-3 text-xs">
           Cached work: reconnect and refresh before acting.
         </p>
