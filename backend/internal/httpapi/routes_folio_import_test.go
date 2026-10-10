@@ -14,12 +14,13 @@ import (
 // DB-backed tests for the Folio history import and book connections
 // (00064/00011). They reuse the folio fake from routes_gnucash_sync_test.go.
 
-// beekeepingMapping is the user's real shape: every income and expense
-// category posts to one "Beekeeping" account.
+// beekeepingMapping is the user's real shape: every expense category posts to
+// one "Beekeeping" expense account and every income kind to one "Beekeeping"
+// income account.
 func beekeepingMapping() gnucashsync.AccountMapping {
 	revenue := map[string]string{}
 	for _, kind := range gnucashsync.SaleLineKinds {
-		revenue[kind] = "acct-bee"
+		revenue[kind] = "acct-bee-income"
 	}
 	expenses := map[string]string{}
 	for _, category := range gnucashsync.ExpenseCategories {
@@ -73,7 +74,42 @@ func moneyOut(cents int64) []gnucashsync.ChangeSplit {
 func moneyIn(cents int64) []gnucashsync.ChangeSplit {
 	return []gnucashsync.ChangeSplit{
 		{AccountGUID: "acct-cash", AmountCents: cents},
-		{AccountGUID: "acct-bee", AmountCents: -cents},
+		{AccountGUID: "acct-bee-income", AmountCents: -cents},
+	}
+}
+
+// refund is money back from a supplier, credited to the expense account.
+func refund(cents int64) []gnucashsync.ChangeSplit {
+	return []gnucashsync.ChangeSplit{
+		{AccountGUID: "acct-cash", AmountCents: cents},
+		{AccountGUID: "acct-bee", AmountCents: -cents, Memo: "returned"},
+	}
+}
+
+// deleteNative deletes a native transaction the way a capable Folio reports
+// it: the transaction stops appearing and a guid tombstone joins the feed
+// (withheld from readers that did not ask, see changesPage).
+func (f *folioFake) deleteNative(guid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blank(guid)
+	f.changes = append(f.changes, gnucashsync.Change{
+		TransactionGUID: guid,
+		Deleted:         true,
+		DeletedAt:       f.tick().Format(time.RFC3339Nano),
+	})
+}
+
+// redeliver appends a copy of the last tombstone for guid: the deletion
+// stream is at-least-once and re-sends recent deletions.
+func (f *folioFake) redeliver(guid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.changes) - 1; i >= 0; i-- {
+		if f.changes[i].TransactionGUID == guid && f.changes[i].Deleted {
+			f.changes = append(f.changes, f.changes[i])
+			return
+		}
 	}
 }
 
@@ -404,5 +440,170 @@ func TestFolioBookSwitchKeepsHistoryWithTheOldBook(t *testing.T) {
 	}
 	if importBook != *oldBook {
 		t.Fatalf("import moved to book %v", importBook)
+	}
+}
+
+// A refund credited to the Beekeeping expense account is a NEGATIVE expense:
+// it lowers the expense total and never shows up as other income.
+func TestFolioImportRefundIsANegativeExpense(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, beekeepingMapping())
+	setImportStart(t, server, "2020-01-01")
+	today := time.Now().Format("2006-01-02")
+	fake.nativeTxn("n-frames", today, "Frames", moneyOut(5000)...)
+	fake.nativeTxn("n-refund", today, "Frames returned", refund(1200)...)
+	report := runImport(t, server, false)
+	if report["importedExpenses"] != float64(2) || report["importedIncome"] != float64(0) {
+		t.Fatalf("report %v", report)
+	}
+	back := importedByGUID(t, server, "n-refund")
+	if back.Direction != "expense" || back.Amount != -1200 || back.Category != "uncategorized" {
+		t.Fatalf("refund %+v", back)
+	}
+	// Categorizing a refund works like any expense.
+	response, body := call(t, server.handleFolioImportCategory,
+		adminRequest(http.MethodPut, "/api/v1/folio-imports/"+back.ID.String()+"/category",
+			map[string]any{"category": "equipment"}, "id", back.ID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("categorize refund: %d %v", response.Code, body)
+	}
+
+	response, body = call(t, server.profitabilityAnalytics,
+		adminRequest(http.MethodGet, "/api/v1/analytics/profitability", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("profitability: %d %v", response.Code, body)
+	}
+	if body["expenses"] != float64(38) || body["expenseRefunds"] != float64(12) {
+		t.Fatalf("expenses %v refunds %v, want 38 net of a 12 refund", body["expenses"], body["expenseRefunds"])
+	}
+	if body["otherIncome"] != float64(0) {
+		t.Fatalf("a refund was counted as other income: %v", body["otherIncome"])
+	}
+
+	// Manual entry still refuses a negative amount.
+	response, _ = call(t, server.expenseCreate,
+		adminRequest(http.MethodPost, "/api/v1/expenses", map[string]any{
+			"expenseDate": today, "category": "feed", "description": "Sugar", "amount": -5,
+		}))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("manual negative expense: %d, want 400", response.Code)
+	}
+}
+
+// With a capable Folio a deleted native transaction is flagged by an ordinary
+// incremental import — no full rescan — and a re-delivered report of the same
+// deletion does not raise it again after the operator kept the entry.
+func TestFolioImportDeletionFeedFlagsWithoutAFullScan(t *testing.T) {
+	fake := newFolioFake(t)
+	fake.deletionFeed = true
+	server := gnucashTestServer(t, fake, beekeepingMapping())
+	setImportStart(t, server, "2024-01-01")
+	fake.nativeTxn("n-gone", "2024-04-01", "Duplicate entry", moneyOut(500)...)
+	fake.nativeTxn("n-kept", "2024-04-02", "Wax", moneyOut(700)...)
+	fake.nativeTxn("n-stays", "2024-04-03", "Jars", moneyOut(900)...)
+	runImport(t, server, false)
+
+	// A categorized entry is flagged too, never deleted.
+	kept := importedByGUID(t, server, "n-kept")
+	response, body := call(t, server.handleFolioImportCategory,
+		adminRequest(http.MethodPut, "/api/v1/folio-imports/"+kept.ID.String()+"/category",
+			map[string]any{"category": "packaging"}, "id", kept.ID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("categorize: %d %v", response.Code, body)
+	}
+
+	fake.deleteNative("n-gone")
+	fake.deleteNative("n-kept")
+	report := runImport(t, server, false)
+	if report["full"] != false || report["deletionFeed"] != true || report["deleted"] != float64(2) {
+		t.Fatalf("report %v", report)
+	}
+	for _, guid := range []string{"n-gone", "n-kept"} {
+		if entry := importedByGUID(t, server, guid); entry.State != "remote_deleted" || entry.Deleted {
+			t.Fatalf("%s %+v — must be flagged, not deleted", guid, entry)
+		}
+	}
+	if stays := importedByGUID(t, server, "n-stays"); stays.State != "" {
+		t.Fatalf("stays %+v", stays)
+	}
+
+	// Keep one; the at-least-once stream sends the same deletion again.
+	kept = importedByGUID(t, server, "n-kept")
+	response, body = call(t, server.handleFolioImportKeep,
+		adminRequest(http.MethodPost, "/api/v1/folio-imports/"+kept.ID.String()+"/keep", nil,
+			"id", kept.ID.String()))
+	if response.Code != http.StatusOK {
+		t.Fatalf("keep: %d %v", response.Code, body)
+	}
+	fake.redeliver("n-kept")
+	report = runImport(t, server, false)
+	if report["deleted"] != float64(0) {
+		t.Fatalf("re-delivered deletion raised again: %v", report)
+	}
+	if kept = importedByGUID(t, server, "n-kept"); kept.State != "" || kept.Deleted || kept.Category != "packaging" {
+		t.Fatalf("kept %+v", kept)
+	}
+	// Nor does a full rescan re-raise a deletion the operator already kept.
+	if report = runImport(t, server, true); report["deleted"] != float64(0) {
+		t.Fatalf("full scan re-raised a kept deletion: %v", report)
+	}
+
+	// Restored in Folio: seen alive again, the flag clears.
+	fake.nativeTxn("n-gone", "2024-04-01", "Duplicate entry", moneyOut(500)...)
+	runImport(t, server, false)
+	if gone := importedByGUID(t, server, "n-gone"); gone.State != "" || gone.Deleted {
+		t.Fatalf("restored %+v", gone)
+	}
+}
+
+// Against an older Folio (no capability) the guid tombstones never arrive:
+// the plain feed is read and deletions are found only by the full rescan.
+func TestFolioImportWithoutDeletionFeedFallsBackToFullScan(t *testing.T) {
+	fake := newFolioFake(t)
+	server := gnucashTestServer(t, fake, beekeepingMapping())
+	setImportStart(t, server, "2024-01-01")
+	fake.nativeTxn("n-gone", "2024-04-01", "Duplicate entry", moneyOut(500)...)
+	runImport(t, server, false)
+
+	fake.deleteNative("n-gone")
+	report := runImport(t, server, false)
+	if report["deletionFeed"] != false || report["deleted"] != float64(0) {
+		t.Fatalf("report %v", report)
+	}
+	if gone := importedByGUID(t, server, "n-gone"); gone.State != "" {
+		t.Fatalf("an older Folio cannot report deletions incrementally: %+v", gone)
+	}
+	if report = runImport(t, server, true); report["deleted"] != float64(1) {
+		t.Fatalf("full scan report %v", report)
+	}
+	if gone := importedByGUID(t, server, "n-gone"); gone.State != "remote_deleted" {
+		t.Fatalf("gone %+v", gone)
+	}
+}
+
+// Pure: which deletion-stream tombstones raise a flag (no database).
+func TestFolioShouldFlagDeletion(t *testing.T) {
+	at := func(minute int) *time.Time {
+		stamp := time.Date(2026, 10, 10, 12, minute, 0, 0, time.UTC)
+		return &stamp
+	}
+	cases := []struct {
+		name      string
+		row       folioImportRow
+		deletedAt *time.Time
+		want      bool
+	}{
+		{"first report", folioImportRow{}, at(1), true},
+		{"first report without a timestamp", folioImportRow{}, nil, true},
+		{"entry already removed", folioImportRow{EntityDeleted: true}, at(1), false},
+		{"same deletion re-delivered", folioImportRow{RemoteDeletedAt: at(1)}, at(1), false},
+		{"older deletion re-delivered", folioImportRow{RemoteDeletedAt: at(5)}, at(1), false},
+		{"untimed repeat of a reported deletion", folioImportRow{RemoteDeletedAt: at(1)}, nil, false},
+		{"deleted again after a restore", folioImportRow{RemoteDeletedAt: at(1)}, at(9), true},
+	}
+	for _, tc := range cases {
+		if got := folioShouldFlagDeletion(tc.row, tc.deletedAt); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -41,13 +41,29 @@ import (
 // money out and money in — is flagged 'remote_changed' with the Folio values
 // held in folio_imports.pending, for the operator to accept or dismiss.
 //
-// Deletions in Folio. The feed only reports tombstones for transactions Atlas
-// pushed, so a deleted native transaction is detected by a FULL scan: the
-// first import (empty cursor), or one run with full=true, reads the whole
-// book, and every imported entry whose transaction was not seen is flagged
-// 'remote_deleted'. It is never deleted silently: the operator accepts the
-// deletion (the entry is soft-deleted) or keeps it. A transaction that no
-// longer posts to its import account is flagged the same way.
+// Deletions in Folio. An imported entry whose Folio transaction was deleted
+// is FLAGGED 'remote_deleted' — never deleted silently, whether it was
+// categorized or not (an uncategorized, unlinked entry could safely be
+// removed outright, but one rule for every entry is easier to trust than two):
+// the operator accepts the deletion (the entry is soft-deleted) or keeps it.
+// Two ways to learn of a deletion:
+//
+//   - the deletion stream. A Folio whose status lists the
+//     "transaction-deletions" capability is read with include=deletions and
+//     reports every deleted transaction as a guid-keyed tombstone, GnuCash
+//     desktop deletions included. Tombstones are at-least-once: the same
+//     deletion can arrive again, so folio_imports.remote_deleted_at records
+//     the deletedAt already handled and a repeat is ignored — in particular
+//     after the operator chose "keep".
+//   - a FULL scan, the fallback for an older Folio (no capability) and for
+//     what the stream cannot see (deletions made before Folio was upgraded or
+//     while its trigger was missing). The first import (empty cursor), or one
+//     run with full=true, reads the whole book, and every live imported entry
+//     whose transaction was not seen, and that was not already reported, is
+//     flagged.
+//
+// A transaction that no longer posts to its import account is flagged the
+// same way. Seeing the transaction alive again clears remote_deleted_at.
 //
 // Changing the start date. Moving it earlier, or adding an import account,
 // clears the import cursor so the next run rescans the book; already-imported
@@ -68,8 +84,12 @@ const (
 
 // folioImportReport is the outcome of one import run.
 type folioImportReport struct {
-	Full                   bool       `json:"full"`
-	ScanComplete           bool       `json:"scanComplete"`
+	Full         bool `json:"full"`
+	ScanComplete bool `json:"scanComplete"`
+	// DeletionFeed is true when Folio reported deletions in the change feed
+	// (the transaction-deletions capability). False means deletions of Folio
+	// transactions are only found by a full rescan.
+	DeletionFeed           bool       `json:"deletionFeed"`
 	Pulled                 int        `json:"pulled"`
 	ImportedExpenses       int        `json:"importedExpenses"`
 	ImportedIncome         int        `json:"importedIncome"`
@@ -95,6 +115,7 @@ type folioImportContext struct {
 	pushedGUIDs  map[string]bool
 	actor        *uuid.UUID
 	seen         map[string]bool // non-nil only on a full scan
+	deletionFeed bool            // read the feed with include=deletions
 }
 
 // effectiveImportAccounts is the configured list, or the mapping's category
@@ -179,6 +200,9 @@ func (s *Server) handleGnuCashImport(w http.ResponseWriter, r *http.Request) {
 		importSet:    map[string]bool{},
 		accountTypes: map[string]string{},
 		actor:        actorID(r),
+		// An older Folio has no capability and gets the plain feed: the full
+		// rescan is then the only way deletions are found.
+		deletionFeed: status.Has(gnucashsync.CapabilityTransactionDeletions),
 	}
 	for _, guid := range accounts {
 		run.importSet[guid] = true
@@ -191,7 +215,7 @@ func (s *Server) handleGnuCashImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	report := &folioImportReport{Errors: []string{}}
+	report := &folioImportReport{Errors: []string{}, DeletionFeed: run.deletionFeed}
 	cursor := settings.ImportCursor
 	report.Full = req.Full || cursor == ""
 	maxPages := folioImportMaxPages
@@ -262,7 +286,7 @@ func (s *Server) folioImportPull(
 		if err := ctx.Err(); err != nil {
 			return cursor, false, err
 		}
-		result, err := client.Changes(ctx, cursor, folioImportPageSize)
+		result, err := client.ChangesWith(ctx, cursor, folioImportPageSize, run.deletionFeed)
 		if err != nil {
 			return cursor, false, fmt.Errorf("read changes: %s", gnucashUserMessage(err))
 		}
@@ -300,6 +324,7 @@ type folioImportRow struct {
 	RemoteEnterDate   *time.Time
 	RemoteDescription string
 	RemoteAmountCents int64
+	RemoteDeletedAt   *time.Time
 	State             string
 	Pending           []byte
 	Category          string
@@ -319,7 +344,7 @@ func (row folioImportRow) entityID() uuid.UUID {
 const folioImportSelect = `
 	SELECT fi.id, fi.direction, fi.expense_id, fi.income_id, fi.account_guids,
 		fi.remote_post_date, fi.remote_enter_date, fi.remote_description,
-		fi.remote_amount_cents, fi.state, fi.pending,
+		fi.remote_amount_cents, fi.remote_deleted_at, fi.state, fi.pending,
 		COALESCE(e.category, oi.category, ''),
 		COALESCE(e.deleted_at, oi.deleted_at) IS NOT NULL
 	FROM folio_imports fi
@@ -335,7 +360,8 @@ func scanFolioImportRow(row pgx.Row) (folioImportRow, error) {
 	)
 	err := row.Scan(&out.ID, &direction, &out.ExpenseID, &out.IncomeID, &accountsJSON,
 		&out.RemotePostDate, &out.RemoteEnterDate, &out.RemoteDescription,
-		&out.RemoteAmountCents, &state, &out.Pending, &out.Category, &out.EntityDeleted)
+		&out.RemoteAmountCents, &out.RemoteDeletedAt, &state, &out.Pending, &out.Category,
+		&out.EntityDeleted)
 	if err != nil {
 		return out, err
 	}
@@ -382,7 +408,11 @@ func (s *Server) folioApplyItem(
 	ctx context.Context, run *folioImportContext, item gnucashsync.Change, report *folioImportReport,
 ) error {
 	if item.Deleted {
-		// Tombstones only exist for transactions Atlas pushed.
+		if item.IsGUIDTombstone() {
+			return s.folioApplyDeletion(ctx, run.bookID, item, report)
+		}
+		// An externalId tombstone names a transaction Atlas pushed; the sync
+		// pull handles it.
 		report.SkippedPushedByAtlas++
 		return nil
 	}
@@ -602,7 +632,7 @@ func folioStoreSnapshot(
 			account_guids = $2, remote_post_date = $3,
 			remote_enter_date = COALESCE($4, remote_enter_date),
 			remote_description = $5, remote_amount_cents = $6,
-			state = NULL, message = NULL, pending = NULL
+			state = NULL, message = NULL, pending = NULL, remote_deleted_at = NULL
 		WHERE id = $1`,
 		id, accounts, postDate, remoteEnter, remote.Description, remote.AmountCents)
 	return err
@@ -696,6 +726,7 @@ func (s *Server) folioFlagMissing(ctx context.Context, run *folioImportContext, 
 		LEFT JOIN other_income oi ON oi.id = fi.income_id
 		WHERE fi.book_id = $1
 		  AND (fi.state IS NULL OR fi.state <> 'remote_deleted')
+		  AND fi.remote_deleted_at IS NULL
 		  AND COALESCE(e.deleted_at, oi.deleted_at) IS NULL`, run.bookID)
 	if err != nil {
 		return err
@@ -718,13 +749,68 @@ func (s *Server) folioFlagMissing(ctx context.Context, run *folioImportContext, 
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	now := time.Now()
 	for _, id := range missing {
-		if err := folioFlag(ctx, s.pool, id, "remote_deleted",
+		if err := folioFlagDeleted(ctx, s.pool, id,
 			"Deleted in Folio (not found in a full scan of the book). Accept to remove it from Atlas, or keep it.",
-			nil, nil); err != nil {
+			now); err != nil {
 			return err
 		}
 		report.Deleted++
 	}
 	return nil
+}
+
+// folioShouldFlagDeletion decides what a deletion-stream tombstone does to
+// an imported entry. Not when the operator already removed the entry, and
+// not when this deletion (or a later one) was already reported — the stream
+// is at-least-once, and a repeat after the operator kept the entry must not
+// raise it again. A deletion with no usable timestamp is judged as new only
+// if nothing was reported before.
+func folioShouldFlagDeletion(row folioImportRow, deletedAt *time.Time) bool {
+	if row.EntityDeleted {
+		return false
+	}
+	if row.RemoteDeletedAt != nil && (deletedAt == nil || !deletedAt.After(*row.RemoteDeletedAt)) {
+		return false
+	}
+	return true
+}
+
+// folioApplyDeletion applies a guid tombstone from the deletion stream. A
+// transaction this book never imported is out of scope; an imported entry is
+// flagged 'remote_deleted' — categorized or not, it is never deleted here.
+func (s *Server) folioApplyDeletion(
+	ctx context.Context, bookID uuid.UUID, item gnucashsync.Change, report *folioImportReport,
+) error {
+	existing, found, err := loadFolioImport(ctx, s.pool, bookID, item.TransactionGUID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		report.OutOfScope++
+		return nil
+	}
+	deletedAt := gnucashParseTime(item.DeletedAt)
+	if !folioShouldFlagDeletion(existing, deletedAt) {
+		report.Unchanged++
+		return nil
+	}
+	stamp := time.Now()
+	if deletedAt != nil {
+		stamp = *deletedAt
+	}
+	report.Deleted++
+	return folioFlagDeleted(ctx, s.pool, existing.ID,
+		"Deleted in Folio. Accept to remove it from Atlas, or keep it.", stamp)
+}
+
+// folioFlagDeleted flags an entry 'remote_deleted' and records which
+// deletion was reported, so the same deletion is not raised twice.
+func folioFlagDeleted(ctx context.Context, q app.Querier, id uuid.UUID, message string, deletedAt time.Time) error {
+	_, err := q.Exec(ctx, `
+		UPDATE folio_imports SET state = 'remote_deleted', message = $2, pending = NULL,
+			remote_deleted_at = $3
+		WHERE id = $1`, id, truncateError(message), deletedAt)
+	return err
 }

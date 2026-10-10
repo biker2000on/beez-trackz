@@ -26,7 +26,7 @@ var importTypes = map[string]string{
 
 func TestClassifyImportSingleExpenseAccount(t *testing.T) {
 	// Everything recorded under one "Beekeeping" expense account: paying a
-	// supplier debits it, a sales deposit credits it.
+	// supplier debits it, a refund from the supplier credits it.
 	imports := map[string]bool{"beekeeping": true}
 
 	purchase, skip := ClassifyImport(importChange(
@@ -43,12 +43,56 @@ func TestClassifyImportSingleExpenseAccount(t *testing.T) {
 		t.Fatalf("memo/accounts = %q %v", purchase.Memo, purchase.AccountGUIDs)
 	}
 
-	deposit, skip := ClassifyImport(importChange(
+	// A credit to an expense account is a NEGATIVE expense (a refund), never
+	// other income: it lowers expense totals.
+	refund, skip := ClassifyImport(importChange(
 		ChangeSplit{AccountGUID: "checking", AmountCents: 4500},
 		ChangeSplit{AccountGUID: "beekeeping", AmountCents: -4500},
 	), imports, importTypes)
+	if skip != ImportSkipNone || refund.Direction != ImportExpense || refund.AmountCents != -4500 {
+		t.Fatalf("refund = %+v skip %q", refund, skip)
+	}
+}
+
+func TestClassifyImportIncomeAccount(t *testing.T) {
+	imports := map[string]bool{"bee-income": true}
+	// A credit to an income account is other income.
+	deposit, skip := ClassifyImport(importChange(
+		ChangeSplit{AccountGUID: "checking", AmountCents: 4500},
+		ChangeSplit{AccountGUID: "bee-income", AmountCents: -4500},
+	), imports, importTypes)
 	if skip != ImportSkipNone || deposit.Direction != ImportIncome || deposit.AmountCents != 4500 {
 		t.Fatalf("deposit = %+v skip %q", deposit, skip)
+	}
+	// A debit to it (a customer refund, a reversed deposit) is NEGATIVE
+	// other income, not an expense.
+	reversal, skip := ClassifyImport(importChange(
+		ChangeSplit{AccountGUID: "bee-income", AmountCents: 1200},
+		ChangeSplit{AccountGUID: "checking", AmountCents: -1200},
+	), imports, importTypes)
+	if skip != ImportSkipNone || reversal.Direction != ImportIncome || reversal.AmountCents != -1200 {
+		t.Fatalf("reversal = %+v skip %q", reversal, skip)
+	}
+}
+
+func TestClassifyImportExpenseAndIncomeAccountsNetAsMoneyOut(t *testing.T) {
+	imports := map[string]bool{"beekeeping": true, "bee-income": true}
+	// 30.00 of supplies paid partly from 10.00 of income: net 20.00 out.
+	got, skip := ClassifyImport(importChange(
+		ChangeSplit{AccountGUID: "beekeeping", AmountCents: 3000},
+		ChangeSplit{AccountGUID: "bee-income", AmountCents: -1000},
+		ChangeSplit{AccountGUID: "checking", AmountCents: -2000},
+	), imports, importTypes)
+	if skip != ImportSkipNone || got.Direction != ImportExpense || got.AmountCents != 2000 {
+		t.Fatalf("got %+v skip %q", got, skip)
+	}
+	got, skip = ClassifyImport(importChange(
+		ChangeSplit{AccountGUID: "beekeeping", AmountCents: 500},
+		ChangeSplit{AccountGUID: "bee-income", AmountCents: -2500},
+		ChangeSplit{AccountGUID: "checking", AmountCents: 2000},
+	), imports, importTypes)
+	if skip != ImportSkipNone || got.Direction != ImportIncome || got.AmountCents != 2000 {
+		t.Fatalf("got %+v skip %q", got, skip)
 	}
 }
 
@@ -141,6 +185,14 @@ func TestClassifyImportUnknownAccountTypeIsProfitAndLoss(t *testing.T) {
 	), map[string]bool{"gone": true}, importTypes)
 	if skip != ImportSkipNone || got.Direction != ImportExpense {
 		t.Fatalf("got %+v skip %q", got, skip)
+	}
+	// It reads as an expense account, so a credit is a refund.
+	got, _ = ClassifyImport(importChange(
+		ChangeSplit{AccountGUID: "gone", AmountCents: -700},
+		ChangeSplit{AccountGUID: "checking", AmountCents: 700},
+	), map[string]bool{"gone": true}, importTypes)
+	if got.Direction != ImportExpense || got.AmountCents != -700 {
+		t.Fatalf("got %+v", got)
 	}
 }
 

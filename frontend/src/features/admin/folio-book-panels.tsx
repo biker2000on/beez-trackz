@@ -470,6 +470,11 @@ export function FolioImportPanel({
             {report.skippedTransfers} transfers, {report.skippedUnrepresentable}{" "}
             unrepresentable; {report.outOfScope} did not touch an import account.
           </p>
+          <p className="text-muted-foreground">
+            {report.deletionFeed
+              ? "Folio reports deleted transactions as they happen. Run a full rescan once to catch deletions made before Folio was upgraded."
+              : "This Folio does not report deleted transactions; run a full rescan now and then to find them."}
+          </p>
         </div>
       ) : null}
     </div>

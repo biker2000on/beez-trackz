@@ -51,6 +51,11 @@ type folioFake struct {
 	stuckCursor string
 	// bookGUID, when set, is the book GET status reports instead of book-1.
 	bookGUID string
+	// deletionFeed makes the fake a Folio with the transaction-deletions
+	// capability: status advertises it and include=deletions returns the
+	// guid tombstones deleteNative records. Without it those tombstones are
+	// withheld, exactly like an older Folio that never emits them.
+	deletionFeed bool
 
 	posts, puts, deletes, changeCalls int
 	unbalanced                        []gnucashsync.Transaction
@@ -118,14 +123,22 @@ func (f *folioFake) route(w http.ResponseWriter, r *http.Request) {
 		if f.bookGUID != "" {
 			bookGUID, bookName = f.bookGUID, "Bee Business"
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
+		status := map[string]any{
 			"ok": true, "bookGuid": bookGUID, "bookName": bookName, "rootCurrency": "USD",
-		})
+		}
+		if f.deletionFeed {
+			status["capabilities"] = []string{gnucashsync.CapabilityTransactionDeletions}
+		}
+		writeJSON(w, http.StatusOK, status)
 	case r.Method == http.MethodGet && path == "/accounts":
 		writeJSON(w, http.StatusOK, map[string]any{"accounts": []map[string]any{
 			{"guid": "acct-cash", "name": "Cash", "fullName": "Assets:Cash", "type": "ASSET",
 				"commodityMnemonic": "USD"},
 			{"guid": "acct-revenue-jar", "name": "Honey", "fullName": "Income:Honey",
+				"type": "INCOME", "commodityMnemonic": "USD"},
+			{"guid": "acct-bee", "name": "Beekeeping", "fullName": "Expenses:Beekeeping",
+				"type": "EXPENSE", "commodityMnemonic": "USD"},
+			{"guid": "acct-bee-income", "name": "Beekeeping", "fullName": "Income:Beekeeping",
 				"type": "INCOME", "commodityMnemonic": "USD"},
 		}})
 	case r.Method == http.MethodPost && path == "/transactions":
@@ -293,6 +306,15 @@ func (f *folioFake) changesPage(w http.ResponseWriter, r *http.Request) {
 		start = len(f.changes)
 	}
 	items := append([]gnucashsync.Change{}, f.changes[start:end]...)
+	// Guid tombstones exist only for a capable Folio asked for them; anyone
+	// else sees an empty item in their place, so integer cursors stay valid.
+	if !f.deletionFeed || r.URL.Query().Get("include") != "deletions" {
+		for i := range items {
+			if items[i].IsGUIDTombstone() {
+				items[i] = gnucashsync.Change{}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":      items,
 		"nextCursor": strconv.Itoa(end),

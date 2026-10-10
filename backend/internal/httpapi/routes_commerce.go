@@ -1554,16 +1554,35 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 	// sale, imported from Folio. An entry linked to an Atlas sale, or
 	// categorized as a deposit of Atlas sales, is that sale's revenue and is
 	// left out so it is not counted twice; uncategorized entries are reported
-	// apart until someone decides what they are.
-	var otherIncome, uncategorizedIncome money
+	// apart until someone decides what they are. Other income is its own line
+	// and never part of gross margin. Amounts are signed: a reversal (money
+	// paid back out of an income account) lowers it.
+	//
+	// unlinkedIncome is the prompt: positive deposits not linked to a sale nor
+	// marked a sales deposit (unlinkedIncomeSQL) — some may be Atlas sales,
+	// and until they are linked that revenue may be counted twice.
+	var otherIncome, uncategorizedIncome, unlinkedIncome money
+	var unlinkedIncomeCount int
 	if err := s.pool.QueryRow(r.Context(), `
 		SELECT
-			COALESCE(SUM(amount_cents) FILTER (WHERE category NOT IN ('uncategorized', 'sales_deposit')), 0),
-			COALESCE(SUM(amount_cents) FILTER (WHERE category = 'uncategorized'), 0)
-		FROM other_income
-		WHERE EXTRACT(YEAR FROM income_date)::integer = $1
-		  AND deleted_at IS NULL AND sale_id IS NULL`, year).
-		Scan(&otherIncome, &uncategorizedIncome); err != nil {
+			COALESCE(SUM(oi.amount_cents) FILTER (WHERE oi.category NOT IN ('uncategorized', 'sales_deposit')), 0),
+			COALESCE(SUM(oi.amount_cents) FILTER (WHERE oi.category = 'uncategorized'), 0),
+			COALESCE(SUM(oi.amount_cents) FILTER (WHERE `+unlinkedIncomeSQL+`), 0),
+			count(*) FILTER (WHERE `+unlinkedIncomeSQL+`)
+		FROM other_income oi
+		WHERE EXTRACT(YEAR FROM oi.income_date)::integer = $1
+		  AND oi.deleted_at IS NULL AND oi.sale_id IS NULL`, year).
+		Scan(&otherIncome, &uncategorizedIncome, &unlinkedIncome, &unlinkedIncomeCount); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	// Refunds are negative expenses (00011/00064): already netted into
+	// expenses above; reported apart so the UI can say how much.
+	var expenseRefunds money
+	if err := s.pool.QueryRow(r.Context(), `
+		SELECT COALESCE(-SUM(amount_cents), 0) FROM expenses
+		WHERE EXTRACT(YEAR FROM expense_date)::integer = $1
+		  AND deleted_at IS NULL AND amount_cents < 0`, year).Scan(&expenseRefunds); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
@@ -1808,8 +1827,9 @@ func (s *Server) profitabilityAnalytics(w http.ResponseWriter, r *http.Request) 
 		// collectedRevenue and invoicedRevenue name the two definitions.
 		"year": year, "revenue": revenue, "invoicedRevenue": revenue,
 		"collectedRevenue": collected, "unpaidRevenue": revenue - collected,
-		"expenses": expenses, "grossMargin": margin,
+		"expenses": expenses, "expenseRefunds": expenseRefunds, "grossMargin": margin,
 		"otherIncome": otherIncome, "uncategorizedIncome": uncategorizedIncome,
+		"unlinkedIncome": unlinkedIncome, "unlinkedIncomeCount": unlinkedIncomeCount,
 		"netIncome":       revenue + otherIncome - expenses,
 		"marginPercent":   safePercent(margin.Dollars(), revenue.Dollars()),
 		"harvestedPounds": harvested, "costPerHarvestedPound": costPerPound,

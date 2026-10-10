@@ -11,11 +11,12 @@
  */
 
 import * as React from "react";
+import Link from "next/link";
 import {
   createColumnHelper,
   useTable,
 } from "@tanstack/react-table";
-import { Bell, DollarSign, Plus, Trash2, Users } from "lucide-react";
+import { Bell, DollarSign, Link2, Plus, Trash2, Users } from "lucide-react";
 
 import {
   AlertDialog,
@@ -77,6 +78,7 @@ import {
   type ProductionPlan,
   type Profitability,
 } from "./api";
+import { formatFolioAmount, UNLINKED_INCOME_HREF } from "./folio-imports-api";
 
 // --- grid plumbing ---------------------------------------------------------
 
@@ -330,6 +332,28 @@ function JarPerformanceTable({ rows }: { rows: JarPerformanceRow[] }) {
   );
 }
 
+/**
+ * Folio deposits nobody has linked to an Atlas sale. Until they are, a deposit
+ * that IS an Atlas sale counts that revenue twice (once as the sale, once as
+ * other income), so the report says how much and opens the list filtered to
+ * those deposits.
+ */
+function UnlinkedIncomePrompt({ amount, count }: { amount: number; count: number }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-sm">
+      <span className="flex items-center gap-2">
+        <Link2 className="size-4 shrink-0 text-warning" />
+        {formatMoney(amount)} of Folio deposits
+        {count === 1 ? " isn't" : ` (${count}) aren't`} linked to a sale — link
+        them so revenue isn&apos;t double counted.
+      </span>
+      <Button asChild size="sm" variant="outline">
+        <Link href={UNLINKED_INCOME_HREF}>Link deposits</Link>
+      </Button>
+    </div>
+  );
+}
+
 export function ProfitabilityPanel({ year }: { year: number }) {
   const report = useProfitability(year);
   if (report.isPending) return <Skeleton className="h-64" />;
@@ -339,15 +363,21 @@ export function ProfitabilityPanel({ year }: { year: number }) {
     <div className="grid gap-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Metric label="Revenue (invoiced)" value={formatMoney(data.revenue)} detail="Order totals, unpaid orders included" />
-        <Metric label="Expenses" value={formatMoney(data.expenses)} />
+        <Metric label="Expenses" value={formatMoney(data.expenses)} detail={(data.expenseRefunds ?? 0) > 0 ? `Net of ${formatMoney(data.expenseRefunds ?? 0)} in refunds` : undefined} />
         <Metric label="Gross margin" value={formatMoney(data.grossMargin)} detail={`${data.marginPercent.toFixed(0)}%`} />
         <Metric label="Inventory value" value={formatMoney(data.inventoryValue)} />
-        {(data.otherIncome ?? 0) > 0 || (data.uncategorizedIncome ?? 0) > 0 ? (
+        {(data.otherIncome ?? 0) !== 0 || (data.uncategorizedIncome ?? 0) !== 0 || (data.unlinkedIncome ?? 0) > 0 ? (
           <>
-            <Metric label="Other income" value={formatMoney(data.otherIncome ?? 0)} detail={(data.uncategorizedIncome ?? 0) > 0 ? `${formatMoney(data.uncategorizedIncome ?? 0)} from Folio not yet categorized` : "Imported from Folio, not Atlas sales"} />
+            {/* Its own line: never part of gross margin. */}
+            <Metric label="Other income" value={formatMoney(data.otherIncome ?? 0)} detail={(data.uncategorizedIncome ?? 0) !== 0 ? `${formatMoney(data.uncategorizedIncome ?? 0)} from Folio not yet categorized` : "Imported from Folio, not Atlas sales; not in gross margin"} />
             <Metric label="Net income" value={formatMoney(data.netIncome ?? 0)} detail="Revenue + other income - expenses" />
           </>
         ) : null}
+      </div>
+      {(data.unlinkedIncome ?? 0) > 0 ? (
+        <UnlinkedIncomePrompt amount={data.unlinkedIncome ?? 0} count={data.unlinkedIncomeCount ?? 0} />
+      ) : null}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Metric label="Cost / harvested lb" value={formatMoney(data.costPerHarvestedPound)} />
         <Metric label="Cost / jar sold" value={formatMoney(data.costPerJarSold)} />
         <Metric label="Harvested" value={formatLbs(data.harvestedPounds)} />
@@ -481,7 +511,9 @@ function ExpensesTable({
             align: "right",
             cellClassName: "font-medium tabular-nums",
           } satisfies DataGridColumnMeta,
-          cell: ({ row }) => formatMoney(row.original.amount),
+          // A negative expense is a refund imported from Folio.
+          cell: ({ row }) =>
+            formatFolioAmount("expense", row.original.amount, formatMoney),
         }),
         expenseHelper.display({
           id: "actions",

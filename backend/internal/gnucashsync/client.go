@@ -304,6 +304,14 @@ func (c *Client) DeleteTransaction(
 // Changes drains folio-side activity from an opaque cursor. An empty cursor
 // starts from the beginning of the history of the book.
 func (c *Client) Changes(ctx context.Context, cursor string, limit int) (ChangesPage, error) {
+	return c.ChangesWith(ctx, cursor, limit, false)
+}
+
+// ChangesWith is Changes, optionally asking for the deletion stream
+// (include=deletions). Only ask a Folio whose status advertised
+// CapabilityTransactionDeletions: an older Folio ignores the parameter, and a
+// newer one without the trigger would deliver a stream with gaps.
+func (c *Client) ChangesWith(ctx context.Context, cursor string, limit int, includeDeletions bool) (ChangesPage, error) {
 	if limit <= 0 || limit > maxChangesLimit {
 		limit = maxChangesLimit
 	}
@@ -312,6 +320,9 @@ func (c *Client) Changes(ctx context.Context, cursor string, limit int) (Changes
 		query.Set("since", cursor)
 	}
 	query.Set("limit", strconv.Itoa(limit))
+	if includeDeletions {
+		query.Set("include", "deletions")
+	}
 	var out ChangesPage
 	_, err := c.do(ctx, http.MethodGet, "changes?"+query.Encode(), "", nil, &out)
 	return out, err

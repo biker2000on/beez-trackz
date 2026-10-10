@@ -32,7 +32,10 @@ export interface FolioImportItem {
   date: string;
   description: string;
   notes: string | null;
-  /** Dollars. */
+  /**
+   * Dollars, signed: a negative expense is a refund (it lowers expenses), a
+   * negative income entry is money paid back out (it lowers other income).
+   */
   amount: number;
   category: string;
   saleId: string | null;
@@ -50,6 +53,24 @@ export interface FolioImportList {
   otherIncomeCategories: string[];
 }
 
+/**
+ * A signed imported amount for display: "−$12.00 refund" for a negative
+ * expense, "−$12.00 paid back" for negative income, "+$45.00" for income.
+ */
+export function formatFolioAmount(
+  direction: "expense" | "income",
+  amount: number,
+  format: (value: number) => string,
+): string {
+  if (amount < 0) {
+    return `−${format(-amount)} ${direction === "expense" ? "refund" : "paid back"}`;
+  }
+  return direction === "income" ? `+${format(amount)}` : format(amount);
+}
+
+/** Where the To-categorize list opens filtered to unlinked deposits. */
+export const UNLINKED_INCOME_HREF = "/sales/expenses?folio=unlinked#folio-imports";
+
 export interface FolioSaleCandidate {
   id: string;
   date: string;
@@ -59,8 +80,13 @@ export interface FolioSaleCandidate {
   amountPaid: number;
 }
 
-/** view "attention" (default): uncategorized and conflicted; "all": everything. */
-export function useFolioImports(view: "attention" | "all" = "attention") {
+/**
+ * view "attention" (default): uncategorized and conflicted; "unlinked":
+ * imported deposits not linked to an Atlas sale; "all": everything.
+ */
+export type FolioImportView = "attention" | "unlinked" | "all";
+
+export function useFolioImports(view: FolioImportView = "attention") {
   return useQuery({
     queryKey: ["folio-imports", view],
     queryFn: () =>

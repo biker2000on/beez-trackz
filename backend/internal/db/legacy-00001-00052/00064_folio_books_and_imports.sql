@@ -17,14 +17,24 @@
 -- imported from Folio (a deposit, a grant, a pre-Atlas honey sale). An entry
 -- may name the Atlas sale it is the deposit for, which keeps reports from
 -- counting the same revenue twice. It never creates a sale or moves stock.
+-- Its amount is signed: a negative entry is money paid back out of an income
+-- account (a customer refund or reversal) and reduces other income.
 --
 -- folio_imports is the pull-side link table, the mirror of external_sync: one
 -- row per Folio transaction imported from one book, pointing at the Atlas
 -- expense or other_income entry it became, with the remote values last seen
 -- (for idempotent re-application of the change feed) and a conflict state.
+-- A transaction deleted in Folio is never deleted here silently: it is
+-- flagged remote_deleted, whether Folio's change feed reported the deletion
+-- (Folio with the transaction-deletions capability) or a full rescan missed it.
 --
 -- expenses gains the 'uncategorized' category: an imported expense starts
--- there until the operator assigns one.
+-- there until the operator assigns one. expenses.amount_cents loses its
+-- non-negative CHECK: a refund credited to an imported expense account is a
+-- NEGATIVE expense (it reduces expense totals, it is not income). Only the
+-- import writes one; manual entry (POST /expenses, colony intake cost) still
+-- refuses a negative amount in the API. folio_imports.remote_amount_cents is
+-- signed for the same reason.
 -- Both chains run this same file.
 CREATE TABLE gnucash_books (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -62,15 +72,16 @@ ALTER TABLE expenses DROP CONSTRAINT expenses_category_check;
 ALTER TABLE expenses ADD CONSTRAINT expenses_category_check CHECK (category IN (
   'bees_queens', 'feed', 'treatments', 'packaging', 'equipment', 'mileage',
   'market_fees', 'labor', 'other', 'grocery', 'uncategorized'));
+ALTER TABLE expenses DROP CONSTRAINT expenses_amount_cents_check;
 
 CREATE TABLE other_income (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   income_date date NOT NULL,
   category text NOT NULL DEFAULT 'uncategorized' CHECK (category IN (
     'uncategorized', 'sales_deposit', 'honey_sales', 'colony_sales',
-    'product_sales', 'pollination', 'services', 'grant', 'refund', 'other')),
+    'product_sales', 'pollination', 'services', 'grant', 'other')),
   description text NOT NULL,
-  amount_cents bigint NOT NULL CHECK (amount_cents >= 0),
+  amount_cents bigint NOT NULL,
   sale_id uuid REFERENCES sales(id) ON DELETE SET NULL,
   notes text,
   created_by uuid REFERENCES app_users(id) ON DELETE SET NULL,
@@ -100,7 +111,12 @@ CREATE TABLE folio_imports (
   remote_post_date date,
   remote_enter_date timestamptz,
   remote_description text NOT NULL DEFAULT '',
-  remote_amount_cents bigint NOT NULL CHECK (remote_amount_cents >= 0),
+  remote_amount_cents bigint NOT NULL,
+  -- When Folio last reported this transaction deleted (its deletion-stream
+  -- deletedAt, or the time a full scan missed it). A re-delivered report of
+  -- the same deletion is not raised again after the operator kept the entry;
+  -- cleared when the transaction is seen alive.
+  remote_deleted_at timestamptz,
   state text CHECK (state IS NULL OR state IN ('remote_changed', 'remote_deleted', 'unrepresentable')),
   message text,
   pending jsonb,
@@ -144,6 +160,9 @@ WHERE system = 'gnucash_web'
 -- +goose Down
 DROP TABLE folio_imports;
 DROP TABLE other_income;
+-- NOT VALID: imported refunds (negative expenses) stay where they are; the
+-- restored CHECK guards new rows only.
+ALTER TABLE expenses ADD CONSTRAINT expenses_amount_cents_check CHECK (amount_cents >= 0) NOT VALID;
 UPDATE expenses SET category = 'other' WHERE category = 'uncategorized';
 ALTER TABLE expenses DROP CONSTRAINT expenses_category_check;
 ALTER TABLE expenses ADD CONSTRAINT expenses_category_check CHECK (category IN (

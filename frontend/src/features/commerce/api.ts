@@ -178,6 +178,14 @@ export interface Profitability {
   otherIncome?: number;
   /** Imported income still waiting for a category (not counted). */
   uncategorizedIncome?: number;
+  /**
+   * Imported deposits (uncategorized or in a sales category) not linked to
+   * an Atlas sale — some may be Atlas sales counted twice until linked.
+   */
+  unlinkedIncome?: number;
+  unlinkedIncomeCount?: number;
+  /** Supplier refunds (negative expenses), already netted into expenses. */
+  expenseRefunds?: number;
   /** revenue + otherIncome - expenses. */
   netIncome?: number;
   harvestedPounds: number;

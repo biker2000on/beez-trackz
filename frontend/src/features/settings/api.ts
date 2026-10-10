@@ -340,6 +340,11 @@ export interface GnuCashBookSwitchResult {
 export interface FolioImportReport {
   full: boolean;
   scanComplete: boolean;
+  /**
+   * Folio reported deletions in its change feed (the transaction-deletions
+   * capability). False (an older Folio): only a full rescan finds them.
+   */
+  deletionFeed?: boolean;
   pulled: number;
   importedExpenses: number;
   importedIncome: number;
@@ -414,6 +419,10 @@ export interface FolioImportCounts {
   expensesToCategorize: number;
   incomeToCategorize: number;
   conflicts: number;
+  /** Imported deposits not linked to an Atlas sale (all years). */
+  unlinkedIncome?: number;
+  /** Their total, dollars. */
+  unlinkedIncomeAmount?: number;
 }
 
 export interface GnuCashRows {

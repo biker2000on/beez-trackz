@@ -198,7 +198,9 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		// no imported entries and no other income. Its singleton restores
 		// with no active book, no import accounts, no import start date and
 		// no import cursor; its external_sync rows restore with book_id NULL
-		// and are attached to the active book by the guarded restore.
+		// and are attached to the active book by the guarded restore. The
+		// dropped expenses.amount_cents >= 0 CHECK (imported refunds are
+		// negative expenses) needs no transform: older rows are never negative.
 		AddedColumns: map[string][]string{
 			"gnucash_sync_settings": {
 				"active_book_id", "import_account_guids", "import_start_date",

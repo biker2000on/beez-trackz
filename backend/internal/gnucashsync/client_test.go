@@ -191,6 +191,56 @@ func TestClientChangesSendsCursorAndClampsTheLimit(t *testing.T) {
 	}
 }
 
+// The deletion stream is asked for only when the caller says so; a plain
+// Changes call must keep the exact query an older Folio has always seen.
+func TestClientChangesWithAsksForTheDeletionStreamOnlyWhenTold(t *testing.T) {
+	server, seen := fakeFolio(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[
+			{"transactionGuid":"g1","externalId":null,"deleted":true,"deletedAt":"2026-10-10T14:03:22.418213Z"},
+			{"externalId":"expense:x","deleted":true}
+		],"nextCursor":"c2","hasMore":false}`))
+	})
+	client := NewClient(server.URL, "t", server.Client())
+	page, err := client.ChangesWith(context.Background(), "c1", 100, true)
+	if err != nil {
+		t.Fatalf("changes: %v", err)
+	}
+	if !strings.Contains((*seen)[0].Query, "include=deletions") {
+		t.Fatalf("query %q lacks include=deletions", (*seen)[0].Query)
+	}
+	if len(page.Items) != 2 || !page.Items[0].IsGUIDTombstone() || page.Items[0].DeletedAt == "" {
+		t.Fatalf("guid tombstone not decoded: %+v", page.Items)
+	}
+	if page.Items[1].IsGUIDTombstone() {
+		t.Fatal("an externalId tombstone is not a guid tombstone")
+	}
+	if _, err := client.Changes(context.Background(), "c1", 100); err != nil {
+		t.Fatalf("changes: %v", err)
+	}
+	if strings.Contains((*seen)[1].Query, "include=") {
+		t.Fatalf("plain Changes sent %q", (*seen)[1].Query)
+	}
+}
+
+func TestStatusCapabilitiesAreOptional(t *testing.T) {
+	// An older Folio's status has no capabilities field at all.
+	server, _ := fakeFolio(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"bookGuid":"b1","rootCurrency":"USD"}`))
+	})
+	client := NewClient(server.URL, "t", server.Client())
+	old, err := client.Status(context.Background())
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if old.Has(CapabilityTransactionDeletions) {
+		t.Fatal("an older Folio advertised the deletion stream")
+	}
+	current := Status{Capabilities: []string{"transaction-deletions"}}
+	if !current.Has(CapabilityTransactionDeletions) {
+		t.Fatal("capability not recognised")
+	}
+}
+
 func TestValidBaseURLRejectsNonHTTPSchemes(t *testing.T) {
 	for _, raw := range []string{"", "   ", "file:///etc/passwd", "folio.example.com", "gopher://x"} {
 		if ValidBaseURL(raw) {
