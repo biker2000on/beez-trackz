@@ -139,7 +139,8 @@ func TestConsigneeShelfIsReportedPerVarietal(t *testing.T) {
 			f.sourwoodJarred-f.sourwoodShipped, f.wildJarred-f.wildShipped)
 	}
 
-	// The movement history names the varietal each transfer carried.
+	// The movement history names the varietal each transfer carried — on the
+	// operation when every line agrees, otherwise on each of its lines.
 	movements, err := server.stockMovementHistory(context.Background(), ledgerLocation(t, server, f.shopID), 100)
 	if err != nil {
 		t.Fatalf("movements: %v", err)
@@ -148,6 +149,11 @@ func TestConsigneeShelfIsReportedPerVarietal(t *testing.T) {
 	for _, movement := range movements {
 		if movement.VarietalName != nil {
 			named++
+		}
+		for _, line := range movement.Lines {
+			if line.VarietalName != nil {
+				named++
+			}
 		}
 	}
 	if named == 0 {

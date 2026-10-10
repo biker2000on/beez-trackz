@@ -33,6 +33,20 @@ CREATE INDEX consignment_location_prices_created_by_idx
 CREATE TRIGGER consignment_location_prices_updated_at BEFORE UPDATE ON consignment_location_prices
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- A wholesale store may now be priced purely by its own rows above, so the
+-- price list stops being mandatory for the wholesale_list basis.
+ALTER TABLE inventory_locations DROP CONSTRAINT inventory_locations_basis_check;
+ALTER TABLE inventory_locations ADD CONSTRAINT inventory_locations_basis_check CHECK (
+  (price_basis = 'commission' AND commission_bps IS NOT NULL)
+  OR price_basis IN ('wholesale_list', 'retail'));
+
 -- +goose Down
+-- Restoring the old rule fails while a wholesale store has no price list;
+-- give it one first.
+ALTER TABLE inventory_locations DROP CONSTRAINT inventory_locations_basis_check;
+ALTER TABLE inventory_locations ADD CONSTRAINT inventory_locations_basis_check CHECK (
+  (price_basis = 'commission' AND commission_bps IS NOT NULL)
+  OR (price_basis = 'wholesale_list' AND wholesale_price_list_id IS NOT NULL)
+  OR price_basis = 'retail');
 DROP TRIGGER IF EXISTS consignment_location_prices_updated_at ON consignment_location_prices;
 DROP TABLE consignment_location_prices;
