@@ -47,7 +47,9 @@ type UpdateSaleDetailsResult struct {
 // Customer rules:
 //   - customerId names a saved customer (it must exist). The stored
 //     customer_name becomes the given customerName, or, when none is given,
-//     a snapshot of the customer's display name (company first). The snapshot
+//     a snapshot of the customer's sale name (SaleCustomerName: the company
+//     when it has one, else the customer's name — the same rule RecordSale
+//     uses). The snapshot
 //     is what the Folio push describes the sale with; screens show the live
 //     customer through the join either way.
 //   - customerId null clears the saved customer; customer_name becomes the
@@ -100,21 +102,13 @@ func UpdateSaleDetails(ctx context.Context, uow *app.UnitOfWork, in UpdateSaleDe
 		newCustomer = in.CustomerID
 		newName = nil
 		if in.CustomerID != nil {
-			var display string
-			if err := uow.QueryRow(ctx, `
-				SELECT CASE
-					WHEN NULLIF(btrim(company_name), '') IS NULL THEN btrim(name)
-					WHEN NULLIF(btrim(name), '') IS NULL
-						OR lower(btrim(name)) = lower(btrim(company_name))
-						THEN btrim(company_name)
-					ELSE btrim(company_name) || ' — ' || btrim(name)
-				END
-				FROM customers WHERE id = $1`, *in.CustomerID).Scan(&display); errors.Is(err, pgx.ErrNoRows) {
+			display, err := loadSaleCustomerName(ctx, uow, *in.CustomerID)
+			if errors.Is(err, errCustomerNotFound) {
 				return out, app.Invalid(op, "customer not found")
 			} else if err != nil {
 				return out, dbError(op, err)
 			}
-			newName = trim(&display)
+			newName = display
 		}
 	}
 	if in.CustomerNameSet {

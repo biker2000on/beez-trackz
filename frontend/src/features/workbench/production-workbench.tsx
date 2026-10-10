@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { ArrowRight, TriangleAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { formatDate } from "@/features/honey/format";
 
 import { useProductionWorkbench } from "./api";
 import { exact, lbs, signedLbs } from "./quantity";
-import { lockoutExplanations } from "./types";
+import { lockoutExplanations, type Quantity } from "./types";
 import { useWorkbenchCommands } from "./use-workbench-commands";
 import { WorkbenchCommands, WorkbenchExplanations } from "./workbench-command";
 import {
@@ -68,6 +70,8 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
         </div>
       }
     >
+      <BulkShortAlert shortLbs={data?.bulkShortLbs} />
+
       <WorkbenchPanel
         step={1}
         panelKey="open-sessions"
@@ -290,5 +294,41 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
       </WorkbenchPanel>
       }
     </WorkbenchShell>
+  );
+}
+
+/**
+ * Bulk honey short of what was jarred — the warning the old honey overview
+ * carried. The read model's `bulkShortLbs` is how far the bulk-honey balance
+ * (the one `/honey/overview` reports) is below zero: jars recorded from honey
+ * no harvest accounts for. The lot rows read `inventory_available`, which
+ * never goes negative, so without this the gap would not show here. It rides
+ * on the same single workbench read; nothing is fetched for it.
+ */
+function BulkShortAlert({ shortLbs }: { shortLbs: Quantity | null | undefined }) {
+  if (shortLbs === null || shortLbs === undefined) return null;
+  return (
+    <div
+      role="alert"
+      data-testid="workbench-bulk-short"
+      data-short-lbs={exact(shortLbs)}
+      className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"
+    >
+      <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">Bulk honey is short of what was jarred</p>
+        <p className="text-muted-foreground">
+          Jars on the shelf exceed recorded harvests.{" "}
+          {lbs(shortLbs)} more has been jarred than harvested.
+          Record the missing harvests or write off the gap.
+        </p>
+      </div>
+      <Button asChild size="sm" variant="outline">
+        <Link href="/production/harvests">
+          Record harvests
+          <ArrowRight />
+        </Link>
+      </Button>
+    </div>
   );
 }

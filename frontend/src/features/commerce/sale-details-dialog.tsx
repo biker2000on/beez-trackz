@@ -67,7 +67,7 @@ export function saleDetailsPatch(
       patch.customerId = null;
       patch.customerName = walkIn || null;
     } else {
-      // The API snapshots the saved customer's display name for the receipt.
+      // The API stores the saved customer's company (else name) on the sale.
       patch.customerId = form.customer;
       patch.customerName = null;
     }

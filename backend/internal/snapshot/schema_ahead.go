@@ -19,6 +19,7 @@ const (
 	FolioBooksAndImportsTransform             = "folio-books-and-imports-v1"
 	SaleItemsHarvestLotTransform              = "sale-items-harvest-lot-v1"
 	FolioRefundsAndDeletionsTransform         = "folio-refunds-and-deletions-v1"
+	SaleCustomerNameSnapshotTransform         = "sale-customer-name-snapshot-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -240,6 +241,13 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		AddedColumns: map[string][]string{
 			"folio_imports": {"remote_deleted_at"},
 		},
+	},
+	{
+		LegacyMigration: 67, BaselineMigration: 14,
+		Name: SaleCustomerNameSnapshotTransform,
+		// Data only: backfills sales.customer_name for sales that name a saved
+		// customer but stored no name (company, else the customer's name). No
+		// record-shape change; an older artifact restores its sales as they were.
 	},
 }
 

@@ -97,6 +97,12 @@ export interface ProductionWorkbenchResponse extends WorkbenchEnvelope {
   lotsAwaitingBottling: AwaitingBottling[];
   jarStock: JarStock[];
   productBatches: ProductBatch[];
+  /**
+   * How far the bulk-honey balance is below zero (more jarred than harvested),
+   * as exact decimal text. Null when not short, or for a non-administrator.
+   * Optional so an older server's body still parses.
+   */
+  bulkShortLbs?: Quantity | null;
 }
 
 // --------------------------------------------------------------------- sales

@@ -32,6 +32,9 @@ func TestWorkbenchesUseLedgerReadModels(t *testing.T) {
 	if len(productionBody.BulkOnHand) == 0 || productionBody.BulkOnHand[0].AvailableLbs == "" {
 		t.Fatalf("production workbench omitted ledger lot balance: %+v", productionBody.BulkOnHand)
 	}
+	if productionBody.BulkShortLbs != nil {
+		t.Errorf("bulk is covered by harvests but the workbench reports it short by %s", *productionBody.BulkShortLbs)
+	}
 	if len(productionBody.Commands) == 0 || productionBody.Commands[0].Offline != "online_only" || productionBody.Commands[0].OfflineReason == nil {
 		t.Fatalf("start extraction disposition is not truthful: %+v", productionBody.Commands)
 	}

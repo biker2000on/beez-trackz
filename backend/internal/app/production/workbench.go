@@ -67,6 +67,14 @@ type WorkbenchView struct {
 	JarStock             []JarStock          `json:"jarStock"`
 	ProductBatches       []ProductBatchStock `json:"productBatches"`
 	Commands             []WorkbenchCommand  `json:"commands"`
+	// BulkShortLbs is how far the bulk-honey balance has gone below zero —
+	// more honey jarred (or otherwise drawn) than harvests account for — as
+	// decimal text ("8.300"). Null when the balance is zero or positive. It is
+	// the same balance /honey/overview reports as bulkOnHandLbs, and like that
+	// endpoint it is shown to administrators only (null for everyone else).
+	// The lot rows above read inventory_available, which never goes negative,
+	// so without this the gap would be invisible here.
+	BulkShortLbs *string `json:"bulkShortLbs"`
 }
 
 type workbenchFreshness struct {
@@ -173,6 +181,17 @@ func Workbench(ctx context.Context, q app.Querier, actor app.Actor, year int, no
 		return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
 	}
 	rows.Close()
+
+	if actor.MayAdminister() {
+		// The whole bulk balance across lots and locations, all years — the
+		// balance honeyBulkOnHand (/honey/overview) reports.
+		if err := q.QueryRow(ctx, `
+			SELECT CASE WHEN b.total < 0 THEN (-b.total)::numeric(14,3)::text END
+			FROM (SELECT COALESCE(SUM(on_hand), 0) total FROM inventory_balances WHERE item_id=$1) b`,
+			HoneyBulkItemID).Scan(&view.BulkShortLbs); err != nil {
+			return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
+		}
+	}
 
 	rows, err = q.Query(ctx, `SELECT js.id,js.label,COALESCE(SUM(a.on_hand),0)::int,COALESCE(SUM(a.reserved),0)::int,COALESCE(SUM(a.available),0)::int,js.low_stock_threshold FROM jar_sizes js LEFT JOIN inventory_available a ON a.item_id=js.item_id GROUP BY js.id ORDER BY js.sort_order,js.label`)
 	if err != nil {

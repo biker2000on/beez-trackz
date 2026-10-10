@@ -132,10 +132,11 @@ func TestSaleDetailsChangeTheCustomerOfAPaidSaleOnly(t *testing.T) {
 	if row.CustomerID == nil || *row.CustomerID != second {
 		t.Errorf("customer_id = %v, want %v", row.CustomerID, second)
 	}
-	// The receipt name is a snapshot of the display name, company first:
+	// The stored name is a snapshot of the sale name — the company when the
+	// customer has one (SaleCustomerName):
 	// that is what the Folio description is built from.
-	if row.CustomerName == nil || *row.CustomerName != "Carolina Pedal Works — Jane Doe" {
-		t.Errorf("customer_name = %v, want the display-name snapshot", row.CustomerName)
+	if row.CustomerName == nil || *row.CustomerName != "Carolina Pedal Works" {
+		t.Errorf("customer_name = %v, want the company snapshot", row.CustomerName)
 	}
 	if row.Notes == nil || *row.Notes != "Picked up for the shop's open house" {
 		t.Errorf("notes = %v, want the trimmed note", row.Notes)
@@ -399,5 +400,87 @@ func TestSaleDetailsRequeueAPushedSaleForFolio(t *testing.T) {
 	}
 	if got := syncRowFor(t, server, SyncEntitySale, saleID).SyncState; got != "synced" {
 		t.Errorf("sync state of a retired-book sale = %q, want synced (never re-pushed)", got)
+	}
+}
+
+// Recording a sale for a saved customer stores the customer's sale name —
+// company first, else the contact's name — so the Folio push describes the
+// sale by customer instead of falling back to its location. A typed receipt
+// name with no saved customer is stored as typed. Screens still show the live
+// customer record through the join.
+func TestRecordSaleStoresTheSavedCustomersSaleName(t *testing.T) {
+	server := honeyTestServer(t)
+	company := seedSaleCustomer(t, server, "Jane Doe", "  Carolina Pedal Works ")
+	person := seedSaleCustomer(t, server, " Ann Buyer ", "")
+	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
+	seedHarvest(t, server, 100)
+	lotID := jarStock(t, server, jarSizeID, 10)
+	record := func(extra map[string]any) string {
+		t.Helper()
+		body := map[string]any{
+			"date":        time.Now().Format("2006-01-02"),
+			"orderStatus": "paid",
+			"location":    "Farm stand",
+			"lines": []map[string]any{
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 1, "unitPrice": 12},
+			},
+		}
+		for key, value := range extra {
+			body[key] = value
+		}
+		response, saleBody := call(t, server.honeyRecordSale, adminRequest(
+			http.MethodPost, "/api/v1/sales", body))
+		if response.Code != http.StatusCreated {
+			t.Fatalf("record sale = %d %v", response.Code, saleBody)
+		}
+		id, _ := saleBody["id"].(string)
+		return id
+	}
+
+	row := readSaleDetails(t, server, record(map[string]any{"customerId": company.String()}))
+	if row.CustomerName == nil || *row.CustomerName != "Carolina Pedal Works" {
+		t.Errorf("with a company: customer_name = %v, want the trimmed company", row.CustomerName)
+	}
+	row = readSaleDetails(t, server, record(map[string]any{"customerId": person.String()}))
+	if row.CustomerName == nil || *row.CustomerName != "Ann Buyer" {
+		t.Errorf("without a company: customer_name = %v, want the trimmed name", row.CustomerName)
+	}
+
+	// A typed walk-in name with no saved customer stays exactly as typed.
+	row = readSaleDetails(t, server, record(map[string]any{"customerName": "  Regular in the red truck "}))
+	if row.CustomerID != nil || row.CustomerName == nil || *row.CustomerName != "Regular in the red truck" {
+		t.Errorf("walk-in: customer_id=%v customer_name=%v, want the typed name", row.CustomerID, row.CustomerName)
+	}
+
+	// Screens keep showing the live customer record.
+	sales, err := server.honeyListSales(context.Background())
+	if err != nil {
+		t.Fatalf("list sales: %v", err)
+	}
+	for _, sale := range sales {
+		if sale.CustomerID != nil && *sale.CustomerID == company &&
+			(sale.CustomerName == nil || *sale.CustomerName != "Carolina Pedal Works — Jane Doe") {
+			t.Errorf("listed sale shows %v, want the live display name", sale.CustomerName)
+		}
+	}
+}
+
+// Editing a sale's customer uses the same rule: a contact without a company
+// is stored by name.
+func TestSaleDetailsStoreTheNameOfACustomerWithoutACompany(t *testing.T) {
+	server := honeyTestServer(t)
+	person := seedSaleCustomer(t, server, "Ann Buyer", "   ")
+	saleID := recordPaidJarSale(t, server, nil, 1)
+
+	code, body := patchSaleDetails(t, server, saleID, map[string]any{"customerId": person.String()})
+	if code != http.StatusOK {
+		t.Fatalf("edit details = %d %v", code, body)
+	}
+	row := readSaleDetails(t, server, saleID)
+	if row.CustomerName == nil || *row.CustomerName != "Ann Buyer" {
+		t.Errorf("customer_name = %v, want the customer's name", row.CustomerName)
+	}
+	if got, _ := body["customerName"].(string); got != "Ann Buyer" {
+		t.Errorf("response customerName = %v, want the stored name", body["customerName"])
 	}
 }

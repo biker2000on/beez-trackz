@@ -105,6 +105,27 @@ async function mockApp(
         },
       });
     }
+    if (path.endsWith("/production/workbench")) {
+      // An empty workbench whose read model reports the bulk balance below
+      // zero (bulkShortLbs), the same balance /honey/overview reports.
+      return route.fulfill({
+        json: {
+          year: 2026,
+          asOf: "2026-06-01T12:00:00Z",
+          freshness: { origin: "server", cachedAt: null, stale: false },
+          commands: [],
+          openSessions: [],
+          bulkOnHand: [],
+          lotsAwaitingBottling: [],
+          jarStock: [],
+          productBatches: [],
+          bulkShortLbs:
+            overview.bulkOnHandLbs < 0
+              ? (-overview.bulkOnHandLbs).toFixed(3)
+              : null,
+        },
+      });
+    }
     if (path.endsWith("/market-day/reconciliation")) {
       return route.fulfill({
         json: {
@@ -119,6 +140,32 @@ async function mockApp(
     return route.fulfill({ json: [] });
   });
 }
+
+test("production workbench flags negative bulk and asks for harvests", async ({
+  page,
+}) => {
+  await mockApp(page, { bulkOnHandLbs: -8.3, totalHarvestedLbs: 0 });
+  await page.goto("/production");
+  const alert = page.getByTestId("workbench-bulk-short");
+  await expect(alert).toBeVisible();
+  await expect(alert).toHaveAttribute("data-short-lbs", "8.300");
+  await expect(alert.getByText("Bulk honey is short of what was jarred")).toBeVisible();
+  await expect(alert.getByText("Jars on the shelf exceed recorded harvests.")).toBeVisible();
+  await expect(alert.getByRole("link", { name: "Record harvests" })).toHaveAttribute(
+    "href",
+    "/production/harvests",
+  );
+});
+
+test("production workbench says nothing about bulk when harvests cover the jars", async ({
+  page,
+}) => {
+  await mockApp(page, { bulkOnHandLbs: 12, totalHarvestedLbs: 40 });
+  await page.goto("/production");
+  await expect(page.getByRole("heading", { name: "Production" })).toBeVisible();
+  await expect(page.getByTestId("workbench-panel").first()).toBeVisible();
+  await expect(page.getByTestId("workbench-bulk-short")).toHaveCount(0);
+});
 
 test("market day refuses a paid sale when the jar has no price", async ({
   page,

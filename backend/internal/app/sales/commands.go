@@ -138,8 +138,9 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 	var customer *uuid.UUID
 	var commissionBPS *int
 	var priceList *uuid.UUID
+	var linkedCompany *string
 	var location uuid.UUID
-	if err := uow.QueryRow(ctx, `SELECT id,name,is_home,is_consignment,customer_id,price_basis,commission_bps,wholesale_price_list_id FROM inventory_locations WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1)) AND deleted_at IS NULL AND kind='consignee' ORDER BY (id=$1) DESC LIMIT 1 FOR UPDATE`, in.LocationID).Scan(&location, &name, &home, &consignment, &customer, &basis, &commissionBPS, &priceList); errors.Is(err, pgx.ErrNoRows) {
+	if err := uow.QueryRow(ctx, `SELECT id,name,is_home,is_consignment,customer_id,price_basis,commission_bps,wholesale_price_list_id,(SELECT c.company_name FROM customers c WHERE c.id=inventory_locations.customer_id) FROM inventory_locations WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1)) AND deleted_at IS NULL AND kind='consignee' ORDER BY (id=$1) DESC LIMIT 1 FOR UPDATE`, in.LocationID).Scan(&location, &name, &home, &consignment, &customer, &basis, &commissionBPS, &priceList, &linkedCompany); errors.Is(err, pgx.ErrNoRows) {
 		return out, app.NotFound(op, "location not found")
 	} else if err != nil {
 		return out, dbError(op, err)
@@ -270,7 +271,9 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		if in.AmountPaidCents >= owed {
 			status = "paid"
 		}
-		if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,order_status,order_number,notes,created_by,stock_location_id,physical_applied_at) VALUES($1,$2,$3,$4,$4,'consignment',$5,$6,0,$7,$8,$9,$10,$11,$12,now())`, saleID, in.ReportedAt, customer, name, in.PaymentMethod, owed, in.AmountPaidCents, status, order, trim(in.Notes), actorValue(uow), location); err != nil {
+		// The sale is to the store: its location is the store, and its name is
+		// the store's linked customer's company when it has one, else the store.
+		if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,order_status,order_number,notes,created_by,stock_location_id,physical_applied_at) VALUES($1,$2,$3,$4,$13,'consignment',$5,$6,0,$7,$8,$9,$10,$11,$12,now())`, saleID, in.ReportedAt, customer, consignmentSaleCustomerName(name, linkedCompany), in.PaymentMethod, owed, in.AmountPaidCents, status, order, trim(in.Notes), actorValue(uow), location, name); err != nil {
 			return out, dbError(op, err)
 		}
 		pinned := map[uuid.UUID]uuid.UUID{}
@@ -492,7 +495,20 @@ func RecordSale(ctx context.Context, uow *app.UnitOfWork, in RecordSaleInput) (R
 		return out, app.Invalid(op, "amountPaid must be between zero and the total")
 	}
 	out.Subtotal, out.TotalAmount, out.AmountPaid, out.BalanceDue = Money(subtotal), Money(total), Money(paid), Money(total-paid)
-	if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,harvest_lot_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,tax_cents,order_status,order_number,due_date,wholesale_price_list_id,notes,created_by,stock_location_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, in.SaleID, in.Date, in.CustomerID, in.HarvestLotID, trim(in.CustomerName), trim(in.Location), in.Channel, in.PaymentMethod, total, in.DiscountAmountCents, paid, in.TaxCents, in.OrderStatus, in.OrderNumber, in.DueDate, in.WholesalePriceListID, trim(in.Notes), actorValue(uow), stockID); err != nil {
+	// A typed receipt name is stored as typed. A saved customer with no typed
+	// name stores its company (else its name): the Folio push describes the
+	// sale with it instead of falling back to the location.
+	customerName := trim(in.CustomerName)
+	if customerName == nil && in.CustomerID != nil {
+		name, err := loadSaleCustomerName(ctx, uow, *in.CustomerID)
+		if errors.Is(err, errCustomerNotFound) {
+			return out, app.Invalid(op, "customer not found")
+		} else if err != nil {
+			return out, dbError(op, err)
+		}
+		customerName = name
+	}
+	if _, err := uow.Exec(ctx, `INSERT INTO sales(id,date,customer_id,harvest_lot_id,customer_name,location,channel,payment_method,total_amount_cents,discount_amount_cents,amount_paid_cents,tax_cents,order_status,order_number,due_date,wholesale_price_list_id,notes,created_by,stock_location_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, in.SaleID, in.Date, in.CustomerID, in.HarvestLotID, customerName, trim(in.Location), in.Channel, in.PaymentMethod, total, in.DiscountAmountCents, paid, in.TaxCents, in.OrderStatus, in.OrderNumber, in.DueDate, in.WholesalePriceListID, trim(in.Notes), actorValue(uow), stockID); err != nil {
 		return out, dbError(op, err)
 	}
 	for _, line := range in.Lines {
