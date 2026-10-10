@@ -49,12 +49,12 @@ func TestMetaYearsReachesEarliestRecord(t *testing.T) {
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO expenses (expense_date, category, description, amount_cents)
-		VALUES ('1931-05-01', 'supplies', 'meta years test', 100)`); err != nil {
+		VALUES ('1931-05-01', 'other', 'meta years test', 100)`); err != nil {
 		t.Fatalf("insert expense: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO expenses (expense_date, category, description, amount_cents, deleted_at)
-		VALUES ('1925-05-01', 'supplies', 'meta years deleted', 100, now())`); err != nil {
+		VALUES ('1925-05-01', 'other', 'meta years deleted', 100, now())`); err != nil {
 		t.Fatalf("insert deleted expense: %v", err)
 	}
 	var earliest, latest *int
