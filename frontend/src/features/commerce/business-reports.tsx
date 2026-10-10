@@ -59,6 +59,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { useApiaryOptions, useHiveOptions, useJarInventory } from "@/features/honey/hooks";
 import { formatDate, formatLbs, formatMoney, todayISO } from "@/features/honey/format";
 import {
+  customerContactName,
+  customerDisplayName,
   useCreateCustomer,
   useCreateExpense,
   useCreateWholesalePriceList,
@@ -675,13 +677,18 @@ const customerHelper = createColumnHelper<typeof gridFeatures, Customer>();
 const customerColumns = customerHelper.columns([
   customerHelper.display({
     id: "name",
-    header: "Name",
-    cell: ({ row }) => (
-      <>
-        <p className="font-medium">{row.original.name}</p>
-        <p className="text-xs text-muted-foreground">{row.original.referralCode}</p>
-      </>
-    ),
+    header: "Customer",
+    cell: ({ row }) => {
+      const company = row.original.companyName?.trim();
+      const contact = customerContactName(row.original);
+      return (
+        <>
+          <p className="font-medium">{company || row.original.name}</p>
+          {company && contact && <p className="text-sm text-muted-foreground">{contact}</p>}
+          <p className="text-xs text-muted-foreground">{row.original.referralCode}</p>
+        </>
+      );
+    },
   }),
   customerHelper.display({
     id: "contact",
@@ -744,13 +751,17 @@ function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpe
   const create = useCreateCustomer();
   const update = useUpdateCustomer();
   const busy = create.isPending || update.isPending;
-  const [name, setName] = React.useState(customer?.name ?? "");
+  const [company, setCompany] = React.useState(customer?.companyName ?? "");
+  // A company-only customer stores the company as its contact name too; the
+  // form shows that as an empty contact rather than the company twice.
+  const [name, setName] = React.useState(customer ? customerContactName(customer) : "");
   const [email, setEmail] = React.useState(customer?.email ?? "");
   const [phone, setPhone] = React.useState(customer?.phone ?? "");
   const [notes, setNotes] = React.useState(customer?.notes ?? "");
   const [optIn, setOptIn] = React.useState(customer?.emailOptIn ?? false);
 
   function resetDraft() {
+    setCompany("");
     setName("");
     setEmail("");
     setPhone("");
@@ -762,7 +773,8 @@ function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpe
     if (customer) {
       update.mutate({
         id: customer.id,
-        name,
+        name: name.trim(),
+        companyName: company.trim() || null,
         email: email.trim() || undefined,
         phone: phone.trim() || undefined,
         notes: notes.trim() || undefined,
@@ -772,7 +784,7 @@ function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpe
         referredBy: customer.referredBy ?? undefined,
       }, { onSuccess: () => onOpenChange(false) });
     } else {
-      create.mutate({ name, email: email.trim() || undefined, phone: phone.trim() || undefined, emailOptIn: optIn }, {
+      create.mutate({ name: name.trim(), companyName: company.trim() || undefined, email: email.trim() || undefined, phone: phone.trim() || undefined, emailOptIn: optIn }, {
         onSuccess: () => {
           if (resetAfter) resetDraft();
           else onOpenChange(false);
@@ -781,7 +793,7 @@ function CustomerDialog({ open, onOpenChange, customer }: { open: boolean; onOpe
     }
   }
 
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>{customer ? `Edit ${customer.name}` : "Add customer"}</DialogTitle></DialogHeader><ShortcutForm className="grid gap-3" onSubmit={(event) => { event.preventDefault(); submit(); }} onSubmitAndReset={customer ? undefined : () => submit(true)} onEscape={() => onOpenChange(false)}><div className="grid gap-1.5"><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div><div className="grid gap-1.5"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div></div>{customer && <div className="grid gap-1.5"><Label>Notes</Label><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>}<label className="flex items-center gap-2 text-sm"><Checkbox checked={optIn} onCheckedChange={(value) => setOptIn(value === true)} />Customer opted into seasonal release and reorder emails</label><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={busy || !name.trim()}>{customer ? "Save changes" : "Save customer"}</Button></DialogFooter></ShortcutForm></DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>{customer ? `Edit ${customerDisplayName(customer)}` : "Add customer"}</DialogTitle></DialogHeader><ShortcutForm className="grid gap-3" onSubmit={(event) => { event.preventDefault(); submit(); }} onSubmitAndReset={customer ? undefined : () => submit(true)} onEscape={() => onOpenChange(false)}><div className="grid gap-1.5"><Label htmlFor="customer-company">Company</Label><Input id="customer-company" value={company} placeholder="Business name, e.g. Carolina Pedal Works" autoComplete="organization" onChange={(e) => setCompany(e.target.value)} /><p className="text-xs text-muted-foreground">For shops, cafes and other businesses. Leave blank for an individual.</p></div><div className="grid gap-1.5"><Label htmlFor="customer-contact">Contact name</Label><Input id="customer-contact" value={name} placeholder={company.trim() ? "Who you deal with there (optional)" : "Customer's name"} autoComplete="name" onChange={(e) => setName(e.target.value)} /></div><div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div><div className="grid gap-1.5"><Label>Phone</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div></div>{customer && <div className="grid gap-1.5"><Label>Notes</Label><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>}<label className="flex items-center gap-2 text-sm"><Checkbox checked={optIn} onCheckedChange={(value) => setOptIn(value === true)} />Customer opted into seasonal release and reorder emails</label><DialogFooter><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button type="submit" disabled={busy || (!name.trim() && !company.trim())}>{customer ? "Save changes" : "Save customer"}</Button></DialogFooter></ShortcutForm></DialogContent></Dialog>;
 }
 
 function PriceListDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {

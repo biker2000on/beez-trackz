@@ -98,7 +98,7 @@ func (s *Server) jarSerialLookup(w http.ResponseWriter, r *http.Request) {
 		SELECT js.serial_number, js.created_at,
 			br.id, br.bottled_date, jz.label, br.quantity,
 			lot.id, lot.lot_code, varietal.name, lot.season, lot.public_slug,
-			sale.id, sale.date, COALESCE(c.name, sale.customer_name),
+			sale.id, sale.date, COALESCE(`+customerDisplayNameSQL("c")+`, sale.customer_name),
 			sale.order_status, js.sold_at, linker.display_name
 		FROM jar_serials js
 		JOIN bottling_runs br ON br.id = js.bottling_run_id

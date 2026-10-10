@@ -14,6 +14,7 @@ import (
 type CustomerRecord struct {
 	ID           uuid.UUID
 	Name         string
+	CompanyName  *string
 	Email        *string
 	Phone        *string
 	Notes        *string
@@ -66,10 +67,10 @@ func (CustomerRestoreRepository) Load(
 	rec := CustomerRecord{ID: id}
 	found, err := loadOne(customerRestoreOp, func() error {
 		return uow.QueryRow(ctx, `
-			SELECT name, email, phone, notes, email_opt_in, referral_code,
+			SELECT name, company_name, email, phone, notes, email_opt_in, referral_code,
 				referred_by, created_at, updated_at
 			FROM customers WHERE id = $1`, id).
-			Scan(&rec.Name, &rec.Email, &rec.Phone, &rec.Notes, &rec.EmailOptIn,
+			Scan(&rec.Name, &rec.CompanyName, &rec.Email, &rec.Phone, &rec.Notes, &rec.EmailOptIn,
 				&rec.ReferralCode, &rec.ReferredBy, &rec.Audit.CreatedAt,
 				&rec.Audit.UpdatedAt)
 	})
@@ -85,6 +86,7 @@ func (CustomerRestoreRepository) Load(
 // updated_at is excluded — the trigger owns it.
 func (CustomerRestoreRepository) Equal(stored, incoming CustomerRecord) bool {
 	return stored.Name == incoming.Name &&
+		equalStringPtr(stored.CompanyName, incoming.CompanyName) &&
 		equalStringPtr(stored.Email, incoming.Email) &&
 		equalStringPtr(stored.Phone, incoming.Phone) &&
 		equalStringPtr(stored.Notes, incoming.Notes) &&
@@ -100,11 +102,11 @@ func (CustomerRestoreRepository) Insert(
 	return insertPreserved(ctx, uow, customerRestoreOp, `
 		INSERT INTO customers
 			(id, name, email, phone, notes, email_opt_in, referral_code,
-			 referred_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			 referred_by, created_at, updated_at, company_name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (id) DO NOTHING`,
 		rec.ID, rec.Name, rec.Email, rec.Phone, rec.Notes, rec.EmailOptIn,
-		rec.ReferralCode, rec.ReferredBy, rec.Audit.CreatedAt, rec.Audit.updatedAtOr())
+		rec.ReferralCode, rec.ReferredBy, rec.Audit.CreatedAt, rec.Audit.updatedAtOr(), rec.CompanyName)
 }
 
 func (CustomerRestoreRepository) Overwrite(
@@ -113,10 +115,10 @@ func (CustomerRestoreRepository) Overwrite(
 	tag, err := uow.Exec(ctx, `
 		UPDATE customers SET
 			name = $2, email = $3, phone = $4, notes = $5, email_opt_in = $6,
-			referral_code = $7, referred_by = $8, created_at = $9
+			referral_code = $7, referred_by = $8, created_at = $9, company_name = $10
 		WHERE id = $1`,
 		rec.ID, rec.Name, rec.Email, rec.Phone, rec.Notes, rec.EmailOptIn,
-		rec.ReferralCode, rec.ReferredBy, rec.Audit.CreatedAt)
+		rec.ReferralCode, rec.ReferredBy, rec.Audit.CreatedAt, rec.CompanyName)
 	if err != nil {
 		return classifyPg(customerRestoreOp, err)
 	}

@@ -1288,14 +1288,43 @@ func (s *Server) expenseDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "softDeleted": true})
 }
 
+// customerDisplayNameSQL is the human-facing name of the customer row under
+// alias: the company when there is one, with the contact person after it
+// ("Carolina Pedal Works — Jane Doe"); the contact alone otherwise. A contact
+// that merely repeats the company (name falls back to the company when only
+// a company was entered) is not printed twice. NULL when the row is absent,
+// so a LEFT JOIN caller can COALESCE to the sale's stored customer_name.
+func customerDisplayNameSQL(alias string) string {
+	return fmt.Sprintf(`(CASE
+		WHEN NULLIF(btrim(%[1]s.company_name), '') IS NULL THEN %[1]s.name
+		WHEN NULLIF(btrim(%[1]s.name), '') IS NULL
+			OR lower(btrim(%[1]s.name)) = lower(btrim(%[1]s.company_name))
+			THEN btrim(%[1]s.company_name)
+		ELSE btrim(%[1]s.company_name) || ' — ' || btrim(%[1]s.name)
+	END)`, alias)
+}
+
+// customerNames normalizes a create/update payload: at least one of company
+// and contact name is required, and because customers.name is NOT NULL a
+// company-only customer stores the company as its name too.
+func customerNames(req customerPayload) (name string, company *string, ok bool) {
+	company = honeyTrimPtr(req.CompanyName)
+	name = strings.TrimSpace(req.Name)
+	if name == "" && company != nil {
+		name = *company
+	}
+	return name, company, name != ""
+}
+
 func (s *Server) customerList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.pool.Query(r.Context(), `
-		SELECT c.id, c.name, c.email, c.phone, c.notes, c.email_opt_in,
+		SELECT c.id, c.name, c.company_name, c.email, c.phone, c.notes, c.email_opt_in,
 			c.referral_code, c.referred_by, c.created_at,
 			COUNT(s.id), COALESCE(SUM(s.total_amount_cents), 0), MAX(s.date)
 		FROM customers c
 		LEFT JOIN sales s ON s.customer_id=c.id AND s.order_status <> 'cancelled'
-		GROUP BY c.id ORDER BY c.name`)
+		GROUP BY c.id
+		ORDER BY lower(COALESCE(NULLIF(btrim(c.company_name), ''), c.name)), lower(c.name)`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -1305,19 +1334,19 @@ func (s *Server) customerList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id uuid.UUID
 		var name string
-		var email, phone, notes, referral, referredBy *string
+		var company, email, phone, notes, referral, referredBy *string
 		var optIn bool
 		var created time.Time
 		var orders int
 		var revenue money
 		var lastOrder *time.Time
-		if err := rows.Scan(&id, &name, &email, &phone, &notes, &optIn,
+		if err := rows.Scan(&id, &name, &company, &email, &phone, &notes, &optIn,
 			&referral, &referredBy, &created, &orders, &revenue, &lastOrder); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
 		out = append(out, map[string]any{
-			"id": id, "name": name, "email": email, "phone": phone, "notes": notes,
+			"id": id, "name": name, "companyName": company, "email": email, "phone": phone, "notes": notes,
 			"emailOptIn": optIn, "referralCode": referral, "referredBy": referredBy,
 			"createdAt": created, "orderCount": orders, "lifetimeRevenue": revenue,
 			"lastOrderDate": lastOrder,
@@ -1330,6 +1359,7 @@ func (s *Server) customerList(w http.ResponseWriter, r *http.Request) {
 
 type customerPayload struct {
 	Name         string  `json:"name"`
+	CompanyName  *string `json:"companyName"`
 	Email        *string `json:"email"`
 	Phone        *string `json:"phone"`
 	Notes        *string `json:"notes"`
@@ -1340,8 +1370,13 @@ type customerPayload struct {
 
 func (s *Server) customerCreate(w http.ResponseWriter, r *http.Request) {
 	var req customerPayload
-	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.Name) == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid customer")
+		return
+	}
+	name, company, ok := customerNames(req)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "a company or contact name is required")
 		return
 	}
 	referral := honeyTrimPtr(req.ReferralCode)
@@ -1351,11 +1386,11 @@ func (s *Server) customerCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var id uuid.UUID
 	err := s.pool.QueryRow(r.Context(), `
-		INSERT INTO customers (name,email,phone,notes,email_opt_in,referral_code,referred_by,created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-		strings.TrimSpace(req.Name), honeyTrimPtr(req.Email), honeyTrimPtr(req.Phone),
+		INSERT INTO customers (name,email,phone,notes,email_opt_in,referral_code,referred_by,created_by,company_name)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+		name, honeyTrimPtr(req.Email), honeyTrimPtr(req.Phone),
 		honeyTrimPtr(req.Notes), req.EmailOptIn, referral, honeyTrimPtr(req.ReferredBy),
-		actorID(r)).Scan(&id)
+		actorID(r), company).Scan(&id)
 	if err != nil {
 		writeDBError(w, err, "referral code or email already exists",
 			"invalid reference")
@@ -1371,16 +1406,21 @@ func (s *Server) customerUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req customerPayload
-	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.Name) == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid customer")
+		return
+	}
+	name, company, ok := customerNames(req)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "a company or contact name is required")
 		return
 	}
 	tag, err := s.pool.Exec(r.Context(), `
 		UPDATE customers SET name=$1,email=$2,phone=$3,notes=$4,email_opt_in=$5,
-			referral_code=$6,referred_by=$7 WHERE id=$8`,
-		strings.TrimSpace(req.Name), honeyTrimPtr(req.Email), honeyTrimPtr(req.Phone),
+			referral_code=$6,referred_by=$7,company_name=$9 WHERE id=$8`,
+		name, honeyTrimPtr(req.Email), honeyTrimPtr(req.Phone),
 		honeyTrimPtr(req.Notes), req.EmailOptIn, honeyTrimPtr(req.ReferralCode),
-		honeyTrimPtr(req.ReferredBy), id)
+		honeyTrimPtr(req.ReferredBy), id, company)
 	if err != nil {
 		writeDBError(w, err, "referral code or email already exists",
 			"invalid reference")

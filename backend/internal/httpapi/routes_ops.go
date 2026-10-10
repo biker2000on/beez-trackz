@@ -943,7 +943,7 @@ func (s *Server) handleCompliancePacket(w http.ResponseWriter, r *http.Request) 
 
 	saleRows, err := s.pool.Query(ctx, `
 		SELECT s.id, s.date, s.channel, s.order_number, s.order_status,
-			COALESCE(c.name, s.customer_name), lot.lot_code,
+			COALESCE(`+customerDisplayNameSQL("c")+`, s.customer_name), lot.lot_code,
 			s.total_amount_cents, s.amount_paid_cents
 		FROM sales s
 		LEFT JOIN customers c ON c.id = s.customer_id

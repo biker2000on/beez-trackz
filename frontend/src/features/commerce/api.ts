@@ -128,7 +128,10 @@ export interface Expense {
 
 export interface Customer {
   id: string;
+  /** The contact person. A company-only customer stores the company here too. */
   name: string;
+  /** The business the customer represents, when they are one. */
+  companyName: string | null;
   email: string | null;
   phone: string | null;
   notes: string | null;
@@ -139,6 +142,26 @@ export interface Customer {
   lifetimeRevenue: number;
   lastOrderDate: string | null;
   reorderReminderDue: boolean;
+}
+
+/**
+ * The name to show a person for a customer: the company first, with the contact
+ * after it ("Carolina Pedal Works — Jane Doe"), or just the contact. A contact
+ * that only repeats the company is not printed twice.
+ */
+export function customerDisplayName(customer: Pick<Customer, "name" | "companyName">): string {
+  const company = customer.companyName?.trim() ?? "";
+  const contact = customer.name.trim();
+  if (!company) return contact;
+  if (!contact || contact.toLowerCase() === company.toLowerCase()) return company;
+  return `${company} — ${contact}`;
+}
+
+/** The contact person, unless it merely repeats the company. */
+export function customerContactName(customer: Pick<Customer, "name" | "companyName">): string {
+  const company = customer.companyName?.trim() ?? "";
+  const contact = customer.name.trim();
+  return company && contact.toLowerCase() === company.toLowerCase() ? "" : contact;
 }
 
 export interface Profitability {
@@ -397,6 +420,7 @@ export function useCreateCustomer() {
   return useCommerceMutation(
     (body: {
       name: string;
+      companyName?: string;
       email?: string;
       phone?: string;
       notes?: string;
@@ -415,6 +439,7 @@ export function useUpdateCustomer() {
     }: {
       id: string;
       name: string;
+      companyName?: string | null;
       email?: string | null;
       phone?: string | null;
       notes?: string | null;

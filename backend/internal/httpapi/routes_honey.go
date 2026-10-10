@@ -677,7 +677,7 @@ type honeySaleRow struct {
 func (s *Server) honeyListSales(ctx context.Context) ([]honeySaleRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT s.id, s.date, s.customer_id, s.harvest_lot_id, lot.lot_code,
-			COALESCE(c.name, s.customer_name),
+			COALESCE(`+customerDisplayNameSQL("c")+`, s.customer_name),
 			s.location, s.stock_location_id, s.channel, s.payment_method, s.total_amount_cents,
 			s.discount_amount_cents, s.amount_paid_cents, s.tax_cents,
 			s.order_status, s.order_number,

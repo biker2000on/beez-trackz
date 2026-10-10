@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  customerDisplayName,
   useCustomers,
   useHarvestLots,
   useWholesalePriceLists,
@@ -619,7 +620,7 @@ export function RecordSaleDialog({
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No saved customer</SelectItem>
-                {(customers.data ?? []).map((customer) => <SelectItem key={customer.id} value={customer.id}>{customer.name}</SelectItem>)}
+                {(customers.data ?? []).map((customer) => <SelectItem key={customer.id} value={customer.id}>{customerDisplayName(customer)}</SelectItem>)}
               </SelectContent>
             </Select>
             <Input
