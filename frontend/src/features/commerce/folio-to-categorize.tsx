@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AlertTriangle, ArrowRight, Link2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,6 +21,7 @@ import { formatDate, formatMoney } from "@/features/honey/format";
 import { errorMessage, humanize } from "@/features/settings/gnucash-format";
 
 import {
+  formatFolioAmount,
   useAcceptFolioImport,
   useCategorizeFolioImport,
   useFolioImports,
@@ -36,11 +38,22 @@ import {
  * operator picks a category here, links a deposit to the Atlas sale it pays
  * for, and settles anything Folio changed or deleted since.
  *
+ * Amounts are signed: a refund credited to an expense account is a negative
+ * expense ("−$12.00 refund"), never income.
+ *
+ * A second view lists deposits not linked to any Atlas sale. Opened from the
+ * profitability report's prompt with `?folio=unlinked`; an unlinked deposit
+ * that really is an Atlas sale would otherwise count that revenue twice.
+ *
  * Nothing here writes to Folio: the transaction stays where the bookkeeper
  * put it. Renders nothing until the import has brought something in.
  */
 export function FolioToCategorize() {
-  const imports = useFolioImports("attention");
+  const searchParams = useSearchParams();
+  const [view, setView] = React.useState<"attention" | "unlinked">(
+    searchParams.get("folio") === "unlinked" ? "unlinked" : "attention",
+  );
+  const imports = useFolioImports(view);
   const categorize = useCategorizeFolioImport();
   const accept = useAcceptFolioImport();
   const keep = useKeepFolioImport();
@@ -55,9 +68,11 @@ export function FolioToCategorize() {
   const busy = categorize.isPending || accept.isPending || keep.isPending;
   const onError = (fallback: string) => (error: unknown) =>
     toast.error(errorMessage(error, fallback));
+  const unlinkedCount = counts.unlinkedIncome ?? 0;
+  const unlinkedAmount = counts.unlinkedIncomeAmount ?? 0;
 
   return (
-    <Card>
+    <Card id="folio-imports">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
         <CardTitle className="flex flex-wrap items-center gap-2 text-base">
           From Folio
@@ -68,6 +83,9 @@ export function FolioToCategorize() {
             <Badge variant="destructive">
               Changed in Folio {counts.conflicts}
             </Badge>
+          ) : null}
+          {unlinkedCount > 0 ? (
+            <Badge variant="outline">Not linked to a sale {unlinkedCount}</Badge>
           ) : null}
         </CardTitle>
         <Button asChild variant="ghost" size="sm">
@@ -84,9 +102,38 @@ export function FolioToCategorize() {
           stays where it is. Income linked to an Atlas sale is not counted as
           revenue a second time.
         </p>
+        {view === "attention" && unlinkedCount > 0 ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
+            <span className="flex items-center gap-1">
+              <Link2 className="size-3.5 shrink-0 text-warning" />
+              {formatMoney(unlinkedAmount)} of Folio deposits
+              {unlinkedCount === 1 ? " isn't" : ` (${unlinkedCount}) aren't`} linked
+              to a sale — link any that are Atlas sales so revenue isn&apos;t
+              double counted.
+            </span>
+            <Button size="sm" variant="outline" onClick={() => setView("unlinked")}>
+              Show unlinked deposits
+            </Button>
+          </div>
+        ) : null}
+        {view === "unlinked" ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              Deposits from Folio not linked to an Atlas sale. If one is the
+              money for a sale Atlas recorded, use &ldquo;This is a
+              sale…&rdquo;; otherwise give it a category and it stays other
+              income.
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => setView("attention")}>
+              Back to To categorize
+            </Button>
+          </div>
+        ) : null}
         {items.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Everything imported has a category.
+            {view === "unlinked"
+              ? "Every imported deposit is linked to a sale or marked a sales deposit."
+              : "Everything imported has a category."}
           </p>
         ) : (
           <ul className="grid gap-2">
@@ -157,13 +204,22 @@ function FolioImportRow({
   onKeep: () => void;
 }) {
   const income = item.direction === "income";
+  const negative = item.amount < 0;
   return (
     <li className="grid gap-2 rounded-md border p-3 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="grid min-w-0 gap-0.5">
           <span className="font-medium">{item.description}</span>
           <span className="text-xs text-muted-foreground">
-            {formatDate(item.date)} · {income ? "Money in" : "Money out"} ·{" "}
+            {formatDate(item.date)} ·{" "}
+            {income
+              ? negative
+                ? "Income paid back"
+                : "Money in"
+              : negative
+                ? "Refund (lowers expenses)"
+                : "Money out"}{" "}
+            ·{" "}
             {item.bookLabel}
             {item.bookRetired ? " (retired book)" : ""}
             {item.notes ? ` · ${item.notes}` : ""}
@@ -171,13 +227,12 @@ function FolioImportRow({
         </div>
         <span
           className={
-            income
+            income && !negative
               ? "font-medium tabular-nums text-success"
               : "font-medium tabular-nums"
           }
         >
-          {income ? "+" : ""}
-          {formatMoney(item.amount)}
+          {formatFolioAmount(item.direction, item.amount, formatMoney)}
         </span>
       </div>
 
@@ -191,8 +246,12 @@ function FolioImportRow({
             <p className="text-xs text-muted-foreground">
               Folio now says: {item.pending.description} ·{" "}
               {formatDate(item.pending.postDate)} ·{" "}
-              {item.pending.direction === "income" ? "money in" : "money out"}{" "}
-              {formatMoney(item.pending.amountCents / 100)}
+              {item.pending.direction === "income" ? "income" : "expense"}{" "}
+              {formatFolioAmount(
+                item.pending.direction,
+                item.pending.amountCents / 100,
+                formatMoney,
+              )}
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
@@ -230,7 +289,7 @@ function FolioImportRow({
             ))}
           </SelectContent>
         </Select>
-        {income ? (
+        {income && !negative ? (
           <Button
             size="sm"
             variant="ghost"
@@ -242,7 +301,9 @@ function FolioImportRow({
           </Button>
         ) : null}
       </div>
-      {income && linking ? <SaleLinker item={item} onDone={onToggleLink} /> : null}
+      {income && !negative && linking ? (
+        <SaleLinker item={item} onDone={onToggleLink} />
+      ) : null}
     </li>
   );
 }

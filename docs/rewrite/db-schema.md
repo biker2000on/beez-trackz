@@ -127,14 +127,19 @@ points at its row through `active_book_id`, alongside the import settings
 it was pushed to (NULL = never pushed; follows the active book).
 `other_income`: money in that is not an Atlas sale (income_date, category
 CHECK uncategorized | sales_deposit | honey_sales | colony_sales |
-product_sales | pollination | services | grant | refund | other, description,
-amount_cents, optional `sale_id` naming the Atlas sale a deposit is, notes,
-soft delete). `folio_imports`: one row per Folio transaction imported from
-one book (UNIQUE book_id + transaction_guid), pointing at exactly one expense
-or other_income row (matching `direction`), with the import accounts it
-posts to, the remote post date / enterDate / description / amount last
-applied, and a conflict `state` (remote_changed | remote_deleted |
-unrepresentable) with `message` and the pending remote version.
+product_sales | pollination | services | grant | other, description,
+signed amount_cents — negative is money paid back out of an income account —,
+optional `sale_id` naming the Atlas sale a deposit is, notes, soft delete).
+`expenses.amount_cents` has no non-negative CHECK since 00011/00064: an
+imported supplier refund is a negative expense; manual entry still refuses a
+negative amount in the API. `folio_imports`: one row per Folio transaction
+imported from one book (UNIQUE book_id + transaction_guid), pointing at
+exactly one expense or other_income row (matching `direction`), with the
+import accounts it posts to, the remote post date / enterDate / description /
+signed amount last applied, `remote_deleted_at` (the Folio deletion last
+reported, so an at-least-once re-delivery is not raised twice), and a
+conflict `state` (remote_changed | remote_deleted | unrepresentable) with
+`message` and the pending remote version.
 
 ### customers and wholesale pricing
 Customers store an optional company name (`company_name`, nullable,

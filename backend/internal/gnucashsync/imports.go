@@ -18,28 +18,37 @@ import (
 // external_sync row.
 //
 // Direction and amount. GnuCash splits are signed: positive is a debit,
-// negative a credit. What a debit MEANS depends on the account type:
+// negative a credit. The ACCOUNT TYPE of the import accounts a transaction
+// touches decides what the entry is, and the amount is signed, so a refund
+// reduces the total it belongs to instead of appearing as the opposite kind:
 //
-//   - an income or expense account (P&L) is debited by spending and credited
-//     by earning, so a positive split is money out (an expense) and a
-//     negative one money in (income, or a refund of an expense);
+//   - an EXPENSE account (and an account whose type is unknown — deleted in
+//     Folio since, or never listed — the shape import accounts almost always
+//     have): the entry is an EXPENSE of the net debit. A net credit is a
+//     NEGATIVE expense — a refund from a supplier — which lowers expense
+//     totals. It is never other income.
+//   - an INCOME account: the entry is OTHER INCOME of the net credit. A net
+//     debit is NEGATIVE other income — money paid back to a customer, a
+//     reversed deposit — which lowers other income. (Flagging it instead was
+//     considered; a signed entry keeps the totals right without a decision
+//     the operator has no better answer to, and it mirrors the expense rule.)
 //   - an asset, bank, cash, liability or credit-card account (balance sheet)
-//     is debited when money arrives and credited when it leaves, so the sign
-//     reads the other way round.
+//     is debited when money arrives and credited when it leaves, so its sign
+//     reads the other way round: a net credit (money out) is an expense, a
+//     net debit (money in) is other income, both positive. These say nothing
+//     about what the money was FOR, so there is no refund reading here.
 //
-// The rule therefore sums, over the splits on import accounts, the signed
-// outflow: +amount for a P&L account, -amount for a balance-sheet account. A
-// positive total is an expense of that many cents, a negative total is income
-// of its absolute value, and zero is a transfer that is skipped.
+// A transaction touching expense AND income import accounts nets them as
+// money out (expense debits plus income debits, minus credits): a positive
+// net is an expense, a negative net is other income, both positive.
 //
-// When one transaction touches import accounts of BOTH kinds (checking ->
-// Beekeeping expense, both chosen as import accounts) the two halves describe
-// the same money and would cancel. The P&L splits win: they are what says
-// what the money was for. Balance-sheet splits are used only when the
-// transaction touches no P&L import account.
+// A net of zero is a transfer between import accounts and is skipped.
 //
-// An account whose type is unknown (deleted in Folio since, or never listed)
-// is treated as P&L — the shape import accounts almost always have.
+// When one transaction touches import accounts of BOTH the P&L and the
+// balance-sheet kind (checking -> Beekeeping expense, both chosen as import
+// accounts) the two halves describe the same money and would cancel. The P&L
+// splits win: they are what says what the money was for. Balance-sheet splits
+// are used only when the transaction touches no P&L import account.
 
 // ImportDirection is which kind of Atlas entry a Folio transaction becomes.
 type ImportDirection string
@@ -65,11 +74,13 @@ const (
 type ImportCandidate struct {
 	TransactionGUID string
 	Direction       ImportDirection
-	AmountCents     int64
-	PostDate        time.Time
-	HasPostDate     bool
-	EnterDate       string
-	Description     string
+	// AmountCents is signed: negative is a refund (expense) or a reversal
+	// (income) and reduces its total. Never zero.
+	AmountCents int64
+	PostDate    time.Time
+	HasPostDate bool
+	EnterDate   string
+	Description string
 	// Memo joins the memos of the splits that decided the direction.
 	Memo string
 	// AccountGUIDs are the import accounts the transaction posts to, sorted.
@@ -88,6 +99,12 @@ func IsProfitAndLoss(accountType string) bool {
 	}
 }
 
+// IsIncomeAccount reports whether a GnuCash account type is an income
+// account. Every other P&L type (EXPENSE, unknown, empty) reads as expense.
+func IsIncomeAccount(accountType string) bool {
+	return strings.ToUpper(strings.TrimSpace(accountType)) == "INCOME"
+}
+
 // ClassifyImport decides whether change becomes an Atlas entry and of what
 // kind. importAccounts is the set of account GUIDs to import from and
 // accountTypes maps a GUID to its GnuCash type.
@@ -104,31 +121,64 @@ func ClassifyImport(
 		return ImportCandidate{}, ImportSkipUnrepresentable
 	}
 
-	var pl, bs []ChangeSplit
+	var expenseSplits, incomeSplits, bs []ChangeSplit
 	touched := map[string]bool{}
 	for _, split := range change.Splits {
 		if !importAccounts[split.AccountGUID] {
 			continue
 		}
 		touched[split.AccountGUID] = true
-		if IsProfitAndLoss(accountTypes[split.AccountGUID]) {
-			pl = append(pl, split)
-		} else {
+		accountType := accountTypes[split.AccountGUID]
+		switch {
+		case !IsProfitAndLoss(accountType):
 			bs = append(bs, split)
+		case IsIncomeAccount(accountType):
+			incomeSplits = append(incomeSplits, split)
+		default:
+			expenseSplits = append(expenseSplits, split)
 		}
 	}
 	if len(touched) == 0 {
 		return ImportCandidate{}, ImportSkipNoImportAccount
 	}
 
-	chosen, sign := pl, int64(1)
-	if len(chosen) == 0 {
-		chosen, sign = bs, -1
+	// See the file note for each case. net is the signed amount of the entry
+	// in the chosen direction.
+	var (
+		chosen    []ChangeSplit
+		direction ImportDirection
+		net       int64
+	)
+	sum := func(splits []ChangeSplit) int64 {
+		var total int64
+		for _, split := range splits {
+			total += split.AmountCents
+		}
+		return total
 	}
-	var outflow int64
+	switch {
+	case len(expenseSplits) > 0 && len(incomeSplits) == 0:
+		chosen, direction, net = expenseSplits, ImportExpense, sum(expenseSplits)
+	case len(incomeSplits) > 0 && len(expenseSplits) == 0:
+		chosen, direction, net = incomeSplits, ImportIncome, -sum(incomeSplits)
+	default:
+		// Both P&L kinds (net money out), or balance sheet only (whose sign
+		// reads the other way round). Either way the result is positive.
+		var outflow int64
+		if len(expenseSplits) > 0 {
+			chosen = append(append(chosen, expenseSplits...), incomeSplits...)
+			outflow = sum(chosen)
+		} else {
+			chosen = bs
+			outflow = -sum(bs)
+		}
+		direction, net = ImportExpense, outflow
+		if outflow < 0 {
+			direction, net = ImportIncome, -outflow
+		}
+	}
 	memos := []string{}
 	for _, split := range chosen {
-		outflow += sign * split.AmountCents
 		if memo := strings.TrimSpace(split.Memo); memo != "" {
 			memos = append(memos, memo)
 		}
@@ -150,14 +200,10 @@ func ClassifyImport(
 	if parsed, ok := ParsePostDate(change.PostDate); ok {
 		candidate.PostDate, candidate.HasPostDate = parsed, true
 	}
-	switch {
-	case outflow > 0:
-		candidate.Direction, candidate.AmountCents = ImportExpense, outflow
-	case outflow < 0:
-		candidate.Direction, candidate.AmountCents = ImportIncome, -outflow
-	default:
+	if net == 0 {
 		return candidate, ImportSkipTransfer
 	}
+	candidate.Direction, candidate.AmountCents = direction, net
 	if candidate.Description == "" {
 		candidate.Description = candidate.Memo
 	}

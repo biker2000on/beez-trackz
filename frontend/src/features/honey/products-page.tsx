@@ -47,6 +47,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useExpenses, useHarvestLots } from "@/features/commerce/api";
+import { formatFolioAmount } from "@/features/commerce/folio-imports-api";
 import { GRAMS_PER_OUNCE, parsePropolisMassInput } from "@/lib/units";
 import { useUnits } from "@/lib/use-units";
 
@@ -951,7 +952,8 @@ function AddBatchDialog({
                     <SelectItem value="none">None</SelectItem>
                     {(expenses.data ?? []).map((expense) => (
                       <SelectItem key={expense.id} value={expense.id}>
-                        {expense.description} · {formatMoney(expense.amount)}
+                        {expense.description} ·{" "}
+                        {formatFolioAmount("expense", expense.amount, formatMoney)}
                       </SelectItem>
                     ))}
                   </SelectContent>

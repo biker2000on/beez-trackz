@@ -26,10 +26,25 @@ import (
 // entry linked to a specific sale, is excluded from reported income so the
 // same revenue is not counted twice. The *_sales categories are for sales
 // Atlas never recorded — history from before Atlas, typically.
+//
+// There is no "refund" category: a refund from a supplier is a NEGATIVE
+// expense (gnucashsync.ClassifyImport), and money paid back to a customer is
+// negative other income in whatever category the original income had.
 var otherIncomeCategories = []string{
 	"uncategorized", "sales_deposit", "honey_sales", "colony_sales",
-	"product_sales", "pollination", "services", "grant", "refund", "other",
+	"product_sales", "pollination", "services", "grant", "other",
 }
+
+// unlinkedIncomeSQL selects, over other_income aliased oi, the deposits that
+// may be Atlas sales nobody has linked yet: live, positive, not linked to a
+// sale, and either uncategorized or in a sales category (honey, colony,
+// product) — the ones that overlap what Atlas records as sales. Grants,
+// pollination, services and "other" are the operator's statement that the
+// money is not an Atlas sale, and a sales deposit is already excluded from
+// income. Reports and the To-categorize list prompt the operator to link
+// these, so revenue is not counted twice.
+const unlinkedIncomeSQL = `oi.deleted_at IS NULL AND oi.sale_id IS NULL AND oi.amount_cents > 0
+	AND oi.category IN ('uncategorized', 'honey_sales', 'colony_sales', 'product_sales')`
 
 func (s *Server) mountFolioImports(r chi.Router) {
 	admin := r.With(s.requireAdmin)
@@ -63,15 +78,20 @@ type folioImportItem struct {
 	Deleted         bool          `json:"deleted"`
 }
 
-// GET /folio-imports?view=attention|all — attention (the default) is the
-// "To categorize" list plus every conflict; all is every imported entry.
+// GET /folio-imports?view=attention|unlinked|all — attention (the default) is
+// the "To categorize" list plus every conflict; unlinked is imported income
+// not linked to an Atlas sale (unlinkedIncomeSQL); all is every imported
+// entry.
 func (s *Server) handleFolioEntryList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	view := r.URL.Query().Get("view")
 	filter := `COALESCE(e.deleted_at, oi.deleted_at) IS NULL
 		AND (COALESCE(e.category, oi.category) = 'uncategorized' OR fi.state IS NOT NULL)`
-	if view == "all" {
+	switch view {
+	case "all":
 		filter = `(COALESCE(e.deleted_at, oi.deleted_at) IS NULL OR fi.state IS NOT NULL)`
+	case "unlinked":
+		filter = `fi.direction = 'income' AND ` + unlinkedIncomeSQL
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT fi.id, fi.book_id, b.label, b.retired_at IS NOT NULL, fi.transaction_guid,
@@ -140,6 +160,10 @@ type folioImportCountsResult struct {
 	ExpensesToCategorize int `json:"expensesToCategorize"`
 	IncomeToCategorize   int `json:"incomeToCategorize"`
 	Conflicts            int `json:"conflicts"`
+	// UnlinkedIncome / UnlinkedIncomeAmount: imported deposits not linked to
+	// an Atlas sale (unlinkedIncomeSQL), all years — the "link them" prompt.
+	UnlinkedIncome       int   `json:"unlinkedIncome"`
+	UnlinkedIncomeAmount money `json:"unlinkedIncomeAmount"`
 }
 
 func folioImportCounts(ctx context.Context, q app.Querier) (folioImportCountsResult, error) {
@@ -150,16 +174,20 @@ func folioImportCounts(ctx context.Context, q app.Querier) (folioImportCountsRes
 			count(*) FILTER (WHERE live AND category = 'uncategorized'),
 			count(*) FILTER (WHERE live AND category = 'uncategorized' AND direction = 'expense'),
 			count(*) FILTER (WHERE live AND category = 'uncategorized' AND direction = 'income'),
-			count(*) FILTER (WHERE state IS NOT NULL)
+			count(*) FILTER (WHERE state IS NOT NULL),
+			count(*) FILTER (WHERE unlinked),
+			COALESCE(SUM(amount_cents) FILTER (WHERE unlinked), 0)
 		FROM (
 			SELECT fi.direction, fi.state,
 				COALESCE(e.category, oi.category) AS category,
-				COALESCE(e.deleted_at, oi.deleted_at) IS NULL AS live
+				COALESCE(e.deleted_at, oi.deleted_at) IS NULL AS live,
+				COALESCE(e.amount_cents, oi.amount_cents) AS amount_cents,
+				COALESCE(fi.direction = 'income' AND `+unlinkedIncomeSQL+`, false) AS unlinked
 			FROM folio_imports fi
 			LEFT JOIN expenses e ON e.id = fi.expense_id
 			LEFT JOIN other_income oi ON oi.id = fi.income_id
 		) imported`).Scan(&out.Imported, &out.ToCategorize, &out.ExpensesToCategorize,
-		&out.IncomeToCategorize, &out.Conflicts)
+		&out.IncomeToCategorize, &out.Conflicts, &out.UnlinkedIncome, &out.UnlinkedIncomeAmount)
 	return out, err
 }
 
@@ -258,6 +286,10 @@ func (s *Server) handleFolioImportSale(w http.ResponseWriter, r *http.Request) {
 			}
 			if row.Direction != gnucashsync.ImportIncome || row.IncomeID == nil {
 				return app.Invalid(op, "Only imported income can be linked to a sale")
+			}
+			if req.SaleID != nil && row.RemoteAmountCents < 0 {
+				// Money paid back out is not a sale's deposit.
+				return app.Invalid(op, "A reversal (negative income) cannot be linked to a sale")
 			}
 			if req.SaleID == nil {
 				_, err = uow.Exec(ctx, `UPDATE other_income SET sale_id = NULL WHERE id = $1`, *row.IncomeID)
