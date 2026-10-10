@@ -37,6 +37,8 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountGnuCashSync(r)
 	s.mountHoney(r)
 	s.mountHoneyActivity(r)
+	// Orders & register: sales merged with give-aways and own use.
+	s.mountSalesRegister(r)
 	s.mountHarvestSessions(r)
 	s.mountJarSizes(r)
 	s.mountEquipment(r)

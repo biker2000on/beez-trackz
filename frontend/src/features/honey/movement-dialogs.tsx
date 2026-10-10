@@ -42,6 +42,7 @@ import {
 } from "@/features/commerce/lot-lines";
 import { useStockInventory } from "@/features/commerce/stock-locations-api";
 import { useUnits } from "@/lib/use-units";
+import { cn } from "@/lib/utils";
 
 import { parseHoneyWeight, parseNum, todayISO } from "./format";
 import {
@@ -599,10 +600,27 @@ export function BulkMovementDialog({
 
 const giveAwaySchema = z.object({
   date: z.string().min(1, "Date is required"),
+  purpose: z.enum(["gift", "own_use"]),
   reason: z.string(),
   notes: z.string(),
 });
 type GiveAwayValues = z.infer<typeof giveAwaySchema>;
+
+const giveAwayDefaults = (): GiveAwayValues => ({
+  date: todayISO(),
+  purpose: "gift",
+  reason: "",
+  notes: "",
+});
+
+/**
+ * Own use is a give-away to yourself: the same zero-revenue outflow, labelled
+ * apart in Orders & register.
+ */
+const GIVE_AWAY_PURPOSES = [
+  { value: "gift", label: "Gift / sample" },
+  { value: "own_use", label: "Own use / kept for myself" },
+] as const;
 
 export function GiveAwayDialog({
   open,
@@ -613,7 +631,7 @@ export function GiveAwayDialog({
   const stock = useStockInventory(open);
   const form = useForm<GiveAwayValues>({
     resolver: zodResolver(giveAwaySchema),
-    defaultValues: { date: todayISO(), reason: "", notes: "" },
+    defaultValues: giveAwayDefaults(),
   });
   const homeId = stock.data?.locations.find((row) => row.isHome)?.id;
   const skus = shelfSkus(stock.data?.items, homeId, { jarsOnly: true });
@@ -623,7 +641,7 @@ export function GiveAwayDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset({ date: todayISO(), reason: "", notes: "" });
+    form.reset(giveAwayDefaults());
     // Each opening is a new transaction draft.
     resetLines();
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -656,11 +674,14 @@ export function GiveAwayDialog({
         lines: jarLines,
         reason: values.reason.trim() || undefined,
         notes: values.notes.trim() || undefined,
+        purpose: values.purpose,
       },
       {
         onSuccess: () => {
           if (resetAfter) {
-            form.reset({ date: todayISO(), reason: "", notes: "" });
+            // "Save and add another" keeps the purpose: a run of own-use
+            // entries stays own use.
+            form.reset({ ...giveAwayDefaults(), purpose: values.purpose });
             resetLines();
           } else onOpenChange(false);
         },
@@ -670,14 +691,16 @@ export function GiveAwayDialog({
   const onSubmit = submitGiveAway(false);
 
   const { errors } = form.formState;
+  const purpose = useWatch({ control: form.control, name: "purpose" });
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Give away jars</DialogTitle>
           <DialogDescription>
-            Record jars given away as gifts or samples. Each line names the
-            varietal / lot the jars come off.
+            Record jars given away as gifts or samples, or kept for your own
+            use. Each line names the varietal / lot the jars come off. They
+            show in Orders &amp; register at $0 revenue.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm
@@ -714,11 +737,39 @@ export function GiveAwayDialog({
             </p>
             <FieldError message={lineError ?? undefined} />
           </div>
+          <fieldset className="grid gap-1.5">
+            <legend className="mb-1.5 text-sm font-medium">Where they went</legend>
+            <div className="flex flex-wrap gap-2">
+              {GIVE_AWAY_PURPOSES.map((option) => (
+                <label
+                  key={option.value}
+                  className={cn(
+                    "flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm",
+                    purpose === option.value && "border-primary bg-primary/5",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    value={option.value}
+                    className="size-4 accent-primary"
+                    {...form.register("purpose")}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <div className="grid gap-1.5">
-            <Label htmlFor="give-reason">Recipient / reason</Label>
+            <Label htmlFor="give-reason">
+              {purpose === "own_use" ? "What for (optional)" : "Recipient / reason"}
+            </Label>
             <Input
               id="give-reason"
-              placeholder="e.g. neighbors, farmers market samples"
+              placeholder={
+                purpose === "own_use"
+                  ? "e.g. kitchen, baking"
+                  : "e.g. neighbors, farmers market samples"
+              }
               {...form.register("reason")}
             />
           </div>
@@ -743,7 +794,11 @@ export function GiveAwayDialog({
               type="submit"
               disabled={mutation.isPending || giveJars === 0 || lines.hasErrors}
             >
-              {mutation.isPending ? "Saving…" : "Record give-away"}
+              {mutation.isPending
+                ? "Saving…"
+                : purpose === "own_use"
+                  ? "Record own use"
+                  : "Record give-away"}
             </Button>
           </DialogFooter>
         </ShortcutForm>

@@ -458,16 +458,25 @@ func honeyValidGiveAwayLines(lines []honeyGiveAwayLineReq) ([]honeyGiveAwayLine,
 	return out, nil
 }
 
-// POST /honey/give-away {date, lines:[{jarSizeId, harvestLotId, quantity}], reason?, notes?}
+// POST /honey/give-away {date, lines:[{jarSizeId, harvestLotId, quantity}], reason?, notes?, purpose?}
+//
+// purpose is "gift" (the default) or "own_use" — jars the beekeeper kept for
+// themselves. reason is the recipient / reason text.
 func (s *Server) honeyRecordGiveAway(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date   string                 `json:"date"`
-		Lines  []honeyGiveAwayLineReq `json:"lines"`
-		Reason *string                `json:"reason"`
-		Notes  *string                `json:"notes"`
+		Date    string                 `json:"date"`
+		Lines   []honeyGiveAwayLineReq `json:"lines"`
+		Reason  *string                `json:"reason"`
+		Notes   *string                `json:"notes"`
+		Purpose string                 `json:"purpose"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Purpose = strings.TrimSpace(req.Purpose)
+	if !production.ValidGiveAwayPurpose(req.Purpose) {
+		writeError(w, http.StatusBadRequest, "purpose must be gift or own_use")
 		return
 	}
 	lines, err := honeyValidGiveAwayLines(req.Lines)
@@ -539,10 +548,16 @@ func (s *Server) honeyRecordGiveAway(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		notes := honeyTrimPtr(req.Notes)
-		if text := honeyTrimPtr(req.Reason); text != nil && notes == nil {
-			notes = text
+		recipient := honeyTrimPtr(req.Reason)
+		// The activity ledger shows notes, so a give-away with only a reason
+		// keeps showing it there; the register reads details.recipient.
+		if recipient != nil && notes == nil {
+			notes = recipient
 		}
-		_, err = commands.RecordGiveAway(ctx, uow, jarLines, date, notes)
+		_, err = commands.RecordGiveAwayFor(ctx, uow, production.GiveAwayInput{
+			Lines: jarLines, Date: date, Notes: notes,
+			Purpose: req.Purpose, Recipient: recipient,
+		})
 		return err
 	})
 	if err != nil {
