@@ -11,6 +11,13 @@
  * - the focused row is highlighted with an inset primary ring and rows are
  *   click-to-activate.
  *
+ * Pass `selection` (from `useRowSelection`) for desktop multi-select: a
+ * leading checkbox column, click selects one row, shift-click selects the
+ * range from the anchor, ctrl/cmd-click toggles, Space toggles the focused
+ * row, shift+arrow extends, Ctrl/Cmd+A selects every loaded row and Escape
+ * clears. With a selection, a row is opened by double-click or Enter rather
+ * than by a single click.
+ *
  * Keystrokes inside inputs, menus, and dialogs are left alone, so editable
  * cells (e.g. physical-count drafts) and row action menus keep their native
  * behavior. Cells that must swallow a click (menus, inline inputs) can call
@@ -26,8 +33,10 @@ import type {
 } from "@tanstack/react-table";
 import { Search, X } from "lucide-react";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { isTypingTarget } from "@/lib/keyboard";
+import type { RowSelection } from "@/lib/use-row-selection";
 
 /** Per-column presentation hints, carried on the column def's `meta`. */
 export interface DataGridColumnMeta {
@@ -116,6 +125,15 @@ interface DataGridProps<
     row: TData,
     rowIndex: number,
   ) => React.HTMLAttributes<HTMLTableRowElement> | undefined;
+  /**
+   * Multi-select over the rendered rows, keyed by the table's row ids. The
+   * ids given to `useRowSelection` must be the rows in display order.
+   */
+  selection?: RowSelection;
+  /** Accessible name of the header checkbox. */
+  selectAllLabel?: string;
+  /** Accessible name of a row's checkbox. */
+  getRowLabel?: (row: TData) => string;
 }
 
 /** True while any modal-ish layer is open; the grid must not steal its keys. */
@@ -143,6 +161,9 @@ export function DataGrid<
   className,
   trailingRows,
   rowProps,
+  selection,
+  selectAllLabel = "Select all loaded rows",
+  getRowLabel,
 }: DataGridProps<TFeatures, TData>) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
@@ -175,6 +196,7 @@ export function DataGrid<
     rows,
     onRowActivate,
     onRowDelete,
+    selection,
   });
   React.useEffect(() => {
     stateRef.current = {
@@ -183,6 +205,7 @@ export function DataGrid<
       rows,
       onRowActivate,
       onRowDelete,
+      selection,
     };
   });
 
@@ -191,6 +214,18 @@ export function DataGrid<
     function handleKeyDown(event: KeyboardEvent) {
       const state = stateRef.current;
       if (isTypingTarget(event.target)) return;
+      if (
+        state.selection &&
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "a" &&
+        !overlayOpen()
+      ) {
+        if (state.rowCount === 0) return;
+        event.preventDefault();
+        state.selection.selectAll();
+        return;
+      }
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (overlayOpen()) return;
       if (event.key === "/" && searchRef.current) {
@@ -205,6 +240,17 @@ export function DataGrid<
         event.preventDefault();
         const clamped = Math.max(0, Math.min(state.rowCount - 1, next));
         setFocusedRowIndex(clamped);
+        // Shift+movement extends the selection from its anchor (or from the
+        // row focus is leaving) to the newly focused row.
+        if (event.shiftKey && state.selection) {
+          const target = state.rows[clamped];
+          if (target) {
+            state.selection.extend(
+              state.rows[state.focusedRowIndex]?.id ?? null,
+              target.id,
+            );
+          }
+        }
         containerRef.current
           ?.querySelectorAll("tbody tr[data-grid-row]")
           [clamped]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -250,7 +296,25 @@ export function DataGrid<
           }
           break;
         }
+        case " ":
+        case "Spacebar": {
+          const row = state.rows[state.focusedRowIndex];
+          if (!row || !state.selection) break;
+          // A focused checkbox, button or link handles its own Space.
+          if (
+            event.target instanceof Element &&
+            event.target.closest("button, a, [role=checkbox]")
+          ) {
+            break;
+          }
+          event.preventDefault();
+          state.selection.toggle(row.id, event.shiftKey);
+          break;
+        }
         case "Escape":
+          if (state.selection && state.selection.count > 0) {
+            state.selection.clear();
+          }
           setFocusedRowIndex(-1);
           break;
       }
@@ -314,6 +378,26 @@ export function DataGrid<
         <thead className="[&_tr]:border-b">
           {headerGroups.map((headerGroup) => (
             <tr key={headerGroup.id}>
+              {selection && (
+                <th className="h-10 w-10 px-3 align-middle">
+                  <Checkbox
+                    checked={
+                      selection.allSelected
+                        ? true
+                        : selection.count > 0
+                          ? "indeterminate"
+                          : false
+                    }
+                    disabled={rowCount === 0}
+                    aria-label={selectAllLabel}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      if (selection.allSelected) selection.clear();
+                      else selection.selectAll();
+                    }}
+                  />
+                </th>
+              )}
               {headerGroup.headers.map((header) => {
                 const meta = header.column.columnDef.meta as
                   | DataGridColumnMeta
@@ -345,12 +429,13 @@ export function DataGrid<
               rowIndex > 0 ? getRowGroup?.(rows[rowIndex - 1].original) : undefined;
             const showGroupHeader =
               group !== undefined && group !== previousGroup;
+            const rowSelected = selection?.isSelected(row.id) ?? false;
             return (
               <React.Fragment key={row.id}>
                 {showGroupHeader && (
                   <tr className="border-b bg-muted/50">
                     <td
-                      colSpan={row.getAllCells().length}
+                      colSpan={row.getAllCells().length + (selection ? 1 : 0)}
                       className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                     >
                       {renderGroupHeader ? renderGroupHeader(group) : group}
@@ -360,20 +445,72 @@ export function DataGrid<
                 <tr
                   data-grid-row=""
                   {...extra}
+                  {...(selection
+                    ? {
+                        "aria-selected": rowSelected,
+                        "data-state": rowSelected ? "selected" : undefined,
+                      }
+                    : {})}
                   className={cn(
                     "group border-b transition-colors hover:bg-muted/40",
-                    onRowActivate && "cursor-pointer",
+                    (onRowActivate || selection) && "cursor-pointer",
+                    rowSelected && "bg-primary/10 hover:bg-primary/15",
                     rowIndex === focusedRowIndex &&
                       "bg-primary/5 ring-2 ring-inset ring-primary/50",
+                    rowSelected &&
+                      rowIndex === focusedRowIndex &&
+                      "bg-primary/10",
                     extra?.className,
                   )}
+                  onMouseDown={(event) => {
+                    extra?.onMouseDown?.(event);
+                    // Shift-click selects a range; keep the browser from
+                    // also highlighting the text in between.
+                    if (selection && event.shiftKey) event.preventDefault();
+                  }}
                   onClick={(event) => {
                     extra?.onClick?.(event);
                     if (event.defaultPrevented) return;
                     setFocusedRowIndex(rowIndex);
+                    if (selection) {
+                      selection.click(row.id, {
+                        shift: event.shiftKey,
+                        toggle: event.ctrlKey || event.metaKey,
+                      });
+                      return;
+                    }
                     onRowActivate?.(row.original);
                   }}
+                  onDoubleClick={(event) => {
+                    extra?.onDoubleClick?.(event);
+                    if (event.defaultPrevented || !selection || !onRowActivate) return;
+                    if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+                    onRowActivate(row.original);
+                  }}
                 >
+                  {selection && (
+                    <td className="w-10 px-3 align-middle">
+                      <Checkbox
+                        checked={rowSelected}
+                        tabIndex={-1}
+                        aria-label={
+                          getRowLabel ? getRowLabel(row.original) : "Select row"
+                        }
+                        onClick={(event) => {
+                          // The checkbox toggles (shift adds the range from
+                          // the anchor); it never collapses the selection
+                          // the way a plain row click does.
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setFocusedRowIndex(rowIndex);
+                          selection.toggle(row.id, event.shiftKey);
+                        }}
+                        onMouseDown={(event) => {
+                          if (event.shiftKey) event.preventDefault();
+                        }}
+                      />
+                    </td>
+                  )}
                   {row.getAllCells().map((cell) => {
                     const meta = cell.column.columnDef.meta as
                       | DataGridColumnMeta
@@ -398,7 +535,7 @@ export function DataGrid<
           {canSearch && globalFilter && rowCount === 0 && (
             <tr>
               <td
-                colSpan={table.getAllLeafColumns().length}
+                colSpan={table.getAllLeafColumns().length + (selection ? 1 : 0)}
                 className="px-3 py-6 text-center text-sm text-muted-foreground"
               >
                 No rows match &ldquo;{globalFilter}&rdquo;.

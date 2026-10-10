@@ -1,5 +1,7 @@
+import * as React from "react";
 import type { Metadata } from "next";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import { ActivityTab } from "@/features/honey/activity-tab";
 
 export const metadata: Metadata = { title: "Honey activity" };
@@ -14,7 +16,10 @@ export default function ActivityPage() {
           adjustments.
         </p>
       </div>
-      <ActivityTab />
+      {/* The ledger's filters live in the URL (useSearchParams). */}
+      <React.Suspense fallback={<Skeleton className="h-64 w-full" />}>
+        <ActivityTab />
+      </React.Suspense>
     </div>
   );
 }
