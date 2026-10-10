@@ -1,19 +1,26 @@
 "use client";
 
 /**
- * Activity: the honey ledger as a register, rebuilt on the Folio account
- * ledger's model.
+ * Stock › Movements: the inventory movement ledger as a TanStack DataGrid,
+ * rebuilt on the Folio account ledger's model.
  *
- * - Infinite scroll: GET /honey/activity pages by keyset cursor (newest
- *   first, ties broken by id) and a sentinel below the grid asks for the next
- *   page as it nears the viewport. Type and search filters are applied by
- *   the server, so every page is a page of the filtered ledger.
- * - Day grouping: a section header per day with that day's entry count and
- *   sales total over the rows loaded so far.
+ * - Server-side everything: GET /honey/activity pages by keyset cursor in the
+ *   chosen sort (date, quantity, type or item; ties broken by id), and the
+ *   Type, Item, Varietal, Location and search filters are applied by the
+ *   server, so every page is a page of the sorted, filtered ledger. Header
+ *   clicks drive that sort (`manualSorting`) and start paging over; sort and
+ *   filters live in the URL.
+ * - Infinite scroll: a sentinel below the grid asks for the next page as it
+ *   nears the viewport.
+ * - Day grouping while sorted by date: a section header per day with that
+ *   day's entry count and sales total over the rows loaded so far. Other
+ *   sorts break days apart, so they drop the headers.
  * - Desktop selection (DataGrid `selection`): click selects one row,
- *   shift-click the range from the anchor — across loaded pages —,
- *   ctrl/cmd-click toggles, Space / shift+arrow from the keyboard, Escape
- *   clears, Ctrl/Cmd+A or `x` selects every loaded row.
+ *   shift-click the range from the anchor — across loaded pages, in the
+ *   on-screen order —, ctrl/cmd-click toggles, Space / shift+arrow from the
+ *   keyboard, Escape clears, Ctrl/Cmd+A or `x` selects every loaded row.
+ * - Phones get cards: type icon + entry as the title, then qty, item, lot
+ *   and location lines, with reverse as the card action.
  *
  * The ledger is append-only: movements are reversed with a negating entry
  * and sales are cancelled in place — nothing is deleted.
@@ -23,7 +30,9 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createColumnHelper, useTable } from "@tanstack/react-table";
+import type { SortingState, Updater } from "@tanstack/react-table";
 import {
+  ArrowRight,
   DollarSign,
   Gift,
   Loader2,
@@ -63,15 +72,21 @@ import { useRowSelection } from "@/lib/use-row-selection";
 import { useUnits } from "@/lib/use-units";
 import { cn } from "@/lib/utils";
 
-import { useHoneyActivity } from "./activity-hooks";
+import {
+  useHoneyActivity,
+  useHoneyActivityFacets,
+  type ActivityEntry,
+  type ActivityFacet,
+  type ActivitySortKey,
+  type SortDir,
+} from "./activity-hooks";
 import { formatDate, formatMoney } from "./format";
 import { useDeleteTimelineEntries } from "./hooks";
-import type { TimelineEntry } from "./types";
 
 interface KindStyle {
   icon: LucideIcon;
   label: string;
-  /** Filter chip label. */
+  /** Type filter option label. */
   filterLabel: string;
   iconClass: string;
 }
@@ -124,28 +139,171 @@ const KIND_STYLES: Record<string, KindStyle> = {
 const FILTER_TYPES = Object.keys(KIND_STYLES);
 const FALLBACK_STYLE: KindStyle = KIND_STYLES.jar_adjustment;
 
-const columnHelper = createColumnHelper<typeof dataGridFeatures, TimelineEntry>();
+function kindStyle(type: string): KindStyle {
+  return KIND_STYLES[type] ?? FALLBACK_STYLE;
+}
 
-function isCorrected(entry: TimelineEntry): boolean {
+/** The colored type badge — the ledger's signature, kept from the old list. */
+function KindIcon({ type, className }: { type: string; className?: string }) {
+  const style = kindStyle(type);
+  const Icon = style.icon;
+  return (
+    <span
+      data-kind-icon={type}
+      className={cn(
+        "flex size-7 shrink-0 items-center justify-center rounded-full",
+        style.iconClass,
+        className,
+      )}
+    >
+      <Icon className="size-3.5" />
+    </span>
+  );
+}
+
+// --- URL state -------------------------------------------------------------
+
+/** Column id ↔ server sort key. */
+const SORT_COLUMNS: Record<ActivitySortKey, string> = {
+  date: "date",
+  type: "type",
+  item: "item",
+  quantity: "qty",
+};
+const COLUMN_SORTS: Record<string, ActivitySortKey> = Object.fromEntries(
+  Object.entries(SORT_COLUMNS).map(([sort, column]) => [column, sort]),
+) as Record<string, ActivitySortKey>;
+
+const DEFAULT_SORT: ActivitySortKey = "date";
+const DEFAULT_DIR: SortDir = "desc";
+
+function parseList(raw: string | null, valid?: (value: string) => boolean): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value !== "" && (!valid || valid(value)));
+}
+
+function parseSort(raw: string | null): ActivitySortKey {
+  return raw && raw in SORT_COLUMNS ? (raw as ActivitySortKey) : DEFAULT_SORT;
+}
+
+function parseDir(raw: string | null, sort: ActivitySortKey): SortDir {
+  if (raw === "asc" || raw === "desc") return raw;
+  return sort === DEFAULT_SORT ? DEFAULT_DIR : "asc";
+}
+
+interface LedgerParams {
+  types: string[];
+  items: string[];
+  varietals: string[];
+  locations: string[];
+  q: string;
+  sort: ActivitySortKey;
+  dir: SortDir;
+}
+
+const LIST_PARAMS = {
+  types: "type",
+  items: "item",
+  varietals: "varietal",
+  locations: "location",
+} as const;
+
+// --- Row helpers -----------------------------------------------------------
+
+const columnHelper = createColumnHelper<typeof dataGridFeatures, ActivityEntry>();
+
+function isCorrected(entry: ActivityEntry): boolean {
   return Boolean(entry.isReversal || entry.cancelled);
 }
 
 /** Day key for grouping; the same UTC calendar day `formatDate` prints. */
-function dayKey(entry: TimelineEntry): string {
+function dayKey(entry: ActivityEntry): string {
   return entry.date.slice(0, 10);
 }
 
-function parseTypes(raw: string | null): string[] {
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((type) => type.trim())
-    .filter((type) => FILTER_TYPES.includes(type));
+/** The signed quantity and its unit, tolerating rows without ledger columns. */
+function signedQuantity(entry: ActivityEntry): { value: number; unit: string } | null {
+  const unit =
+    entry.qtyUnit ??
+    (entry.quantity != null ? "jars" : entry.amountLbs != null ? "lbs" : "");
+  const value =
+    entry.qty ??
+    (unit === "jars"
+      ? (entry.type === "sale" ? -1 : 1) * (entry.quantity ?? 0)
+      : (entry.amountLbs ?? 0));
+  if (!unit || value === 0) return null;
+  return { value, unit };
+}
+
+function locationText(entry: ActivityEntry): string {
+  const from = entry.fromLocation ?? "";
+  const to = entry.toLocation ?? "";
+  if (from && to && from !== to) return `${from} → ${to}`;
+  return from || to;
+}
+
+function lotText(entry: ActivityEntry): string {
+  return entry.varietal ?? entry.lotCode ?? "";
 }
 
 type ConfirmTarget =
-  | { kind: "single"; entry: TimelineEntry }
-  | { kind: "bulk"; entries: TimelineEntry[]; skipped: number };
+  | { kind: "single"; entry: ActivityEntry }
+  | { kind: "bulk"; entries: ActivityEntry[]; skipped: number };
+
+const selectClassName =
+  "h-8 min-w-0 max-w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/** A server-side column filter: one choice (or all), written to the URL. */
+function FilterSelect({
+  label,
+  allLabel,
+  values,
+  options,
+  onChange,
+}: {
+  label: string;
+  allLabel: string;
+  values: string[];
+  options: ActivityFacet[];
+  onChange: (values: string[]) => void;
+}) {
+  // A shared link may carry several values or one the facets no longer list;
+  // show it rather than silently reading as "all".
+  const known = new Set(options.map((option) => option.value));
+  const extra = values.filter((value) => !known.has(value));
+  const value = values.length > 1 ? "__multiple__" : (values[0] ?? "");
+  return (
+    <select
+      aria-label={`Filter by ${label.toLowerCase()}`}
+      value={value}
+      onChange={(event) =>
+        onChange(event.target.value ? [event.target.value] : [])
+      }
+      className={cn(selectClassName, values.length > 0 && "border-primary/60")}
+    >
+      <option value="">{allLabel}</option>
+      {values.length > 1 && (
+        <option value="__multiple__" disabled>
+          {values.length} {label.toLowerCase()} values
+        </option>
+      )}
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+      {values.length === 1 &&
+        extra.map((value) => (
+          <option key={value} value={value}>
+            Unknown {label.toLowerCase()}
+          </option>
+        ))}
+    </select>
+  );
+}
 
 export function ActivityTab() {
   const router = useRouter();
@@ -153,26 +311,36 @@ export function ActivityTab() {
   const searchParams = useSearchParams();
   const { formatHoney } = useUnits();
 
-  // Filters live in the URL so a reload or a shared link keeps them.
-  const types = React.useMemo(
-    () => parseTypes(searchParams.get("type")),
-    [searchParams],
-  );
-  const q = searchParams.get("q") ?? "";
+  // Sort and filters live in the URL so a reload or a shared link keeps them.
+  const params = React.useMemo<LedgerParams>(() => {
+    const sort = parseSort(searchParams.get("sort"));
+    return {
+      types: parseList(searchParams.get("type"), (t) => FILTER_TYPES.includes(t)),
+      items: parseList(searchParams.get("item")),
+      varietals: parseList(searchParams.get("varietal")),
+      locations: parseList(searchParams.get("location")),
+      q: searchParams.get("q") ?? "",
+      sort,
+      dir: parseDir(searchParams.get("dir"), sort),
+    };
+  }, [searchParams]);
+  const { q, sort, dir } = params;
   const [searchText, setSearchText] = React.useState(q);
   const searchRef = React.useRef<HTMLInputElement>(null);
 
-  const activity = useHoneyActivity({ types, q });
+  const activity = useHoneyActivity(params);
+  const facets = useHoneyActivityFacets();
   const deleteEntries = useDeleteTimelineEntries();
   const [confirmTarget, setConfirmTarget] = React.useState<ConfirmTarget | null>(
     null,
   );
 
-  // Every loaded page, in order. Keyset pages never overlap, but a row can
-  // shift pages if the ledger changes between fetches; keep the first copy.
+  // Every loaded page, in the server's order. Keyset pages never overlap, but
+  // a row can shift pages if the ledger changes between fetches; keep the
+  // first copy.
   const entries = React.useMemo(() => {
     const seen = new Set<string>();
-    const out: TimelineEntry[] = [];
+    const out: ActivityEntry[] = [];
     for (const page of activity.data?.pages ?? []) {
       for (const entry of page.entries) {
         if (seen.has(entry.id)) continue;
@@ -195,86 +363,112 @@ export function ActivityTab() {
     enabled: Boolean(hasNextPage) && !isFetchingNextPage && !isFetchNextPageError,
   });
 
-  const setFilters = React.useCallback(
-    (next: { types?: string[]; q?: string }) => {
-      const params = new URLSearchParams(searchParams.toString());
-      const nextTypes = next.types ?? types;
-      const nextQ = (next.q ?? q).trim();
-      if (nextTypes.length > 0) params.set("type", nextTypes.join(","));
-      else params.delete("type");
-      if (nextQ) params.set("q", nextQ);
-      else params.delete("q");
-      const query = params.toString();
-      // A selection belongs to the rows it was made on.
+  const setParams = React.useCallback(
+    (next: Partial<LedgerParams>) => {
+      const merged = { ...params, ...next };
+      const query = new URLSearchParams(searchParams.toString());
+      for (const [key, name] of Object.entries(LIST_PARAMS)) {
+        const values = merged[key as keyof typeof LIST_PARAMS];
+        if (values.length > 0) query.set(name, values.join(","));
+        else query.delete(name);
+      }
+      const nextQ = merged.q.trim();
+      if (nextQ) query.set("q", nextQ);
+      else query.delete("q");
+      // The default order (newest first) keeps the URL clean.
+      if (merged.sort === DEFAULT_SORT && merged.dir === DEFAULT_DIR) {
+        query.delete("sort");
+        query.delete("dir");
+      } else {
+        query.set("sort", merged.sort);
+        query.set("dir", merged.dir);
+      }
+      const search = query.toString();
+      // A selection belongs to the rows (and the order) it was made on.
       clearSelection();
-      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+      router.replace(search ? `${pathname}?${search}` : pathname, { scroll: false });
     },
-    [searchParams, types, q, pathname, router, clearSelection],
+    [params, searchParams, pathname, router, clearSelection],
   );
 
   // Search is debounced into the URL (and so into the query key).
   React.useEffect(() => {
     if (searchText.trim() === q.trim()) return;
-    const timer = window.setTimeout(() => setFilters({ q: searchText }), 300);
+    const timer = window.setTimeout(() => setParams({ q: searchText }), 300);
     return () => window.clearTimeout(timer);
-  }, [searchText, q, setFilters]);
+  }, [searchText, q, setParams]);
 
-  function toggleType(type: string) {
-    setFilters({
-      types: types.includes(type)
-        ? types.filter((t) => t !== type)
-        : [...types, type],
-    });
-  }
-
-  useShortcut("x", "Select all loaded activity rows", () => {
+  useShortcut("x", "Select all loaded movement rows", () => {
     if (selection.allSelected) selection.clear();
     else selection.selectAll();
   });
 
   const reversible = React.useCallback(
-    (entry: TimelineEntry) => !isCorrected(entry),
+    (entry: ActivityEntry) => !isCorrected(entry),
     [],
+  );
+
+  // The table's sorting is the URL's: header clicks become a server sort.
+  const sorting = React.useMemo<SortingState>(
+    () => [{ id: SORT_COLUMNS[sort], desc: dir === "desc" }],
+    [sort, dir],
+  );
+  const onSortingChange = React.useCallback(
+    (updater: Updater<SortingState>) => {
+      const next = typeof updater === "function" ? updater(sorting) : updater;
+      const first = next[0];
+      const nextSort = first ? COLUMN_SORTS[first.id] : undefined;
+      if (!first || !nextSort) {
+        // "Default order" (the phone sort select) is newest first.
+        setParams({ sort: DEFAULT_SORT, dir: DEFAULT_DIR });
+        return;
+      }
+      setParams({ sort: nextSort, dir: first.desc ? "desc" : "asc" });
+    },
+    [sorting, setParams],
   );
 
   const columns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
-          id: "kind",
-          header: "Kind",
-          meta: { headClassName: "w-36" } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: entry } }) => {
-            const style = KIND_STYLES[entry.type] ?? FALLBACK_STYLE;
-            const Icon = style.icon;
-            return (
-              <span className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "flex size-7 shrink-0 items-center justify-center rounded-full",
-                    style.iconClass,
-                  )}
-                >
-                  <Icon className="size-3.5" />
-                </span>
-                <span className="text-xs font-medium text-muted-foreground">
-                  {style.label}
-                </span>
+        columnHelper.accessor((entry) => entry.date, {
+          id: "date",
+          header: "Date",
+          sortDescFirst: true,
+          meta: {
+            card: "subtitle",
+            headClassName: "w-28",
+            cellClassName: "tabular-nums text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) => formatDate(entry.date),
+        }),
+        columnHelper.accessor((entry) => kindStyle(entry.type).label, {
+          id: "type",
+          header: "Type",
+          meta: { card: "hidden", headClassName: "w-36" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) => (
+            <span className="flex items-center gap-2">
+              <KindIcon type={entry.type} />
+              <span className="text-xs font-medium text-muted-foreground">
+                {kindStyle(entry.type).label}
               </span>
-            );
-          },
+            </span>
+          ),
         }),
         columnHelper.display({
           id: "description",
           header: "Entry",
           meta: {
-            cellClassName: "w-full min-w-[14rem] whitespace-normal",
+            card: "title",
+            cellClassName: "min-w-[14rem] whitespace-normal",
           } satisfies DataGridColumnMeta,
           cell: ({ row: { original: entry } }) => (
-            <div className="min-w-0">
-              <p
+            <span className="flex min-w-0 items-center gap-2">
+              {/* Cards (below md) have no Type column: the badge leads the title. */}
+              <KindIcon type={entry.type} className="md:hidden" />
+              <span
                 className={cn(
-                  "text-sm font-medium",
+                  "min-w-0 text-sm font-medium",
                   entry.cancelled && "line-through",
                 )}
               >
@@ -289,33 +483,137 @@ export function ActivityTab() {
                 ) : (
                   entry.description
                 )}
-              </p>
-              {entry.notes && (
-                <p className="text-xs text-muted-foreground">{entry.notes}</p>
-              )}
-            </div>
+              </span>
+            </span>
           ),
         }),
-        columnHelper.display({
-          id: "amount",
-          header: "Amount",
+        columnHelper.accessor((entry) => signedQuantity(entry)?.value ?? 0, {
+          id: "qty",
+          header: "Qty",
+          meta: {
+            align: "right",
+            cellClassName: "tabular-nums",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) => {
+            const qty = signedQuantity(entry);
+            if (!qty) return <span className="text-muted-foreground">—</span>;
+            const sign = qty.value > 0 ? "+" : "−";
+            const amount = Math.abs(qty.value);
+            const text =
+              qty.unit === "lbs"
+                ? formatHoney(amount)
+                : `${amount} ${qty.unit === "jars" ? (amount === 1 ? "jar" : "jars") : amount === 1 ? "item" : "items"}`;
+            return (
+              <span
+                className={cn(
+                  qty.value > 0
+                    ? "text-green-700 dark:text-green-400"
+                    : "text-foreground",
+                )}
+              >
+                {sign}
+                {text}
+              </span>
+            );
+          },
+        }),
+        columnHelper.accessor((entry) => entry.item ?? "", {
+          id: "item",
+          header: "Item",
+          meta: { cellClassName: "whitespace-normal" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) =>
+            entry.item ? (
+              <span>
+                {entry.item}
+                {(entry.itemCount ?? 0) > 1 && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    +{(entry.itemCount ?? 1) - 1}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            ),
+        }),
+        columnHelper.accessor(lotText, {
+          id: "lot",
+          header: "Lot",
+          enableSorting: false,
+          meta: {
+            label: "Lot",
+            cellClassName: "whitespace-normal",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) =>
+            entry.varietal || entry.lotCode ? (
+              <span>
+                {entry.varietal ?? entry.lotCode}
+                {entry.varietal && entry.lotCode && (
+                  <span className="text-xs text-muted-foreground">
+                    {" "}
+                    · {entry.lotCode}
+                  </span>
+                )}
+                {(entry.lotCount ?? 0) > 1 && (
+                  <span className="text-xs text-muted-foreground">
+                    {" "}
+                    +{(entry.lotCount ?? 1) - 1} lots
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            ),
+        }),
+        columnHelper.accessor(locationText, {
+          id: "location",
+          header: "Location",
+          enableSorting: false,
+          meta: { cellClassName: "whitespace-normal" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) => {
+            const from = entry.fromLocation ?? "";
+            const to = entry.toLocation ?? "";
+            if (!from && !to) return <span className="text-muted-foreground">—</span>;
+            if (!from || !to || from === to) return from || to;
+            return (
+              <span className="inline-flex flex-wrap items-center gap-1">
+                {from}
+                <ArrowRight aria-label="to" className="size-3 text-muted-foreground" />
+                {to}
+              </span>
+            );
+          },
+        }),
+        columnHelper.accessor((entry) => entry.totalAmount ?? null, {
+          id: "value",
+          header: "Value",
+          enableSorting: false,
           meta: {
             align: "right",
             cellClassName: "tabular-nums",
           } satisfies DataGridColumnMeta,
           cell: ({ row: { original: entry } }) =>
-            entry.totalAmount != null
-              ? formatMoney(entry.totalAmount)
-              : entry.amountLbs != null
-                ? formatHoney(entry.amountLbs)
-                : entry.quantity != null
-                  ? `${entry.quantity > 0 ? "+" : ""}${entry.quantity} jars`
-                  : "—",
+            entry.totalAmount != null ? (
+              formatMoney(entry.totalAmount)
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            ),
+        }),
+        columnHelper.accessor((entry) => entry.notes ?? "", {
+          id: "notes",
+          header: "Notes",
+          enableSorting: false,
+          meta: {
+            card: "subtitle",
+            cellClassName:
+              "min-w-[8rem] max-w-[16rem] whitespace-normal text-xs text-muted-foreground",
+          } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: entry } }) => entry.notes ?? null,
         }),
         columnHelper.display({
           id: "actions",
           header: () => <span className="sr-only">Actions</span>,
-          meta: { headClassName: "w-12" } satisfies DataGridColumnMeta,
+          meta: { card: "actions", headClassName: "w-12" } satisfies DataGridColumnMeta,
           cell: ({ row: { original: entry } }) =>
             reversible(entry) ? (
               <DataGridCellAction>
@@ -327,7 +625,7 @@ export function ActivityTab() {
                   aria-label={
                     entry.type === "sale"
                       ? "Cancel sale"
-                      : `Reverse ${(KIND_STYLES[entry.type] ?? FALLBACK_STYLE).label.toLowerCase()} entry`
+                      : `Reverse ${kindStyle(entry.type).label.toLowerCase()} entry`
                   }
                   onClick={() => setConfirmTarget({ kind: "single", entry })}
                 >
@@ -345,6 +643,12 @@ export function ActivityTab() {
     columns,
     data: entries,
     getRowId: (entry) => entry.id,
+    // The server sorts; the table only shows and drives that order.
+    manualSorting: true,
+    enableMultiSort: false,
+    enableSortingRemoval: false,
+    state: { sorting },
+    onSortingChange,
   });
 
   // Day summaries over the loaded rows (the Folio ledger's running context).
@@ -387,12 +691,25 @@ export function ActivityTab() {
     });
   }
 
-  const filtered = types.length > 0 || q.trim() !== "";
+  const filtered =
+    params.types.length > 0 ||
+    params.items.length > 0 ||
+    params.varietals.length > 0 ||
+    params.locations.length > 0 ||
+    q.trim() !== "";
   const selectedCount = selection.count;
   const selectionText =
     selection.allSelected && hasNextPage
       ? `${selectedCount} loaded rows selected`
       : `${selectedCount} selected`;
+  const typeOptions = React.useMemo(
+    () =>
+      FILTER_TYPES.map((type) => ({
+        value: type,
+        label: KIND_STYLES[type].filterLabel,
+      })),
+    [],
+  );
 
   const toolbar = (
     <div className="sticky top-0 z-10 grid gap-2 border-b bg-background/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -414,8 +731,8 @@ export function ActivityTab() {
               else event.currentTarget.blur();
             }
           }}
-          placeholder="Search the ledger — customer, location, jar size, notes"
-          aria-label="Search activity"
+          placeholder="Search the ledger — customer, location, jar size, lot, notes"
+          aria-label="Search movements"
           className="h-9 w-full rounded-md border border-input bg-transparent pl-8 pr-8 text-base shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring sm:text-sm [&::-webkit-search-cancel-button]:hidden"
         />
         {searchText && (
@@ -434,25 +751,37 @@ export function ActivityTab() {
       </div>
       <div
         role="group"
-        aria-label="Filter by kind"
-        className="flex flex-wrap items-center gap-1.5"
+        aria-label="Column filters"
+        className="flex flex-wrap items-center gap-2"
       >
-        {FILTER_TYPES.map((type) => {
-          const active = types.includes(type);
-          return (
-            <Button
-              key={type}
-              type="button"
-              size="sm"
-              variant={active ? "secondary" : "ghost"}
-              aria-pressed={active}
-              className={cn("h-7 px-2 text-xs", active && "ring-1 ring-primary/40")}
-              onClick={() => toggleType(type)}
-            >
-              {KIND_STYLES[type].filterLabel}
-            </Button>
-          );
-        })}
+        <FilterSelect
+          label="Type"
+          allLabel="All types"
+          values={params.types}
+          options={typeOptions}
+          onChange={(types) => setParams({ types })}
+        />
+        <FilterSelect
+          label="Item"
+          allLabel="All items"
+          values={params.items}
+          options={facets.data?.items ?? []}
+          onChange={(items) => setParams({ items })}
+        />
+        <FilterSelect
+          label="Varietal"
+          allLabel="All varietals"
+          values={params.varietals}
+          options={facets.data?.varietals ?? []}
+          onChange={(varietals) => setParams({ varietals })}
+        />
+        <FilterSelect
+          label="Location"
+          allLabel="All locations"
+          values={params.locations}
+          options={facets.data?.locations ?? []}
+          onChange={(locations) => setParams({ locations })}
+        />
         {filtered && (
           <Button
             type="button"
@@ -461,7 +790,7 @@ export function ActivityTab() {
             className="h-7 px-1 text-xs"
             onClick={() => {
               setSearchText("");
-              setFilters({ types: [], q: "" });
+              setParams({ types: [], items: [], varietals: [], locations: [], q: "" });
             }}
           >
             Clear filters
@@ -486,11 +815,11 @@ export function ActivityTab() {
         <p className="text-sm text-muted-foreground">
           {activity.error instanceof ApiError && activity.error.status === 403
             ? "Administrator access required"
-            : "Could not load the activity ledger."}
+            : "Could not load the movement ledger."}
         </p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/production">Back to Honey</Link>
+            <Link href="/stock">Back to Stock</Link>
           </Button>
           <Button type="button" size="sm" onClick={() => void activity.refetch()}>
             Retry
@@ -503,7 +832,7 @@ export function ActivityTab() {
       <p className="py-8 text-center text-sm text-muted-foreground">
         {filtered
           ? "No ledger entries match these filters."
-          : "No activity yet. Jar honey or record a sale to get started."}
+          : "No movements yet. Jar honey or record a sale to get started."}
       </p>
     );
   } else {
@@ -512,12 +841,14 @@ export function ActivityTab() {
         <div className="rounded-xl border">
           <DataGrid
             table={table}
-            aria-label="Honey activity"
+            aria-label="Stock movements"
             searchable={false}
             selection={selection}
-            selectAllLabel="Select all loaded activity rows"
+            selectAllLabel="Select all loaded movement rows"
             getRowLabel={(entry) => `Select ${entry.description}`}
-            getRowGroup={dayKey}
+            // Days only hold together while the ledger is in date order.
+            getRowGroup={sort === "date" ? dayKey : undefined}
+            groupWhileSorted
             renderGroupHeader={(key) => {
               const summary = daySummaries.get(key);
               return (
@@ -568,7 +899,7 @@ export function ActivityTab() {
               className="text-xs uppercase tracking-widest text-muted-foreground"
               onClick={loadMore}
             >
-              Scroll or click for older entries
+              Scroll or click for more entries
             </Button>
           ) : (
             <span>
@@ -585,8 +916,9 @@ export function ActivityTab() {
     <div className="grid gap-2">
       {toolbar}
       <p className="text-xs text-muted-foreground">
-        Click selects a row, Shift-click selects a range, Ctrl/⌘-click adds or
-        removes one. Enter or double-click opens a sale.
+        Click a column header to sort. Click selects a row, Shift-click
+        selects a range, Ctrl/⌘-click adds or removes one. Enter or
+        double-click opens a sale.
       </p>
       {body}
 

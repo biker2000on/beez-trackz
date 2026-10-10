@@ -170,6 +170,12 @@ interface DataGridProps<
    */
   getRowGroup?: (row: TData) => string;
   renderGroupHeader?: (key: string) => React.ReactNode;
+  /**
+   * Keep group headers while the table is sorted. For server-sorted
+   * (`manualSorting`) tables whose caller passes `getRowGroup` only for the
+   * orders the groups follow — e.g. day headers while sorted by date.
+   */
+  groupWhileSorted?: boolean;
   /** Called on Enter or click on a row. */
   onRowActivate?: (row: TData) => void;
   /** Called on Delete/Backspace on the focused row. */
@@ -247,6 +253,7 @@ export function DataGrid<
   table: tableProp,
   getRowGroup,
   renderGroupHeader,
+  groupWhileSorted = false,
   onRowActivate,
   onRowDelete,
   listenOnWindow = true,
@@ -516,7 +523,8 @@ export function DataGrid<
     ? `${sorting[0].id}:${sorting[0].desc ? "desc" : "asc"}`
     : "";
 
-  const groupFor = (row: TData) => (isSorted ? undefined : getRowGroup?.(row));
+  const groupFor = (row: TData) =>
+    isSorted && !groupWhileSorted ? undefined : getRowGroup?.(row);
 
   const noMatch = narrowed && rowCount === 0 && totalCount > 0;
   const emptyText = noMatch

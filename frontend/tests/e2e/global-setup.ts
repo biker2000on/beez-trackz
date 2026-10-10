@@ -46,6 +46,7 @@ const ROUTES = [
   "/production",
   "/production/workbench",
   "/production/activity",
+  "/stock/movements",
   "/production/overview",
   "/production/harvests",
   "/production/jars",

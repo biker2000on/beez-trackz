@@ -1,25 +1,21 @@
-import * as React from "react";
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { Skeleton } from "@/components/ui/skeleton";
-import { ActivityTab } from "@/features/honey/activity-tab";
-
-export const metadata: Metadata = { title: "Honey activity" };
-
-export default function ActivityPage() {
-  return (
-    <div className="mx-auto grid w-full max-w-5xl gap-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Activity</h1>
-        <p className="text-sm text-muted-foreground">
-          The honey ledger: jarring, sales, give-aways, use, loss and
-          adjustments.
-        </p>
-      </div>
-      {/* The ledger's filters live in the URL (useSearchParams). */}
-      <React.Suspense fallback={<Skeleton className="h-64 w-full" />}>
-        <ActivityTab />
-      </React.Suspense>
-    </div>
-  );
+/**
+ * Production › Activity moved to Stock › Movements, the one canonical
+ * movement ledger. Old links and bookmarks keep their sort and filters.
+ */
+export default async function ActivityPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const query = await searchParams;
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    for (const item of Array.isArray(value) ? value : value == null ? [] : [value]) {
+      params.append(key, item);
+    }
+  }
+  const search = params.toString();
+  redirect(search ? `/stock/movements?${search}` : "/stock/movements");
 }
