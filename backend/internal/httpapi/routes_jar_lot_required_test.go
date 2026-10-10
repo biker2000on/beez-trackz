@@ -218,10 +218,12 @@ func TestPendingSaleKeepsItsLotPinWhenPatchedToPaid(t *testing.T) {
 	}
 	saleID, _ := body["id"].(string)
 
-	// Pending draws nothing yet.
+	// Pending consumes nothing yet but reserves against the lot it named; the
+	// shelf reads available stock, so the reservation shows on the newer lot
+	// only.
 	shelf := shelfByLot(t, server, homeLocation(t, server), w.jarSizeID)
-	if shelf[w.lotOld].OnHand != 10 || shelf[w.lotNew].OnHand != 10 {
-		t.Fatalf("home shelf while pending = old %d new %d, want 10 and 10",
+	if shelf[w.lotOld].OnHand != 10 || shelf[w.lotNew].OnHand != 6 {
+		t.Fatalf("home shelf while pending = old %d new %d, want 10 and 6",
 			shelf[w.lotOld].OnHand, shelf[w.lotNew].OnHand)
 	}
 
