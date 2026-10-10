@@ -20,8 +20,11 @@ import type {
   HoneyInventoryRow,
   HoneyLotBalances,
   HoneyOverview,
+  GiveAwayPurpose,
   HoneySale,
   HoneyVarietal,
+  SalesRegister,
+  SalesRegisterKind,
   ProductAdjustment,
   ProductBatch,
   ProductCatalogResponse,
@@ -59,6 +62,19 @@ export function useHoneySales(enabled = true) {
     queryKey: ["honey", "sales"],
     queryFn: () => api.get<HoneySale[]>("/sales"),
     enabled,
+  });
+}
+
+/**
+ * The Orders & register list: sales merged with give-aways and own use,
+ * newest first. Keyed under ["honey"], so every honey mutation — a give-away
+ * included — refreshes it.
+ */
+export function useSalesRegister(kind: SalesRegisterKind = "all") {
+  return useQuery({
+    queryKey: ["honey", "sales-register", kind],
+    queryFn: () =>
+      api.get<SalesRegister>("/sales/register", { params: { kind } }),
   });
 }
 
@@ -283,12 +299,29 @@ export interface GiveAwayBody {
   lines: GiveAwayLineBody[];
   reason?: string;
   notes?: string;
+  /** "gift" (default) or "own_use" — jars kept for yourself. */
+  purpose?: GiveAwayPurpose;
 }
 
 export function useRecordGiveAway() {
   return useHoneyMutation({
     mutationFn: (body: GiveAwayBody) => api.post("/honey/give-away", body),
     successMessage: "Give-away recorded",
+    // The register lives under ["honey"]; listed so the dependency is
+    // explicit: a recorded give-away must show up there straight away.
+    invalidate: [["honey", "sales-register"]],
+  });
+}
+
+/**
+ * Undo a give-away (or own use) from the register. The ledger is append-only:
+ * this records a reversing entry and the jars go back on the shelf.
+ */
+export function useReverseGiveAway() {
+  return useHoneyMutation({
+    mutationFn: (id: string) => api.delete(`/honey/movements/${id}`),
+    successMessage: "Give-away undone — jars are back on the shelf",
+    invalidate: [["honey", "sales-register"]],
   });
 }
 

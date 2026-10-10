@@ -143,6 +143,21 @@ async function mockApp(page: Page, sent: Sent[]) {
     if (path.endsWith("/sales/locations")) {
       return route.fulfill({ json: ["Farm stand", "Saturday market"] });
     }
+    if (path.endsWith("/api/v1/sales/register")) {
+      const sales = [sale(), consignmentSale()];
+      return route.fulfill({
+        json: {
+          entries: sales.map((row) => ({
+            type: "sale",
+            id: row.id,
+            date: row.date,
+            sale: row,
+            giveAway: null,
+          })),
+          totals: { revenue: 48, salesCount: 2, givenAwayJars: 0, ownUseJars: 0, retailValueGiven: 0 },
+        },
+      });
+    }
     if (path.endsWith("/api/v1/sales")) {
       return route.fulfill({ json: [sale(), consignmentSale()] });
     }

@@ -205,6 +205,64 @@ export interface HoneySale {
   lineItems: SaleLineItem[];
 }
 
+/** A give-away's purpose: a gift, or jars kept for the beekeeper's own use. */
+export type GiveAwayPurpose = "gift" | "own_use";
+
+export interface RegisterGiveAwayLine {
+  jarSizeId: string;
+  label: string;
+  harvestLotId: string | null;
+  lotCode: string | null;
+  varietal: string | null;
+  quantity: number;
+  /** The size's default price; null when the size has none. */
+  unitRetailPrice: number | null;
+  /** quantity × default price — value given, never revenue. */
+  retailValue: number | null;
+}
+
+export interface RegisterGiveAway {
+  id: string;
+  date: string;
+  purpose: GiveAwayPurpose;
+  recipient: string | null;
+  notes: string | null;
+  lines: RegisterGiveAwayLine[];
+  totalJars: number;
+  /** Sum of the priced lines at default prices (value given, not revenue). */
+  retailValue: number;
+  /** Jars whose size has no default price, so retailValue is a floor. */
+  unpricedJars: number;
+  reversed: boolean;
+  reversedAt: string | null;
+}
+
+export type SalesRegisterEntry =
+  | { type: "sale"; id: string; date: string; sale: HoneySale; giveAway: null }
+  | {
+      type: "give_away" | "own_use";
+      id: string;
+      date: string;
+      sale: null;
+      giveAway: RegisterGiveAway;
+    };
+
+/** What GET /sales/register?kind= shows. */
+export type SalesRegisterKind = "all" | "sales" | "giveaways";
+
+export interface SalesRegister {
+  entries: SalesRegisterEntry[];
+  /** Totals over the whole register, whatever kind is shown. */
+  totals: {
+    /** Invoiced total of non-cancelled sales. Give-aways never count. */
+    revenue: number;
+    salesCount: number;
+    givenAwayJars: number;
+    ownUseJars: number;
+    retailValueGiven: number;
+  };
+}
+
 export interface HarvestRow {
   id: string;
   hiveId: string;

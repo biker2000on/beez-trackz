@@ -1,4 +1,7 @@
+import * as React from "react";
 import type { Metadata } from "next";
+
+import { Skeleton } from "@/components/ui/skeleton";
 
 import { HoneyQuickActions } from "@/features/honey/quick-actions";
 import Link from "next/link";
@@ -32,7 +35,13 @@ export default function SalesPage() {
       </div>
       <nav aria-label="Sales pages" className="flex flex-wrap gap-4 border-b pb-3 text-sm">{[["/sales/market-day","Market day"],["/sales/consignment","Consignment"],["/sales/customers","Customers & wholesale"],["/sales/expenses","Expenses"]].map(([href,label])=><Link key={href} href={href} className="inline-flex min-h-11 items-center underline">{label}</Link>)}</nav>
       <SalesWorkbench embedded/>
-      <section><h2 className="mb-3 text-lg font-semibold">Orders & register</h2><SalesTab /></section>
+      <section>
+        <h2 className="mb-3 text-lg font-semibold">Orders & register</h2>
+        {/* The register's All / Sales / Given away filter lives in the URL. */}
+        <React.Suspense fallback={<Skeleton className="h-48 w-full" />}>
+          <SalesTab />
+        </React.Suspense>
+      </section>
     </div>
   );
 }

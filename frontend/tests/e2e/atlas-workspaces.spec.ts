@@ -6,7 +6,9 @@ for (const queued of [false,true]) {
    if(path.endsWith("/auth/status"))return route.fulfill({json:{authenticated:true,setupComplete:true}});
    if(path.endsWith("/access/me"))return route.fulfill({json:{id:"u",displayName:"Test",isAdmin:true,memberships:[]}});
    if(path.endsWith("/payment")||path.endsWith("/fulfill"))return route.fulfill({status:queued?202:409,json:queued?{queued:true,offline:true,mutationId:"queued-sale"}:{error:"Insufficient stock for this order"}});
-   if(path.endsWith("/sales"))return route.fulfill({json:[{id:"sale-1",date:"2026-09-11",orderNumber:"ORDER-1",orderStatus:"pending",channel:"direct",paymentMethod:"cash",amountPaid:0,totalAmount:10,lineItems:[],physicalAppliedAt:null}]});
+   const sale={id:"sale-1",date:"2026-09-11",orderNumber:"ORDER-1",orderStatus:"pending",channel:"direct",paymentMethod:"cash",amountPaid:0,totalAmount:10,lineItems:[],physicalAppliedAt:null};
+   if(path.endsWith("/sales/register"))return route.fulfill({json:{entries:[{type:"sale",id:sale.id,date:sale.date,sale,giveAway:null}],totals:{revenue:10,salesCount:1,givenAwayJars:0,ownUseJars:0,retailValueGiven:0}}});
+   if(path.endsWith("/sales"))return route.fulfill({json:[sale]});
    if(path.endsWith("/workbench"))return route.fulfill({json:{asOf:"2026-09-11T12:00:00Z",freshness:{origin:"server",stale:false},drafts:[],consignment:[],sellable:[]}});
    return route.fulfill({json:[]});
   });

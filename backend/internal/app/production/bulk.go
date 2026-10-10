@@ -104,13 +104,61 @@ func (s *Service) RecordGiveAway(
 	ctx context.Context, uow *app.UnitOfWork, lines []JarLine, date time.Time,
 	notes *string, guards ...Guard,
 ) (uuid.UUID, error) {
-	for _, line := range lines {
+	return s.RecordGiveAwayFor(ctx, uow, GiveAwayInput{Lines: lines, Date: date, Notes: notes}, guards...)
+}
+
+// Give-away purposes. Both are the same zero-revenue outflow — a shrink with
+// reason give_away, so every stock and "given away" total counts them alike —
+// and the purpose rides in the operation's details so the sales register can
+// tell a gift from jars the beekeeper kept for themselves. A details key, not
+// a new registry reason: a new reason would drop own-use jars out of every
+// read that filters on reason='give_away', and would need a migration.
+const (
+	GiveAwayPurposeGift   = "gift"
+	GiveAwayPurposeOwnUse = "own_use"
+)
+
+// ValidGiveAwayPurpose reports whether purpose is one RecordGiveAwayFor
+// accepts ("" means gift).
+func ValidGiveAwayPurpose(purpose string) bool {
+	return purpose == "" || purpose == GiveAwayPurposeGift || purpose == GiveAwayPurposeOwnUse
+}
+
+// GiveAwayInput is a give-away with its purpose and recipient.
+type GiveAwayInput struct {
+	Lines []JarLine
+	Date  time.Time
+	Notes *string
+	// Purpose is GiveAwayPurposeGift (the default) or GiveAwayPurposeOwnUse.
+	Purpose string
+	// Recipient is who the jars went to, or why ("neighbors", "samples").
+	Recipient *string
+}
+
+// RecordGiveAwayFor is RecordGiveAway with a purpose and a recipient, both
+// kept in the operation's details (details.purpose, details.recipient).
+func (s *Service) RecordGiveAwayFor(
+	ctx context.Context, uow *app.UnitOfWork, input GiveAwayInput, guards ...Guard,
+) (uuid.UUID, error) {
+	const op = "record give-away"
+	for _, line := range input.Lines {
 		if line.Quantity > 0 && (line.HarvestLotID == nil || *line.HarvestLotID == uuid.Nil) {
-			return uuid.Nil, app.Invalid("record give-away", "%s", ErrGiveAwayNeedsLot)
+			return uuid.Nil, app.Invalid(op, "%s", ErrGiveAwayNeedsLot)
 		}
 	}
+	if !ValidGiveAwayPurpose(input.Purpose) {
+		return uuid.Nil, app.Invalid(op, "purpose must be gift or own_use")
+	}
+	purpose := input.Purpose
+	if purpose == "" {
+		purpose = GiveAwayPurposeGift
+	}
+	extra := map[string]any{"purpose": purpose}
+	if input.Recipient != nil && *input.Recipient != "" {
+		extra["recipient"] = *input.Recipient
+	}
 	return s.recordJarWithdrawal(ctx, uow, "honey_give_away", "give_away",
-		ReasonGiveAway, lines, date, notes, guards)
+		ReasonGiveAway, input.Lines, input.Date, input.Notes, extra, guards)
 }
 
 // AdjustJarCounts corrects a miscount (spec 6.1: count_adjust with reason
@@ -207,7 +255,7 @@ func (s *Service) AdjustJarCounts(
 func (s *Service) recordJarWithdrawal(
 	ctx context.Context, uow *app.UnitOfWork,
 	sourceType, command, reason string, lines []JarLine, date time.Time,
-	notes *string, guards []Guard,
+	notes *string, extra map[string]any, guards []Guard,
 ) (uuid.UUID, error) {
 	const op = "record jar withdrawal"
 	if len(lines) == 0 {
@@ -268,6 +316,9 @@ func (s *Service) recordJarWithdrawal(
 		return uuid.Nil, app.Invalid(op, "add at least one jar line")
 	}
 	details := detailNotes(notes)
+	for key, value := range extra {
+		details[key] = value
+	}
 	details["lot_allocation"] = map[string]any{"method": allocationMethod(inferred)}
 	base := baseFor(uow, sourceType, operationID, command, 1, reason, date, details)
 	base.ID = operationID
