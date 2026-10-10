@@ -98,7 +98,7 @@ type Client struct {
 // errRedirect is returned by the redirect policy below. It is deliberately
 // not an *APIError: a redirect is a configuration problem, not something a
 // row can be marked failed for.
-var errRedirect = errors.New("gnucash refused: the server answered with a redirect, which this integration does not follow")
+var errRedirect = errors.New("Folio refused: the server answered with a redirect, which this integration does not follow")
 
 // denyRedirects refuses every 3xx. Folio never redirects its API calls, so a
 // redirect means the base URL points at something else — a proxy, a login
@@ -211,13 +211,13 @@ func (c *Client) do(
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("call gnucash: %w", err)
+		return 0, fmt.Errorf("call Folio: %w", err)
 	}
 	defer response.Body.Close()
 
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 	if err != nil {
-		return response.StatusCode, fmt.Errorf("read gnucash response: %w", err)
+		return response.StatusCode, fmt.Errorf("read Folio response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		apiErr := &APIError{Status: response.StatusCode}
@@ -233,7 +233,7 @@ func (c *Client) do(
 	}
 	if out != nil && len(payload) > 0 {
 		if err := json.Unmarshal(payload, out); err != nil {
-			return response.StatusCode, fmt.Errorf("decode gnucash response: %w", err)
+			return response.StatusCode, fmt.Errorf("decode Folio response: %w", err)
 		}
 	}
 	return response.StatusCode, nil

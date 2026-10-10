@@ -258,7 +258,7 @@ export const NAV_ITEMS: NavItem[] = [
         keywords: ["inspector market manager export treatments withdrawal"],
       },
       {
-        label: "GnuCash reconciliation",
+        label: "Folio reconciliation",
         href: "/insights/reconciliation",
         adminOnly: true,
         keywords: ["sync conflicts pushed failed folio book"],
@@ -275,7 +275,7 @@ export const NAV_ITEMS: NavItem[] = [
     icon: Settings,
     shortcutKey: "a",
     adminOnly: true,
-    keywords: ["integrations access api users gnucash ntfy storage ai"],
+    keywords: ["integrations access api users folio gnucash ntfy storage ai"],
     children: [
       {
         label: "Operation setup",

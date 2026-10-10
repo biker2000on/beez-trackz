@@ -16,9 +16,11 @@ import {
   type GnuCashRow,
 } from "@/features/settings/api";
 import {
+  describeRequestError,
   errorMessage,
   humanize,
   formatTimestamp,
+  isFolioConfigured,
 } from "@/features/settings/gnucash-format";
 
 import { AdminReportGate } from "./reports-nav";
@@ -49,7 +51,7 @@ function ConflictRow({
       <p className="text-xs text-muted-foreground">{row.lastError}</p>
       {row.remoteEnterDate ? (
         <p className="text-xs text-muted-foreground">
-          Changed in GnuCash {formatTimestamp(row.remoteEnterDate)}
+          Changed in Folio {formatTimestamp(row.remoteEnterDate)}
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2">
@@ -61,7 +63,7 @@ function ConflictRow({
           title={
             canPush
               ? undefined
-              : "Enable GnuCash sync before writing to the book"
+              : "Enable Folio sync before writing to the book"
           }
           onClick={() => onPush(row.id)}
         >
@@ -82,10 +84,10 @@ function ConflictRow({
 }
 
 /**
- * `/insights/reconciliation` — what the GnuCash feed did and what disagrees
+ * `/insights/reconciliation` — what the Folio feed did and what disagrees
  * (design 2026-09-03 §6.3, S6).
  *
- * The configuration this reports on — folio credentials, the book, the
+ * The configuration this reports on — Folio credentials, the book, the
  * account mapping — has exactly one editor, and it is not here: it is Admin
  * and Integrations. What lives here is the run and its outcome, including the
  * two ways an operator ends a conflict, because resolving a conflict *is* the
@@ -103,6 +105,7 @@ function ReconciliationReport() {
   const conflicts = rows.data?.conflicts ?? [];
   const failures = rows.data?.failures ?? [];
   const syncEnabled = settings.data?.syncEnabled === true;
+  const configured = settings.data ? isFolioConfigured(settings.data) : false;
   // The column is stamped on every run, including one whose pull failed and
   // which pushed nothing, so it is an attempt time.
   const lastAttemptAt =
@@ -113,19 +116,59 @@ function ReconciliationReport() {
       {settings.isPending || rows.isPending ? (
           <Skeleton className="h-64 w-full" />
         ) : settings.isError || rows.isError ? (
-          <p className="text-sm text-muted-foreground">
-            Could not load the reconciliation report.{" "}
-            <button
-              type="button"
-              className="font-medium text-primary underline-offset-4 hover:underline"
-              onClick={() => {
-                void settings.refetch();
-                void rows.refetch();
-              }}
-            >
-              Try again
-            </button>
-          </p>
+          <div
+            role="alert"
+            className="grid gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"
+          >
+            <p className="flex items-center gap-1 font-medium">
+              <AlertTriangle className="size-4 shrink-0 text-destructive" />
+              Could not load the reconciliation report
+            </p>
+            <ul className="grid gap-1 text-xs text-muted-foreground">
+              {settings.isError ? (
+                <li>
+                  Folio sync settings:{" "}
+                  {describeRequestError(settings.error)}
+                </li>
+              ) : null}
+              {rows.isError ? (
+                <li>
+                  Sync entries: {describeRequestError(rows.error)}
+                </li>
+              ) : null}
+            </ul>
+            <p>
+              <button
+                type="button"
+                className="font-medium text-primary underline-offset-4 hover:underline"
+                onClick={() => {
+                  void settings.refetch();
+                  void rows.refetch();
+                }}
+              >
+                Try again
+              </button>
+            </p>
+          </div>
+        ) : !configured ? (
+          <div className="grid gap-2 rounded-md border p-3 text-sm">
+            <p className="font-medium">Folio sync is not set up</p>
+            <p className="text-xs text-muted-foreground">
+              {settings.data?.baseUrl
+                ? "No API token is saved."
+                : "No Folio server URL is saved."}{" "}
+              Nothing has been pushed, so there is nothing to reconcile yet.
+              Connect a Folio book in Admin and Integrations to start.
+            </p>
+            <div>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/admin#gnucash">
+                  Set up Folio
+                  <ArrowRight />
+                </Link>
+              </Button>
+            </div>
+          </div>
         ) : (
           <div className="grid gap-5">
             <div className="flex flex-wrap items-center gap-2">
@@ -149,7 +192,7 @@ function ReconciliationReport() {
                         toast.warning(
                           `${report.conflicts} entr${
                             report.conflicts === 1 ? "y was" : "ies were"
-                          } changed in GnuCash — resolve them below`,
+                          } changed in Folio — resolve them below`,
                         );
                       }
                       for (const message of report.errors) toast.error(message);
@@ -170,7 +213,8 @@ function ReconciliationReport() {
               </span>
               {syncEnabled ? null : (
                 <span className="text-xs text-muted-foreground">
-                  Sync is disabled — pushes are refused by the server.
+                  Folio is connected but sync is disabled — the server refuses
+                  pushes until it is enabled in Admin and Integrations.
                 </span>
               )}
             </div>
@@ -194,11 +238,11 @@ function ReconciliationReport() {
               <div className="grid gap-2">
                 <h2 className="flex items-center gap-1 text-sm font-medium">
                   <AlertTriangle className="size-4 shrink-0 text-destructive" />
-                  Changed in GnuCash ({conflicts.length})
+                  Changed in Folio ({conflicts.length})
                 </h2>
                 <p className="text-xs text-muted-foreground">
-                  Pushing the local version overwrites GnuCash; ignoring stops
-                  syncing that entry and leaves GnuCash alone.
+                  Pushing the local version overwrites Folio; ignoring stops
+                  syncing that entry and leaves Folio alone.
                 </p>
                 <ul className="grid gap-2">
                   {conflicts.map((row) => (
@@ -263,7 +307,7 @@ function ReconciliationReport() {
               </p>
               <Button asChild variant="outline" size="sm">
                 <Link href="/admin#gnucash">
-                  GnuCash settings
+                  Folio settings
                   <ArrowRight />
                 </Link>
               </Button>
@@ -279,7 +323,7 @@ export function ReconciliationView() {
     <div className="grid gap-6">
       <div className="grid gap-1">
         <h1 className="text-2xl font-bold tracking-tight">
-          GnuCash reconciliation
+          Folio reconciliation
         </h1>
         <p className="text-sm text-muted-foreground">
           What the feed pushed, what failed, and what somebody changed in the

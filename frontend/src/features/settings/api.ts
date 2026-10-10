@@ -222,7 +222,7 @@ export function useUpdateJarSize() {
   });
 }
 
-// --- GnuCash (folio) sync --------------------------------------------------
+// --- Folio (formerly GnuCash Web) sync --------------------------------------------------
 //
 // Beez pushes sales and expenses into a GnuCash book and pulls back only
 // enough to notice that someone edited them there. The browser never talks to
@@ -411,7 +411,7 @@ export function useGnuCashAccounts(enabled: boolean) {
 export function useGnuCashRows() {
   return useQuery({
     queryKey: ["settings", "gnucash", "rows"],
-    queryFn: () => api.get<GnuCashRows>("/settings/gnucash/rows"),
+    queryFn: () => api.get<GnuCashRows>("/insights/reconciliation"),
   });
 }
 
@@ -429,7 +429,7 @@ export function usePushGnuCashRow() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api.post<GnuCashSyncReport>(`/settings/gnucash/rows/${id}/push`),
+      api.post<GnuCashSyncReport>(`/insights/reconciliation/${id}/push`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
     },
@@ -440,7 +440,7 @@ export function useIgnoreGnuCashRow() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api.post<{ success: boolean }>(`/settings/gnucash/rows/${id}/ignore`),
+      api.post<{ success: boolean }>(`/insights/reconciliation/${id}/ignore`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings", "gnucash"] });
     },

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AccountSelector } from "@/components/ui/account-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,12 +24,10 @@ import {
   type GnuCashSettingsPayload,
 } from "@/features/settings/api";
 import {
+  describeRequestError,
   errorMessage,
   humanize,
 } from "@/features/settings/gnucash-format";
-
-/** Sentinel for "not mapped" in the account selects. */
-const UNMAPPED = "__unmapped__";
 
 /** Human labels for the slots that are not a sale kind or expense category. */
 const LEDGER_SLOTS: { key: LedgerSlot; label: string; hint: string }[] = [
@@ -69,9 +68,9 @@ type LedgerSlot =
   | "inventory";
 
 /**
- * One account picker. Until the account list has been loaded from GnuCash the
+ * One account picker. Until the account list has been loaded from Folio the
  * control falls back to showing the stored GUID, so an existing mapping is
- * never silently blanked by a page that could not reach folio.
+ * never silently blanked by a page that could not reach Folio.
  */
 function AccountSelect({
   id,
@@ -92,32 +91,22 @@ function AccountSelect({
     );
   }
   // The stored GUID may name an account that has since been deleted in
-  // GnuCash; keep it selectable so the operator sees what is there.
-  const known = accounts.some((account) => account.guid === value);
+  // Folio; it stays shown as the current value so the operator sees it.
   return (
-    <select
+    <AccountSelector
       id={id}
-      className="h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
-      value={value === "" ? UNMAPPED : value}
-      onChange={(event) =>
-        onChange(event.target.value === UNMAPPED ? "" : event.target.value)
-      }
-    >
-      <option value={UNMAPPED}>Not mapped</option>
-      {!known && value !== "" ? (
-        <option value={value}>{value} (missing in GnuCash)</option>
-      ) : null}
-      {accounts.map((account) => (
-        <option key={account.guid} value={account.guid}>
-          {account.fullName}
-        </option>
-      ))}
-    </select>
+      value={value}
+      accounts={accounts}
+      onChange={onChange}
+      clearLabel="Not mapped"
+      missingLabel={(guid) => `${guid} (missing in Folio)`}
+      placeholder="Not mapped"
+    />
   );
 }
 
 /**
- * The GnuCash *configuration*: folio credentials, the book identity and
+ * The Folio *configuration*: credentials, the book identity and
  * cursor, the account mapping and the restore acknowledgement (design
  * 2026-09-03 §6.3, S6). Its output — the reconciliation report — is at
  * `/insights/reconciliation`.
@@ -136,8 +125,16 @@ export function GnuCashSection() {
 
   if (settings.isError) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Could not load GnuCash sync settings.
+      <p className="text-sm text-muted-foreground" role="alert">
+        Could not load Folio sync settings:{" "}
+        {describeRequestError(settings.error)}.{" "}
+        <button
+          type="button"
+          className="font-medium text-primary underline-offset-4 hover:underline"
+          onClick={() => void settings.refetch()}
+        >
+          Try again
+        </button>
       </p>
     );
   }
@@ -160,7 +157,7 @@ export function GnuCashSection() {
         if (done) toast.success(done);
       },
       onError: (error) =>
-        toast.error(errorMessage(error, "Could not save GnuCash settings")),
+        toast.error(errorMessage(error, "Could not save Folio settings")),
     });
   }
 
@@ -189,17 +186,17 @@ export function GnuCashSection() {
   return (
     <div className="grid gap-5" data-config-editor="gnucash">
       <p className="text-sm text-muted-foreground">
-        Push sales and expenses into a GnuCash book through folio, as balanced
+        Push sales and expenses into a Folio book, as balanced
         double-entry transactions. Beez stays authoritative for physical
         quantities — jars, colonies, and equipment. Nothing read back from
-        GnuCash ever changes a beez record; a book edited behind us shows up
+        Folio ever changes a beez record; a book edited behind us shows up
         as a conflict on the reconciliation report for you to resolve.
       </p>
 
       {/* --- connection --- */}
       <div className="grid gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="gnucash-base-url">folio base URL</Label>
+          <Label htmlFor="gnucash-base-url">Folio base URL</Label>
           <Input
             id="gnucash-base-url"
             type="url"
@@ -210,7 +207,7 @@ export function GnuCashSection() {
               const value = event.target.value.trim();
               setBaseUrlDraft(null);
               if (value === data.baseUrl) return;
-              save({ baseUrl: value }, "GnuCash server saved");
+              save({ baseUrl: value }, "Folio server saved");
             }}
           />
           <p className="text-xs text-muted-foreground">
@@ -228,7 +225,7 @@ export function GnuCashSection() {
               placeholder={
                 data.hasToken
                   ? "Token saved — type to replace"
-                  : "gcw_… from folio"
+                  : "gcw_… from Folio"
               }
               value={tokenDraft}
               onChange={(event) => setTokenDraft(event.target.value)}
@@ -236,7 +233,7 @@ export function GnuCashSection() {
                 const value = tokenDraft.trim();
                 if (value === "") return;
                 setTokenDraft("");
-                save({ apiToken: value }, "GnuCash token saved");
+                save({ apiToken: value }, "Folio token saved");
               }}
             />
             {data.hasToken ? (
@@ -246,7 +243,7 @@ export function GnuCashSection() {
                 size="sm"
                 onClick={() => {
                   setTokenDraft("");
-                  save({ apiToken: "" }, "GnuCash token cleared");
+                  save({ apiToken: "" }, "Folio token cleared");
                 }}
               >
                 Clear
@@ -254,7 +251,7 @@ export function GnuCashSection() {
             ) : null}
           </div>
           <p className="text-xs text-muted-foreground">
-            Bound to one folio book. It is sent only from this server and is
+            Bound to one Folio book. It is sent only from this server and is
             never shown again.
           </p>
         </div>
@@ -478,7 +475,7 @@ export function GnuCashSection() {
           the book and the mapping, and nothing else. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          Runs, push counts and entries changed in GnuCash are reported under
+          Runs, push counts and entries changed in Folio are reported under
           Insights.
         </p>
         <Button asChild variant="outline" size="sm">

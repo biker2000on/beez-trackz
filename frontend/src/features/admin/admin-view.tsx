@@ -24,7 +24,7 @@ import { NtfySection } from "./ntfy-section";
 /**
  * `/admin` — Admin and Integrations (design 2026-09-03 §6.3).
  *
- * Access, media, AI, notifications and the GnuCash feed: the things that need
+ * Access, media, AI, notifications and the Folio feed: the things that need
  * a credential or govern who may do what. The operational catalogs are one
  * click away at `/admin/setup`; per-user display settings are on `/me` and
  * are not editable from here at all.
@@ -38,7 +38,7 @@ export function AdminView() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Collaborators and roles, photo storage, AI providers, phone push and
-          the GnuCash feed.
+          the Folio feed.
         </p>
       </div>
 
@@ -101,7 +101,7 @@ export function AdminView() {
             <NtfySection />
           </SettingsSection>
           <SettingsSection
-            title="GnuCash sync"
+            title="Folio sync"
             description="Credentials, book and account mapping. The reconciliation report is under Insights."
             icon={BookOpenCheck}
             anchor="gnucash"

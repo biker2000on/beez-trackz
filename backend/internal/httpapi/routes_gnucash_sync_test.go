@@ -333,7 +333,7 @@ func (f *folioFake) nativeActivity() {
 		ExternalID:      nil,
 		PostDate:        "2026-08-19",
 		EnterDate:       f.tick().Format(time.RFC3339Nano),
-		Description:     "Bank fee entered in GnuCash",
+		Description:     "Bank fee entered in Folio",
 	})
 }
 
@@ -800,7 +800,7 @@ func TestGnuCashPullFlagsRemoteEditsAndTombstones(t *testing.T) {
 	}
 	deletedRow = syncRowFor(t, server, SyncEntitySale, deletedID)
 	if deletedRow.ConflictState != "remote_newer" ||
-		!strings.Contains(deletedRow.LastError, "Deleted in GnuCash") {
+		!strings.Contains(deletedRow.LastError, "Deleted in Folio") {
 		t.Fatalf("deleted row %+v", deletedRow)
 	}
 
@@ -1019,13 +1019,13 @@ func TestGnuCashSyncPullsBeforePushingSoARemoteEditIsNotOverwritten(t *testing.T
 	}
 	deletedRow = syncRowFor(t, server, SyncEntitySale, deletedID)
 	if deletedRow.ConflictState == "" || deletedRow.ConflictState == "none" ||
-		!strings.Contains(deletedRow.LastError, "Deleted in GnuCash") {
+		!strings.Contains(deletedRow.LastError, "Deleted in Folio") {
 		t.Fatalf("locally edited row was pushed over a remote deletion: %+v", deletedRow)
 	}
 
 	// The bookkeeper's version is still what GnuCash holds.
 	if got := fake.bodyFor(t, editedRow.ExternalID).Description; !strings.Contains(got, "bookkeeper") {
-		t.Fatalf("GnuCash description %q — the local edit was pushed over it", got)
+		t.Fatalf("Folio description %q — the local edit was pushed over it", got)
 	}
 
 	// Both are on the reconciliation list, where the operator can override.

@@ -188,10 +188,10 @@ func nullIfBlank(v string) *string {
 // gnucashClient builds a client from stored settings.
 func (settings gnucashSettings) client() (*gnucashsync.Client, error) {
 	if !gnucashsync.ValidBaseURL(settings.BaseURL) {
-		return nil, app.Precondition("gnucash sync", "GnuCash base URL is not configured")
+		return nil, app.Precondition("gnucash sync", "Folio base URL is not configured")
 	}
 	if strings.TrimSpace(settings.Token) == "" {
-		return nil, app.Precondition("gnucash sync", "GnuCash API token is not configured")
+		return nil, app.Precondition("gnucash sync", "Folio API token is not configured")
 	}
 	return gnucashsync.NewClient(settings.BaseURL, settings.Token, nil), nil
 }
@@ -219,7 +219,7 @@ func (settings gnucashSettings) writeClient() (*gnucashsync.Client, error) {
 	}
 	if !settings.SyncEnabled {
 		return nil, app.Conflict("gnucash sync",
-			"GnuCash sync is disabled. Enable it in settings before pushing to the book.")
+			"Folio sync is disabled. Enable it in settings before pushing to the book.")
 	}
 	// Belt and braces on top of the flag. Since 00049 the settings PUT will
 	// not turn sync on while restore_state is 'installed', so this can only
@@ -227,7 +227,7 @@ func (settings gnucashSettings) writeClient() (*gnucashsync.Client, error) {
 	// restored, unreconciled mapping set must not push.
 	if settings.restorePending() {
 		return nil, app.Conflict("gnucash sync",
-			"A restored GnuCash sync state is still awaiting reconciliation. "+
+			"A restored Folio sync state is still awaiting reconciliation. "+
 				"Acknowledge the reconciliation before pushing to the book.")
 	}
 	if settings.BookGUID == "" {
@@ -381,7 +381,7 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 			// TestGnuCashSettingsPutClearsTheBookOnATokenChange still passes.
 			if identityChanged && settings.restorePending() && !req.DiscardRestore {
 				return app.Conflict("gnucash settings",
-					"A restored GnuCash cursor is installed and sync is still disabled. "+
+					"A restored Folio cursor is installed and sync is still disabled. "+
 						"Changing the server or token now would discard it. Finish the restore "+
 						"reconciliation and enable sync, or send discardRestore to drop the "+
 						"restored state on purpose.")
@@ -404,7 +404,7 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 				if *req.SyncEnabled && !settings.SyncEnabled &&
 					settings.RestoreState == restoreStateInstalled {
 					return app.Conflict("gnucash settings",
-						"A restored GnuCash sync state is still awaiting reconciliation. "+
+						"A restored Folio sync state is still awaiting reconciliation. "+
 							"Run the pull-first reconciliation and the no-write push dry run, "+
 							"then acknowledge it, before enabling sync. Sending discardRestore "+
 							"drops the restored state instead.")
@@ -547,18 +547,18 @@ func gnucashUserMessage(err error) string {
 	if errors.As(err, &apiErr) {
 		switch {
 		case gnucashsync.IsAuth(err):
-			return "GnuCash rejected the token (check that it is a folio personal access token bound to the right book)"
+			return "Folio rejected the token (check that it is a Folio personal access token bound to the right book)"
 		case apiErr.Status == http.StatusNotFound:
-			return "GnuCash returned 404 — check the base URL"
+			return "Folio returned 404 — check the base URL"
 		case apiErr.Detail != "":
-			return fmt.Sprintf("GnuCash error %s: %s", apiErr.Code, apiErr.Detail)
+			return fmt.Sprintf("Folio error %s: %s", apiErr.Code, apiErr.Detail)
 		case apiErr.Code != "":
-			return "GnuCash error " + apiErr.Code
+			return "Folio error " + apiErr.Code
 		default:
-			return fmt.Sprintf("GnuCash returned HTTP %d", apiErr.Status)
+			return fmt.Sprintf("Folio returned HTTP %d", apiErr.Status)
 		}
 	}
-	return "Could not reach GnuCash: " + err.Error()
+	return "Could not reach Folio: " + err.Error()
 }
 
 // --- sync row inspection ----------------------------------------------------
@@ -918,7 +918,7 @@ func (s *Server) gnucashPushRow(
 				if gnucashsync.IsReconciled(err) {
 					report.Failed++
 					return s.gnucashMarkConflict(ctx, row.ID, "diverged",
-						"Reconciled in GnuCash — beez no longer has this entry; unreconcile or delete it there")
+						"Reconciled in Folio — beez no longer has this entry; unreconcile or delete it there")
 				}
 				if !gnucashsync.IsNotFound(err) {
 					if gnucashsync.IsPermanent(err) {
@@ -956,7 +956,7 @@ func (s *Server) gnucashPushRow(
 		case gnucashsync.IsReconciled(err):
 			report.Failed++
 			return s.gnucashMarkConflict(ctx, row.ID, "diverged",
-				"Reconciled in GnuCash — the local edit was not applied")
+				"Reconciled in Folio — the local edit was not applied")
 		case gnucashsync.IsPermanent(err):
 			report.Failed++
 			return s.gnucashMarkFailed(ctx, row.ID, gnucashUserMessage(err))
@@ -1059,7 +1059,7 @@ func (s *Server) gnucashBuild(
 		return txn, externalID, true, nil
 	default:
 		return gnucashsync.Transaction{}, "", false, &gnucashBuildError{
-			fmt.Errorf("entity type %q is not pushed to GnuCash", row.EntityType)}
+			fmt.Errorf("entity type %q is not pushed to Folio", row.EntityType)}
 	}
 }
 
@@ -1289,10 +1289,10 @@ func (s *Server) gnucashPull(
 			switch result.NextCursor {
 			case "":
 				return cursor, false, errors.New(
-					"pull changes: GnuCash reported more changes without a nextCursor")
+					"pull changes: Folio reported more changes without a nextCursor")
 			case cursor:
 				return cursor, false, errors.New(
-					"pull changes: GnuCash returned the same nextCursor twice, so the change feed cannot advance")
+					"pull changes: Folio returned the same nextCursor twice, so the change feed cannot advance")
 			}
 		}
 		for _, item := range result.Items {
@@ -1355,11 +1355,11 @@ func (s *Server) gnucashReconcileItem(
 
 	if item.Deleted {
 		return true, s.gnucashMarkConflict(ctx, rowID, "remote_newer",
-			"Deleted in GnuCash. Beez still has this entry — push it again to recreate it, or ignore it here.")
+			"Deleted in Folio. Beez still has this entry — push it again to recreate it, or ignore it here.")
 	}
 	if item.Unrepresentable {
 		return true, s.gnucashMarkConflict(ctx, rowID, "remote_newer",
-			"Edited in GnuCash into a shape beez cannot represent (multi-currency or similar). Resolve it in GnuCash.")
+			"Edited in Folio into a shape beez cannot represent (multi-currency or similar). Resolve it in Folio.")
 	}
 
 	remote := gnucashParseTime(item.EnterDate)
@@ -1372,10 +1372,10 @@ func (s *Server) gnucashReconcileItem(
 	}
 	// pending means beez also has an unpushed local change.
 	state := "remote_newer"
-	message := "Edited in GnuCash since the last push. Push the beez version again to overwrite it, or ignore it here."
+	message := "Edited in Folio since the last push. Push the beez version again to overwrite it, or ignore it here."
 	if syncState == "pending" {
 		state = "diverged"
-		message = "Edited in GnuCash AND changed in beez since the last push. Push the beez version to overwrite GnuCash, or ignore it here."
+		message = "Edited in Folio AND changed in beez since the last push. Push the beez version to overwrite Folio, or ignore it here."
 	}
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE external_sync SET conflict_state = $2, last_error = $3,
@@ -1691,7 +1691,7 @@ func (s *Server) handleGnuCashRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	if settings.SyncEnabled {
 		writeAppError(w, app.Conflict("gnucash restore",
-			"Disable GnuCash sync before restoring. The restored mappings have to pass a "+
+			"Disable Folio sync before restoring. The restored mappings have to pass a "+
 				"pull-first reconciliation before anything is pushed."))
 		return
 	}
@@ -1755,7 +1755,7 @@ func (s *Server) handleGnuCashRestore(w http.ResponseWriter, r *http.Request) {
 		"Run the pull-first reconciliation and the no-write push dry run against the restored mappings.",
 		"Resolve anything quarantined as a conflict.",
 		"Acknowledge the reconciliation: POST /settings/gnucash/restore with markReconciled.",
-		"Only then enable GnuCash sync; the settings PUT refuses to enable it until you do.",
+		"Only then enable Folio sync; the settings PUT refuses to enable it until you do.",
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -1793,18 +1793,18 @@ func (s *Server) gnucashAcknowledgeReconciliation(w http.ResponseWriter, r *http
 			case restoreStateInstalled:
 			case restoreStateReconciled:
 				return app.Conflict(op,
-					"The restored GnuCash sync state has already been acknowledged. "+
+					"The restored Folio sync state has already been acknowledged. "+
 						"Enable sync when you are ready.")
 			default:
 				return app.Conflict(op,
-					"There is no restored GnuCash sync state awaiting reconciliation.")
+					"There is no restored Folio sync state awaiting reconciliation.")
 			}
 			if settings.SyncEnabled {
 				// Unreachable through the API — the PUT will not enable sync
 				// from 'installed' — but a hand-edited row must not have its
 				// restore acknowledged while it is already pushing.
 				return app.Conflict(op,
-					"GnuCash sync is already enabled; the reconciliation is acknowledged "+
+					"Folio sync is already enabled; the reconciliation is acknowledged "+
 						"before sync is turned on, not after.")
 			}
 			settings.RestoreState = restoreStateReconciled
@@ -1822,7 +1822,7 @@ func (s *Server) gnucashAcknowledgeReconciliation(w http.ResponseWriter, r *http
 	result.Success = true
 	result.RestorePending = false
 	result.NextSteps = []string{
-		"Enable GnuCash sync in settings when you are ready for beez to push again.",
+		"Enable Folio sync in settings when you are ready for beez to push again.",
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -1859,11 +1859,11 @@ func (s *Server) gnucashInstallRestore(
 	// opens.
 	if settings.BaseURL != tested.BaseURL || settings.Token != tested.Token {
 		return app.Conflict(op,
-			"The GnuCash credentials changed while this restore was being verified. "+
+			"The Folio credentials changed while this restore was being verified. "+
 				"Test the connection again and re-run the restore.")
 	}
 	if settings.SyncEnabled {
-		return app.Conflict(op, "GnuCash sync was enabled while this restore was being verified.")
+		return app.Conflict(op, "Folio sync was enabled while this restore was being verified.")
 	}
 
 	var existing int
@@ -1874,7 +1874,7 @@ func (s *Server) gnucashInstallRestore(
 	}
 	if existing > 0 && !req.ReplaceExisting {
 		return app.Conflict(op,
-			"%d GnuCash sync rows already exist. A restore installs the sync state of the artifact "+
+			"%d Folio sync rows already exist. A restore installs the sync state of the artifact "+
 				"into an empty one; send replaceExisting to discard what is there on purpose.",
 			existing)
 	}

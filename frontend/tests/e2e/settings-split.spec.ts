@@ -158,7 +158,7 @@ async function mockApp(page: Page, options: MockOptions = {}) {
     if (path.endsWith("/settings/gnucash")) {
       return route.fulfill({ json: GNUCASH_SETTINGS });
     }
-    if (path.endsWith("/settings/gnucash/rows")) {
+    if (path.endsWith("/insights/reconciliation")) {
       return route.fulfill({ json: { counts: {}, conflicts: [], failures: [] } });
     }
     if (path.endsWith("/settings/storage")) {

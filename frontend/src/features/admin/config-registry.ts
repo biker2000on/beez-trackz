@@ -75,7 +75,7 @@ export const CONFIG_OBJECTS: ConfigObject[] = [
   { key: "ntfy", label: "Phone push (ntfy)", href: "/admin", anchor: "ntfy" },
   {
     key: "gnucash",
-    label: "GnuCash credentials, book and mapping",
+    label: "Folio credentials, book and mapping",
     href: "/admin",
     anchor: "gnucash",
     contextualLinks: ["/insights/reconciliation"],

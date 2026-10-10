@@ -20,7 +20,7 @@ export function ComplianceView() {
   async function download() {
     setBusy(true);
     try {
-      const response = await fetch("/api/v1/ops/compliance-packet", {
+      const response = await fetch("/api/v1/insights/compliance", {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
@@ -76,7 +76,7 @@ export function ComplianceView() {
         </Button>
         <Button asChild variant="outline">
           <a
-            href="/api/v1/ops/compliance-packet/print"
+            href="/api/v1/insights/compliance/print"
             target="_blank"
             rel="noreferrer"
           >

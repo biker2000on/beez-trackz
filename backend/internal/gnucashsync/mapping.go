@@ -57,7 +57,7 @@ type AccountMapping struct {
 type mappingError struct{ what string }
 
 func (e *mappingError) Error() string {
-	return "no GnuCash account mapped for " + e.what
+	return "no Folio account mapped for " + e.what
 }
 
 // MissingMapping builds the error the engine stores in last_error.
