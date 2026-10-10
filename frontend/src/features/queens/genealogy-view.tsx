@@ -24,7 +24,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -46,10 +45,11 @@ import {
   type QueenStatus,
 } from "./api";
 import { layoutQueenTree, type QueenFlowNode } from "./layout";
-import { markingColorForDate, markingColorForYear } from "./marking";
+import { markingColorForYear } from "./marking";
 import { QueenDetailsSheet } from "./queen-details-sheet";
 import { QueenFormDialog } from "./queen-form-dialog";
 import { QueenNode } from "./queen-node";
+import { QueenManageGrid } from "./queen-manage-grid";
 import { QueenPerformancePanel } from "./performance-panel";
 
 const nodeTypes = { queen: QueenNode };
@@ -261,48 +261,11 @@ export function GenealogyView() {
           </CardContent>
         </Card>
       ) : manageMode ? (
-        <div className="grid gap-2">
-          {queens.map((queen) => {
-            const marking = markingColorForDate(queen.introducedDate);
-            return (
-              <button
-                key={queen.id}
-                type="button"
-                className={`flex min-h-14 items-center gap-3 rounded-lg border bg-card p-3 text-left transition-colors ${
-                  bulkSelected.has(queen.id)
-                    ? "border-primary bg-primary/5"
-                    : "hover:border-primary/40"
-                }`}
-                onClick={() => toggleBulkSelected(queen.id)}
-              >
-                <Checkbox
-                  checked={bulkSelected.has(queen.id)}
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  className="pointer-events-none"
-                />
-                <span
-                  className="size-3 shrink-0 rounded-full border"
-                  style={{ backgroundColor: marking?.color ?? "transparent" }}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">
-                    {queen.apiaryName && queen.hiveName
-                      ? `${queen.apiaryName} — ${queen.hiveName}`
-                      : "Unassigned queen"}
-                  </span>
-                  <span className="block text-xs capitalize text-muted-foreground">
-                    {queen.origin.replaceAll("_", " ")}
-                    {marking ? ` · ${marking.year}` : ""}
-                  </span>
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {QUEEN_STATUS_LABELS[queen.status]}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <QueenManageGrid
+          queens={queens}
+          selected={bulkSelected}
+          onToggle={toggleBulkSelected}
+        />
       ) : (
         <div className="h-[calc(100dvh-19rem)] min-h-96 overflow-hidden rounded-xl border bg-card">
           <ReactFlow

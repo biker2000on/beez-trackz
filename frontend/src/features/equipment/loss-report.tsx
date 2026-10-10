@@ -68,31 +68,31 @@ export function LossReportCard() {
   const columns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
+        columnHelper.accessor((row) => row.typeName, {
           id: "equipment",
           header: "Equipment",
           meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.typeName,
         }),
-        columnHelper.display({
+        columnHelper.accessor((row) => row.damaged, {
           id: "damaged",
           header: "Damaged",
           meta: rightAligned,
           cell: ({ row }) => row.original.damaged || "—",
         }),
-        columnHelper.display({
+        columnHelper.accessor((row) => row.retired, {
           id: "retired",
           header: "Retired",
           meta: rightAligned,
           cell: ({ row }) => row.original.retired || "—",
         }),
-        columnHelper.display({
+        columnHelper.accessor((row) => row.writtenOff, {
           id: "writtenOff",
           header: "Written off",
           meta: rightAligned,
           cell: ({ row }) => row.original.writtenOff || "—",
         }),
-        columnHelper.display({
+        columnHelper.accessor((row) => row.valueCents, {
           id: "value",
           header: "Value",
           meta: rightAligned,
@@ -202,32 +202,9 @@ export function LossReportCard() {
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   Recent events
                 </h3>
-                <ul className="divide-y">
-                  {report.data.events.slice(0, 12).map((event) => (
-                    <li
-                      key={event.id}
-                      className="flex min-h-12 items-center justify-between gap-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {event.quantity}× {event.typeName}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {formatDate(event.date)} · {reasonLabel(event.reason)}
-                          {event.notes ? ` · ${event.notes}` : ""}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Badge variant="secondary">
-                          {LOSS_KIND_LABELS[event.kind] ?? event.kind}
-                        </Badge>
-                        <span className="text-xs tabular-nums text-muted-foreground">
-                          {formatCents(event.valueCents)}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <div className="rounded-lg border">
+                  <LossEventsGrid events={report.data.events.slice(0, 12)} />
+                </div>
               </div>
             )}
           </>
@@ -249,5 +226,64 @@ function LossStat({
       <p className="text-xl font-bold tabular-nums">{value}</p>
       <p className="text-xs text-muted-foreground">{label}</p>
     </div>
+  );
+}
+
+type LossEvent = LossReport["events"][number];
+const eventHelper = createColumnHelper<typeof gridFeatures, LossEvent>();
+const eventColumns = eventHelper.columns([
+  eventHelper.accessor((event) => event.date, {
+    id: "date",
+    header: "Date",
+    meta: { card: "subtitle" } satisfies DataGridColumnMeta,
+    cell: ({ getValue }) => formatDate(getValue()),
+  }),
+  eventHelper.accessor((event) => event.typeName, {
+    id: "equipment",
+    header: "Equipment",
+    meta: { card: "title", cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+  }),
+  eventHelper.accessor((event) => event.quantity, {
+    id: "quantity",
+    header: "Qty",
+    meta: rightAligned,
+  }),
+  eventHelper.accessor((event) => LOSS_KIND_LABELS[event.kind] ?? event.kind, {
+    id: "kind",
+    header: "Kind",
+    meta: { card: "badge", filter: true, filterAllLabel: "All kinds" } satisfies DataGridColumnMeta,
+    cell: ({ getValue }) => <Badge variant="secondary">{getValue()}</Badge>,
+  }),
+  eventHelper.accessor((event) => reasonLabel(event.reason), {
+    id: "reason",
+    header: "Reason",
+  }),
+  eventHelper.accessor((event) => event.valueCents, {
+    id: "value",
+    header: "Value",
+    meta: rightAligned,
+    cell: ({ getValue }) => formatCents(getValue()),
+  }),
+  eventHelper.accessor((event) => event.notes ?? "", {
+    id: "notes",
+    header: "Notes",
+    meta: { cellClassName: "whitespace-normal text-muted-foreground" } satisfies DataGridColumnMeta,
+  }),
+]);
+
+function LossEventsGrid({ events }: { events: LossEvent[] }) {
+  const table = useTable({
+    features: gridFeatures,
+    columns: eventColumns,
+    data: events,
+    getRowId: (event) => event.id,
+  });
+  return (
+    <DataGrid
+      table={table}
+      aria-label="Recent equipment loss events"
+      listenOnWindow={false}
+      searchable={false}
+    />
   );
 }

@@ -219,7 +219,7 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
   const columns = React.useMemo(
     () =>
       varroaColumnHelper.columns([
-        varroaColumnHelper.display({
+        varroaColumnHelper.accessor((r) => r.hiveName, {
           id: "hive",
           header: "Hive",
           meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
@@ -234,12 +234,12 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
             </DataGridCellAction>
           ),
         }),
-        varroaColumnHelper.display({
+        varroaColumnHelper.accessor((r) => r.apiaryName, {
           id: "apiary",
           header: "Apiary",
           cell: ({ row }) => row.original.apiaryName,
         }),
-        varroaColumnHelper.display({
+        varroaColumnHelper.accessor((r) => r.lastCount?.mitesCount, { sortUndefined: "last",
           id: "latest",
           header: "Latest",
           meta: rightAligned,
@@ -249,7 +249,7 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
             return display ? display.label : `${latest.mitesCount} mites`;
           },
         }),
-        varroaColumnHelper.display({
+        varroaColumnHelper.accessor((r) => (r.lastCount ? (METHOD_LABELS[r.lastCount.method] ?? r.lastCount.method) : undefined), {
           id: "method",
           header: "Method",
           cell: ({ row }) => {
@@ -257,7 +257,7 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
             return METHOD_LABELS[latest.method] ?? latest.method;
           },
         }),
-        varroaColumnHelper.display({
+        varroaColumnHelper.accessor((r) => r.lastCount?.date, { sortUndefined: "last",
           id: "date",
           header: "Date",
           cell: ({ row }) => formatDate(row.original.lastCount!.date),
@@ -359,18 +359,18 @@ function YieldLeaderboardGrid({ rows }: { rows: YieldHiveRow[] }) {
   const columns = React.useMemo(
     () =>
       yieldColumnHelper.columns([
-        yieldColumnHelper.display({
+        yieldColumnHelper.accessor((r) => r.hiveName, {
           id: "hive",
           header: "Hive",
           meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.hiveName,
         }),
-        yieldColumnHelper.display({
+        yieldColumnHelper.accessor((r) => r.apiaryName, {
           id: "apiary",
           header: "Apiary",
           cell: ({ row }) => row.original.apiaryName,
         }),
-        yieldColumnHelper.display({
+        yieldColumnHelper.accessor((r) => r.pounds, {
           id: "honey",
           header: "Honey",
           meta: rightAligned,
@@ -400,7 +400,7 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
   const columns = React.useMemo(
     () =>
       economicsColumnHelper.columns([
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.apiaryName, {
           id: "apiary",
           header: "Apiary",
           meta: {
@@ -409,25 +409,25 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
           } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.apiaryName,
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.poundsPerHive, {
           id: "poundsPerHive",
           header: "lb/hive",
           meta: rightAligned,
           cell: ({ row }) => row.original.poundsPerHive.toFixed(1),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.revenueAllocated, {
           id: "revenue",
           header: "Revenue (invoiced)",
           meta: rightAligned,
           cell: ({ row }) => formatMoney(row.original.revenueAllocated),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.expenses, {
           id: "expenses",
           header: "Expenses",
           meta: rightAligned,
           cell: ({ row }) => formatMoney(row.original.expenses),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.margin, {
           id: "margin",
           header: "Margin",
           meta: {
@@ -436,19 +436,19 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
           } satisfies DataGridColumnMeta,
           cell: ({ row }) => formatMoney(row.original.margin),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.feedCostPerColony, {
           id: "feedPerColony",
           header: "Feed/colony",
           meta: rightAligned,
           cell: ({ row }) => formatMoney(row.original.feedCostPerColony),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.treatmentCostPerColony, {
           id: "treatmentPerColony",
           header: "Treatment/colony",
           meta: rightAligned,
           cell: ({ row }) => formatMoney(row.original.treatmentCostPerColony),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.winterSurvivalRate, {
           id: "winterSurvival",
           header: "Winter survival",
           meta: rightAligned,
@@ -459,7 +459,7 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
             </>
           ),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.splitChildrenSurviving, {
           id: "splitsSurviving",
           header: "Splits surviving",
           meta: rightAligned,
@@ -469,7 +469,7 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
             </>
           ),
         }),
-        economicsColumnHelper.display({
+        economicsColumnHelper.accessor((r) => r.introducedQueensActive, {
           id: "queensActive",
           header: "Introduced queens active",
           meta: rightAligned,
@@ -518,25 +518,25 @@ function SurvivalTable({ title, rows }: { title: string; rows: SurvivalGroup[] }
   const columns = React.useMemo(
     () =>
       survivalColumnHelper.columns([
-        survivalColumnHelper.display({
+        survivalColumnHelper.accessor((r) => r.label, {
           id: "group",
           header: "Group",
           meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.label,
         }),
-        survivalColumnHelper.display({
+        survivalColumnHelper.accessor((r) => r.enteredWinter, {
           id: "enteredWinter",
           header: "Entered winter",
           meta: rightAligned,
           cell: ({ row }) => row.original.enteredWinter,
         }),
-        survivalColumnHelper.display({
+        survivalColumnHelper.accessor((r) => r.survived, {
           id: "survived",
           header: "Survived",
           meta: rightAligned,
           cell: ({ row }) => row.original.survived,
         }),
-        survivalColumnHelper.display({
+        survivalColumnHelper.accessor((r) => r.survivalRate, {
           id: "rate",
           header: "Rate",
           meta: {

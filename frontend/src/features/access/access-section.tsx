@@ -14,8 +14,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { createColumnHelper, useTable } from "@tanstack/react-table";
+
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+  dataGridFeatures,
+} from "@/components/ui/data-grid";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +61,203 @@ import {
 } from "./api";
 
 type RoleChoice = ApiaryRole | "none";
+
+const EMPTY_TOKENS: AccessToken[] = [];
+const EMPTY_USERS: AccessUser[] = [];
+const tokenColumnHelper = createColumnHelper<
+  typeof dataGridFeatures,
+  AccessToken
+>();
+const userColumnHelper = createColumnHelper<
+  typeof dataGridFeatures,
+  AccessUser
+>();
+
+function TokenGrid({
+  tokens,
+  loading,
+  onRevoke,
+}: {
+  tokens: AccessToken[];
+  loading: boolean;
+  onRevoke: (token: AccessToken) => void;
+}) {
+  const columns = React.useMemo(
+    () =>
+      tokenColumnHelper.columns([
+        tokenColumnHelper.accessor((token) => token.name, {
+          id: "name",
+          header: "Token",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: token } }) => (
+            <span className="inline-flex items-center gap-2">
+              <KeyRound className="size-4 text-muted-foreground" />
+              {token.name}
+            </span>
+          ),
+        }),
+        tokenColumnHelper.accessor((token) => token.lastUsedAt ?? "", {
+          id: "lastUsed",
+          header: "Last used",
+          cell: ({ row: { original: token } }) =>
+            token.lastUsedAt
+              ? new Date(token.lastUsedAt).toLocaleDateString()
+              : "Never used",
+        }),
+        tokenColumnHelper.accessor((token) => token.createdAt, {
+          id: "created",
+          header: "Created",
+          cell: ({ row: { original: token } }) =>
+            new Date(token.createdAt).toLocaleDateString(),
+        }),
+        tokenColumnHelper.display({
+          id: "actions",
+          header: "",
+          meta: { align: "right" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: token } }) => (
+            <DataGridCellAction>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={`Delete ${token.name}`}
+                onClick={() => onRevoke(token)}
+              >
+                <Trash2 />
+              </Button>
+            </DataGridCellAction>
+          ),
+        }),
+      ]),
+    [onRevoke],
+  );
+  const table = useTable({
+    features: dataGridFeatures,
+    columns,
+    data: tokens,
+    getRowId: (token) => token.id,
+  });
+  return (
+    <div className="rounded-lg border">
+      <DataGrid
+        table={table}
+        aria-label="API tokens"
+        listenOnWindow={false}
+        searchable={false}
+        emptyMessage={loading ? "Loading…" : "No API tokens yet."}
+      />
+    </div>
+  );
+}
+
+function userStatus(user: AccessUser): string {
+  if (user.isAdmin) return "Administrator";
+  if (!user.isActive) return "Disabled";
+  if (user.isPending) return "Invite pending";
+  return "Active";
+}
+
+function UserGrid({
+  users,
+  onEdit,
+  onDisable,
+}: {
+  users: AccessUser[];
+  onEdit: (user: AccessUser) => void;
+  onDisable: (user: AccessUser) => void;
+}) {
+  const columns = React.useMemo(
+    () =>
+      userColumnHelper.columns([
+        userColumnHelper.accessor((user) => user.displayName || user.email || "", {
+          id: "name",
+          header: "Name",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: user } }) => (
+            <span className="inline-flex items-center gap-2">
+              <UserRound className="size-4 text-muted-foreground" />
+              {user.displayName || user.email}
+            </span>
+          ),
+        }),
+        userColumnHelper.accessor((user) => user.email ?? "Local owner", {
+          id: "email",
+          header: "Email",
+          meta: { card: "subtitle" } satisfies DataGridColumnMeta,
+        }),
+        userColumnHelper.accessor(userStatus, {
+          id: "status",
+          header: "Status",
+          meta: { card: "badge", filter: true, filterAllLabel: "Any status" } satisfies DataGridColumnMeta,
+          cell: ({ getValue }) => (
+            <Badge variant={getValue() === "Active" ? "secondary" : "outline"}>
+              {getValue()}
+            </Badge>
+          ),
+        }),
+        userColumnHelper.accessor(
+          (user) =>
+            user.isAdmin
+              ? "Every apiary"
+              : user.memberships
+                  .map((item) => `${item.apiaryName}: ${item.role}`)
+                  .join(", "),
+          {
+            id: "apiaries",
+            header: "Apiaries",
+            meta: { cellClassName: "whitespace-normal" } satisfies DataGridColumnMeta,
+            cell: ({ getValue }) =>
+              getValue() || <span className="text-muted-foreground">None</span>,
+          },
+        ),
+        userColumnHelper.display({
+          id: "actions",
+          header: "",
+          meta: { align: "right" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: user } }) =>
+            user.isAdmin ? null : (
+              <DataGridCellAction className="inline-flex">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label={`Edit ${user.displayName}`}
+                  onClick={() => onEdit(user)}
+                >
+                  <Pencil />
+                </Button>
+                {user.isActive ? (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`Disable ${user.displayName}`}
+                    onClick={() => onDisable(user)}
+                  >
+                    <Trash2 />
+                  </Button>
+                ) : null}
+              </DataGridCellAction>
+            ),
+        }),
+      ]),
+    [onEdit, onDisable],
+  );
+  const table = useTable({
+    features: dataGridFeatures,
+    columns,
+    data: users,
+    getRowId: (user) => user.id,
+  });
+  return (
+    <div className="rounded-lg border">
+      <DataGrid
+        table={table}
+        aria-label="Collaborators"
+        listenOnWindow={false}
+        searchable={users.length > 5}
+        emptyMessage="No collaborators yet."
+      />
+    </div>
+  );
+}
 
 function UserDialog({
   user,
@@ -268,32 +474,11 @@ function TokenManager() {
           </p>
         </div>
       ) : null}
-      <div className="divide-y rounded-lg border">
-        {(tokens.data ?? []).map((token) => (
-          <div className="flex items-center gap-3 p-3" key={token.id}>
-            <KeyRound className="size-4 text-muted-foreground" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{token.name}</p>
-              <p className="text-xs text-muted-foreground">
-                {token.lastUsedAt
-                  ? `Last used ${new Date(token.lastUsedAt).toLocaleDateString()}`
-                  : "Never used"}
-              </p>
-            </div>
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label={`Delete ${token.name}`}
-              onClick={() => setRevoking(token)}
-            >
-              <Trash2 />
-            </Button>
-          </div>
-        ))}
-        {!tokens.isPending && tokens.data?.length === 0 ? (
-          <p className="p-3 text-sm text-muted-foreground">No API tokens yet.</p>
-        ) : null}
-      </div>
+      <TokenGrid
+        tokens={tokens.data ?? EMPTY_TOKENS}
+        loading={tokens.isPending}
+        onRevoke={setRevoking}
+      />
       <RevokeTokenDialog
         token={revoking}
         onOpenChange={(open) => {
@@ -414,56 +599,18 @@ export function CollaboratorsSection() {
           Add user
         </Button>
       </div>
-      <div className="divide-y rounded-lg border">
-        {(users.data ?? []).map((user) => (
-          <div className="flex items-center gap-3 p-3" key={user.id}>
-            <UserRound className="size-4 text-muted-foreground" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">
-                {user.displayName || user.email}
-                {user.isAdmin ? " · Administrator" : ""}
-                {user.isPending ? " · Invite pending" : ""}
-                {!user.isActive ? " · Disabled" : ""}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {user.email ?? "Local owner"}{" "}
-                {!user.isAdmin && user.memberships.length
-                  ? `· ${user.memberships.map((item) => `${item.apiaryName}: ${item.role}`).join(", ")}`
-                  : ""}
-              </p>
-            </div>
-            {!user.isAdmin ? (
-              <>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label={`Edit ${user.displayName}`}
-                  onClick={() => {
-                    setEditing(user);
-                    setDialogOpen(true);
-                  }}
-                >
-                  <Pencil />
-                </Button>
-                {user.isActive ? (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label={`Disable ${user.displayName}`}
-                    onClick={() => {
-                      if (window.confirm(`Disable ${user.displayName}?`)) {
-                        deactivate.mutate(user.id);
-                      }
-                    }}
-                  >
-                    <Trash2 />
-                  </Button>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        ))}
-      </div>
+      <UserGrid
+        users={users.data ?? EMPTY_USERS}
+        onEdit={(user) => {
+          setEditing(user);
+          setDialogOpen(true);
+        }}
+        onDisable={(user) => {
+          if (window.confirm(`Disable ${user.displayName}?`)) {
+            deactivate.mutate(user.id);
+          }
+        }}
+      />
       {dialogOpen ? (
         <UserDialog
           key={editing?.id ?? "new"}

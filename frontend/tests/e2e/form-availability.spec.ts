@@ -299,7 +299,7 @@ test("a bottling run shows each size's ounces and totals jars · oz ≈ lb again
   await mockApp(page);
   await page.goto("/production/lots");
 
-  const clover = page.locator("[data-slot=card]", { hasText: "2026-CLOVER-01" }).first();
+  const clover = page.getByRole("row").filter({ hasText: "2026-CLOVER-01" }).first();
   await clover.getByRole("button", { name: "Add bottling run" }).click();
   const dialog = page.getByRole("dialog", { name: /Bottle 2026-CLOVER-01/ });
   await expect(dialog).toBeVisible();

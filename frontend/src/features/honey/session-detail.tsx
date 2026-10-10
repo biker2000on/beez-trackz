@@ -12,7 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import Link from "next/link";
-import { ArrowLeft, Plus, Scale, Trash2, X } from "lucide-react";
+import { ArrowLeft, Plus, Scale, X } from "lucide-react";
 
 import {
   AlertDialog,
@@ -44,14 +44,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { SessionEntriesGrid } from "./session-entries-grid";
 import { cn } from "@/lib/utils";
 import { useUnits } from "@/lib/use-units";
 
@@ -190,65 +183,13 @@ export function SessionDetail({ id }: { id: string }) {
             </p>
           ) : (
             <div className="rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Hive</TableHead>
-                    <TableHead className="text-right">Super before</TableHead>
-                    <TableHead className="text-right">Super after</TableHead>
-                    <TableHead className="text-right">Honey</TableHead>
-                    <TableHead>Notes</TableHead>
-                    <TableHead />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.entries.map((entry) => (
-                    <TableRow key={entry.id}>
-                      <TableCell className="font-medium">
-                        {entry.hiveName}
-                      </TableCell>
-                      {entry.directWeight ? (
-                        <TableCell
-                          colSpan={2}
-                          className="text-right text-xs text-muted-foreground"
-                        >
-                          Weighed directly
-                        </TableCell>
-                      ) : (
-                        <>
-                          <TableCell className="text-right tabular-nums">
-                            {formatHoney(entry.superWeightBefore)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatHoney(entry.superWeightAfter)}
-                          </TableCell>
-                        </>
-                      )}
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {formatHoney(entry.calculatedHoneyWeight)}
-                      </TableCell>
-                      <TableCell className="max-w-48 truncate text-muted-foreground">
-                        {entry.notes ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="text-muted-foreground hover:text-destructive"
-                          aria-label={`Remove entry for ${entry.hiveName}`}
-                          onClick={() => {
-                            setDeleteReason("");
-                            setConfirmEntry(entry);
-                          }}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <SessionEntriesGrid
+                entries={data.entries}
+                onRemove={(entry) => {
+                  setDeleteReason("");
+                  setConfirmEntry(entry);
+                }}
+              />
             </div>
           )}
         </CardContent>

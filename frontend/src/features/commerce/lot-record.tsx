@@ -3,6 +3,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useHarvestLots } from "./api";
 import { BottlingDialog } from "./lots-tab";
+import { BottlingRunsGrid } from "./bottling-runs-grid";
 import { Button } from "@/components/ui/button";
 import { formatDate, formatLbs } from "@/features/honey/format";
 export function LotRecord({ id }: { id: string }) {
@@ -70,37 +71,8 @@ export function LotRecord({ id }: { id: string }) {
       </section>
       <section>
         <h2 className="mb-3 text-lg font-semibold">Bottling history</h2>
-        <div className="atlas-records">
-          {lot.bottlingRuns.length ? (
-            lot.bottlingRuns.map((run) => (
-              <article
-                key={run.id}
-                className="atlas-record flex flex-wrap justify-between gap-3"
-              >
-                <div>
-                  <p className="font-medium">
-                    {run.quantity} {run.jarSizeLabel ?? "jars"}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {formatDate(run.bottledDate)} /{" "}
-                    {run.honeyLbs == null
-                      ? "Honey draw not recorded"
-                      : formatLbs(run.honeyLbs)}
-                  </p>
-                </div>
-                <Link
-                  href={`/production/lots/${id}/runs/${run.id}`}
-                  className="text-sm underline"
-                >
-                  Full run record
-                </Link>
-              </article>
-            ))
-          ) : (
-            <p className="atlas-record text-sm text-muted-foreground">
-              No bottling runs recorded.
-            </p>
-          )}
+        <div className="overflow-hidden rounded-xl border bg-card">
+          <BottlingRunsGrid lotId={id} runs={lot.bottlingRuns} />
         </div>
       </section>
       <div className="flex flex-wrap gap-3">

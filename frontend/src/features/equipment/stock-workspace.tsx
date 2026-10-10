@@ -1,14 +1,29 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import * as React from "react";
+import { useSearchParams, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { createColumnHelper, useTable } from "@tanstack/react-table";
 import { api } from "@/lib/api";
 import { useAccessProfile } from "@/features/access/api";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+  dataGridFeatures,
+} from "@/components/ui/data-grid";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SectionNav } from "@/components/shell/section-nav";
 import { NAV_ITEMS } from "@/components/shell/nav-items";
+import { useStoredFlag } from "@/lib/use-stored-flag";
+import { formatStockQuantity, parseStockQuantity } from "./stock-format";
+
 export interface StockRow {
   itemId: string;
   itemName: string;
@@ -29,22 +44,23 @@ export interface StockRow {
   holds: { kind: string; reason: string; until: string | null }[];
   holdsKnown?: boolean;
 }
+type HistoryEntry = {
+  operationId: string;
+  kind: string;
+  reason: string;
+  occurredAt: string;
+  quantity: string;
+  sourceType: string;
+  sourceId: string;
+  lotId: string | null;
+  harvestLotId?: string | null;
+  hiveId: string | null;
+};
 interface StockRead {
   asOf: string;
   freshness: { stale: boolean; origin: string };
   rows: StockRow[];
-  history?: {
-    operationId: string;
-    kind: string;
-    reason: string;
-    occurredAt: string;
-    quantity: string;
-    sourceType: string;
-    sourceId: string;
-    lotId: string | null;
-    harvestLotId?: string | null;
-    hiveId: string | null;
-  }[];
+  history?: HistoryEntry[];
 }
 const kinds: Record<string, string> = {
   equipment: "equipment",
@@ -52,7 +68,7 @@ const kinds: Record<string, string> = {
   packaging: "packaging",
   finished: "jar",
 };
-function sourceHref(entry: NonNullable<StockRead["history"]>[number]) {
+function sourceHref(entry: HistoryEntry) {
   const id = encodeURIComponent(entry.sourceId);
   if (entry.sourceType === "sale") return `/sales/${id}`;
   if (entry.sourceType === "hive") return `/yard/hives/${id}`;
@@ -71,6 +87,235 @@ const names: Record<string, string> = {
   packaging: "Packaging",
   finished: "Finished goods",
 };
+const CONDITION_LABELS: Record<string, string> = {
+  serviceable: "Ready",
+  damaged: "Damaged",
+  retired: "Retired",
+};
+function conditionLabel(condition: string | null) {
+  return condition ? (CONDITION_LABELS[condition] ?? condition) : "Unassigned";
+}
+
+/** Zero on hand, nothing reserved: a ledger row with nothing in it. */
+export function isEmptyStockRow(row: StockRow): boolean {
+  if (!row.countKnown) return false;
+  return (
+    parseStockQuantity(row.onHand) === 0 &&
+    (parseStockQuantity(row.reserved) ?? 0) === 0
+  );
+}
+
+const EMPTY_ROWS: StockRow[] = [];
+const EMPTY_HISTORY: HistoryEntry[] = [];
+const columnHelper = createColumnHelper<typeof dataGridFeatures, StockRow>();
+const historyHelper = createColumnHelper<
+  typeof dataGridFeatures,
+  HistoryEntry
+>();
+const quantityMeta: DataGridColumnMeta = {
+  align: "right",
+  cellClassName: "tabular-nums",
+};
+
+function UnknownQuantity() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          tabIndex={0}
+          aria-label="Unknown"
+          className="cursor-help text-muted-foreground underline decoration-dotted underline-offset-4"
+        >
+          —
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        Not counted yet. Record a physical count to establish this stock.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function itemHref(row: StockRow) {
+  return `/stock/items/${row.itemId}?${new URLSearchParams({
+    locationId: row.locationId ?? "null",
+    lotId: row.lotId ?? "null",
+    condition: row.condition ?? "null",
+    hiveId: row.hiveId ?? "null",
+  })}`;
+}
+
+/** Ledger quantity for sorting; unknown counts sort last. */
+function quantityValue(row: StockRow, key: "onHand" | "reserved" | "available") {
+  if (key !== "reserved" && !row.countKnown) return undefined;
+  return parseStockQuantity(row[key]) ?? undefined;
+}
+
+const stockColumns = columnHelper.columns([
+  columnHelper.accessor((row) => row.itemName, {
+    id: "item",
+    header: "Item",
+    meta: { card: "title" } satisfies DataGridColumnMeta,
+    cell: ({ row: { original: row } }) => (
+      <DataGridCellAction className="inline-flex flex-wrap items-center gap-2">
+        <Link
+          className="font-semibold underline-offset-4 hover:underline"
+          href={itemHref(row)}
+        >
+          {row.itemName}
+        </Link>
+        {row.hiveId && <Badge variant="secondary">In field</Badge>}
+      </DataGridCellAction>
+    ),
+  }),
+  columnHelper.accessor((row) => row.locationName ?? "Unassigned", {
+    id: "location",
+    header: "Location",
+    meta: { filter: true, filterAllLabel: "All locations" } satisfies DataGridColumnMeta,
+  }),
+  columnHelper.accessor((row) => row.lotCode ?? "", {
+    id: "lot",
+    header: "Lot",
+    sortUndefined: "last",
+    meta: { filter: true, filterAllLabel: "All lots" } satisfies DataGridColumnMeta,
+    cell: ({ row: { original: row } }) =>
+      row.harvestLotId ? (
+        <DataGridCellAction className="inline">
+          <Link
+            className="underline underline-offset-4"
+            href={`/production/lots/${row.harvestLotId}`}
+          >
+            {row.lotCode ?? "Lot record"}
+          </Link>
+        </DataGridCellAction>
+      ) : (
+        (row.lotCode ?? <span className="text-muted-foreground">—</span>)
+      ),
+  }),
+  columnHelper.accessor((row) => conditionLabel(row.condition), {
+    id: "condition",
+    header: "Condition",
+    meta: {
+      filter: true,
+      filterAllLabel: "Any condition",
+    } satisfies DataGridColumnMeta,
+  }),
+  columnHelper.accessor((row) => quantityValue(row, "onHand"), {
+    id: "onHand",
+    header: "On hand",
+    sortUndefined: "last",
+    meta: quantityMeta,
+    cell: ({ row: { original: row } }) =>
+      row.countKnown ? formatStockQuantity(row.onHand, row.unit) : <UnknownQuantity />,
+  }),
+  columnHelper.accessor((row) => quantityValue(row, "reserved"), {
+    id: "reserved",
+    header: "Reserved",
+    sortUndefined: "last",
+    meta: quantityMeta,
+    cell: ({ row: { original: row } }) =>
+      formatStockQuantity(row.reserved, row.unit),
+  }),
+  columnHelper.accessor((row) => quantityValue(row, "available"), {
+    id: "available",
+    header: "Available",
+    sortUndefined: "last",
+    meta: { ...quantityMeta, cellClassName: "tabular-nums font-semibold" },
+    cell: ({ row: { original: row } }) =>
+      row.countKnown ? (
+        formatStockQuantity(row.available, row.unit)
+      ) : (
+        <UnknownQuantity />
+      ),
+  }),
+  columnHelper.display({
+    id: "notes",
+    header: "Notes",
+    meta: {
+      card: "subtitle",
+      cellClassName: "whitespace-normal text-xs",
+    } satisfies DataGridColumnMeta,
+    cell: ({ row: { original: row } }) => (
+      <div className="grid gap-0.5">
+        {row.holds?.map((hold, i) => (
+          <span key={i} className="text-destructive">
+            {hold.reason}
+            {hold.until ? ` / Until ${hold.until}` : ""}
+          </span>
+        ))}
+        {row.holdsKnown === false && (
+          <span className="text-muted-foreground">
+            Action holds not checked. Review restrictions before use.
+          </span>
+        )}
+        {!row.originKnown && (
+          <span className="text-muted-foreground">Origin not recorded</span>
+        )}
+      </div>
+    ),
+  }),
+]);
+
+function historyColumns(unit: string | undefined) {
+  return historyHelper.columns([
+    historyHelper.accessor((entry) => entry.occurredAt, {
+      id: "when",
+      header: "When",
+      meta: { card: "subtitle" } satisfies DataGridColumnMeta,
+      cell: ({ row: { original: entry } }) =>
+        new Date(entry.occurredAt).toLocaleString(),
+    }),
+    historyHelper.accessor((entry) => entry.kind.replaceAll("_", " "), {
+      id: "movement",
+      header: "Movement",
+      meta: {
+        card: "title",
+        cellClassName: "font-medium capitalize",
+        filter: true,
+        filterAllLabel: "All movements",
+      } satisfies DataGridColumnMeta,
+    }),
+    historyHelper.accessor((entry) => entry.reason, {
+      id: "reason",
+      header: "Reason",
+      meta: { cellClassName: "whitespace-normal" } satisfies DataGridColumnMeta,
+      cell: ({ row: { original: entry } }) =>
+        entry.reason || (
+          <span className="text-muted-foreground">No reason recorded</span>
+        ),
+    }),
+    historyHelper.accessor((entry) => parseStockQuantity(entry.quantity) ?? undefined, {
+      id: "quantity",
+      header: "Quantity",
+      sortUndefined: "last",
+      meta: quantityMeta,
+      cell: ({ row: { original: entry } }) =>
+        formatStockQuantity(entry.quantity, unit, { signed: true }),
+    }),
+    historyHelper.display({
+      id: "links",
+      header: "Source",
+      cell: ({ row: { original: entry } }) => {
+        const href = sourceHref(entry);
+        return (
+          <DataGridCellAction className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            {href && (
+              <Link className="underline" href={href}>
+                Open {entry.sourceType.replaceAll("_", " ")}
+              </Link>
+            )}
+            {entry.hiveId && (
+              <Link className="underline" href={`/yard/hives/${entry.hiveId}`}>
+                Hive record
+              </Link>
+            )}
+          </DataGridCellAction>
+        );
+      },
+    }),
+  ]);
+}
+
 export function StockWorkspace({
   category = "equipment",
   itemId,
@@ -80,14 +325,19 @@ export function StockWorkspace({
 }) {
   const access = useAccessProfile();
   const query = useSearchParams();
-  const router = useRouter();
   const pathname = usePathname();
-  const [search, setSearch] = useState("");
   const location = query.get("locationId") ?? "any";
   const condition = query.get("condition") ?? "any";
   const lot = query.get("lotId") ?? "any";
   const hive = query.get("hiveId") ?? "any";
   const harvest = query.get("harvestLotId") ?? "any";
+  const scoped = [location, condition, lot, hive, harvest].some(
+    (value) => value !== "any",
+  );
+  const [showEmpty, setShowEmpty] = useStoredFlag(
+    `atlas.stock.showEmpty.${itemId ? "item" : category}`,
+    false,
+  );
   const stock = useQuery({
     queryKey: [
       "stock",
@@ -138,7 +388,9 @@ export function StockWorkspace({
       };
     },
   });
-  const kind = stock.data?.rows[0]?.kind;
+  const allRows = stock.data?.rows ?? EMPTY_ROWS;
+  const kind = allRows[0]?.kind;
+  const unit = allRows[0]?.unit;
   const actionCategory = itemId
     ? kind === "equipment"
       ? "equipment"
@@ -146,17 +398,27 @@ export function StockWorkspace({
         ? "bulk"
         : "finished"
     : category;
-  const rows = (stock.data?.rows ?? []).filter((r) =>
-    `${r.itemName} ${r.lotCode ?? ""} ${r.locationName ?? ""}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
+  const emptyCount = React.useMemo(
+    () => allRows.filter(isEmptyStockRow).length,
+    [allRows],
   );
-  function filter(key: string, value: string) {
-    const next = new URLSearchParams(query);
-    if (value === "any") next.delete(key);
-    else next.set(key, value);
-    router.push(`${pathname}?${next}`);
-  }
+  const rows = React.useMemo(
+    () => (showEmpty ? allRows : allRows.filter((row) => !isEmptyStockRow(row))),
+    [allRows, showEmpty],
+  );
+  const table = useTable({
+    features: dataGridFeatures,
+    columns: stockColumns,
+    data: rows,
+  });
+  const history = stock.data?.history ?? EMPTY_HISTORY;
+  const movementColumns = React.useMemo(() => historyColumns(unit), [unit]);
+  const historyTable = useTable({
+    features: dataGridFeatures,
+    columns: movementColumns,
+    data: history,
+  });
+
   if (access.isPending) return <p>Loading access...</p>;
   if (!access.data?.isAdmin)
     return <p>Stock is available to operation administrators.</p>;
@@ -169,7 +431,7 @@ export function StockWorkspace({
           </p>
           <h1>
             {itemId
-              ? (stock.data?.rows[0]?.itemName ?? "Stock item")
+              ? (allRows[0]?.itemName ?? "Stock item")
               : names[category]}
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
@@ -201,57 +463,14 @@ export function StockWorkspace({
         rootHref="/stock"
         pathname={pathname}
       />
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="grid min-w-0 flex-1 gap-1 text-xs">
-          Find stock
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Item, lot, or location"
-          />
-        </label>
-        <label className="grid min-w-0 gap-1 text-xs">
-          Location
-          <select
-            className="min-h-11 max-w-full rounded-md border bg-card px-3 text-sm"
-            value={location}
-            onChange={(e) => filter("locationId", e.target.value)}
-          >
-            <option value="any">All locations, separate rows</option>
-            <option value="null">Unassigned location</option>
-            {Array.from(
-              new Map(
-                (stock.data?.rows ?? [])
-                  .filter((r) => r.locationId)
-                  .map((r) => [r.locationId!, r.locationName ?? r.locationId!]),
-              ).entries(),
-            ).map(([id, name]) => (
-              <option key={id} value={id}>
-                {name}
-              </option>
-            ))}
-            {location !== "any" &&
-              location !== "null" &&
-              !(stock.data?.rows ?? []).some(
-                (r) => r.locationId === location,
-              ) && <option value={location}>Selected location</option>}
-          </select>
-        </label>
-        <label className="grid gap-1 text-xs">
-          Condition
-          <select
-            className="min-h-11 rounded-md border bg-card px-3 text-sm"
-            value={condition}
-            onChange={(e) => filter("condition", e.target.value)}
-          >
-            <option value="any">Any condition</option>
-            <option value="null">Unassigned</option>
-            <option value="serviceable">Ready</option>
-            <option value="damaged">Damaged</option>
-            <option value="retired">Retired</option>
-          </select>
-        </label>
-      </div>
+      {scoped && (
+        <p className="text-xs text-muted-foreground">
+          Showing one scope of this stock.{" "}
+          <Link className="underline" href={pathname}>
+            Show every location and lot
+          </Link>
+        </p>
+      )}
       {stock.isPending ? (
         <p role="status">Loading stock...</p>
       ) : stock.isError ? (
@@ -274,76 +493,28 @@ export function StockWorkspace({
               Refresh
             </button>
           </p>
-          <div className="atlas-records">
-            {rows.length === 0 ? (
-              <p className="atlas-record text-sm text-muted-foreground">
-                No stock matches this scope. Record a count or production
-                activity to establish stock.
-              </p>
-            ) : (
-              rows.map((row, index) => (
-                <article
-                  className="atlas-record grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(18rem,1fr)]"
-                  key={`${row.itemId}-${index}`}
-                >
-                  <div>
-                    <Link
-                      className="font-semibold underline-offset-4 hover:underline"
-                      href={`/stock/items/${row.itemId}?${new URLSearchParams({ locationId: row.locationId ?? "null", lotId: row.lotId ?? "null", condition: row.condition ?? "null", hiveId: row.hiveId ?? "null" })}`}
-                    >
-                      {row.itemName}
-                    </Link>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {row.locationName ?? "Unassigned location"} /{" "}
-                      {row.condition ?? "Condition unassigned"}
-                      {row.hiveId ? " / In field" : ""}
-                    </p>
-                    {row.harvestLotId && (
-                      <Link
-                        className="text-xs underline"
-                        href={`/production/lots/${row.harvestLotId}`}
-                      >
-                        {row.lotCode ?? "Lot record"}
-                      </Link>
-                    )}
-                    {!row.originKnown && (
-                      <p className="text-xs text-muted-foreground">
-                        Origin not recorded
-                      </p>
-                    )}
-                    {row.holdsKnown === false && (
-                      <p className="text-xs text-muted-foreground">
-                        Action holds not checked. Review restrictions before
-                        use.
-                      </p>
-                    )}
-                    {row.holds?.map((hold, i) => (
-                      <p key={i} className="text-xs text-destructive">
-                        {hold.reason}
-                        {hold.until ? ` / Until ${hold.until}` : ""}
-                      </p>
-                    ))}
-                  </div>
-                  <dl className="atlas-quantities">
-                    {[
-                      ["On hand", row.countKnown ? row.onHand : "Unknown"],
-                      ["Reserved", row.reserved],
-                      ["Available", row.countKnown ? row.available : "Unknown"],
-                    ].map(([label, value]) => (
-                      <div key={label}>
-                        <dt>{label}</dt>
-                        <dd>
-                          {value}{" "}
-                          <span className="text-xs font-normal">
-                            {row.unit}
-                          </span>
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </article>
-              ))
-            )}
+          <div className="overflow-hidden rounded-xl border bg-card">
+            <DataGrid
+              table={table}
+              aria-label="Stock"
+              searchPlaceholder="Item, lot, or location… (press / to focus)"
+              toolbar={
+                <label className="inline-flex shrink-0 items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={showEmpty}
+                    onChange={(event) => setShowEmpty(event.target.checked)}
+                    className="size-4 accent-primary"
+                  />
+                  Show empty{emptyCount > 0 ? ` (${emptyCount})` : ""}
+                </label>
+              }
+              emptyMessage={
+                allRows.length > 0
+                  ? `Nothing on hand. ${emptyCount} empty ${emptyCount === 1 ? "row is" : "rows are"} hidden; tick Show empty to list ${emptyCount === 1 ? "it" : "them"}.`
+                  : "No stock matches this scope. Record a count or production activity to establish stock."
+              }
+            />
           </div>
           <p className="text-xs text-muted-foreground">
             Available = on hand minus reserved. Holds appear separately.
@@ -352,50 +523,14 @@ export function StockWorkspace({
           {itemId && (
             <section>
               <h2 className="mb-3 text-lg font-semibold">Movement history</h2>
-              <div className="atlas-records">
-                {stock.data?.history?.length ? (
-                  stock.data.history.map((entry, i) => (
-                    <div
-                      key={`${entry.operationId}-${i}`}
-                      className="atlas-record flex flex-wrap justify-between gap-2"
-                    >
-                      <div>
-                        <p className="font-medium">
-                          {entry.kind.replaceAll("_", " ")}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {entry.reason || "No reason recorded"} /{" "}
-                          {new Date(entry.occurredAt).toLocaleString()}
-                        </p>
-                      </div>
-                      <div className="grid gap-1 text-right">
-                        <span className="font-mono">
-                          {entry.quantity} {stock.data?.rows[0]?.unit}
-                        </span>
-                        {sourceHref(entry) && (
-                          <Link
-                            className="text-xs underline"
-                            href={sourceHref(entry)!}
-                          >
-                            Open {entry.sourceType.replaceAll("_", " ")}
-                          </Link>
-                        )}
-                        {entry.hiveId && (
-                          <Link
-                            className="text-xs underline"
-                            href={`/yard/hives/${entry.hiveId}`}
-                          >
-                            Hive record
-                          </Link>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="atlas-record text-sm text-muted-foreground">
-                    No recorded movements in this scope.
-                  </p>
-                )}
+              <div className="overflow-hidden rounded-xl border bg-card">
+                <DataGrid
+                  table={historyTable}
+                  aria-label="Movement history"
+                  listenOnWindow={false}
+                  searchable={history.length > 0}
+                  emptyMessage="No recorded movements in this scope."
+                />
               </div>
             </section>
           )}

@@ -5,10 +5,7 @@ import Link from "next/link";
 import {
   ChevronDown,
   ChevronUp,
-  ExternalLink,
   Loader2,
-  PackagePlus,
-  Pencil,
   Plus,
   QrCode,
   ScanSearch,
@@ -16,9 +13,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -48,6 +44,7 @@ import {
   useJarInventory,
 } from "@/features/honey/hooks";
 import { ApiError } from "@/lib/api";
+import { LotsGrid } from "./lots-grid";
 import {
   METERS_PER_FOOT,
   parseElevation,
@@ -69,10 +66,6 @@ import {
   type LotPrefill,
   type LotStoryDraft,
 } from "./api";
-
-function honeyStoryHref(slug: string) {
-  return `/honey/${slug}`;
-}
 
 export function LotsTab() {
   const lots = useHarvestLots();
@@ -102,80 +95,7 @@ export function LotsTab() {
           No harvest lots yet. Create one to connect extraction, bottles, QR labels, and the public Honey Story.
         </CardContent></Card>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {lots.data.map((lot) => (
-            <Card key={lot.id}>
-              <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
-                <div>
-                  <CardTitle className="text-base"><Link href={`/production/lots/${lot.id}`} className="hover:underline">{lot.lotCode}</Link></CardTitle>
-                  <p className="text-xs text-muted-foreground">
-                    {formatDate(lot.extractionDate)} · {formatLbs(lot.honeyWeightLbs)}
-                    {lot.honeyWeightSource === "derived"
-                      ? ` · derived from ${lot.linkedHarvestCount} ${
-                          lot.linkedHarvestCount === 1 ? "harvest" : "harvests"
-                        }`
-                      : lot.linkedHarvestCount > 0 &&
-                          lot.derivedWeightLbs !== lot.honeyWeightLbs
-                        ? ` · typed; ${lot.linkedHarvestCount} ${
-                            lot.linkedHarvestCount === 1 ? "harvest sums" : "harvests sum"
-                          } to ${formatLbs(lot.derivedWeightLbs)}`
-                        : ""}
-                  </p>
-                </div>
-                <div className="flex flex-wrap justify-end gap-1">
-                  <Badge variant={lot.isPublic ? "accent" : "outline"}>{lot.isPublic ? "Public story" : "Private"}</Badge>
-                  {lot.lockout?.locked && <Badge variant="destructive">Locked</Badge>}
-                </div>
-              </CardHeader>
-              <CardContent className="grid gap-4">
-                <div className="grid grid-cols-[88px_1fr] gap-3">
-                  {/* Same-origin endpoint; QR content points at the curated public page. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/api/v1/harvest-lots/${lot.id}/qr`} alt={`QR code for ${lot.lotCode}`} className="size-[88px] rounded-md border bg-white p-1" />
-                  <div className="grid content-start gap-1 text-sm">
-                    <p className="font-medium">{lot.floralClaim || (lot.varietalName ?? "No varietal assigned")}{lot.season ? ` · ${lot.season}` : ""}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {lot.apiaryRegion ?? (lot.sourceApiaries.join(", ") || "Region not published")}
-                    </p>
-                    {(lot.moisturePct != null || lot.bottlingMoisturePct != null) && (
-                      <p className="text-xs text-muted-foreground">
-                        {lot.moisturePct != null ? `Extracted ${lot.moisturePct}%` : "Extraction moisture not recorded"}
-                        {lot.bottlingMoisturePct != null ? ` · Bottled ${lot.bottlingMoisturePct}%` : ""}
-                        {lot.moistureOverrideReason ? ` · Override: ${lot.moistureOverrideReason}` : ""}
-                      </p>
-                    )}
-                    {lot.lockout?.locked && (
-                      <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
-                        {lot.lockout.message}
-                      </p>
-                    )}
-                    <Link href={honeyStoryHref(lot.publicSlug)} target="_blank" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                      Open Honey Story <ExternalLink className="size-3" />
-                    </Link>
-                  </div>
-                </div>
-                {lot.bottlingRuns.length > 0 && (
-                  <div className="grid gap-1 rounded-md bg-muted p-3 text-xs">
-                    {lot.bottlingRuns.map((run) => (
-                      <div key={run.id} className="flex justify-between gap-2">
-                        <span>{formatDate(run.bottledDate)} · {run.jarSizeLabel ?? "Bulk"}</span>
-                        <span className="font-medium">{run.quantity} jars{run.serialCount > 0 ? ` · ${run.serialCount} serialized` : ""}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setBottleLot(lot)}>
-                    <PackagePlus /> Add bottling run
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setEditLot(lot)}>
-                    <Pencil /> Edit lot
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <LotsGrid lots={lots.data} onBottle={setBottleLot} onEdit={setEditLot} />
       )}
       {createOpen && (
         <LotFormDialog open onOpenChange={setCreateOpen} harvests={harvests.data} />

@@ -180,7 +180,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
   const columns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
+        columnHelper.accessor((r) => r.typeName, {
           id: "equipment",
           header: "Equipment",
           meta: {
@@ -219,19 +219,19 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
             </>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.totalOwned, {
           id: "owned",
           header: "Owned",
           meta: rightAligned,
           cell: ({ row }) => row.original.totalOwned,
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.deployed, {
           id: "deployed",
           header: "In field",
           meta: rightAligned,
           cell: ({ row }) => row.original.deployed,
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.available, {
           id: "available",
           header: countMode ? "Counted" : "Available",
           meta: rightAligned,
@@ -274,7 +274,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
             );
           },
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.needed, {
           id: "needed",
           header: "Needed",
           meta: rightAligned,
@@ -289,7 +289,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
               row.needed
             ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.damaged, {
           id: "damaged",
           header: "Damaged",
           meta: rightAligned,
@@ -300,7 +300,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
               <Badge variant="secondary">{row.damaged}</Badge>
             ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.retired, {
           id: "retired",
           header: "Retired",
           meta: rightAligned,
@@ -311,7 +311,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
               <Badge variant="secondary">{row.retired}</Badge>
             ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.storageLocation ?? "", {
           id: "location",
           header: "Location",
           meta: {

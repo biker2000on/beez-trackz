@@ -134,24 +134,24 @@ export function HiveProductsPage() {
   const catalogColumns = React.useMemo(
     () =>
       catalogColumnHelper.columns([
-        catalogColumnHelper.display({
+        catalogColumnHelper.accessor((r) => r.name, {
           id: "name",
           header: "Name",
           meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.name,
         }),
-        catalogColumnHelper.display({
+        catalogColumnHelper.accessor((r) => r.kind, {
           id: "kind",
           header: "Kind",
           meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
           cell: ({ row }) => kindLabel(row.original.kind),
         }),
-        catalogColumnHelper.display({
+        catalogColumnHelper.accessor((r) => r.sizeLabel, {
           id: "size",
           header: "Size",
           cell: ({ row }) => row.original.sizeLabel ?? row.original.unit,
         }),
-        catalogColumnHelper.display({
+        catalogColumnHelper.accessor((r) => r.netGrams, {
           id: "netMass",
           header: "Net mass",
           meta: rightAligned,
@@ -160,12 +160,12 @@ export function HiveProductsPage() {
               ? formatPropolis(row.original.netGrams)
               : "—",
         }),
-        catalogColumnHelper.display({
+        catalogColumnHelper.accessor((r) => r.defaultPrice, {
           id: "price",
           header: "Price",
           cell: ({ row }) => formatMoney(row.original.defaultPrice),
         }),
-        catalogColumnHelper.display({
+        catalogColumnHelper.accessor((r) => r.onHand, {
           id: "onHand",
           header: "On hand",
           meta: rightAligned,
@@ -204,12 +204,12 @@ export function HiveProductsPage() {
   const harvestColumns = React.useMemo(
     () =>
       harvestColumnHelper.columns([
-        harvestColumnHelper.display({
+        harvestColumnHelper.accessor((r) => r.date, {
           id: "date",
           header: "Date",
           cell: ({ row }) => formatDate(row.original.date),
         }),
-        harvestColumnHelper.display({
+        harvestColumnHelper.accessor((r) => r.hiveName ?? r.apiaryName ?? "", {
           id: "source",
           header: "Source",
           cell: ({ row: { original: row } }) =>
@@ -217,7 +217,7 @@ export function HiveProductsPage() {
               ? `${row.hiveName}${row.apiaryName ? ` · ${row.apiaryName}` : ""}`
               : row.apiaryName ?? "Yard",
         }),
-        harvestColumnHelper.display({
+        harvestColumnHelper.accessor((r) => (r.unit === "ounces" ? r.amount * GRAMS_PER_OUNCE : r.amount), {
           id: "amount",
           header: "Amount",
           meta: rightAligned,
@@ -233,13 +233,13 @@ export function HiveProductsPage() {
   const batchColumns = React.useMemo(
     () =>
       batchColumnHelper.columns([
-        batchColumnHelper.display({
+        batchColumnHelper.accessor((r) => r.startedAt, {
           id: "date",
           header: "Date",
           cell: ({ row: { original: row } }) =>
             dimIfVoided(row.voidedAt != null, formatDate(row.startedAt)),
         }),
-        batchColumnHelper.display({
+        batchColumnHelper.accessor((r) => r.productName, {
           id: "product",
           header: "Product",
           cell: ({ row: { original: row } }) =>
@@ -280,14 +280,14 @@ export function HiveProductsPage() {
               </>,
             ),
         }),
-        batchColumnHelper.display({
+        batchColumnHelper.accessor((r) => r.quantityOut, {
           id: "out",
           header: "Out",
           meta: rightAligned,
           cell: ({ row: { original: row } }) =>
             dimIfVoided(row.voidedAt != null, row.quantityOut),
         }),
-        batchColumnHelper.display({
+        batchColumnHelper.accessor((r) => r.totalCost, {
           id: "cost",
           header: "Cost",
           meta: rightAligned,

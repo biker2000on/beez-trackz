@@ -6,7 +6,6 @@ import {
   Frame,
   PackageOpen,
   Plus,
-  RotateCcw,
   Target,
   Truck,
   Warehouse,
@@ -33,6 +32,7 @@ import {
   useFrameSummary,
   useSeedDefaultTypes,
 } from "./hooks";
+import { DeploymentsGrid } from "./deployments-grid";
 import { LossReportCard } from "./loss-report";
 import { ReturnDeploymentDialog } from "./return-dialog";
 import { StockTable } from "./stock-table";
@@ -185,38 +185,10 @@ export function EquipmentStockView() {
                   equipment to a hive.
                 </p>
               ) : (
-                <ul className="divide-y">
-                  {deployments.data.map((deployment) => (
-                    <li
-                      key={deployment.id}
-                      className="flex min-h-14 items-center justify-between gap-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {deployment.typeName}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {deployment.hiveLabel}
-                          {deployment.quantityReturned > 0 &&
-                            ` · ${deployment.quantityReturned} of ${deployment.quantity} already back`}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Badge variant="secondary">
-                          {deployment.outstanding}
-                        </Badge>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setReturning(deployment)}
-                        >
-                          <RotateCcw />
-                          Return
-                        </Button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <DeploymentsGrid
+                  deployments={deployments.data}
+                  onReturn={setReturning}
+                />
               )}
             </CardContent>
           </Card>
