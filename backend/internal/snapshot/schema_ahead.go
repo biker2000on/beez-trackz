@@ -18,6 +18,7 @@ const (
 	AtlasStockTransform                       = "atlas-stock-v1"
 	FolioBooksAndImportsTransform             = "folio-books-and-imports-v1"
 	SaleItemsHarvestLotTransform              = "sale-items-harvest-lot-v1"
+	FolioRefundsAndDeletionsTransform         = "folio-refunds-and-deletions-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -198,9 +199,7 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		// no imported entries and no other income. Its singleton restores
 		// with no active book, no import accounts, no import start date and
 		// no import cursor; its external_sync rows restore with book_id NULL
-		// and are attached to the active book by the guarded restore. The
-		// dropped expenses.amount_cents >= 0 CHECK (imported refunds are
-		// negative expenses) needs no transform: older rows are never negative.
+		// and are attached to the active book by the guarded restore.
 		AddedColumns: map[string][]string{
 			"gnucash_sync_settings": {
 				"active_book_id", "import_account_guids", "import_start_date",
@@ -230,6 +229,17 @@ var PostArtifactMigrations = []PostArtifactMigration{
 			"sale_items": {"harvest_lot_id"},
 		},
 		AddedReferenceChecks: []string{"sale_items_harvest_lot_id_fkey"},
+	},
+	{
+		LegacyMigration: 66, BaselineMigration: 13,
+		Name: FolioRefundsAndDeletionsTransform,
+		// Signed import amounts (refunds are negative expenses) and the Folio
+		// deletion last reported for an imported transaction. Dropped CHECKs need
+		// no transform: older rows are never negative. An older artifact's import
+		// rows restore with remote_deleted_at NULL.
+		AddedColumns: map[string][]string{
+			"folio_imports": {"remote_deleted_at"},
+		},
 	},
 }
 
