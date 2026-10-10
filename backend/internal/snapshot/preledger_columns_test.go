@@ -26,8 +26,8 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 12 {
-		t.Fatalf("migration files = %d, want 12 (00050-00061): %v", len(files), files)
+	if len(files) != 14 {
+		t.Fatalf("migration files = %d, want 14 (00050-00063): %v", len(files), files)
 	}
 
 	registered := map[string]bool{}
@@ -85,8 +85,8 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 	}
 
 	want := map[int64]portableMigrationShape{}
-	if len(PostArtifactMigrations) != 12 {
-		t.Fatalf("PostArtifactMigrations has %d entries, want one for each migration 00050-00061", len(PostArtifactMigrations))
+	if len(PostArtifactMigrations) != 14 {
+		t.Fatalf("PostArtifactMigrations has %d entries, want one for each migration 00050-00063", len(PostArtifactMigrations))
 	}
 	for index, migration := range PostArtifactMigrations {
 		if migration.LegacyMigration != int64(50+index) || migration.Name == "" {
@@ -100,7 +100,7 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 		want[migration.LegacyMigration] = shape
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("PostArtifactMigrations drifted from legacy SQL 00050-00061\n got: %#v\nwant: %#v", got, want)
+		t.Fatalf("PostArtifactMigrations drifted from legacy SQL 00050-00063\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

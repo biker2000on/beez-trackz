@@ -50,6 +50,7 @@ var Domains = []Domain{
 	domain("apiary_weather_cache"), domain("immich_timeline_scans"),
 	domain("immich_timeline_candidates"), domain("photos"),
 	domain("media_files"), domain("transcript_versions"),
+	domain("apiary_inspections"), domain("transcription_confirmations"),
 	domain("yard_labor_sessions"), domain("ai_recommendations"),
 	domain("offline_mutation_receipts"), domain("external_sync"),
 	{Name: "gnucash_sync_settings", Table: "gnucash_sync_settings", ExcludedColumns: []string{"api_token", "restore_state"}, RenameColumns: map[string]string{"last_synced_at": "last_attempt_at"}},

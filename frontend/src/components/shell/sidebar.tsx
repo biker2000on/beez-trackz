@@ -98,12 +98,13 @@ export function Sidebar() {
             const children = itemChildren(item);
             const active = isNavRouteActive(item, currentHref);
             const Icon = item.icon;
-            const open = expanded[item.href] ?? active;
+            const open = expanded[item.href] ?? true;
             return (
               <li key={item.href}>
                 <div
                   className={cn(
                     "flex items-center rounded-md transition-colors",
+                    ["/insights", "/admin"].includes(item.href) && "mt-4 border-t pt-3",
                     active
                       ? "bg-primary/12 text-primary"
                       : "text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -178,7 +179,7 @@ function SidebarRoute({
 }) {
   const active = isNavRouteActive(route, currentHref);
   const children = route.children ?? [];
-  const open = expanded[route.href] ?? active;
+  const open = expanded[route.href] ?? true;
   const padding = DEPTH_PADDING[Math.min(depth, DEPTH_PADDING.length - 1)];
 
   return (

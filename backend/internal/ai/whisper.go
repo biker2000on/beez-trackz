@@ -78,6 +78,8 @@ func whisperFilename(mimeType string) string {
 		return "audio.ogg"
 	case "audio/flac", "audio/x-flac":
 		return "audio.flac"
+	case "audio/aac", "audio/x-aac":
+		return "audio.aac"
 	default:
 		// The recorder produces webm/opus; also the safe fallback.
 		return "audio.webm"

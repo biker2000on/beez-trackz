@@ -60,31 +60,15 @@ test("safe-area handling lives only in globals.css (DESIGN.md)", () => {
   );
 });
 
-test("mobile navigation matches DESIGN.md (scroll strips vs section select)", () => {
-  const design = read(repoRoot, "DESIGN.md");
-  expect(design).toContain("horizontally scrollable");
-  expect(design).toContain("`<Select>`");
-  expect(design).toContain("`SectionNav` is the single implementation");
-
-  // Route-level section navigation: one component, select on small screens.
+test("mobile route navigation uses named page links instead of a route select", () => {
   const sectionNav = read(srcRoot, "components", "shell", "section-nav.tsx");
-  expect(sectionNav).toContain('<div className="md:hidden">');
-  expect(sectionNav).toContain("<Select");
-  expect(sectionNav).toMatch(/md:inline-flex/);
-
-  // In-page record tabs still scroll horizontally on phones.
-  for (const page of [
-    join(srcRoot, "features", "apiaries", "detail-page.tsx"),
-    join(srcRoot, "features", "hives", "detail-page.tsx"),
-  ]) {
+  expect(sectionNav).toContain("<details");
+  expect(sectionNav).toContain("Pages");
+  expect(sectionNav).not.toContain("<Select");
+  for (const page of [join(srcRoot, "features", "apiaries", "detail-page.tsx"), join(srcRoot, "features", "hives", "detail-page.tsx")]) {
     const source = readFileSync(page, "utf8");
-    const strip = source.slice(
-      source.indexOf("<TabsList") - 200,
-      source.indexOf("<TabsList"),
-    );
-    expect(strip, `${page} must keep its scrollable tab strip`).toContain(
-      "overflow-x-auto",
-    );
+    expect(source).not.toContain("<TabsList");
+    expect(source).toContain("<nav aria-label=");
   }
 });
 

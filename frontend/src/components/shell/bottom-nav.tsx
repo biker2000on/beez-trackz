@@ -75,7 +75,7 @@ export function BottomNav() {
         aria-label="Mobile navigation"
         className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur pb-safe pl-[var(--safe-left)] pr-[var(--safe-right)] lg:hidden"
       >
-        <ul className="grid grid-cols-5">
+        <ul className="grid" style={{gridTemplateColumns:`repeat(${items.length + 1}, minmax(0, 1fr))`}}>
           {items.map((item) => {
             const active = isNavRouteActive(item, currentHref);
             const Icon = item.icon;
@@ -85,7 +85,7 @@ export function BottomNav() {
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition-colors",
+                    "flex flex-col items-center gap-0.5 min-h-12 py-2 text-[10px] font-medium transition-colors",
                     active
                       ? "text-primary"
                       : "text-muted-foreground hover:text-foreground",
@@ -104,14 +104,14 @@ export function BottomNav() {
               aria-haspopup="dialog"
               aria-expanded={moreOpen}
               className={cn(
-                "flex w-full flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition-colors",
+                "flex w-full flex-col items-center gap-0.5 min-h-12 py-2 text-[10px] font-medium transition-colors",
                 overflowActive
                   ? "text-primary"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Menu className="size-5" />
-              More
+              Pages
             </button>
           </li>
         </ul>
@@ -120,9 +120,9 @@ export function BottomNav() {
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
         <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto lg:hidden">
           <SheetHeader>
-            <SheetTitle>All sections</SheetTitle>
+            <SheetTitle>Pages</SheetTitle>
             <SheetDescription>
-              Expand a section to reach every page underneath it.
+              Every workspace and record destination, in one place.
             </SheetDescription>
           </SheetHeader>
           <ul className="grid gap-2 pb-4">
@@ -134,7 +134,7 @@ export function BottomNav() {
                 canEditContext,
               );
               const active = isNavRouteActive(item, currentHref);
-              const open = expanded[item.href] ?? active;
+              const open = expanded[item.href] ?? true;
               const Icon = item.icon;
               return (
                 <li key={item.href} className="rounded-lg border">
@@ -213,7 +213,7 @@ function MobileRoute({
 }) {
   const active = isNavRouteActive(route, currentHref);
   const children = route.children ?? [];
-  const open = expanded[route.href] ?? active;
+  const open = expanded[route.href] ?? true;
 
   return (
     <li>

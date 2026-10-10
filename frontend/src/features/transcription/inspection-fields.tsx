@@ -4,7 +4,6 @@ import * as React from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -22,7 +21,7 @@ import type { ConfirmInspection, ParsedInspection } from "./api";
 /** Editable, string-friendly form state for one inspection card. */
 export interface EditableInspection {
   hiveReference: string | null;
-  queenSeen: boolean;
+  queenSeen: boolean | null;
   queenHealth: string;
   broodPattern: string;
   storesHoney: string;
@@ -65,7 +64,7 @@ const UNSET = "not-recorded";
 export function toEditable(p?: ParsedInspection | null): EditableInspection {
   return {
     hiveReference: p?.hiveReference ?? null,
-    queenSeen: p?.queenSeen ?? false,
+    queenSeen: p?.queenSeen ?? null,
     queenHealth: p?.queenHealth ?? "",
     broodPattern:
       p?.broodPattern &&
@@ -212,15 +211,19 @@ export function InspectionFields({
 
   return (
     <fieldset disabled={disabled} className={cn("grid", dense ? "gap-3" : "gap-4")}>
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id={`${idPrefix}-queen-seen`}
-          checked={value.queenSeen}
-          onCheckedChange={(checked) => set("queenSeen", checked === true)}
-        />
+      <div className="grid gap-1.5">
         <Label htmlFor={`${idPrefix}-queen-seen`} className={labelClass}>
-          Queen seen
+          Queen observation
         </Label>
+        <Select value={value.queenSeen === null ? UNSET : value.queenSeen ? "seen" : "not-seen"}
+          onValueChange={(v) => set("queenSeen", v === UNSET ? null : v === "seen")}>
+          <SelectTrigger id={`${idPrefix}-queen-seen`}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value={UNSET}>Not mentioned / not checked</SelectItem>
+            <SelectItem value="seen">Queen seen</SelectItem>
+            <SelectItem value="not-seen">Queen not seen</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="grid gap-1.5">

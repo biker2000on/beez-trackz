@@ -31,6 +31,8 @@ type offlineRouteManifest struct {
 var offlineRoutes = offlineRouteManifest{
 	Rules: []offlineRouteRule{
 		{Prefix: "/api/v1/inspections"},
+		{Prefix: "/api/v1/inspection-visits", Exact: true, Methods: []string{"POST"}},
+		{Prefix: "/api/v1/apiary-inspections", Exact: true, Methods: []string{"POST"}},
 		{Prefix: "/api/v1/feedings"},
 		{Prefix: "/api/v1/bloom-observations"},
 		{Prefix: "/api/v1/mite-counts"},

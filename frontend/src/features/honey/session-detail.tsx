@@ -8,6 +8,9 @@
  */
 
 import * as React from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import Link from "next/link";
 import { ArrowLeft, Plus, Scale, Trash2, X } from "lucide-react";
 
@@ -79,6 +82,9 @@ export function sessionFinalized(totalExtractedWeight: number | null): boolean {
 export function SessionDetail({ id }: { id: string }) {
   const { formatHoney } = useUnits();
   const session = useHarvestSession(id);
+  const access = useAccessProfile();
+  const client = useQueryClient();
+  const closeSession = useMutation({ mutationFn: () => api.post(`/harvest-sessions/${id}/close`, {}), onSuccess: () => { void session.refetch(); void client.invalidateQueries({queryKey:["workbench"]}); void client.invalidateQueries({queryKey:["harvest-sessions"]}); } });
   const apiaries = useApiaryOptions();
   const deleteEntry = useDeleteSessionEntry();
   const [confirmEntry, setConfirmEntry] =
@@ -110,7 +116,7 @@ export function SessionDetail({ id }: { id: string }) {
   }
 
   const data = session.data;
-  const finalized = sessionFinalized(data.totalExtractedWeight);
+  const finalized = Boolean(data.closedAt) || sessionFinalized(data.totalExtractedWeight);
   const apiaryName =
     apiaries.data?.find((apiary) => apiary.id === data.apiaryId)?.name ?? null;
 
@@ -166,6 +172,7 @@ export function SessionDetail({ id }: { id: string }) {
         />
       </div>
 
+      <section className="atlas-records"><div className="atlas-record"><h2 className="font-semibold">Extraction status</h2>{data.closedAt ? <p className="text-sm">Extraction closed {formatDate(data.closedAt)}. This record remains in harvest history.</p> : <><p className="mb-3 text-sm text-muted-foreground">When all extraction work is complete, close this session to remove it from active work. Weights and stock stay as recorded.</p>{["admin","editor"].includes(apiaryRole(access.data,data.apiaryId)??"")&&<Button variant="outline" disabled={closeSession.isPending} onClick={()=>closeSession.mutate()}>Finish extraction</Button>}</>}{closeSession.isError&&<p role="alert" className="text-sm text-destructive">{closeSession.error.message}</p>}</div></section>
       <MoistureCard sessionId={id} moisturePct={data.moisturePct} />
 
       <Card>

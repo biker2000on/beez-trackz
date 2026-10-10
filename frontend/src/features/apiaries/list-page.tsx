@@ -23,7 +23,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
 import { useBulkSelect } from "@/lib/use-bulk-select";

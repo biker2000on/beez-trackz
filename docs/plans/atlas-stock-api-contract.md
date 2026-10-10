@@ -1,0 +1,24 @@
+# Atlas stock, production and sales API
+
+All paths are under `/api/v1`. Inventory movements and their balance/reservation/availability views remain the only quantity authority. No new balance or workflow tables.
+
+## Stock
+
+`GET /stock`: `{asOf, freshness:{origin:"server",stale:false}, rows: StockRow[]}`.
+`StockRow`: `{itemId,itemName,kind,unit,locationId,locationName,lotId,lotCode,condition,hiveId,harvestLotId,onHand,reserved,available,countKnown,originKnown,holds:[{kind:"treatment",reason,until}],holdsKnown}`. Quantities are exact decimal strings. Every row is one item/unit/location/lot/condition/hive tuple; never add unlike units. Kind is `equipment`, `honey_bulk`, `packaging`, `jar`, `catalog_product`, `propolis_raw` (`bulk_honey` accepted as input alias). Null dimensions stay JSON null. Filters `itemId`, `locationId`, `lotId`, `condition`, `hiveId` accept omitted/`any` for all values and `null` for explicitly unassigned. `kind` filters item family. `harvestLotId` optionally filters the domain harvest source across inventory lots; it is deliberately distinct from tuple `lotId` (inventory lot identity). Use returned `harvestLotId` for production lot links. No movements means count is unknown; missing stock rows must not be presented as confirmed physical zero. Legacy unassigned lots have `originKnown:false`. Treatment holds are derived from recorded harvest ancestry and current withdrawal/removal facts. `holdsKnown:false` means source records do not establish the restrictions; domain commands still perform their own checks. Availability never deducts holds.
+
+`GET /stock/{itemId}` returns the same envelope plus up to 200 newest `history` records: `{operationId,kind,reason,occurredAt,sourceType,sourceId,quantity,locationId,lotId,condition,hiveId,harvestLotId}`. History uses the same location/lot/condition/hive/source filters as the tuple rows. The source identity links the appropriate sale, hive, harvest, bottling or production record; unknown source relationships must not be invented.
+
+Full stock/history access is admin. Apiary editors may request `GET /stock?kind=equipment&apiaryId=UUID` for **home serviceable stock only** (this explicit apiary context also limits admin requests). `hiveId` is a deployed-tuple filter, not authorization; use `apiaryId` to request visit options. Existing `GET /hives/{id}/deployments` provides scoped return options. Deploy uses existing `POST /equipment/deployments` `{stockId,hiveId,quantity,idempotencyKey?}` from home only. Return uses existing `POST /equipment/deployments/{id}/return` `{quantity,idempotencyKey?}`. Both authorize the hive's apiary editor in the service and protect reserved quantities under the same tuple locks as the write.
+
+## Sales
+
+`POST /sales/{id}/payment` `{amountPaidCents: integer,paymentMethod?:string}` sets the total received-to-date (not an increment), with row locking and zero-to-total bounds. It never applies or reverses stock and preserves fulfilment. `POST /sales/{id}/fulfill` `{}` applies stock once under row locking and preserves the money fact, including zero or partial payment. Both return `{id,success:true,amountPaidCents,physicalAppliedAt}`. Replay of fulfilment returns the existing physical timestamp. Read payment from amount paid/balance due; read fulfilment from physicalAppliedAt, not orderStatus. Cancel remains the domain cancellation command.
+
+Legacy create/update `orderStatus:paid` retain their immediate-sale semantics for compatibility with Market day. New deferred orders should be created as draft/pending and then use the separate commands. Do not send the legacy PATCH merely to collect payment. Draft shortage now credits its own reservation; generic stock still subtracts every reservation. Equipment sales reserve serviceable condition, matching consumption.
+
+## Production
+
+Session list and detail add nullable `closedAt`. `POST /harvest-sessions/{id}/close` `{}` is authorized for that apiary's editor and returns `{id,closedAt}`; repeat returns the same timestamp. Production workbench `openSessions` includes only sessions with no closedAt. Migrations are mirrored in baseline `00008` and legacy `00061`. Existing legacy sessions remain unclassified/open until the operator explicitly closes them: neither age, weight nor remaining stock is proof of completion. Session list remains complete history, which can filter closedAt client-side. Existing lot and bottling provenance remain authoritative; leftover bulk is stock, not an automatic active job. Product batch `onHand` now reads physical on hand, as does the legacy honey jar inventory field. New scoped Stock rows are preferred over location-wide summary fields.
+
+Packaging warning policy is unchanged: the domain bottling command continues to warn about packaging shortage without blocking an otherwise valid honey operation.

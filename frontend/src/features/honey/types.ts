@@ -179,6 +179,7 @@ export interface ProductAdjustment {
 }
 
 export interface HoneySale {
+  physicalAppliedAt?: string | null;
   id: string;
   date: string;
   customerId: string | null;
@@ -219,6 +220,7 @@ export interface HarvestRow {
 }
 
 export interface HarvestSessionRow {
+  closedAt?: string | null;
   id: string;
   date: string;
   totalExtractedWeight: number | null;
@@ -250,6 +252,7 @@ export interface SessionTrueUp {
 }
 
 export interface HarvestSessionDetail {
+  closedAt?: string | null;
   id: string;
   apiaryId: string;
   date: string;

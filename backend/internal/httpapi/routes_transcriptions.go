@@ -3,8 +3,10 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -15,12 +17,16 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/ai"
+	"github.com/biker2000on/beez-trackz/backend/internal/audioformat"
 	"github.com/biker2000on/beez-trackz/backend/internal/jobs"
 )
 
 const transcriptionMaxUploadBytes = 64 << 20 // 64MB of audio
 
 func (s *Server) mountTranscriptions(r chi.Router) {
+	r.Post("/inspection-visits", s.handleInspectionVisitCreate)
+	r.Post("/apiary-inspections", s.handleApiaryInspectionCreate)
+	r.Get("/apiary-inspections", s.handleApiaryInspectionList)
 	r.Post("/transcriptions", s.handleTranscriptionCreate)
 	r.Get("/transcriptions", s.handleTranscriptionList)
 	r.With(s.requireEntityParamRole("transcription", false)).
@@ -41,16 +47,21 @@ func (s *Server) mountTranscriptions(r chi.Router) {
 
 // transcriptionRow mirrors a media_files record.
 type transcriptionRow struct {
-	ID                 uuid.UUID
-	AudioKey           string
-	TranscriptionText  *string
-	Status             string
-	TranscriptionError *string
-	OwnerType          string
-	OwnerID            uuid.UUID
-	CurrentVersionID   *uuid.UUID
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                  uuid.UUID
+	AudioKey            string
+	TranscriptionText   *string
+	Status              string
+	TranscriptionError  *string
+	OwnerType           string
+	OwnerID             uuid.UUID
+	CurrentVersionID    *uuid.UUID
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	CaptureID           *uuid.UUID
+	Mode                string
+	ObservedAt          time.Time
+	TimeZone            string
+	ReplacesMediaFileID *uuid.UUID
 }
 
 type transcriptVersionRow struct {
@@ -67,10 +78,10 @@ func (s *Server) transcriptionLoad(ctx context.Context, id uuid.UUID) (*transcri
 	var row transcriptionRow
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, audio_key, transcription_text, transcription_status, transcription_error,
-		       owner_type, owner_id, current_transcript_version_id, created_at, updated_at
+		       owner_type, owner_id, current_transcript_version_id, created_at, updated_at, capture_id, capture_mode, COALESCE(observed_at,created_at), time_zone, replaces_media_file_id
 		FROM media_files WHERE id = $1`, id).
 		Scan(&row.ID, &row.AudioKey, &row.TranscriptionText, &row.Status, &row.TranscriptionError,
-			&row.OwnerType, &row.OwnerID, &row.CurrentVersionID, &row.CreatedAt, &row.UpdatedAt)
+			&row.OwnerType, &row.OwnerID, &row.CurrentVersionID, &row.CreatedAt, &row.UpdatedAt, &row.CaptureID, &row.Mode, &row.ObservedAt, &row.TimeZone, &row.ReplacesMediaFileID)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +132,7 @@ func transcriptionRowJSON(row *transcriptionRow) map[string]any {
 		"currentVersionId":  row.CurrentVersionID,
 		"createdAt":         row.CreatedAt,
 		"updatedAt":         row.UpdatedAt,
+		"captureId":         row.CaptureID, "mode": row.Mode, "observedAt": row.ObservedAt, "timeZone": row.TimeZone, "replacesMediaFileId": row.ReplacesMediaFileID,
 	}
 }
 
@@ -129,7 +141,7 @@ func transcriptionMode(mode string) (string, bool) {
 	switch mode {
 	case "":
 		return "single", true
-	case "single", "batch":
+	case "single", "batch", "apiary":
 		return mode, true
 	default:
 		return "", false
@@ -141,7 +153,10 @@ func transcriptionMode(mode string) (string, bool) {
 func (s *Server) transcriptionCandidateHives(ctx context.Context, ownerType string, ownerID uuid.UUID) ([]ai.HiveRef, error) {
 	query := `SELECT id, position_label FROM hives WHERE is_archived = false`
 	args := []any{}
-	if ownerType == "apiary" {
+	if ownerType == "hive" {
+		query += ` AND id = $1`
+		args = append(args, ownerID)
+	} else if ownerType == "apiary" {
 		query += ` AND apiary_id = $1`
 		args = append(args, ownerID)
 	}
@@ -164,6 +179,23 @@ func (s *Server) transcriptionCandidateHives(ctx context.Context, ownerType stri
 // transcriptionParseAndMatch parses the text with the configured transcription
 // provider and annotates inspections with fuzzy hive matches.
 func (s *Server) transcriptionParseAndMatch(ctx context.Context, row *transcriptionRow, mode string) (map[string]any, error) {
+	if mode != row.Mode {
+		return nil, fmt.Errorf("Recording mode cannot change; start another capture")
+	}
+	if row.CurrentVersionID != nil {
+		var cached []byte
+		if err := s.pool.QueryRow(ctx, `SELECT parsed_inspections FROM transcript_versions WHERE id=$1 AND media_file_id=$2`, *row.CurrentVersionID, row.ID).Scan(&cached); err != nil {
+			return nil, err
+		}
+		if len(cached) > 0 {
+			var matched []ai.MatchedInspection
+			if err := json.Unmarshal(cached, &matched); err != nil {
+				return nil, err
+			}
+			return map[string]any{"rawText": row.TranscriptionText, "inspections": matched}, nil
+		}
+	}
+
 	cfg, err := ai.LoadConfig(ctx, s.pool)
 	if err != nil {
 		return nil, err
@@ -184,14 +216,37 @@ func (s *Server) transcriptionParseAndMatch(ctx context.Context, row *transcript
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"rawText":     result.RawText,
-		"inspections": ai.MatchHiveReferences(result.Inspections, hives),
-	}, nil
+	matched := ai.MatchHiveReferences(result.Inspections, hives)
+	for i := range matched {
+		matched[i].ItemKey = fmt.Sprintf("item-%d", i)
+		if matched[i].Scope == "" {
+			matched[i].Scope = "hive"
+		}
+		if mode == "apiary" {
+			matched[i].Scope = "apiary"
+		}
+		if matched[i].Scope == "apiary" {
+			matched[i].MatchedHiveID = nil
+		}
+	}
+	if row.CurrentVersionID != nil {
+		encoded, err := json.Marshal(matched)
+		if err != nil {
+			return nil, err
+		}
+		var cached []byte
+		if err = s.pool.QueryRow(ctx, `UPDATE transcript_versions SET parsed_inspections=COALESCE(parsed_inspections,$3::jsonb) WHERE id=$1 AND media_file_id=$2 RETURNING parsed_inspections`, *row.CurrentVersionID, row.ID, encoded).Scan(&cached); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(cached, &matched); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"rawText": result.RawText, "inspections": matched}, nil
 }
 
 // POST /transcriptions — multipart audio upload; inserts a pending media_files
-// row, stores the audio in MinIO under audio/{id}.webm, and enqueues the
+// row, stores the audio in MinIO with its detected format, and enqueues the
 // transcription job.
 func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Request) {
 	// ParseMultipartForm's argument only controls the memory-vs-tempfile
@@ -208,6 +263,7 @@ func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	file, header, err := r.FormFile("audio")
 	if err != nil {
 		// Legacy field name.
@@ -236,7 +292,8 @@ func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Reques
 	if !s.requireOwnerRole(w, r, ownerType, ownerID, true) {
 		return
 	}
-	if _, ok := transcriptionMode(r.FormValue("mode")); !ok {
+	mode, validMode := transcriptionMode(r.FormValue("mode"))
+	if !validMode || (mode == "single" && ownerType != "hive") || (mode != "single" && ownerType != "apiary") {
 		writeError(w, http.StatusBadRequest, "mode must be single or batch")
 		return
 	}
@@ -246,25 +303,109 @@ func (s *Server) handleTranscriptionCreate(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "Audio file is required")
 		return
 	}
-
-	id := uuid.New()
-	audioKey := "audio/" + id.String() + ".webm"
-	ctx := r.Context()
-
-	if _, err := s.pool.Exec(ctx, `
-		INSERT INTO media_files (id, audio_key, transcription_status, owner_type, owner_id)
-		VALUES ($1, $2, 'pending', $3, $4)`, id, audioKey, ownerType, ownerID); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
+	if len(data) > transcriptionMaxUploadBytes {
+		writeError(w, http.StatusBadRequest, "Audio must be under 64MB")
+		return
+	}
+	format, err := audioformat.Detect(data)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	contentType := "audio/webm"
-	if header != nil && header.Header.Get("Content-Type") != "" {
-		contentType = header.Header.Get("Content-Type")
+	captureID := uuid.New()
+	if raw := r.FormValue("captureId"); raw != "" {
+		captureID, err = uuid.Parse(raw)
+		if err != nil || captureID == uuid.Nil {
+			writeError(w, 400, "Invalid captureId")
+			return
+		}
 	}
-	if err := s.store.Put(ctx, audioKey, bytes.NewReader(data), int64(len(data)), contentType); err != nil {
-		_, _ = s.pool.Exec(ctx, `DELETE FROM media_files WHERE id = $1`, id)
-		writeError(w, http.StatusInternalServerError, "failed to store audio")
+	observedAt := time.Now().UTC()
+	if raw := r.FormValue("observedAt"); raw != "" {
+		observedAt, err = time.Parse(time.RFC3339Nano, raw)
+		if err != nil || observedAt.IsZero() || observedAt.After(time.Now().Add(5*time.Minute)) {
+			writeError(w, 400, "Invalid observation time")
+			return
+		}
+	}
+	zone := r.FormValue("timeZone")
+	if zone == "" {
+		zone = "UTC"
+	}
+	if _, err = time.LoadLocation(zone); err != nil {
+		writeError(w, 400, "Invalid timeZone")
+		return
+	}
+	var replaces *uuid.UUID
+	if raw := r.FormValue("replacesMediaFileId"); raw != "" {
+		v, e := uuid.Parse(raw)
+		if e != nil {
+			writeError(w, 400, "Invalid replaced recording")
+			return
+		}
+		prior, e := s.transcriptionLoad(r.Context(), v)
+		if e != nil || prior.OwnerType != ownerType || prior.OwnerID != ownerID {
+			writeError(w, 400, "Replacement must have the same owner")
+			return
+		}
+		replaces = &v
+	}
+	actor := actorID(r)
+	if actor == nil {
+		writeError(w, 401, "Sign in to save a capture")
+		return
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256(data))
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, actor.String()+":"+captureID.String()); err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	id := uuid.New()
+	audioKey := "audio/" + id.String() + format.Extension
+	var existingHash, existingOwnerType, existingMode, existingZone string
+	var existingOwner uuid.UUID
+	var existingObserved time.Time
+	var existingReplacement *uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id,audio_sha256,owner_type,owner_id,capture_mode,observed_at,time_zone,replaces_media_file_id FROM media_files WHERE capture_actor_id=$1 AND capture_id=$2`, actor, captureID).Scan(&id, &existingHash, &existingOwnerType, &existingOwner, &existingMode, &existingObserved, &existingZone, &existingReplacement)
+	if err == nil {
+		sameReplacement := (replaces == nil && existingReplacement == nil) || (replaces != nil && existingReplacement != nil && *replaces == *existingReplacement)
+		if hash != existingHash || ownerType != existingOwnerType || ownerID != existingOwner || mode != existingMode || zone != existingZone || !sameReplacement || (r.FormValue("observedAt") != "" && !observedAt.Truncate(time.Microsecond).Equal(existingObserved)) {
+			writeError(w, 409, "Capture identity was already used for different audio or context")
+			return
+		}
+	} else if errors.Is(err, pgx.ErrNoRows) {
+		if err = s.store.Put(ctx, audioKey, bytes.NewReader(data), int64(len(data)), format.MIME); err != nil {
+			writeError(w, 500, "failed to store audio")
+			return
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO media_files(id,audio_key,transcription_status,owner_type,owner_id,capture_id,capture_actor_id,audio_sha256,capture_mode,observed_at,time_zone,replaces_media_file_id) VALUES($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, audioKey, ownerType, ownerID, captureID, actor, hash, mode, observedAt, zone, replaces); err != nil {
+			writeError(w, 500, "database error")
+			return
+		}
+	} else {
+		writeError(w, 500, "database error")
+		return
+	}
+	if err = tx.Commit(ctx); err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	// Replaying a completed capture returns its existing result without another job.
+	var status string
+	if err = s.pool.QueryRow(ctx, `SELECT transcription_status FROM media_files WHERE id=$1`, id).Scan(&status); err != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	if status == "complete" || status == "processing" {
+		writeJSON(w, 200, map[string]any{"mediaFileId": id})
 		return
 	}
 
@@ -300,7 +441,7 @@ func (s *Server) handleTranscriptionList(w http.ResponseWriter, r *http.Request)
 
 	query := `
 		SELECT id, audio_key, transcription_text, transcription_status, transcription_error,
-		       owner_type, owner_id, current_transcript_version_id, created_at, updated_at
+		       owner_type, owner_id, current_transcript_version_id, created_at, updated_at, capture_id, capture_mode, COALESCE(observed_at,created_at), time_zone, replaces_media_file_id
 		FROM media_files`
 	args := []any{}
 	if ownerType != "" || ownerIDRaw != "" {
@@ -336,7 +477,7 @@ func (s *Server) handleTranscriptionList(w http.ResponseWriter, r *http.Request)
 		var row transcriptionRow
 		if err := rows.Scan(&row.ID, &row.AudioKey, &row.TranscriptionText, &row.Status,
 			&row.TranscriptionError, &row.OwnerType, &row.OwnerID, &row.CurrentVersionID,
-			&row.CreatedAt, &row.UpdatedAt); err != nil {
+			&row.CreatedAt, &row.UpdatedAt, &row.CaptureID, &row.Mode, &row.ObservedAt, &row.TimeZone, &row.ReplacesMediaFileID); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
 		}
@@ -371,7 +512,16 @@ func (s *Server) handleTranscriptionGet(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	if r.URL.Query().Get("mode") == "" {
+		mode = row.Mode
+	}
 	resp := transcriptionRowJSON(row)
+	outcomes, receiptErr := s.transcriptionOutcomes(r.Context(), row.ID)
+	if receiptErr != nil {
+		writeError(w, 500, "database error")
+		return
+	}
+	resp["outcomes"] = outcomes
 	versions, err := s.transcriptionVersions(r.Context(), row.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
@@ -428,6 +578,9 @@ func (s *Server) handleTranscriptionParse(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	if req.Mode == "" {
+		mode = row.Mode
+	}
 	if req.VersionID != nil {
 		text, err := s.transcriptionVersionText(r.Context(), id, *req.VersionID)
 		if err != nil {
@@ -455,237 +608,6 @@ func (s *Server) handleTranscriptionParse(w http.ResponseWriter, r *http.Request
 		parsed["diff"] = diff
 	}
 	writeJSON(w, http.StatusOK, parsed)
-}
-
-// transcriptionConfirmItem is one confirmed inspection from the review UI.
-type transcriptionConfirmItem struct {
-	HiveID        *uuid.UUID `json:"hiveId"`
-	MatchedHiveID *uuid.UUID `json:"matchedHiveId"` // tolerated from parse output; ignored
-	ai.ParsedInspection
-}
-
-// POST /transcriptions/{id}/confirm {mode, inspections} — create inspection
-// rows from confirmed parsed data. Single mode defaults hiveId to the media
-// owner (which must be a hive); batch mode requires hiveId per item.
-func (s *Server) handleTranscriptionConfirm(w http.ResponseWriter, r *http.Request) {
-	id, err := uuidParam(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	var req struct {
-		Mode        string                     `json:"mode"`
-		VersionID   *uuid.UUID                 `json:"versionId"`
-		Inspections []transcriptionConfirmItem `json:"inspections"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	mode, ok := transcriptionMode(req.Mode)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "mode must be single or batch")
-		return
-	}
-	if len(req.Inspections) == 0 {
-		writeError(w, http.StatusBadRequest, "No inspections to confirm")
-		return
-	}
-
-	ctx := r.Context()
-	row, err := s.transcriptionLoad(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "Media file not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	if existing, err := s.transcriptionSourceCounts(ctx, row.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	} else if existing.total() > 0 {
-		writeError(w, http.StatusConflict,
-			"this recording already has confirmed rows; use apply-reparse instead of inserting another walkthrough")
-		return
-	}
-
-	versionID, err := s.transcriptionResolveVersion(ctx, row, req.VersionID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	// Hold the media row for the whole confirm so a concurrent DELETE
-	// /transcriptions/{id} (FOR UPDATE) serializes against it — otherwise the
-	// delete can land between the count check above and the inserts below and
-	// turn the FK into a 500.
-	var one int
-	err = tx.QueryRow(ctx,
-		`SELECT 1 FROM media_files WHERE id = $1 FOR KEY SHARE`, row.ID).Scan(&one)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "Media file not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-
-	now := time.Now()
-	inspectionIDs := make([]uuid.UUID, 0, len(req.Inspections))
-	inspectionHiveIDs := make([]uuid.UUID, 0, len(req.Inspections))
-	feedingIDs := make([]uuid.UUID, 0)
-	treatmentEventIDs := make([]uuid.UUID, 0)
-	queenEventIDs := make([]uuid.UUID, 0)
-	miteCountIDs := make([]uuid.UUID, 0)
-	for _, item := range req.Inspections {
-		hiveID := item.HiveID
-		if hiveID == nil && mode == "single" && row.OwnerType == "hive" {
-			hiveID = &row.OwnerID
-		}
-		if hiveID == nil {
-			writeError(w, http.StatusBadRequest, "Hive ID is required for each inspection")
-			return
-		}
-		if !s.requireHiveRole(w, r, *hiveID, true) {
-			return
-		}
-
-		pestsJSON, err := transcriptionNullableJSON(item.Pests)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid pests")
-			return
-		}
-		treatmentsJSON, err := transcriptionNullableJSON(item.Treatments)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid treatments")
-			return
-		}
-		sourceMedia, err := json.Marshal(struct {
-			MediaFileID   uuid.UUID `json:"mediaFileId"`
-			HiveReference *string   `json:"hiveReference,omitempty"`
-			RawText       *string   `json:"rawText"`
-		}{MediaFileID: row.ID, HiveReference: item.HiveReference, RawText: row.TranscriptionText})
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "encoding error")
-			return
-		}
-
-		var createdID uuid.UUID
-		err = tx.QueryRow(ctx, `
-			INSERT INTO inspections
-				(hive_id, date, queen_seen, queen_health, brood_pattern,
-				 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media,
-				 source_media_file_id, source_transcript_version_id,
-				 frames_of_bees, frames_of_brood, frames_of_stores)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-			RETURNING id`,
-			*hiveID, now, item.QueenSeen, item.QueenHealth, item.BroodPattern,
-			clampRating(item.StoresHoney), clampRating(item.StoresPollen), clampRating(item.Temperament),
-			pestsJSON, treatmentsJSON, item.Notes, sourceMedia, row.ID, versionID,
-			item.FramesOfBees, item.FramesOfBrood, item.FramesOfStores).Scan(&createdID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		inspectionIDs = append(inspectionIDs, createdID)
-		inspectionHiveIDs = append(inspectionHiveIDs, *hiveID)
-
-		for _, feeding := range item.Feedings {
-			// The shared insert path applies the feeder-lifecycle rule: a
-			// feeding with no feeder is recorded closed, not left open.
-			eventID, err := feedingInsert(ctx, tx, feedingFields{
-				HiveID:                    *hiveID,
-				DateFed:                   now,
-				Type:                      feeding.Type,
-				Quantity:                  feeding.Quantity,
-				QuantityUnit:              feeding.QuantityUnit,
-				FeederType:                feedingFeederPtr(feeding.FeederType),
-				Notes:                     feeding.Notes,
-				SourceMediaFileID:         &row.ID,
-				SourceTranscriptVersionID: &versionID,
-			}, actorID(r))
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid feeding extracted from transcript")
-				return
-			}
-			feedingIDs = append(feedingIDs, eventID)
-		}
-		for _, treatment := range item.Treatments {
-			days, resolveErr := s.resolveWithdrawalDays(ctx, treatment.Product)
-			if resolveErr != nil {
-				writeError(w, http.StatusInternalServerError, "database error")
-				return
-			}
-			var eventID uuid.UUID
-			err = tx.QueryRow(ctx, `
-				INSERT INTO treatment_events
-					(hive_id, inspection_id, date_applied, product, method, withdrawal_days,
-					 source_media_file_id, source_transcript_version_id)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-				*hiveID, createdID, now, treatment.Product, treatment.Method, days,
-				row.ID, versionID).Scan(&eventID)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid treatment extracted from transcript")
-				return
-			}
-			treatmentEventIDs = append(treatmentEventIDs, eventID)
-		}
-		for _, event := range item.QueenEvents {
-			var eventID uuid.UUID
-			err = tx.QueryRow(ctx, `
-				INSERT INTO queen_events (hive_id, event_date, event_type, notes)
-				VALUES ($1,$2,$3,$4) RETURNING id`,
-				*hiveID, now, event.EventType, event.Notes).Scan(&eventID)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid queen event extracted from transcript")
-				return
-			}
-			queenEventIDs = append(queenEventIDs, eventID)
-		}
-		for _, miteCount := range item.MiteCounts {
-			var eventID uuid.UUID
-			err = tx.QueryRow(ctx, `
-				INSERT INTO mite_counts
-					(hive_id, inspection_id, date, method, mites_count, sample_size, notes,
-					 source_media_file_id, source_transcript_version_id)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-				*hiveID, createdID, now, miteCount.Method, miteCount.MitesCount,
-				miteCount.SampleSize, miteCount.Notes, row.ID, versionID).Scan(&eventID)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid mite count extracted from transcript")
-				return
-			}
-			miteCountIDs = append(miteCountIDs, eventID)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	for index, inspectionID := range inspectionIDs {
-		if snapshot := s.inspectionWeatherSnapshot(r, inspectionHiveIDs[index]); len(snapshot) > 0 {
-			_, _ = s.pool.Exec(ctx,
-				`UPDATE inspections SET weather_snapshot=$1 WHERE id=$2`,
-				snapshot, inspectionID)
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"success": true, "inspectionIds": inspectionIDs, "feedingIds": feedingIDs,
-		"treatmentEventIds": treatmentEventIDs, "queenEventIds": queenEventIDs,
-		"miteCountIds": miteCountIDs,
-	})
 }
 
 // transcriptionNullableJSON marshals a slice for a jsonb column, mapping nil

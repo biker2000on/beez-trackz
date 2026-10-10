@@ -103,7 +103,7 @@ func Workbench(ctx context.Context, q app.Querier, actor app.Actor, year int, no
 		FROM harvest_sessions s
 		JOIN apiaries a ON a.id=s.apiary_id
 		LEFT JOIN honey_harvests h ON h.session_id=s.id AND h.deleted_at IS NULL
-		WHERE EXTRACT(YEAR FROM s.date)=$1
+		WHERE EXTRACT(YEAR FROM s.date)=$1 AND s.closed_at IS NULL
 		GROUP BY s.id,a.name
 		ORDER BY s.date DESC,s.id`, year)
 	if err != nil {
@@ -192,7 +192,7 @@ func Workbench(ctx context.Context, q app.Querier, actor app.Actor, year int, no
 	}
 	rows.Close()
 
-	rows, err = q.Query(ctx, `SELECT b.id,p.name,COALESCE(SUM(a.available),0)::int FROM product_batches b JOIN product_catalog p ON p.id=b.product_id LEFT JOIN inventory_available a ON a.item_id=p.item_id AND a.lot_id=b.inventory_lot_id WHERE b.voided_at IS NULL AND EXTRACT(YEAR FROM b.started_at)=$1 GROUP BY b.id,p.name ORDER BY b.started_at DESC`, year)
+	rows, err = q.Query(ctx, `SELECT b.id,p.name,COALESCE(SUM(a.on_hand),0)::int FROM product_batches b JOIN product_catalog p ON p.id=b.product_id LEFT JOIN inventory_available a ON a.item_id=p.item_id AND a.lot_id=b.inventory_lot_id WHERE b.voided_at IS NULL AND EXTRACT(YEAR FROM b.started_at)=$1 GROUP BY b.id,p.name ORDER BY b.started_at DESC`, year)
 	if err != nil {
 		return WorkbenchView{}, app.Wrap(app.KindInternal, op, err)
 	}

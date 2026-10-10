@@ -14,6 +14,44 @@ type parserProvider struct {
 	context  string
 }
 
+func TestParseEquipmentIsProposalAndMissingQueenRemainsUnknown(t *testing.T) {
+	provider := &parserProvider{response: `{"notes":"Brood looks good","equipmentActions":[{"kind":"deploy","quantity":1,"description":"add a medium super","referenceId":"invented","accepted":true}]}`}
+	result, err := ParseTranscription(context.Background(), provider, "Brood looks good; add a medium super", "single")
+	if err != nil || len(result.Inspections) != 1 {
+		t.Fatalf("parse %v %v", result, err)
+	}
+	inspection := result.Inspections[0]
+	if inspection.QueenSeen != nil {
+		t.Fatal("missing queen observation became a boolean")
+	}
+	if len(inspection.EquipmentActions) != 1 || inspection.EquipmentActions[0].Accepted || inspection.EquipmentActions[0].ReferenceID != "" {
+		t.Fatalf("AI command became accepted or chose stock: %+v", inspection.EquipmentActions)
+	}
+}
+
+func TestParseBatchRetainsSeparateApiaryObservation(t *testing.T) {
+	provider := &parserProvider{response: `[{"scope":"apiary","notes":"Water source is dry"},{"scope":"hive","hiveReference":"A1","queenSeen":false}]`}
+	result, err := ParseTranscription(context.Background(), provider, "Water source dry. A1 no queen seen.", "batch")
+	if err != nil || len(result.Inspections) != 2 || result.Inspections[0].Scope != "apiary" || result.Inspections[0].QueenSeen != nil || result.Inspections[1].QueenSeen == nil || *result.Inspections[1].QueenSeen {
+		t.Fatalf("mixed scopes %+v %v", result, err)
+	}
+	if strings.Contains(BuildPrompt("batch"), "include it in each hive's data") {
+		t.Fatal("prompt broadcasts yard statements to hives")
+	}
+}
+
+func TestMatchAmbiguousHiveNeedsReview(t *testing.T) {
+	reference := "blue"
+	matches := MatchHiveReferences([]ParsedInspection{{HiveReference: &reference}}, []HiveRef{{ID: "one", PositionLabel: "blue left"}, {ID: "two", PositionLabel: "blue right"}})
+	if matches[0].MatchedHiveID != nil {
+		t.Fatalf("ambiguous speech selected %s", *matches[0].MatchedHiveID)
+	}
+	matches = MatchHiveReferences([]ParsedInspection{{HiveReference: &reference, Scope: "apiary"}}, []HiveRef{{ID: "one", PositionLabel: "blue"}})
+	if matches[0].MatchedHiveID != nil {
+		t.Fatal("apiary observation received a hive target")
+	}
+}
+
 func (p *parserProvider) Chat(_ context.Context, prompt, context string) (string, error) {
 	p.prompt = prompt
 	p.context = context
