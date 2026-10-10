@@ -32,13 +32,11 @@ import {
   ChevronRight,
   ClipboardCheck,
   Pencil,
-  Plus,
   RotateCcw,
   Send,
   Store,
   TriangleAlert,
   Undo2,
-  X,
 } from "lucide-react";
 
 import {
@@ -83,6 +81,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatMoney, todayISO } from "@/features/honey/format";
 import { ApiError } from "@/lib/api";
 
+import {
+  ANY_LOT,
+  compareNullable,
+  LotLinesEditor,
+  lotLabel,
+  shelfSkus,
+  skuKey,
+  useLotLines,
+} from "./lot-lines";
 import { consignmentTerms, StockLocationDialog } from "./stock-location-form";
 import {
   useRecordStockSettlement,
@@ -93,8 +100,6 @@ import {
   useStockTransfer,
   useUpdateStockPrices,
   useVoidStockSettlement,
-  type StockInventoryLot,
-  type StockInventoryRow,
   type StockLocation,
   type StockLocationDetail,
   type StockLocationPrice,
@@ -105,11 +110,6 @@ import {
   type StockShelfRow,
   type StockTransferLineBody,
 } from "./stock-locations-api";
-
-/** SKU identity that works for both jar sizes and catalog products. */
-function skuKey(row: { jarSizeId: string | null; productId: string | null }) {
-  return row.jarSizeId ? `jar:${row.jarSizeId}` : `product:${row.productId}`;
-}
 
 function skuBody(row: {
   jarSizeId: string | null;
@@ -136,22 +136,9 @@ function varietalGroup(row: StockLotRef): string {
   return row.varietalName ?? NO_VARIETAL;
 }
 
-/** "Sourwood · 2025-SW", or whichever half is known. */
-function lotLabel(row: StockLotRef): string {
-  if (row.varietalName && row.lotCode) return `${row.varietalName} · ${row.lotCode}`;
-  return row.varietalName ?? row.lotCode ?? "No lot";
-}
-
 /** "Quart · Sourwood · 2025-SW": how a shelf row is named in a form control. */
 function shelfRowName(row: StockShelfRow): string {
   return `${row.label} · ${lotLabel(row)}`;
-}
-
-function compareNullable(a: string | null, b: string | null): number {
-  if (a === b) return 0;
-  if (a == null) return 1;
-  if (b == null) return -1;
-  return a.localeCompare(b);
 }
 
 /** Varietal, then lot, then size — the order the shelf and every dialog use. */
@@ -842,28 +829,6 @@ function EditPricesDialog({
 
 // --- send stock ------------------------------------------------------------
 
-/** "Any lot" is the empty string: the line submits no `harvestLotId`. */
-const ANY_LOT = "";
-
-interface SendLine {
-  id: number;
-  sku: string;
-  lot: string;
-  qty: string;
-}
-
-/** A send line's whole-unit count; blank or unevaluated text counts as 0. */
-function qtyOf(line: SendLine): number {
-  return Math.max(0, Math.trunc(Number(line.qty) || 0));
-}
-
-type SendableSku = StockInventoryRow & {
-  key: string;
-  atHome: number;
-  /** Lots of this SKU with something at home; unattributed stock is not listed. */
-  homeLots: (StockInventoryLot & { atHome: number })[];
-};
-
 function SendStockDialog({
   open,
   onOpenChange,
@@ -876,151 +841,38 @@ function SendStockDialog({
   const inventory = useStockInventory(open);
   const transfer = useStockTransfer(location.id);
   const [date, setDate] = React.useState(todayISO());
-  const [lines, setLines] = React.useState<SendLine[]>([]);
   const [notes, setNotes] = React.useState("");
-  const nextId = React.useRef(1);
-
-  function blankLine(): SendLine {
-    return { id: nextId.current++, sku: "", lot: ANY_LOT, qty: "" };
-  }
-
-  React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLines(open ? [blankLine()] : []);
-    if (!open) setNotes("");
-  }, [open]);
 
   const homeId = inventory.data?.locations.find((row) => row.isHome)?.id;
   // Only what is actually at home can be sent: consigned stock is already out.
-  const available: SendableSku[] = (inventory.data?.items ?? [])
-    .map((row) => ({
-      ...row,
-      key: skuKey(row),
-      atHome: homeId ? (row.byLocation[homeId] ?? 0) : 0,
-      homeLots: (row.lots ?? [])
-        .map((lot) => ({
-          ...lot,
-          atHome: homeId ? (lot.byLocation[homeId] ?? 0) : 0,
-        }))
-        .filter((lot) => lot.harvestLotId != null && lot.atHome > 0)
-        .sort(
-          (a, b) =>
-            compareNullable(a.varietalName, b.varietalName) ||
-            compareNullable(a.lotCode, b.lotCode),
-        ),
-    }))
-    .filter((row) => row.atHome > 0);
-  const skuByKey = new Map(available.map((row) => [row.key, row]));
+  const available = shelfSkus(inventory.data?.items, homeId);
+  // The one form that keeps the escape hatch: a transfer may let the server
+  // pick the oldest lot.
+  const lines = useLotLines(available, { allowAnyLot: true, where: "at home" });
+  const { reset } = lines;
 
-  // Every count below is "what is left after the OTHER lines in this dialog",
-  // so two lines of Sourwood quarts cannot each claim the same twelve jars.
-
-  /** Units of this SKU the other lines (pinned or any-lot) already take. */
-  function skuTakenByOthers(line: SendLine, skuKeyValue: string): number {
-    return lines.reduce(
-      (sum, other) =>
-        other.id !== line.id && other.sku === skuKeyValue
-          ? sum + qtyOf(other)
-          : sum,
-      0,
-    );
-  }
-
-  /** Units of this (SKU, lot) the other lines pinned to that lot take. */
-  function lotTakenByOthers(line: SendLine, skuKeyValue: string, lotId: string): number {
-    return lines.reduce(
-      (sum, other) =>
-        other.id !== line.id && other.sku === skuKeyValue && other.lot === lotId
-          ? sum + qtyOf(other)
-          : sum,
-      0,
-    );
-  }
-
-  /** What is left at home of a SKU for this line. */
-  function skuLeftFor(line: SendLine, sku: SendableSku): number {
-    return Math.max(0, sku.atHome - skuTakenByOthers(line, sku.key));
-  }
-
-  /** What is left at home of one lot for this line, bounded by the SKU. */
-  function lotLeftFor(
-    line: SendLine,
-    sku: SendableSku,
-    lot: SendableSku["homeLots"][number],
-  ): number {
-    const lotLeft = lot.atHome - lotTakenByOthers(line, sku.key, lot.harvestLotId!);
-    return Math.max(0, Math.min(lotLeft, skuLeftFor(line, sku)));
-  }
-
-  /** The input's cap: this line's (SKU, lot) after every other line. */
-  function capOf(line: SendLine): number {
-    const sku = skuByKey.get(line.sku);
-    if (!sku) return 0;
-    if (line.lot === ANY_LOT) return skuLeftFor(line, sku);
-    const lot = sku.homeLots.find((row) => row.harvestLotId === line.lot);
-    return lot ? lotLeftFor(line, sku, lot) : 0;
-  }
-
-  /** The earlier line this one repeats (same SKU and same lot choice). */
-  function duplicateOf(line: SendLine, index: number): number | null {
-    if (!line.sku) return null;
-    const first = lines.findIndex(
-      (other) => other.sku === line.sku && other.lot === line.lot,
-    );
-    return first >= 0 && first < index ? first + 1 : null;
-  }
-
-  const lineErrors = new Map<number, string>();
-  lines.forEach((line, index) => {
-    const sku = skuByKey.get(line.sku);
-    if (!sku) return;
-    const repeats = duplicateOf(line, index);
-    if (repeats != null) {
-      lineErrors.set(
-        line.id,
-        `Same size and lot as line ${repeats}. Add the units to that line instead.`,
-      );
-      return;
+  React.useEffect(() => {
+    // Each opening is a new transfer draft.
+    if (open) {
+      reset();
+    } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNotes("");
     }
-    const qty = qtyOf(line);
-    const cap = capOf(line);
-    if (qty > cap) {
-      lineErrors.set(
-        line.id,
-        cap === 0
-          ? "None left at home after the other lines."
-          : `Only ${cap} left at home after the other lines.`,
-      );
-    }
-  });
+  }, [open, reset]);
 
-  const body: StockTransferLineBody[] = lines.flatMap((line) => {
-    const sku = skuByKey.get(line.sku);
-    if (!sku) return [];
-    const quantity = qtyOf(line);
-    if (quantity === 0) return [];
-    return [
-      {
-        ...skuBody(sku),
-        quantity,
-        ...(line.lot === ANY_LOT ? {} : { harvestLotId: line.lot }),
-      },
-    ];
-  });
-  const totalUnits = body.reduce((sum, line) => sum + line.quantity, 0);
-  const hasLineErrors = lineErrors.size > 0;
+  const body: StockTransferLineBody[] = lines.filled.map(({ line, sku, quantity }) => ({
+    ...skuBody(sku),
+    quantity,
+    ...(line.lot === ANY_LOT ? {} : { harvestLotId: line.lot }),
+  }));
+  const totalUnits = lines.totalUnits;
 
   const error =
     transfer.error instanceof Error ? transfer.error.message : null;
 
-  function patchLine(id: number, patch: Partial<SendLine>) {
-    setLines((current) =>
-      current.map((line) => (line.id === id ? { ...line, ...patch } : line)),
-    );
-  }
-
   function submit() {
-    if (body.length === 0 || hasLineErrors) return;
+    if (body.length === 0 || lines.hasErrors) return;
     transfer.mutate(
       { date, lines: body, notes: notes.trim() || undefined },
       { onSuccess: () => onOpenChange(false) },
@@ -1059,156 +911,15 @@ function SendStockDialog({
           </div>
           {inventory.isPending ? (
             <Skeleton className="h-32" />
-          ) : available.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing is on hand at home to send.
-            </p>
           ) : (
-            <div className="grid gap-3">
-              {lines.map((line, index) => {
-                const sku = skuByKey.get(line.sku);
-                const cap = capOf(line);
-                const n = index + 1;
-                const lineError = lineErrors.get(line.id);
-                const sizeOptions = available
-                  .map((row) => ({ row, left: skuLeftFor(line, row) }))
-                  .filter(({ row, left }) => left > 0 || row.key === line.sku);
-                // Lots another line already pins are hidden: a second line for
-                // the same lot is a duplicate, not a new choice.
-                const lotOptions = sku
-                  ? sku.homeLots
-                      .map((lot) => ({ lot, left: lotLeftFor(line, sku, lot) }))
-                      .filter(
-                        ({ lot, left }) =>
-                          lot.harvestLotId === line.lot ||
-                          (left > 0 &&
-                            !lines.some(
-                              (other) =>
-                                other.id !== line.id &&
-                                other.sku === line.sku &&
-                                other.lot === lot.harvestLotId,
-                            )),
-                      )
-                  : [];
-                return (
-                  <div key={line.id} data-testid="send-line" className="grid gap-1">
-                    <div className="grid gap-2 sm:grid-cols-[1fr_1.4fr_6rem_auto] sm:items-end">
-                      <div className="grid gap-1">
-                        <Label htmlFor={`send-size-${line.id}`}>Size</Label>
-                        <Select
-                          value={line.sku}
-                          onValueChange={(value) =>
-                            patchLine(line.id, { sku: value, lot: ANY_LOT, qty: "" })
-                          }
-                        >
-                          <SelectTrigger
-                            id={`send-size-${line.id}`}
-                            aria-label={`Line ${n} size`}
-                          >
-                            <SelectValue placeholder="Pick a size" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {sizeOptions.map(({ row, left }) => (
-                              <SelectItem key={row.key} value={row.key}>
-                                {row.label}
-                                <span className="text-xs text-muted-foreground">
-                                  {` · ${left} left at home`}
-                                </span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-1">
-                        <Label htmlFor={`send-lot-${line.id}`}>Varietal / lot</Label>
-                        <Select
-                          value={line.lot}
-                          onValueChange={(value) =>
-                            patchLine(line.id, { lot: value === "any" ? ANY_LOT : value })
-                          }
-                          disabled={!sku}
-                        >
-                          <SelectTrigger
-                            id={`send-lot-${line.id}`}
-                            aria-label={`Line ${n} varietal`}
-                          >
-                            <SelectValue placeholder="Any lot (oldest first)" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="any">
-                              Any lot (oldest first)
-                              {sku && (
-                                <span className="text-xs text-muted-foreground">
-                                  {` · ${skuLeftFor(line, sku)} left`}
-                                </span>
-                              )}
-                            </SelectItem>
-                            {lotOptions.map(({ lot, left }) => (
-                              <SelectItem key={lot.harvestLotId!} value={lot.harvestLotId!}>
-                                {lotLabel(lot)}
-                                <span className="text-xs text-muted-foreground">
-                                  {` · ${left} left`}
-                                </span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-1">
-                        <Label htmlFor={`send-qty-${line.id}`}>Units</Label>
-                        <Input
-                          id={`send-qty-${line.id}`}
-                          aria-label={`Line ${n} quantity`}
-                          type="number"
-                          min="0"
-                          max={cap}
-                          disabled={!sku}
-                          value={line.qty}
-                          placeholder={sku ? `≤ ${cap}` : "0"}
-                          aria-invalid={lineError ? true : undefined}
-                          aria-describedby={lineError ? `send-error-${line.id}` : undefined}
-                          onChange={(event) =>
-                            patchLine(line.id, { qty: event.target.value })
-                          }
-                        />
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Remove line ${n}`}
-                        disabled={lines.length === 1}
-                        onClick={() =>
-                          setLines((current) => current.filter((row) => row.id !== line.id))
-                        }
-                      >
-                        <X />
-                      </Button>
-                    </div>
-                    {lineError && (
-                      <p
-                        id={`send-error-${line.id}`}
-                        role="alert"
-                        className="text-xs text-destructive"
-                      >
-                        Line {n}: {lineError}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-              <div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setLines((current) => [...current, blankLine()])}
-                >
-                  <Plus />
-                  Add a line
-                </Button>
-              </div>
-            </div>
+            <LotLinesEditor
+              state={lines}
+              skus={available}
+              where="at home"
+              idPrefix="send"
+              lineTestId="send-line"
+              emptyText="Nothing is on hand at home to send."
+            />
           )}
           <p className="text-xs text-muted-foreground" aria-live="polite">
             {totalUnits} {totalUnits === 1 ? "unit" : "units"} leaving home for{" "}
@@ -1228,7 +939,7 @@ function SendStockDialog({
             </Button>
             <Button
               type="submit"
-              disabled={totalUnits === 0 || hasLineErrors || transfer.isPending}
+              disabled={totalUnits === 0 || lines.hasErrors || transfer.isPending}
             >
               {transfer.isPending ? "Sending…" : `Send ${totalUnits} units`}
             </Button>

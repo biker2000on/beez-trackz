@@ -232,7 +232,12 @@ function catalog() {
   };
 }
 
-async function mockApp(page: Page) {
+interface Posted {
+  path: string;
+  body: unknown;
+}
+
+async function mockApp(page: Page, posted: Posted[] = []) {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -261,7 +266,13 @@ async function mockApp(page: Page) {
       });
     }
     if (request.method() !== "GET") {
+      posted.push({ path, body: request.postDataJSON() });
       return route.fulfill({ json: { success: true, id: "new" } });
+    }
+    if (path.endsWith("/market-day/reconciliation")) {
+      return route.fulfill({
+        json: { orderCount: 0, grossSales: 0, amountCollected: 0, balanceDue: 0, breakdown: [] },
+      });
     }
     if (path.endsWith("/ops/units")) {
       return route.fulfill({ json: { units: "us", temperatureUnit: "f" } });
@@ -329,10 +340,11 @@ test("a bottling run shows each size's ounces and totals jars · oz ≈ lb again
   await expect(dialog.getByRole("button", { name: "Record bottling run" })).toBeEnabled();
 });
 
-test("a sale hides sizes and lots with nothing at the selling shelf and totals units · $ live", async ({
+test("a sale is lines of size and lot: empty sizes and lots hidden, a lone lot preselected, units · $ live", async ({
   page,
 }) => {
-  await mockApp(page);
+  const posted: Posted[] = [];
+  await mockApp(page, posted);
   await page.goto("/sales");
 
   await page.getByRole("button", { name: "Record" }).click();
@@ -340,34 +352,45 @@ test("a sale hides sizes and lots with nothing at the selling shelf and totals u
   const dialog = page.getByRole("dialog", { name: "Record a sale" });
   await expect(dialog).toBeVisible();
 
-  // Pints are at home with their ounces; quarts are all gone, so no row.
-  await expect(dialog.getByText("Pint · 22 oz")).toBeVisible();
-  await expect(dialog.getByText("12 on hand at home")).toBeVisible();
-  await expect(dialog.getByRole("textbox", { name: "Quart quantity" })).toHaveCount(0);
+  // One empty line to start. Pints are at home with their ounces; quarts are
+  // all gone, so they are not offered.
+  await dialog.getByRole("combobox", { name: "Line 1 size" }).click();
+  await expect(page.getByRole("option", { name: /Quart/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /Pint · 22 oz · 12 left at home/ }).click();
 
-  // Units and dollars follow the quantity as it is typed.
-  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("2");
-  await expect(dialog.getByText("2 jars · $20.00")).toBeVisible();
-  await expect(dialog.getByText("2 units · subtotal $20.00")).toBeVisible();
-
-  // The lot picker lists the jars each lot has at this shelf and drops the
-  // lot with none.
-  await dialog.getByRole("combobox").filter({ hasText: "Unassigned" }).click();
-  await expect(page.getByRole("option", { name: /2026-CLOVER-01 .*12 jars at home/ })).toBeVisible();
+  // Only Clover has pints at home, so it is chosen; Wildflower is not offered.
+  await expect(dialog.getByRole("combobox", { name: "Line 1 varietal" })).toHaveText(
+    /Clover · 2026-CLOVER-01/,
+  );
+  await dialog.getByRole("combobox", { name: "Line 1 varietal" }).click();
   await expect(page.getByRole("option", { name: /2026-WILDFLOWER-01/ })).toHaveCount(0);
-  await page.getByRole("option", { name: /2026-CLOVER-01/ }).click();
-  await expect(dialog.getByText("12 jars of 2026-CLOVER-01 at home · leaves 10")).toBeVisible();
+  await page.keyboard.press("Escape");
 
-  // Asking for more than the shelf holds warns; the API is what refuses.
-  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("15");
-  await expect(dialog.getByText(/More Pint than at home/)).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Record sale" })).toBeEnabled();
+  // The price comes from the size; units and dollars follow the quantity.
+  await expect(dialog.getByRole("textbox", { name: "Line 1 unit price" })).toHaveValue("10");
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("2");
+  await expect(dialog.getByTestId("sale-total")).toHaveText(/2 jars · $20.00/);
+
+  // Asking for more than the lot holds is refused before the server is asked.
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("15");
+  await expect(dialog.getByText(/Only 12 left at home after the other lines/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Record sale" })).toBeDisabled();
+
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("2");
+  await dialog.getByRole("button", { name: "Record sale" }).click();
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0].path).toBe("/api/v1/sales");
+  expect(posted[0].body).toMatchObject({
+    orderStatus: "paid",
+    lines: [{ kind: "jar", jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 2, unitPrice: 10 }],
+  });
 });
 
-test("giving jars away shows on hand and ounces per size and totals jars · oz", async ({
+test("giving jars away names the lot of every line and totals jars · oz", async ({
   page,
 }) => {
-  await mockApp(page);
+  const posted: Posted[] = [];
+  await mockApp(page, posted);
   await page.goto("/sales");
 
   await page.getByRole("button", { name: "Record" }).click();
@@ -375,17 +398,53 @@ test("giving jars away shows on hand and ounces per size and totals jars · oz",
   const dialog = page.getByRole("dialog", { name: "Give away jars" });
   await expect(dialog).toBeVisible();
 
-  await expect(dialog.getByText("Pint · 22 oz")).toBeVisible();
-  await expect(dialog.getByText("12 on hand")).toBeVisible();
-  await expect(dialog.getByRole("textbox", { name: "Quart quantity" })).toHaveCount(0);
-
   await expect(dialog.getByText("0 jars · 0 oz")).toBeVisible();
-  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("6");
+  await dialog.getByRole("combobox", { name: "Line 1 size" }).click();
+  await expect(page.getByRole("option", { name: /Quart/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /Pint · 22 oz · 12 left at home/ }).click();
+  await expect(dialog.getByRole("combobox", { name: "Line 1 varietal" })).toHaveText(
+    /Clover · 2026-CLOVER-01/,
+  );
+
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("6");
   await expect(dialog.getByText("6 jars · 132 oz")).toBeVisible();
 
-  await dialog.getByRole("textbox", { name: "Pint quantity" }).fill("13");
-  await expect(dialog.getByText(/More Pint than on hand/)).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Record give-away" })).toBeEnabled();
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("13");
+  await expect(dialog.getByText(/Only 12 left at home after the other lines/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Record give-away" })).toBeDisabled();
+
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("6");
+  await dialog.getByRole("button", { name: "Record give-away" }).click();
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0].path).toBe("/api/v1/honey/give-away");
+  expect(posted[0].body).toMatchObject({
+    lines: [{ jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 6 }],
+  });
+});
+
+test("market day lists one row per varietal × size × lot with stock and posts each row's lot", async ({
+  page,
+}) => {
+  const posted: Posted[] = [];
+  await mockApp(page, posted);
+  await page.goto("/sales/market-day");
+
+  // Clover pints have stock; Wildflower (0 left) and quarts (none) never show.
+  const row = page.getByTestId("market-row").filter({ hasText: "Clover · Pint" });
+  await expect(row).toContainText("2026-CLOVER-01 · 12 left");
+  await expect(page.getByTestId("market-row")).toHaveCount(1);
+  await expect(page.getByText(/Wildflower/)).toHaveCount(0);
+  await expect(page.getByText(/Quart/)).toHaveCount(0);
+
+  await row.getByRole("button", { name: /Add one Clover · Pint/ }).click();
+  await row.getByRole("button", { name: "Add one more Clover · Pint" }).click();
+  await expect(page.getByTestId("market-total")).toHaveText(/2 items · $20.00/);
+
+  await page.getByRole("button", { name: "Complete sale" }).click();
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0].body).toMatchObject({
+    lines: [{ kind: "jar", jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 2, unitPrice: 10 }],
+  });
 });
 
 test("a product batch picks a lot by pounds left and says what it leaves", async ({

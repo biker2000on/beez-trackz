@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Reusable per-jar-size line editor shared by the jarring, sale, give-away,
- * and adjust dialogs: one row per active size with a quantity input and
- * optional price / on-hand / new-total columns.
+ * Per-jar-size line editor for the jarring and adjust dialogs: one row per
+ * active size with a quantity input and optional on-hand / new-total columns.
+ * Forms that take jars OFF a shelf (sale, give-away, transfer) use the
+ * lot-linked lines in features/commerce/lot-lines instead.
  */
 
 import Link from "next/link";

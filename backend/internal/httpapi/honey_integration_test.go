@@ -382,7 +382,11 @@ func seedLot(t *testing.T, server *Server, weightLbs float64) uuid.UUID {
 // as bulk on hand the harvest never produced. Sizing the lot to the seeded
 // harvests keeps "harvested minus jarred" true, which is what the overview
 // and production-plan tests read.
-func jarStock(t *testing.T, server *Server, jarSizeID uuid.UUID, quantity int) {
+//
+// It returns the lot the jars came off. Since every jar sale line must name the
+// harvest lot it draws from, callers that sell or give away these jars pass the
+// returned id as the line's harvestLotId.
+func jarStock(t *testing.T, server *Server, jarSizeID uuid.UUID, quantity int) uuid.UUID {
 	t.Helper()
 	var needed float64
 	if err := server.pool.QueryRow(context.Background(),
@@ -390,7 +394,9 @@ func jarStock(t *testing.T, server *Server, jarSizeID uuid.UUID, quantity int) {
 		jarSizeID, quantity).Scan(&needed); err != nil {
 		t.Fatalf("size fixture lot: %v", err)
 	}
-	jarStockFromLot(t, server, seedFixtureLot(t, server, needed), jarSizeID, quantity)
+	lotID := seedFixtureLot(t, server, needed)
+	jarStockFromLot(t, server, lotID, jarSizeID, quantity)
+	return lotID
 }
 
 // seedFixtureLot creates the lot a fixture draws its honey from, sized to the
@@ -437,7 +443,7 @@ func TestSaleRoundTripsMoneyAsCents(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 10)
+	lotID := jarStock(t, server, jarSizeID, 10)
 
 	// 12.345 must round half away from zero to 1235 cents, which a float
 	// multiplication would get wrong.
@@ -446,7 +452,7 @@ func TestSaleRoundTripsMoneyAsCents(t *testing.T) {
 			"date":           time.Now().Format("2006-01-02"),
 			"discountAmount": 0.10,
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 3, "unitPrice": 12.345},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 3, "unitPrice": 12.345},
 			},
 		}))
 	if response.Code != http.StatusCreated {
@@ -641,7 +647,9 @@ func TestHoneyInventoryClassifiesBackfilledHistoryByLedgerSemantics(t *testing.T
 		http.MethodPost, "/api/v1/honey/give-away", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{{
-				"jarSizeId": pintID.String(), "quantity": 1,
+				// A lot is required on every give-away line now; the
+				// legacy-unassigned jar is no longer reachable by sale.
+				"jarSizeId": pintID.String(), "harvestLotId": harvestLotID.String(), "quantity": 1,
 			}},
 		}))
 	if response.Code != http.StatusOK {
@@ -651,7 +659,8 @@ func TestHoneyInventoryClassifiesBackfilledHistoryByLedgerSemantics(t *testing.T
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{{
-				"jarSizeId": pintID.String(), "quantity": 4, "unitPrice": 12,
+				"jarSizeId": pintID.String(), "harvestLotId": harvestLotID.String(),
+				"quantity": 4, "unitPrice": 12,
 			}},
 		}))
 	if response.Code != http.StatusCreated {
@@ -783,13 +792,13 @@ func TestDeleteSaleCancelsAndRestoresStock(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 10)
+	lotID := jarStock(t, server, jarSizeID, 10)
 
 	_, saleBody := call(t, server.honeyRecordSale, adminRequest(
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 4, "unitPrice": 12},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 4, "unitPrice": 12},
 			},
 		}))
 	saleID, _ := saleBody["id"].(string)
@@ -837,13 +846,13 @@ func TestPatchSaleReachesCancelled(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 10)
+	lotID := jarStock(t, server, jarSizeID, 10)
 	_, saleBody := call(t, server.honeyRecordSale, adminRequest(
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":        time.Now().Format("2006-01-02"),
 			"orderStatus": "pending",
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 2, "unitPrice": 12},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 2, "unitPrice": 12},
 			},
 		}))
 	saleID, _ := saleBody["id"].(string)
@@ -959,19 +968,19 @@ func TestOverviewSeparatesCollectedAndInvoicedRevenue(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 20)
+	lotID := jarStock(t, server, jarSizeID, 20)
 
 	// One paid sale and one unpaid invoice.
 	call(t, server.honeyRecordSale, adminRequest(
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":  time.Now().Format("2006-01-02"),
-			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 2, "unitPrice": 10}},
+			"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 2, "unitPrice": 10}},
 		}))
 	call(t, server.honeyRecordSale, adminRequest(
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date":        time.Now().Format("2006-01-02"),
 			"orderStatus": "pending",
-			"lines":       []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 3, "unitPrice": 10}},
+			"lines":       []map[string]any{{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 3, "unitPrice": 10}},
 		}))
 
 	_, overview := call(t, server.honeyOverviewHandler,
@@ -1111,11 +1120,11 @@ func TestNegativeStockIsRejected(t *testing.T) {
 	})
 
 	t.Run("give-away beyond jars on hand", func(t *testing.T) {
-		jarStock(t, server, jarSizeID, 2)
+		lotID := jarStock(t, server, jarSizeID, 2)
 		response, body := call(t, server.honeyRecordGiveAway, adminRequest(
 			http.MethodPost, "/api/v1/honey/give-away", map[string]any{
 				"date":  time.Now().Format("2006-01-02"),
-				"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "quantity": 9}},
+				"lines": []map[string]any{{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 9}},
 			}))
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("giving away 9 of 2 jars = %d %v", response.Code, body)
@@ -1254,7 +1263,7 @@ func TestOfflineSaleReceiptIsTransactionalAndReplaysIdentically(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Offline sale pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 10)
+	lotID := jarStock(t, server, jarSizeID, 10)
 	mutationID := uuid.New().String()
 	handler := server.offlineMutations(http.HandlerFunc(server.honeyRecordSale))
 
@@ -1262,7 +1271,8 @@ func TestOfflineSaleReceiptIsTransactionalAndReplaysIdentically(t *testing.T) {
 		request := adminRequest(http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{{
-				"jarSizeId": jarSizeID.String(), "quantity": quantity, "unitPrice": 12,
+				"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(),
+				"quantity": quantity, "unitPrice": 12,
 			}},
 		})
 		request.Header.Set("X-Offline-Mutation-ID", mutationID)
@@ -1360,13 +1370,13 @@ func TestReverseJarringBlockedWhenJarsAreSold(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 10)
+	lotID := jarStock(t, server, jarSizeID, 10)
 
 	response, body := call(t, server.honeyRecordSale, adminRequest(
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 10, "unitPrice": 12},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 10, "unitPrice": 12},
 			},
 		}))
 	if response.Code != http.StatusCreated {
@@ -1992,6 +2002,9 @@ func TestOfflineReceiptSkipsTruncatedBody(t *testing.T) {
 
 type mixedSaleWorld struct {
 	apiaryID, hiveID, typeID, stockID, jarSizeID, feederID, deployID uuid.UUID
+	// jarLotID is the harvest lot the world's ten pints were jarred from; a jar
+	// line must name it.
+	jarLotID uuid.UUID
 }
 
 func seedMixedSaleWorld(t *testing.T, server *Server) mixedSaleWorld {
@@ -2026,7 +2039,7 @@ func seedMixedSaleWorld(t *testing.T, server *Server) mixedSaleWorld {
 	}
 	w.jarSizeID = seedJarSize(t, server, "Pint mixed", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, w.jarSizeID, 10)
+	w.jarLotID = jarStock(t, server, w.jarSizeID, 10)
 	return w
 }
 
@@ -2039,7 +2052,7 @@ func TestRecordMixedSaleAndCancelRestores(t *testing.T) {
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
-				{"kind": "jar", "jarSizeId": w.jarSizeID.String(), "quantity": 2, "unitPrice": 12},
+				{"kind": "jar", "jarSizeId": w.jarSizeID.String(), "harvestLotId": w.jarLotID.String(), "quantity": 2, "unitPrice": 12},
 				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
 				{"kind": "equipment", "equipmentStockId": w.stockID.String(), "quantity": 2, "unitPrice": 40},
 			},
@@ -2420,7 +2433,7 @@ func TestMixedSaleWithCatalogSKU(t *testing.T) {
 		http.MethodPost, "/api/v1/sales", map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
-				{"kind": "jar", "jarSizeId": w.jarSizeID.String(), "quantity": 1, "unitPrice": 12},
+				{"kind": "jar", "jarSizeId": w.jarSizeID.String(), "harvestLotId": w.jarLotID.String(), "quantity": 1, "unitPrice": 12},
 				{"kind": "creamed_honey", "productId": productID, "quantity": 2, "unitPrice": 14},
 				{"kind": "colony", "hiveId": w.hiveID.String(), "quantity": 1, "unitPrice": 250},
 			},

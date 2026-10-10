@@ -45,6 +45,10 @@ type Line struct {
 	// BottlingRunID is the recorded provenance of a jar line; when it is set
 	// the lot is a fact rather than a FIFO inference (review A3).
 	BottlingRunID *uuid.UUID
+	// HarvestLotID is the harvest lot (varietal) the jar line itself names.
+	// It is recorded provenance: the line reserves and draws from that lot's
+	// jars only, and a short lot is a refusal rather than a FIFO spill.
+	HarvestLotID *uuid.UUID
 	// SaleHarvestLotID is the harvest lot the sale itself names. When that
 	// lot holds jars at the sale's location it pins every jar line that has
 	// no bottling run; otherwise it is a story reference only.
@@ -64,12 +68,21 @@ func (l Line) Pinned(ctx context.Context, q app.Querier) (bool, error) {
 	if l.BottlingRunID != nil {
 		return true, nil
 	}
-	if l.SaleHarvestLotID == nil || l.Kind != KindJar {
+	if l.Kind != KindJar {
+		return false, nil
+	}
+	// The line's own harvest lot is checked first: LinkLines always stamps
+	// that lot's jars, so a match is provenance the operator recorded.
+	harvestLot := l.HarvestLotID
+	if harvestLot == nil {
+		harvestLot = l.SaleHarvestLotID
+	}
+	if harvestLot == nil {
 		return false, nil
 	}
 	var pinned bool
 	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM inventory_lots WHERE id=$1 AND source_type='harvest_lot' AND source_id=$2)`,
-		*l.LotID, *l.SaleHarvestLotID).Scan(&pinned); err != nil {
+		*l.LotID, *harvestLot).Scan(&pinned); err != nil {
 		return false, app.Wrap(app.KindInternal, "resolve pinned lot", err)
 	}
 	return pinned, nil
@@ -79,7 +92,7 @@ func (l Line) Pinned(ctx context.Context, q app.Querier) (bool, error) {
 func LoadLines(ctx context.Context, q app.Querier, saleID uuid.UUID) ([]Line, error) {
 	rows, err := q.Query(ctx, `
 		SELECT si.id, si.kind, si.quantity, si.jar_size_id, si.product_id, si.hive_id,
-		       si.item_id, si.inventory_lot_id, si.bottling_run_id, s.harvest_lot_id,
+		       si.item_id, si.inventory_lot_id, si.bottling_run_id, si.harvest_lot_id, s.harvest_lot_id,
 		       pc.net_grams
 		FROM sale_items si
 		JOIN sales s ON s.id = si.sale_id
@@ -95,7 +108,7 @@ func LoadLines(ctx context.Context, q app.Querier, saleID uuid.UUID) ([]Line, er
 		var line Line
 		if err := rows.Scan(&line.ID, &line.Kind, &line.Quantity, &line.JarSizeID,
 			&line.ProductID, &line.HiveID, &line.ItemID, &line.LotID,
-			&line.BottlingRunID, &line.SaleHarvestLotID, &line.NetGrams); err != nil {
+			&line.BottlingRunID, &line.HarvestLotID, &line.SaleHarvestLotID, &line.NetGrams); err != nil {
 			return nil, app.Wrap(app.KindInternal, "load sale lines", err)
 		}
 		lines = append(lines, line)
@@ -174,6 +187,16 @@ func (s *Service) reservationLot(
 		// Equipment is condition-tracked, not lot-tracked. Raw propolis
 		// reservations span the harvested lots and are held at item level.
 		return nil, nil
+	}
+	// A jar line that names its harvest lot reserves that lot's jars whether
+	// or not any stand at the location yet: the reservation check then refuses
+	// the shortfall on that lot instead of quietly guessing another varietal.
+	if line.HarvestLotID != nil && line.Kind == KindJar {
+		lotID, err := production.EnsureJarLotForHarvestLot(ctx, uow, itemID, *line.HarvestLotID)
+		if err != nil {
+			return nil, err
+		}
+		return &lotID, nil
 	}
 	if line.BottlingRunID != nil {
 		lotID, err := s.runLot(ctx, uow, itemID, *line.BottlingRunID)

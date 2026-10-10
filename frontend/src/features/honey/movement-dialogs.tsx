@@ -33,7 +33,14 @@ import {
 import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Textarea } from "@/components/ui/textarea";
 
+import { Skeleton } from "@/components/ui/skeleton";
 import { useHarvestLots } from "@/features/commerce/api";
+import {
+  LotLinesEditor,
+  shelfSkus,
+  useLotLines,
+} from "@/features/commerce/lot-lines";
+import { useStockInventory } from "@/features/commerce/stock-locations-api";
 import { useUnits } from "@/lib/use-units";
 
 import { parseHoneyWeight, parseNum, todayISO } from "./format";
@@ -583,6 +590,12 @@ export function BulkMovementDialog({
 }
 
 // --- Give Away (v) ---
+//
+// A gift is as traceable as a sale: every line names the size AND the
+// varietal / lot the jars come off, so "some quarts, whichever" cannot be
+// recorded. The lines, the per-lot availability and the over-cap errors are
+// the consignment send dialog's (features/commerce/lot-lines), measured at
+// home, without its "any lot" escape hatch.
 
 const giveAwaySchema = z.object({
   date: z.string().min(1, "Date is required"),
@@ -597,50 +610,41 @@ export function GiveAwayDialog({
   inventory,
 }: QuickDialogProps) {
   const mutation = useRecordGiveAway();
+  const stock = useStockInventory(open);
   const form = useForm<GiveAwayValues>({
     resolver: zodResolver(giveAwaySchema),
     defaultValues: { date: todayISO(), reason: "", notes: "" },
   });
-  const [lines, setLines] = React.useState<JarLineValue[]>([]);
+  const homeId = stock.data?.locations.find((row) => row.isHome)?.id;
+  const skus = shelfSkus(stock.data?.items, homeId, { jarsOnly: true });
+  const lines = useLotLines(skus, { where: "at home" });
+  const { reset: resetLines } = lines;
   const [lineError, setLineError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
     form.reset({ date: todayISO(), reason: "", notes: "" });
     // Each opening is a new transaction draft.
+    resetLines();
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLines(makeJarLines(inventory));
     setLineError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, inventory]);
+  }, [open, resetLines]);
 
-  const giveTotals = lines.reduce(
-    (acc, line) => {
-      const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
-      const qty = parseNum(line.quantity) ?? 0;
-      if (qty > 0) {
-        acc.jars += qty;
-        acc.oz += row?.honeyOz ? row.honeyOz * qty : 0;
-      }
-      return acc;
-    },
-    { jars: 0, oz: 0 },
+  const ozBySize = new Map(inventory.map((row) => [row.jarSizeId, row.honeyOz ?? 0]));
+  const giveOz = lines.filled.reduce(
+    (sum, { sku, quantity }) => sum + (ozBySize.get(sku.jarSizeId ?? "") ?? 0) * quantity,
+    0,
   );
-  // Sizes asked for beyond what is on hand. A warning, not a block: the API
-  // is the one that refuses, and it says so inline.
-  const giveOver = lines.flatMap((line) => {
-    const row = inventory.find((r) => r.jarSizeId === line.jarSizeId);
-    const qty = parseNum(line.quantity) ?? 0;
-    return row && qty > row.onHand ? [row.label] : [];
-  });
+  const giveJars = lines.totalUnits;
 
   const submitGiveAway = (resetAfter: boolean) => form.handleSubmit((values) => {
-    const jarLines = lines
-      .map((line) => ({
-        jarSizeId: line.jarSizeId,
-        quantity: parseNum(line.quantity) ?? 0,
-      }))
-      .filter((line) => line.quantity > 0);
+    if (lines.hasErrors) return;
+    const jarLines = lines.filled.map(({ line, sku, quantity }) => ({
+      jarSizeId: sku.jarSizeId ?? "",
+      harvestLotId: line.lot,
+      quantity,
+    }));
     if (jarLines.length === 0) {
       setLineError("Add at least one jar.");
       return;
@@ -657,7 +661,7 @@ export function GiveAwayDialog({
         onSuccess: () => {
           if (resetAfter) {
             form.reset({ date: todayISO(), reason: "", notes: "" });
-            setLines(makeJarLines(inventory));
+            resetLines();
           } else onOpenChange(false);
         },
       },
@@ -668,11 +672,12 @@ export function GiveAwayDialog({
   const { errors } = form.formState;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Give away jars</DialogTitle>
           <DialogDescription>
-            Record jars given away as gifts or samples.
+            Record jars given away as gifts or samples. Each line names the
+            varietal / lot the jars come off.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm
@@ -687,24 +692,26 @@ export function GiveAwayDialog({
             <FieldError message={errors.date?.message} />
           </div>
           <div className="grid gap-1.5">
-            <JarLinesEditor
-              rows={inventory}
-              value={lines}
-              onChange={setLines}
-              showOnHand
-              hideEmpty
-              warnOverdraw
-            />
-            <p className="text-xs text-muted-foreground" aria-live="polite">
-              {giveTotals.jars} {giveTotals.jars === 1 ? "jar" : "jars"} ·{" "}
-              {Math.round(giveTotals.oz * 10) / 10} oz
-            </p>
-            {giveOver.length > 0 && (
-              <p className="text-xs text-amber-700 dark:text-amber-400">
-                More {giveOver.join(", ")} than on hand — the ledger will refuse
-                this unless the counts are corrected first.
-              </p>
+            {stock.isPending ? (
+              <Skeleton className="h-20" />
+            ) : (
+              <LotLinesEditor
+                state={lines}
+                skus={skus}
+                where="at home"
+                idPrefix="give"
+                lineTestId="give-line"
+                emptyText="No jars with a lot are on hand at home."
+                sizeHint={(sku) => {
+                  const oz = ozBySize.get(sku.jarSizeId ?? "");
+                  return oz ? ` · ${oz} oz` : "";
+                }}
+              />
             )}
+            <p className="text-xs text-muted-foreground" aria-live="polite">
+              {giveJars} {giveJars === 1 ? "jar" : "jars"} ·{" "}
+              {Math.round(giveOz * 10) / 10} oz
+            </p>
             <FieldError message={lineError ?? undefined} />
           </div>
           <div className="grid gap-1.5">
@@ -732,7 +739,10 @@ export function GiveAwayDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button
+              type="submit"
+              disabled={mutation.isPending || giveJars === 0 || lines.hasErrors}
+            >
               {mutation.isPending ? "Saving…" : "Record give-away"}
             </Button>
           </DialogFooter>

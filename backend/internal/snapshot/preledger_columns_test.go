@@ -26,9 +26,12 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 12 {
-		t.Fatalf("migration files = %d, want 12 (00050-00061): %v", len(files), files)
+	// Every legacy migration from 00050 on is declared, in order. The count
+	// follows the files so a new migration only has to add its declaration.
+	if len(files) < 12 {
+		t.Fatalf("migration files = %d, want at least 12 (00050-00061): %v", len(files), files)
 	}
+	sort.Strings(files)
 
 	registered := map[string]bool{}
 	for _, domain := range RegisteredDomains() {
@@ -85,12 +88,16 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 	}
 
 	want := map[int64]portableMigrationShape{}
-	if len(PostArtifactMigrations) != 12 {
-		t.Fatalf("PostArtifactMigrations has %d entries, want one for each migration 00050-00061", len(PostArtifactMigrations))
+	if len(PostArtifactMigrations) != len(files) {
+		t.Fatalf("PostArtifactMigrations has %d entries, want one for each of the %d legacy migrations from 00050", len(PostArtifactMigrations), len(files))
 	}
 	for index, migration := range PostArtifactMigrations {
-		if migration.LegacyMigration != int64(50+index) || migration.Name == "" {
-			t.Fatalf("declaration %d is not the named migration %05d: %+v", index, 50+index, migration)
+		fileMigration, err := strconv.ParseInt(filepath.Base(files[index])[:5], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if migration.LegacyMigration != fileMigration || migration.Name == "" {
+			t.Fatalf("declaration %d is not the named migration %05d: %+v", index, fileMigration, migration)
 		}
 		shape := portableMigrationShape{Added: cloneColumns(migration.AddedColumns), Removed: cloneColumns(migration.RemovedColumns)}
 		for _, domain := range migration.NewDomains {
@@ -100,7 +107,7 @@ func TestPostArtifactMigrationsMatchLegacySQL(t *testing.T) {
 		want[migration.LegacyMigration] = shape
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("PostArtifactMigrations drifted from legacy SQL 00050-00061\n got: %#v\nwant: %#v", got, want)
+		t.Fatalf("PostArtifactMigrations drifted from legacy SQL 00050 onward\n got: %#v\nwant: %#v", got, want)
 	}
 }
 

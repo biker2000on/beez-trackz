@@ -109,8 +109,8 @@ func (s *Service) Apply(ctx context.Context, uow *app.UnitOfWork, input ApplyInp
 			needed[*line.ItemID] = 0
 		case line.ItemID != nil:
 			// sale_items.inventory_lot_id is only recorded provenance when the
-			// line names the bottling run it came off or the sale names its
-			// harvest lot: then the draw is pinned to that lot and a short
+			// line names its harvest lot or the bottling run it came off, or
+			// the sale names its harvest lot: then the draw is pinned to that lot and a short
 			// lot is a refusal. Otherwise it is the reservation's FIFO guess,
 			// and drawing from the lot it guessed does not turn the guess
 			// into a fact (review A3).

@@ -83,19 +83,32 @@ func (s *Service) RecordBulkDraw(
 	return recorded.Operation.ID, nil
 }
 
+// ErrGiveAwayNeedsLot is the refusal for a give-away line that names no lot.
+const ErrGiveAwayNeedsLot = "every jar line needs a varietal / lot: choose the harvest lot the jars come off"
+
 // JarLine is one jar size and a whole number of jars.
 type JarLine struct {
 	JarSizeID uuid.UUID
 	Quantity  int
+	// HarvestLotID pins a withdrawal to that harvest lot's jars (one
+	// varietal). A pinned lot that is short is refused, never topped up from
+	// another lot. Nil allocates oldest receipt first.
+	HarvestLotID *uuid.UUID
 }
 
 // RecordGiveAway takes jars off the home shelf with reason give_away
-// (spec 6.1). Lots are allocated oldest receipt first; where the jars cannot
-// be traced the allocation is marked inferred (review A3).
+// (spec 6.1). Every line names the harvest lot (varietal) the jars come off
+// and draws from that lot only, so a gift is as traceable as a sale: there is
+// no "some quarts, whichever" give-away.
 func (s *Service) RecordGiveAway(
 	ctx context.Context, uow *app.UnitOfWork, lines []JarLine, date time.Time,
 	notes *string, guards ...Guard,
 ) (uuid.UUID, error) {
+	for _, line := range lines {
+		if line.Quantity > 0 && (line.HarvestLotID == nil || *line.HarvestLotID == uuid.Nil) {
+			return uuid.Nil, app.Invalid("record give-away", "%s", ErrGiveAwayNeedsLot)
+		}
+	}
 	return s.recordJarWithdrawal(ctx, uow, "honey_give_away", "give_away",
 		ReasonGiveAway, lines, date, notes, guards)
 }
@@ -218,13 +231,29 @@ func (s *Service) recordJarWithdrawal(
 		if err != nil {
 			return uuid.Nil, err
 		}
-		allocations, method, err := AllocateFIFO(ctx, uow, "inventory_balances",
-			itemID, home, line.Quantity, nil)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if method == MethodFIFOInferred {
-			inferred = true
+		var allocations []Allocation
+		if line.HarvestLotID != nil && *line.HarvestLotID != uuid.Nil {
+			// The operator named the varietal: draw that lot's jars and refuse
+			// a short lot by its code rather than spill into another one.
+			lotID, err := EnsureJarLotForHarvestLot(ctx, uow, itemID, *line.HarvestLotID)
+			if err != nil {
+				return uuid.Nil, err
+			}
+			allocations, err = AllocateLot(ctx, uow, "inventory_balances",
+				itemID, home, line.Quantity, lotID)
+			if err != nil {
+				return uuid.Nil, err
+			}
+		} else {
+			var method string
+			allocations, method, err = AllocateFIFO(ctx, uow, "inventory_balances",
+				itemID, home, line.Quantity, nil)
+			if err != nil {
+				return uuid.Nil, err
+			}
+			if method == MethodFIFOInferred {
+				inferred = true
+			}
 		}
 		for _, allocation := range allocations {
 			lotID := allocation.LotID

@@ -14,6 +14,8 @@ const (
 	HarvestLotPulledOnTransform               = "harvest-lot-pulled-on-v1"
 	ConsignmentLocationPricesTransform        = "consignment-location-prices-v1"
 	CustomerCompanyNameTransform              = "customer-company-name-v1"
+	FolioBooksAndImportsTransform             = "folio-books-and-imports-v1"
+	SaleItemsHarvestLotTransform              = "sale-items-harvest-lot-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -152,6 +154,46 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		AddedColumns: map[string][]string{
 			"customers": {"company_name"},
 		},
+	},
+	{
+		LegacyMigration: 64, BaselineMigration: 11,
+		Name: FolioBooksAndImportsTransform,
+		// Folio book connections and the history import. Three new, empty
+		// domains: an older artifact restores with no book connection (the
+		// guarded restore creates the active one from the proven identity),
+		// no imported entries and no other income. Its singleton restores
+		// with no active book, no import accounts, no import start date and
+		// no import cursor; its external_sync rows restore with book_id NULL
+		// and are attached to the active book by the guarded restore.
+		AddedColumns: map[string][]string{
+			"gnucash_sync_settings": {
+				"active_book_id", "import_account_guids", "import_start_date",
+				"import_cursor", "last_import_at",
+			},
+			"external_sync": {"book_id"},
+		},
+		NewDomains: emptyNewDomains("gnucash_books", "other_income", "folio_imports"),
+		AddedReferenceChecks: []string{
+			"gnucash_sync_settings_active_book_id_fkey",
+			"external_sync_book_id_fkey",
+			"other_income_sale_id_fkey",
+			"other_income_created_by_fkey",
+			"other_income_deleted_by_fkey",
+			"folio_imports_book_id_fkey",
+			"folio_imports_expense_id_fkey",
+			"folio_imports_income_id_fkey",
+		},
+	},
+	{
+		LegacyMigration: 65, BaselineMigration: 12,
+		Name: SaleItemsHarvestLotTransform,
+		// The harvest lot a jar line sells, nullable. An older artifact's
+		// sale lines restore with harvest_lot_id NULL; their lot provenance is
+		// still whatever the ledger movements recorded.
+		AddedColumns: map[string][]string{
+			"sale_items": {"harvest_lot_id"},
+		},
+		AddedReferenceChecks: []string{"sale_items_harvest_lot_id_fkey"},
 	},
 }
 

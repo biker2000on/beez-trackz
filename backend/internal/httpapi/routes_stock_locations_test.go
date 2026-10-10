@@ -382,7 +382,7 @@ func TestHomeStockValidationIgnoresConsignedJars(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 24)
+	lotID := jarStock(t, server, jarSizeID, 24)
 	shopID := seedShop(t, server, "Bike shop", 30)
 	transfer(t, server, shopID, jarSizeID, 20)
 
@@ -392,7 +392,7 @@ func TestHomeStockValidationIgnoresConsignedJars(t *testing.T) {
 			"date":    time.Now().Format("2006-01-02"),
 			"channel": "farmers_market",
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 5, "unitPrice": 12.00},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 5, "unitPrice": 12.00},
 			},
 		}))
 	if response.Code != http.StatusBadRequest {
@@ -405,7 +405,7 @@ func TestHomeStockValidationIgnoresConsignedJars(t *testing.T) {
 			"date":    time.Now().Format("2006-01-02"),
 			"channel": "farmers_market",
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 4, "unitPrice": 12.00},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 4, "unitPrice": 12.00},
 			},
 		}))
 	if response.Code != http.StatusCreated {
@@ -990,7 +990,7 @@ func TestLocationSaleDelegatesToTheGenericEndpoint(t *testing.T) {
 	server := honeyTestServer(t)
 	jarSizeID := seedJarSize(t, server, "Pint", 16, 1200)
 	seedHarvest(t, server, 100)
-	jarStock(t, server, jarSizeID, 10)
+	lotID := jarStock(t, server, jarSizeID, 10)
 	standID := seedStand(t, server, "Second stand")
 	transfer(t, server, standID, jarSizeID, 6)
 
@@ -1000,7 +1000,7 @@ func TestLocationSaleDelegatesToTheGenericEndpoint(t *testing.T) {
 			"date":    time.Now().Format("2006-01-02"),
 			"channel": "farm_stand",
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 2, "unitPrice": 12.00},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 2, "unitPrice": 12.00},
 			},
 		}, "id", standID.String()))
 	if response.Code != http.StatusCreated {
@@ -1037,7 +1037,7 @@ func TestLocationSaleDelegatesToTheGenericEndpoint(t *testing.T) {
 		map[string]any{
 			"date": time.Now().Format("2006-01-02"),
 			"lines": []map[string]any{
-				{"jarSizeId": jarSizeID.String(), "quantity": 1, "unitPrice": 12.00},
+				{"jarSizeId": jarSizeID.String(), "harvestLotId": lotID.String(), "quantity": 1, "unitPrice": 12.00},
 			},
 		}, "id", shopID.String()))
 	if refused.Code != http.StatusConflict {

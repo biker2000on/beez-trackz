@@ -132,7 +132,6 @@ func TestSaleRefusedWhileLotLocked(t *testing.T) {
 		VALUES ($1,'2026-08-24',80,0,80)`, hiveID); err != nil {
 		t.Fatalf("seed bulk harvest: %v", err)
 	}
-	jarStock(t, server, jarSizeID, 4)
 
 	created, createdBody := call(t, server.harvestLotCreate, adminRequest(
 		http.MethodPost, "/harvest-lots", map[string]any{
@@ -145,6 +144,11 @@ func TestSaleRefusedWhileLotLocked(t *testing.T) {
 		t.Fatalf("create lot = %d %v", created.Code, createdBody)
 	}
 	lotID, _ := createdBody["id"].(string)
+	// The sale-level lot is where a jar line draws its jars from, so the jars
+	// have to be bottled off the locked lot itself (dated after the lockout, so
+	// the bottling is allowed). A fixture lot would leave the lot short and the
+	// sale refused as a shortage rather than exercising the lockout.
+	jarStockFromLot(t, server, uuid.MustParse(lotID), jarSizeID, 4)
 
 	blocked, body := call(t, server.honeyRecordSale, adminRequest(
 		http.MethodPost, "/honey/sales", map[string]any{

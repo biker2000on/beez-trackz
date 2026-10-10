@@ -89,6 +89,17 @@ async function mockApp(
               unitPrice: null,
               total: 6,
               byLocation: { home: 6 },
+              // Market day lists varietal × size × lot rows, so the pints
+              // need a lot to appear at all.
+              lots: [
+                {
+                  harvestLotId: "lot-sourwood",
+                  lotCode: "2026-SOURWOOD-01",
+                  varietalName: "Sourwood",
+                  total: 6,
+                  byLocation: { home: 6 },
+                },
+              ],
             },
           ],
         },
@@ -124,10 +135,11 @@ test("market day refuses a paid sale when the jar has no price", async ({
 }) => {
   await mockApp(page, { bulkOnHandLbs: 0, totalHarvestedLbs: 0 });
   await page.goto("/sales/market-day");
-  await expect(page.getByText("No price")).toBeVisible();
-  await page.getByRole("button", { name: /Pint/ }).first().click();
+  // One row per varietal × size × lot; an unpriced size says so on its row.
+  await expect(page.getByText(/2026-SOURWOOD-01 · 6 left · No price/)).toBeVisible();
+  await page.getByRole("button", { name: /Add one Sourwood · Pint/ }).click();
   await expect(
-    page.getByText(/Set a default price on Pint/),
+    page.getByText(/Set a price on Sourwood · Pint/),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Complete sale" })).toBeDisabled();
 });

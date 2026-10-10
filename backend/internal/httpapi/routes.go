@@ -36,6 +36,7 @@ func (s *Server) mountDomains(r chi.Router) {
 	// "sync now", and the reconciliation queue.
 	s.mountGnuCashSync(r)
 	s.mountHoney(r)
+	s.mountHoneyActivity(r)
 	s.mountHarvestSessions(r)
 	s.mountJarSizes(r)
 	s.mountEquipment(r)

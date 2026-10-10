@@ -53,6 +53,9 @@ var Domains = []Domain{
 	domain("yard_labor_sessions"), domain("ai_recommendations"),
 	domain("offline_mutation_receipts"), domain("external_sync"),
 	{Name: "gnucash_sync_settings", Table: "gnucash_sync_settings", ExcludedColumns: []string{"api_token", "restore_state"}, RenameColumns: map[string]string{"last_synced_at": "last_attempt_at"}},
+	// Folio book connections (00064/00011). No credential lives here: the
+	// token is only ever on the singleton above, and only for the active book.
+	domain("gnucash_books"), domain("other_income"), domain("folio_imports"),
 }
 
 // LedgerDomains are additive in format v1. Export chooses domains by actual

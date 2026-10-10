@@ -83,7 +83,7 @@ func TestStockLocationReadersServeABaselineDatabase(t *testing.T) {
 		t.Fatalf("detail id = %s, want canonical %s", detailBody.Location.ID, mirroredID)
 	}
 
-	jarID := baselineJarStock(t, server, userID, 12)
+	jarID, jarLotID := baselineJarStock(t, server, userID, 12)
 	baselineTransfer(t, server, userID, standID, jarID, 4)
 	baselineTransfer(t, server, userID, shopID, jarID, 4)
 
@@ -93,7 +93,7 @@ func TestStockLocationReadersServeABaselineDatabase(t *testing.T) {
 		baselineRequest(userID, http.MethodPost, "/stock-locations/"+standID.String()+"/sales", map[string]any{
 			"date": time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02"), "channel": "farm_stand",
 			"orderStatus": "draft",
-			"lines":       []map[string]any{{"jarSizeId": jarID.String(), "quantity": 2, "unitPrice": 12.00}},
+			"lines":       []map[string]any{{"jarSizeId": jarID.String(), "harvestLotId": jarLotID.String(), "quantity": 2, "unitPrice": 12.00}},
 		}, "id", standID.String()))
 	baselineOK(t, "record location sale", response)
 	if body["id"] == nil {
@@ -183,7 +183,9 @@ func baselineCreateLocation(t *testing.T, server *Server, userID uuid.UUID, payl
 	return id
 }
 
-func baselineJarStock(t *testing.T, server *Server, userID uuid.UUID, quantity int) uuid.UUID {
+// baselineJarStock jars quantity pints from a fresh lot and returns the jar size
+// and the lot (a sale's jar line must name the lot it draws from).
+func baselineJarStock(t *testing.T, server *Server, userID uuid.UUID, quantity int) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
 	var jarID, lotID uuid.UUID
@@ -215,7 +217,7 @@ func baselineJarStock(t *testing.T, server *Server, userID uuid.UUID, quantity i
 	if body["success"] != true {
 		t.Fatalf("jarring response = %v", body)
 	}
-	return jarID
+	return jarID, lotID
 }
 
 func baselineTransfer(t *testing.T, server *Server, userID, locationID, jarID uuid.UUID, quantity int) {

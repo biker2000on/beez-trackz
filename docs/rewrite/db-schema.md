@@ -112,6 +112,29 @@ weight, and optional globally unique jar serials.
 ### expenses
 Expense date, constrained category, description, amount, optional apiary,
 hive, harvest lot, season, vendor, quantity/unit, notes, and created_at.
+The category `uncategorized` (migration 00064 / baseline 00011) is held by
+expenses the Folio history import created until the operator assigns one; such
+an expense has a `folio_imports` row and is never pushed back to Folio.
+
+### Folio book connections, imports and other income (00064 / baseline 00011)
+`gnucash_books`: one row per Folio book Atlas has been connected to (label,
+base_url, book_guid/book_name/root_currency from the status endpoint,
+connected_at, retired_at; at most one unretired). No credential: the token
+lives only on `gnucash_sync_settings`, which is the active connection and
+points at its row through `active_book_id`, alongside the import settings
+`import_account_guids` jsonb, `import_start_date`, `import_cursor` and
+`last_import_at`. `external_sync.book_id` pins a pushed entity to the book
+it was pushed to (NULL = never pushed; follows the active book).
+`other_income`: money in that is not an Atlas sale (income_date, category
+CHECK uncategorized | sales_deposit | honey_sales | colony_sales |
+product_sales | pollination | services | grant | refund | other, description,
+amount_cents, optional `sale_id` naming the Atlas sale a deposit is, notes,
+soft delete). `folio_imports`: one row per Folio transaction imported from
+one book (UNIQUE book_id + transaction_guid), pointing at exactly one expense
+or other_income row (matching `direction`), with the import accounts it
+posts to, the remote post date / enterDate / description / amount last
+applied, and a conflict `state` (remote_changed | remote_deleted |
+unrepresentable) with `message` and the pending remote version.
 
 ### customers and wholesale pricing
 Customers store an optional company name (`company_name`, nullable,

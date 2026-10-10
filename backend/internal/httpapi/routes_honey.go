@@ -408,19 +408,67 @@ func (s *Server) honeyRecordBulkMovement(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
-// POST /honey/give-away {date, lines, reason?, notes?}
+// honeyGiveAwayLineReq is one give-away line: a jar size, a count, and the
+// harvest lot (varietal) the jars come off. The lot is required.
+type honeyGiveAwayLineReq struct {
+	JarSizeID    string `json:"jarSizeId"`
+	HarvestLotID string `json:"harvestLotId"`
+	Quantity     int    `json:"quantity"`
+}
+
+type honeyGiveAwayLine struct {
+	JarSizeID    uuid.UUID
+	HarvestLotID uuid.UUID
+	Quantity     int
+}
+
+// honeyValidGiveAwayLines parses give-away lines, skipping blank ones, and
+// merges repeats of the same (size, lot) so the per-lot check sees the whole
+// draw. A line with a quantity and no lot is refused: a give-away says whose
+// honey went out, like a sale does.
+func honeyValidGiveAwayLines(lines []honeyGiveAwayLineReq) ([]honeyGiveAwayLine, error) {
+	type key struct{ size, lot uuid.UUID }
+	index := map[key]int{}
+	out := make([]honeyGiveAwayLine, 0, len(lines))
+	for _, l := range lines {
+		if l.JarSizeID == "" || l.Quantity <= 0 {
+			continue
+		}
+		size, err := uuid.Parse(l.JarSizeID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid jarSizeId")
+		}
+		if strings.TrimSpace(l.HarvestLotID) == "" {
+			return nil, errors.New(production.ErrGiveAwayNeedsLot)
+		}
+		lot, err := uuid.Parse(strings.TrimSpace(l.HarvestLotID))
+		if err != nil {
+			return nil, fmt.Errorf("invalid harvestLotId")
+		}
+		k := key{size, lot}
+		if i, ok := index[k]; ok {
+			out[i].Quantity += l.Quantity
+			continue
+		}
+		index[k] = len(out)
+		out = append(out, honeyGiveAwayLine{JarSizeID: size, HarvestLotID: lot, Quantity: l.Quantity})
+	}
+	return out, nil
+}
+
+// POST /honey/give-away {date, lines:[{jarSizeId, harvestLotId, quantity}], reason?, notes?}
 func (s *Server) honeyRecordGiveAway(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date   string            `json:"date"`
-		Lines  []honeyJarLineReq `json:"lines"`
-		Reason *string           `json:"reason"`
-		Notes  *string           `json:"notes"`
+		Date   string                 `json:"date"`
+		Lines  []honeyGiveAwayLineReq `json:"lines"`
+		Reason *string                `json:"reason"`
+		Notes  *string                `json:"notes"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	lines, err := honeyValidJarLines(req.Lines)
+	lines, err := honeyValidGiveAwayLines(req.Lines)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -443,7 +491,8 @@ func (s *Server) honeyRecordGiveAway(w http.ResponseWriter, r *http.Request) {
 	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
 		// Giving away jars you do not have is a stock error, not a data-entry
 		// preference. The availability read is the ledger's; the refusal is
-		// phrased the way the operator has always seen it.
+		// phrased the way the operator has always seen it, per size and then
+		// per lot, because each line draws from its named lot only.
 		jarSizeIDs := make([]uuid.UUID, 0, len(lines))
 		needed := make(map[uuid.UUID]int, len(lines))
 		for _, line := range lines {
@@ -462,8 +511,29 @@ func (s *Server) honeyRecordGiveAway(w http.ResponseWriter, r *http.Request) {
 		}
 		jarLines := make([]production.JarLine, 0, len(lines))
 		for _, line := range lines {
+			var code string
+			var have int
+			if err := uow.QueryRow(ctx, `
+				SELECT hl.lot_code,
+				       COALESCE((SELECT SUM(a.available) FROM inventory_available a
+				                 JOIN inventory_locations l ON l.id = a.location_id
+				                 JOIN inventory_lots il ON il.id = a.lot_id
+				                 JOIN jar_sizes js ON js.item_id = a.item_id
+				                 WHERE js.id = $2 AND l.is_home
+				                   AND il.source_type = 'harvest_lot' AND il.source_id = hl.id), 0)::int
+				FROM harvest_lots hl WHERE hl.id = $1`,
+				line.HarvestLotID, line.JarSizeID).Scan(&code, &have); errors.Is(err, pgx.ErrNoRows) {
+				return equipBadRequest("invalid harvestLotId")
+			} else if err != nil {
+				return err
+			}
+			if line.Quantity > have {
+				return equipBadRequest("Not enough %s of %s: need %d, have %d",
+					labels[line.JarSizeID], code, line.Quantity, have)
+			}
+			lot := line.HarvestLotID
 			jarLines = append(jarLines, production.JarLine{
-				JarSizeID: line.JarSizeID, Quantity: line.Quantity,
+				JarSizeID: line.JarSizeID, Quantity: line.Quantity, HarvestLotID: &lot,
 			})
 		}
 		notes := honeyTrimPtr(req.Notes)
@@ -803,6 +873,10 @@ type honeySaleLineInput struct {
 	// through the run to a harvest lot. Optional: pre-00038 sales and clients
 	// that do not track provenance keep working.
 	BottlingRunID string `json:"bottlingRunId"`
+	// HarvestLotID is the harvest lot (varietal) a jar line sells. A jar line
+	// must name one, directly, through its bottling run, or through the
+	// sale-level harvestLotId; the line draws from that lot only.
+	HarvestLotID string `json:"harvestLotId"`
 }
 
 type honeySaleLine struct {
@@ -820,6 +894,8 @@ type honeySaleLine struct {
 	UnitPrice        money
 	// BottlingRunID is uuid.Nil when the jar line names no run.
 	BottlingRunID uuid.UUID
+	// HarvestLotID is uuid.Nil when the jar line names no lot of its own.
+	HarvestLotID uuid.UUID
 }
 
 // honeySalePriceRequired rejects a $0 paid sale. Gift is the only channel
@@ -842,7 +918,7 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 	// Jar lines merge per (size, bottling run): two lines of the same size off
 	// two different runs are two different lots and must stay separate rows,
 	// but a client that repeats the same size and run still collapses.
-	type jarKey struct{ size, run uuid.UUID }
+	type jarKey struct{ size, run, lot uuid.UUID }
 	byJarSize := make(map[jarKey]int, len(inputs))
 	byHive := make(map[uuid.UUID]int, len(inputs))
 	byStock := make(map[uuid.UUID]int, len(inputs))
@@ -877,6 +953,9 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 		if kind != saleKindJar && strings.TrimSpace(input.BottlingRunID) != "" {
 			return nil, errors.New("bottlingRunId is only valid on jar lines")
 		}
+		if kind != saleKindJar && strings.TrimSpace(input.HarvestLotID) != "" {
+			return nil, errors.New("harvestLotId is only valid on jar lines")
+		}
 		switch kind {
 		case saleKindJar:
 			if input.JarSizeID == "" {
@@ -893,7 +972,14 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 					return nil, errors.New("invalid bottlingRunId")
 				}
 			}
-			key := jarKey{size: id, run: runID}
+			var lotID uuid.UUID
+			if trimmed := strings.TrimSpace(input.HarvestLotID); trimmed != "" {
+				lotID, err = uuid.Parse(trimmed)
+				if err != nil {
+					return nil, errors.New("invalid harvestLotId")
+				}
+			}
+			key := jarKey{size: id, run: runID, lot: lotID}
 			if index, ok := byJarSize[key]; ok {
 				if lines[index].UnitPrice != input.UnitPrice {
 					return nil, errors.New("duplicate jarSizeId entries must use the same unitPrice")
@@ -904,7 +990,7 @@ func normalizeHoneySaleLines(inputs []honeySaleLineInput) ([]honeySaleLine, erro
 			byJarSize[key] = len(lines)
 			lines = append(lines, honeySaleLine{
 				Kind: saleKindJar, JarSizeID: id, Quantity: input.Quantity,
-				UnitPrice: input.UnitPrice, BottlingRunID: runID,
+				UnitPrice: input.UnitPrice, BottlingRunID: runID, HarvestLotID: lotID,
 			})
 		case saleKindColony:
 			id, err := uuid.Parse(input.HiveID)
@@ -1057,7 +1143,7 @@ func (s *Server) honeyRecordSale(w http.ResponseWriter, r *http.Request) {
 	}
 	commandLines := make([]sales.SaleLine, 0, len(lines))
 	for _, line := range lines {
-		commandLines = append(commandLines, sales.SaleLine{Kind: line.Kind, JarSizeID: line.JarSizeID, HiveID: line.HiveID, ItemID: line.ItemID, EquipmentStockID: line.EquipmentStockID, ProductID: line.ProductID, BottlingRunID: line.BottlingRunID, Quantity: line.Quantity, UnitPriceCents: int64(line.UnitPrice)})
+		commandLines = append(commandLines, sales.SaleLine{Kind: line.Kind, JarSizeID: line.JarSizeID, HiveID: line.HiveID, ItemID: line.ItemID, EquipmentStockID: line.EquipmentStockID, ProductID: line.ProductID, BottlingRunID: line.BottlingRunID, HarvestLotID: line.HarvestLotID, Quantity: line.Quantity, UnitPriceCents: int64(line.UnitPrice)})
 	}
 	var paid, tax *int64
 	if req.AmountPaid != nil {

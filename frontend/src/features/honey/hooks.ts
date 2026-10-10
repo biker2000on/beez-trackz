@@ -273,9 +273,14 @@ export function useUpdateVarietal() {
   });
 }
 
+export interface GiveAwayLineBody extends JarLineBody {
+  /** The harvest lot (varietal) the jars come off. Required. */
+  harvestLotId: string;
+}
+
 export interface GiveAwayBody {
   date: string;
-  lines: JarLineBody[];
+  lines: GiveAwayLineBody[];
   reason?: string;
   notes?: string;
 }

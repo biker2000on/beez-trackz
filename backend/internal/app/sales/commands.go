@@ -32,6 +32,10 @@ func (m Money) MarshalJSON() ([]byte, error) {
 type SaleLine struct {
 	Kind                                                                  string
 	JarSizeID, HiveID, ItemID, EquipmentStockID, ProductID, BottlingRunID uuid.UUID
+	// HarvestLotID is the harvest lot (varietal) a jar line sells. Every jar
+	// line names one, directly or through its bottling run or the sale-level
+	// harvest lot; the line then draws from that lot only.
+	HarvestLotID uuid.UUID
 	Quantity                                                              int
 	UnitPriceCents                                                        int64
 }
@@ -163,6 +167,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		price                     int64
 		count                     *int
 		lot                       *uuid.UUID
+		harvest                   *uuid.UUID
 		lotCode                   string
 	}
 	preparedLines := []prepared{}
@@ -206,7 +211,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 			if err != nil {
 				return out, err
 			}
-			p.lot, p.lotCode = &lotID, production.LotCode(ctx, uow, lotID)
+			p.lot, p.harvest, p.lotCode = &lotID, line.HarvestLotID, production.LotCode(ctx, uow, lotID)
 			p.label += " (lot " + p.lotCode + ")"
 			key += "/" + lotID.String()
 		}
@@ -274,7 +279,7 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 				continue
 			}
 			var itemID uuid.UUID
-			if err := uow.QueryRow(ctx, `INSERT INTO sale_items(sale_id,kind,jar_size_id,product_id,quantity,unit_price_cents,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, saleID, p.kind, p.jar, p.product, p.sold, p.price, actorValue(uow)).Scan(&itemID); err != nil {
+			if err := uow.QueryRow(ctx, `INSERT INTO sale_items(sale_id,kind,jar_size_id,product_id,quantity,unit_price_cents,harvest_lot_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, saleID, p.kind, p.jar, p.product, p.sold, p.price, p.harvest, actorValue(uow)).Scan(&itemID); err != nil {
 				return out, dbError(op, err)
 			}
 			if p.lot != nil {
@@ -381,6 +386,10 @@ func RecordSale(ctx context.Context, uow *app.UnitOfWork, in RecordSaleInput) (R
 			}
 			line.ItemID = item.ItemID
 		}
+		if line.Kind != KindJar && line.HarvestLotID != uuid.Nil {
+			return out, app.Invalid(op, "harvestLotId is only valid on jar lines")
+		}
+		var runLot uuid.UUID
 		if line.BottlingRunID != uuid.Nil {
 			var lotID uuid.UUID
 			var size *uuid.UUID
@@ -405,6 +414,10 @@ func RecordSale(ctx context.Context, uow *app.UnitOfWork, in RecordSaleInput) (R
 				}
 				return out, app.Conflict(op, "Lot %s: %s", code, refusal)
 			}
+			runLot = lotID
+		}
+		if err := resolveJarLineLot(ctx, uow, op, line, runLot, in.HarvestLotID, in.Date); err != nil {
+			return out, err
 		}
 	}
 	if in.HarvestLotID != nil {
@@ -483,10 +496,13 @@ func RecordSale(ctx context.Context, uow *app.UnitOfWork, in RecordSaleInput) (R
 		return out, dbError(op, err)
 	}
 	for _, line := range in.Lines {
-		var jar, hive, item, product, run *uuid.UUID
+		var jar, hive, item, product, run, harvestLot *uuid.UUID
 		switch {
 		case line.Kind == KindJar:
 			jar = ptr(line.JarSizeID)
+			if line.HarvestLotID != uuid.Nil {
+				harvestLot = ptr(line.HarvestLotID)
+			}
 			if line.BottlingRunID != uuid.Nil {
 				run = ptr(line.BottlingRunID)
 			}
@@ -497,7 +513,7 @@ func RecordSale(ctx context.Context, uow *app.UnitOfWork, in RecordSaleInput) (R
 		default:
 			product = ptr(line.ProductID)
 		}
-		if _, err := uow.Exec(ctx, `INSERT INTO sale_items(sale_id,kind,jar_size_id,hive_id,item_id,product_id,quantity,unit_price_cents,bottling_run_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, in.SaleID, line.Kind, jar, hive, item, product, line.Quantity, line.UnitPriceCents, run, actorValue(uow)); err != nil {
+		if _, err := uow.Exec(ctx, `INSERT INTO sale_items(sale_id,kind,jar_size_id,hive_id,item_id,product_id,quantity,unit_price_cents,bottling_run_id,harvest_lot_id,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, in.SaleID, line.Kind, jar, hive, item, product, line.Quantity, line.UnitPriceCents, run, harvestLot, actorValue(uow)); err != nil {
 			return out, dbError(op, err)
 		}
 	}
@@ -741,7 +757,7 @@ func revertPhysical(ctx context.Context, uow *app.UnitOfWork, id uuid.UUID) erro
 	return dbError("clear sale costs", err)
 }
 func loadCommandLines(ctx context.Context, uow *app.UnitOfWork, id uuid.UUID) ([]SaleLine, error) {
-	rows, err := uow.Query(ctx, `SELECT kind,jar_size_id,hive_id,item_id,product_id,quantity,unit_price_cents,bottling_run_id FROM sale_items WHERE sale_id=$1 ORDER BY id`, id)
+	rows, err := uow.Query(ctx, `SELECT kind,jar_size_id,hive_id,item_id,product_id,quantity,unit_price_cents,bottling_run_id,harvest_lot_id FROM sale_items WHERE sale_id=$1 ORDER BY id`, id)
 	if err != nil {
 		return nil, dbError("load sale lines", err)
 	}
@@ -749,8 +765,8 @@ func loadCommandLines(ctx context.Context, uow *app.UnitOfWork, id uuid.UUID) ([
 	out := []SaleLine{}
 	for rows.Next() {
 		var x SaleLine
-		var jar, hive, item, product, run *uuid.UUID
-		if err := rows.Scan(&x.Kind, &jar, &hive, &item, &product, &x.Quantity, &x.UnitPriceCents, &run); err != nil {
+		var jar, hive, item, product, run, harvestLot *uuid.UUID
+		if err := rows.Scan(&x.Kind, &jar, &hive, &item, &product, &x.Quantity, &x.UnitPriceCents, &run, &harvestLot); err != nil {
 			return nil, dbError("load sale lines", err)
 		}
 		if jar != nil {
@@ -767,6 +783,9 @@ func loadCommandLines(ctx context.Context, uow *app.UnitOfWork, id uuid.UUID) ([
 		}
 		if run != nil {
 			x.BottlingRunID = *run
+		}
+		if harvestLot != nil {
+			x.HarvestLotID = *harvestLot
 		}
 		out = append(out, x)
 	}

@@ -380,7 +380,7 @@ func TestJarSaleLineCarriesItsBottlingRunAndLot(t *testing.T) {
 func TestJarSaleFromLockedLotIsRefusedWithoutASaleLevelLot(t *testing.T) {
 	server := honeyTestServer(t)
 	_, hiveID := seedLockoutHive(t, server)
-	_, runID, jarSizeID := seedTracedRun(t, server, hiveID, "TRACE-LOCK")
+	lotID, runID, jarSizeID := seedTracedRun(t, server, hiveID, "TRACE-LOCK")
 
 	// The treatment lands after the jars are bottled — a mite treatment
 	// recorded late, which is exactly when the honey is already in jars.
@@ -395,13 +395,26 @@ func TestJarSaleFromLockedLotIsRefusedWithoutASaleLevelLot(t *testing.T) {
 			}))
 	}
 
-	// Untraced, the sale still goes through: nothing links it to a lot. That
-	// is the residual hole the run reference is opt-in against.
+	// Untraced, the sale is refused outright: every jar line must name a lot
+	// (its own, its run's, or the sale's), so the old "untraced goes through"
+	// hole no longer exists.
 	response, decoded := sale(map[string]any{
 		"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1, "unitPrice": 12,
 	})
-	if response.Code != http.StatusCreated {
-		t.Fatalf("untraced sale = %d %v", response.Code, decoded)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("untraced sale = %d %v, want 400", response.Code, decoded)
+	}
+	if message, _ := decoded["error"].(string); !strings.Contains(message, "varietal / lot") {
+		t.Fatalf("untraced refusal %q does not ask for a lot", message)
+	}
+
+	// Naming the locked lot directly on the line is checked the same way.
+	response, decoded = sale(map[string]any{
+		"kind": "jar", "jarSizeId": jarSizeID.String(), "quantity": 1, "unitPrice": 12,
+		"harvestLotId": lotID.String(),
+	})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("line-lot sale from a locked lot = %d %v, want 409", response.Code, decoded)
 	}
 
 	response, decoded = sale(map[string]any{

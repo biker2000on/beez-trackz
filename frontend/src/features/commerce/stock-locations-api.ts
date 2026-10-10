@@ -475,6 +475,8 @@ export function useStockLocationSale(locationId: string) {
       notes?: string;
       lines: {
         jarSizeId?: string;
+        /** The harvest lot (varietal) a jar line sells; jar lines need one. */
+        harvestLotId?: string;
         productId?: string;
         quantity: number;
         unitPrice: number;
