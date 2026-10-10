@@ -194,6 +194,16 @@ function parseDir(raw: string | null, sort: ActivitySortKey): SortDir {
   return sort === DEFAULT_SORT ? DEFAULT_DIR : "asc";
 }
 
+/** Two query strings with the same parameters, in any order. */
+function sameQuery(a: string, b: string): boolean {
+  const normalize = (query: string) =>
+    [...new URLSearchParams(query).entries()]
+      .map(([key, value]) => `${key}=${value}`)
+      .sort()
+      .join("&");
+  return normalize(a) === normalize(b);
+}
+
 interface LedgerParams {
   types: string[];
   items: string[];
@@ -363,32 +373,63 @@ export function ActivityTab() {
     enabled: Boolean(hasNextPage) && !isFetchingNextPage && !isFetchNextPageError,
   });
 
+  // Every URL update merges onto the newest query — including one written a
+  // moment ago whose navigation has not landed yet. `router.replace` is
+  // asynchronous, so building from the rendered `searchParams` lost a filter
+  // picked just before typing a search (the debounced search wrote over it).
+  // `pendingQueryRef` holds the last query we wrote until the URL catches up;
+  // `renderedQueryRef` is the URL as last rendered (back/forward included).
+  const renderedQuery = searchParams.toString();
+  const renderedQueryRef = React.useRef(renderedQuery);
+  const pendingQueryRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    renderedQueryRef.current = renderedQuery;
+    if (
+      pendingQueryRef.current !== null &&
+      sameQuery(pendingQueryRef.current, renderedQuery)
+    ) {
+      pendingQueryRef.current = null;
+    }
+  }, [renderedQuery]);
+
   const setParams = React.useCallback(
     (next: Partial<LedgerParams>) => {
-      const merged = { ...params, ...next };
-      const query = new URLSearchParams(searchParams.toString());
+      const query = new URLSearchParams(
+        pendingQueryRef.current ?? renderedQueryRef.current,
+      );
+      // Only the keys this update names change; everything else is kept.
       for (const [key, name] of Object.entries(LIST_PARAMS)) {
-        const values = merged[key as keyof typeof LIST_PARAMS];
+        const values = next[key as keyof typeof LIST_PARAMS];
+        if (values === undefined) continue;
         if (values.length > 0) query.set(name, values.join(","));
         else query.delete(name);
       }
-      const nextQ = merged.q.trim();
-      if (nextQ) query.set("q", nextQ);
-      else query.delete("q");
-      // The default order (newest first) keeps the URL clean.
-      if (merged.sort === DEFAULT_SORT && merged.dir === DEFAULT_DIR) {
-        query.delete("sort");
-        query.delete("dir");
-      } else {
-        query.set("sort", merged.sort);
-        query.set("dir", merged.dir);
+      if (next.q !== undefined) {
+        const nextQ = next.q.trim();
+        if (nextQ) query.set("q", nextQ);
+        else query.delete("q");
+      }
+      if (next.sort !== undefined || next.dir !== undefined) {
+        const sort = next.sort ?? parseSort(query.get("sort"));
+        const dir = next.dir ?? parseDir(query.get("dir"), sort);
+        // The default order (newest first) keeps the URL clean.
+        if (sort === DEFAULT_SORT && dir === DEFAULT_DIR) {
+          query.delete("sort");
+          query.delete("dir");
+        } else {
+          query.set("sort", sort);
+          query.set("dir", dir);
+        }
       }
       const search = query.toString();
+      const current = pendingQueryRef.current ?? renderedQueryRef.current;
+      if (sameQuery(search, current)) return;
+      pendingQueryRef.current = search;
       // A selection belongs to the rows (and the order) it was made on.
       clearSelection();
       router.replace(search ? `${pathname}?${search}` : pathname, { scroll: false });
     },
-    [params, searchParams, pathname, router, clearSelection],
+    [pathname, router, clearSelection],
   );
 
   // Search is debounced into the URL (and so into the query key).

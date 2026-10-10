@@ -403,7 +403,11 @@ test("column filters and search are sent to the server and kept across pages", a
   await page.getByRole("combobox", { name: "Filter by type" }).selectOption("jarring");
   await page.getByRole("searchbox", { name: "Search movements" }).fill("Entry 11");
   await expect(page).toHaveURL(/q=Entry\+11|q=Entry%2011/);
-  // "entry 11" matches 11 and 110-119; the jarring ones are 11, 111, 113, 115, 117, 119.
+  // The filter is picked and the search typed straight after it, before the
+  // filter's navigation has necessarily landed: the search must merge onto
+  // it, not overwrite it. "Entry 11" matches entries 11 and 110-119 (11 rows
+  // unfiltered); entry n is index n-1 and jarrings are the even indexes, so
+  // the jarring ones are 11, 111, 113, 115, 117 and 119.
   await expect(rows(page)).toHaveCount(6);
   expect(
     requests.some(
@@ -425,6 +429,36 @@ test("column filters and search are sent to the server and kept across pages", a
   await expect(page.getByRole("searchbox", { name: "Search movements" })).toHaveValue(
     "Entry 11",
   );
+});
+
+test("a search typed while a filter's navigation is still in flight keeps the filter", async ({
+  page,
+}) => {
+  const requests: URL[] = [];
+  await mockApp(page, requests);
+  await page.goto("/stock/movements");
+  await expect(rows(page)).toHaveCount(50);
+
+  // Hold every navigation's server payload, so the filter's URL change is
+  // still pending when the debounced search writes its own.
+  await page.route(
+    (url) => url.searchParams.has("_rsc"),
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.fallback();
+    },
+  );
+  await page.getByRole("combobox", { name: "Filter by type" }).selectOption("jarring");
+  await page.getByRole("searchbox", { name: "Search movements" }).fill("Entry 11");
+  await expect(page).toHaveURL(/type=jarring/);
+  await expect(page).toHaveURL(/q=Entry\+11|q=Entry%2011/);
+  await expect(rows(page)).toHaveCount(6);
+  // No request ever dropped the filter while carrying the search.
+  expect(
+    requests.filter(
+      (url) => url.searchParams.get("q") === "Entry 11" && !url.searchParams.get("type"),
+    ),
+  ).toEqual([]);
 });
 
 test("click, shift-click and ctrl-click follow desktop selection conventions", async ({
