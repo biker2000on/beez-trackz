@@ -94,7 +94,7 @@ export function SalesTab() {
   const columns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
+        columnHelper.accessor((r) => r.date, {
           id: "date",
           header: "Date",
           meta: { cellClassName: "align-top" } satisfies DataGridColumnMeta,
@@ -145,17 +145,19 @@ export function SalesTab() {
             </Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.location ?? "", {
           id: "location",
           header: "Location",
           meta: {
             cellClassName: "align-top text-muted-foreground",
+            filter: true,
+            filterAllLabel: "All locations",
           } satisfies DataGridColumnMeta,
           cell: ({ row: { original: sale } }) => (
             <Dim sale={sale}>{sale.location ?? "—"}</Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.customerName ?? "", {
           id: "customer",
           header: "Customer",
           meta: {
@@ -165,7 +167,7 @@ export function SalesTab() {
             <Dim sale={sale}>{sale.customerName ?? "—"}</Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.orderNumber ?? "", {
           id: "order",
           header: "Order",
           meta: { cellClassName: "align-top" } satisfies DataGridColumnMeta,
@@ -204,7 +206,7 @@ export function SalesTab() {
             </Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.totalAmount, {
           id: "total",
           header: "Total (invoiced)",
           meta: {

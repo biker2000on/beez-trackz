@@ -16,7 +16,15 @@ import * as React from "react";
 import Link from "next/link";
 import { Loader2, Plus, X } from "lucide-react";
 
+import { createColumnHelper, useTable } from "@tanstack/react-table";
+
 import { Button } from "@/components/ui/button";
+import {
+  DataGrid,
+  DataGridCellAction,
+  type DataGridColumnMeta,
+  dataGridFeatures,
+} from "@/components/ui/data-grid";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ShortcutForm } from "@/components/ui/shortcut-form";
@@ -73,35 +81,11 @@ export function SaleSerials({ saleId }: { saleId: string }) {
             No jars linked yet.
           </p>
         ) : (
-          <ul className="grid gap-2">
-            {serials.data.map((item) => (
-              <li
-                key={item.serialNumber}
-                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <Link
-                    href={`/production/serials?serial=${encodeURIComponent(item.serialNumber)}`}
-                    className="break-all font-mono text-sm underline-offset-4 hover:underline"
-                  >
-                    {item.serialNumber}
-                  </Link>
-                  <p className="text-xs text-muted-foreground">
-                    {[item.lotCode, item.jarSizeLabel].filter(Boolean).join(" · ")}
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Unlink ${item.serialNumber}`}
-                  disabled={unlink.isPending}
-                  onClick={() => unlink.mutate(item.serialNumber)}
-                >
-                  <X />
-                </Button>
-              </li>
-            ))}
-          </ul>
+          <SerialGrid
+            serials={serials.data}
+            unlinking={unlink.isPending}
+            onUnlink={(serial) => unlink.mutate(serial)}
+          />
         )}
 
         <ShortcutForm onSubmit={add} className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
@@ -123,5 +107,82 @@ export function SaleSerials({ saleId }: { saleId: string }) {
         </ShortcutForm>
       </CardContent>
     </Card>
+  );
+}
+type SaleSerial = NonNullable<ReturnType<typeof useSaleSerials>["data"]>[number];
+const serialHelper = createColumnHelper<typeof dataGridFeatures, SaleSerial>();
+
+function SerialGrid({
+  serials,
+  unlinking,
+  onUnlink,
+}: {
+  serials: SaleSerial[];
+  unlinking: boolean;
+  onUnlink: (serial: string) => void;
+}) {
+  const columns = React.useMemo(
+    () =>
+      serialHelper.columns([
+        serialHelper.accessor((item) => item.serialNumber, {
+          id: "serial",
+          header: "Serial",
+          cell: ({ getValue }) => (
+            <DataGridCellAction className="inline">
+              <Link
+                href={`/production/serials?serial=${encodeURIComponent(getValue())}`}
+                className="break-all font-mono text-sm underline-offset-4 hover:underline"
+              >
+                {getValue()}
+              </Link>
+            </DataGridCellAction>
+          ),
+        }),
+        serialHelper.accessor((item) => item.lotCode ?? "", {
+          id: "lot",
+          header: "Lot",
+          meta: { filter: true, filterAllLabel: "All lots" } satisfies DataGridColumnMeta,
+        }),
+        serialHelper.accessor((item) => item.jarSizeLabel ?? "", {
+          id: "size",
+          header: "Jar size",
+          meta: { filter: true, filterAllLabel: "All sizes" } satisfies DataGridColumnMeta,
+        }),
+        serialHelper.display({
+          id: "actions",
+          header: "",
+          meta: { align: "right" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: item } }) => (
+            <DataGridCellAction>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label={`Unlink ${item.serialNumber}`}
+                disabled={unlinking}
+                onClick={() => onUnlink(item.serialNumber)}
+              >
+                <X />
+              </Button>
+            </DataGridCellAction>
+          ),
+        }),
+      ]),
+    [unlinking, onUnlink],
+  );
+  const table = useTable({
+    features: dataGridFeatures,
+    columns,
+    data: serials,
+    getRowId: (item) => item.serialNumber,
+  });
+  return (
+    <div className="rounded-md border">
+      <DataGrid
+        table={table}
+        aria-label="Jar serials"
+        listenOnWindow={false}
+        searchable={serials.length > 8}
+      />
+    </div>
   );
 }

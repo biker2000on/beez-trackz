@@ -141,7 +141,7 @@ export function VarietalsView() {
   const varietalColumns = React.useMemo(
     () =>
       varietalColumnHelper.columns([
-        varietalColumnHelper.display({
+        varietalColumnHelper.accessor((r) => r.name, {
           id: "name",
           header: "Varietal",
           cell: ({ row: { original: varietal } }) => (
@@ -169,31 +169,31 @@ export function VarietalsView() {
             </DataGridCellAction>
           ),
         }),
-        varietalColumnHelper.display({
+        varietalColumnHelper.accessor((r) => r.lotCount, {
           id: "lotCount",
           header: "Lots",
           meta: rightAligned,
           cell: ({ row }) => row.original.lotCount,
         }),
-        varietalColumnHelper.display({
+        varietalColumnHelper.accessor((r) => r.onHandLbs, {
           id: "onHand",
           header: "Bulk on hand",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.onHandLbs),
         }),
-        varietalColumnHelper.display({
+        varietalColumnHelper.accessor((r) => r.jarredLbs, {
           id: "jarred",
           header: "Jarred",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.jarredLbs),
         }),
-        varietalColumnHelper.display({
+        varietalColumnHelper.accessor((r) => r.bulkUsedLbs, {
           id: "used",
           header: "Used",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.bulkUsedLbs),
         }),
-        varietalColumnHelper.display({
+        varietalColumnHelper.accessor((r) => r.lossLbs, {
           id: "lost",
           header: "Lost",
           meta: rightAligned,
@@ -234,14 +234,14 @@ export function VarietalsView() {
   const lotColumns = React.useMemo(
     () =>
       lotColumnHelper.columns([
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.lotCode, {
           id: "lotCode",
           header: "Lot",
           cell: ({ row }) => (
             <span className="font-medium">{row.original.lotCode}</span>
           ),
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.varietalName, {
           id: "varietal",
           header: "Varietal",
           meta: {
@@ -250,7 +250,7 @@ export function VarietalsView() {
           cell: ({ row }) =>
             row.original.varietalName ?? "—",
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.extractionDate, {
           id: "extractionDate",
           header: "Extracted",
           meta: {
@@ -258,31 +258,31 @@ export function VarietalsView() {
           } satisfies DataGridColumnMeta,
           cell: ({ row }) => formatDate(row.original.extractionDate),
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.lotLbs, {
           id: "lotLbs",
           header: "Harvested",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.lotLbs),
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.jarredLbs, {
           id: "jarred",
           header: "Jarred",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.jarredLbs),
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.bulkUsedLbs, {
           id: "used",
           header: "Used",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.bulkUsedLbs),
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.lossLbs, {
           id: "lost",
           header: "Lost",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.lossLbs),
         }),
-        lotColumnHelper.display({
+        lotColumnHelper.accessor((r) => r.onHandLbs, {
           id: "onHand",
           header: "Bulk on hand",
           meta: {

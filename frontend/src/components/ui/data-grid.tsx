@@ -14,9 +14,19 @@
  * Pass `selection` (from `useRowSelection`) for desktop multi-select: a
  * leading checkbox column, click selects one row, shift-click selects the
  * range from the anchor, ctrl/cmd-click toggles, Space toggles the focused
- * row, shift+arrow extends, Ctrl/Cmd+A selects every loaded row and Escape
+ * row, shift+arrow extends, Ctrl/Cmd+A selects every visible row and Escape
  * clears. With a selection, a row is opened by double-click or Enter rather
- * than by a single click.
+ * than by a single click. Selection is keyed by row id and ranges run over
+ * the rows as currently shown (sorted, filtered, searched), so a shift-range
+ * follows what the user sees. Narrowing the rows (search or a column filter)
+ * clears the selection, so bulk actions never reach rows that are hidden.
+ *
+ * Columns built with an accessor are sortable (click the header; on phones a
+ * "Sort by" select), columns whose meta sets `filter` get a select of their
+ * distinct values above the grid, and below the `md` breakpoint every grid
+ * renders its rows as cards (see ./data-grid-cards.tsx) — one row per card,
+ * one label/value line per column, laid out by `meta.card`. Selectable cards
+ * carry a checkbox and a selected tint; a tap selects like a click.
  *
  * Keystrokes inside inputs, menus, and dialogs are left alone, so editable
  * cells (e.g. physical-count drafts) and row action menus keep their native
@@ -25,31 +35,99 @@
  */
 
 import * as React from "react";
-import { FlexRender, tableFeatures } from "@tanstack/react-table";
+import {
+  FlexRender,
+  createSortedRowModel,
+  rowSortingFeature,
+  sortFn_alphanumeric,
+  sortFn_basic,
+  sortFn_datetime,
+  sortFn_text,
+  tableFeatures,
+} from "@tanstack/react-table";
 import type {
+  Column,
+  Row,
   RowData,
   Table as TanstackTable,
   TableFeatures,
 } from "@tanstack/react-table";
-import { Search, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { isTypingTarget } from "@/lib/keyboard";
 import type { RowSelection } from "@/lib/use-row-selection";
 
+import {
+  DataGridCard,
+  type DataGridCardRole,
+  cardRole,
+  columnLabel,
+  useBelowMd,
+} from "./data-grid-cards";
+
+export type { DataGridCardRole } from "./data-grid-cards";
+
 /** Per-column presentation hints, carried on the column def's `meta`. */
-export interface DataGridColumnMeta {
+export interface DataGridColumnMeta<TData = unknown> {
   align?: "left" | "right";
   headClassName?: string;
   cellClassName?: string;
+  /**
+   * Human name used by the mobile card, the sort select and the filter
+   * select. Defaults to the header when the header is a string.
+   */
+  label?: string;
+  /** Where this column goes on the mobile card (see data-grid-cards.tsx). */
+  card?: DataGridCardRole;
+  /**
+   * Adds a select above the grid listing every distinct value of this column;
+   * picking one keeps only rows with that value. Values come from
+   * `filterValue` when given, else from the column's accessor.
+   */
+  filter?: boolean;
+  filterValue?: (row: TData) => string | null | undefined;
+  /** Label of the filter select's "everything" option. */
+  filterAllLabel?: string;
 }
 
 /**
  * The feature set every grid uses. Pass to `useTable({ features })` and
- * `createColumnHelper<typeof dataGridFeatures, Row>()`.
+ * `createColumnHelper<typeof dataGridFeatures, Row>()`. Sorting is on for
+ * every accessor column (display columns have no value to sort by).
  */
-export const dataGridFeatures = tableFeatures({});
+export const dataGridFeatures = tableFeatures({
+  rowSortingFeature,
+  sortedRowModel: createSortedRowModel(),
+  sortFns: {
+    alphanumeric: sortFn_alphanumeric,
+    text: sortFn_text,
+    datetime: sortFn_datetime,
+    basic: sortFn_basic,
+  },
+});
+
+type GridFeatures = typeof dataGridFeatures;
+type GridColumn<TData extends RowData> = Column<GridFeatures, TData, unknown>;
+
+/** Sentinel filter value for rows whose value is empty. */
+const EMPTY_FILTER_VALUE = "__none__";
+
+function filterValueOf<TData extends RowData>(
+  row: Row<GridFeatures, TData>,
+  column: GridColumn<TData>,
+): string {
+  const meta = column.columnDef.meta as DataGridColumnMeta<TData> | undefined;
+  const raw = meta?.filterValue
+    ? meta.filterValue(row.original)
+    : column.accessorFn
+      ? row.getValue(column.id)
+      : undefined;
+  if (raw == null) return EMPTY_FILTER_VALUE;
+  const text = String(raw).trim();
+  return text === "" ? EMPTY_FILTER_VALUE : text;
+}
 
 /**
  * Text the search box matches a row against: every string and number in the
@@ -87,7 +165,8 @@ interface DataGridProps<
   table: TanstackTable<TFeatures, TData>;
   /**
    * Group key per row. Consecutive rows sharing a key render under one full
-   * width section header; keep the data pre-sorted by this key.
+   * width section header; keep the data pre-sorted by this key. Headers are
+   * dropped while the user sorts by a column, since groups no longer hold.
    */
   getRowGroup?: (row: TData) => string;
   renderGroupHeader?: (key: string) => React.ReactNode;
@@ -113,9 +192,12 @@ interface DataGridProps<
   className?: string;
   /**
    * Extra `<tr>` rows appended after the data rows (totals, summary lines).
-   * They are outside keyboard navigation.
+   * They are outside keyboard navigation. In card mode they render in a
+   * small table under the cards unless `trailingCard` is given.
    */
   trailingRows?: React.ReactNode;
+  /** Card-mode replacement for `trailingRows`. */
+  trailingCard?: React.ReactNode;
   /**
    * Extra attributes merged onto each data `<tr>` — tabIndex, aria-selected,
    * per-row key handlers. A handler that calls `event.preventDefault()` stops
@@ -126,14 +208,24 @@ interface DataGridProps<
     rowIndex: number,
   ) => React.HTMLAttributes<HTMLTableRowElement> | undefined;
   /**
-   * Multi-select over the rendered rows, keyed by the table's row ids. The
-   * ids given to `useRowSelection` must be the rows in display order.
+   * Multi-select over the rendered rows, keyed by the table's row ids. Give
+   * `useRowSelection` every row id (data order is fine); the grid runs
+   * ranges and select-all over the rows in their visible order.
    */
   selection?: RowSelection;
   /** Accessible name of the header checkbox. */
   selectAllLabel?: string;
   /** Accessible name of a row's checkbox. */
   getRowLabel?: (row: TData) => string;
+  /**
+   * "auto" (default) renders cards below the `md` breakpoint; "never" keeps
+   * the table everywhere (wide matrices that read better scrolled).
+   */
+  cardMode?: "auto" | "never" | "always";
+  /** Extra controls placed in the toolbar beside search and filters. */
+  toolbar?: React.ReactNode;
+  /** Shown instead of an empty body when the grid has no rows at all. */
+  emptyMessage?: React.ReactNode;
 }
 
 /** True while any modal-ish layer is open; the grid must not steal its keys. */
@@ -145,11 +237,14 @@ function overlayOpen(): boolean {
   );
 }
 
+const selectClassName =
+  "h-8 min-w-0 max-w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
 export function DataGrid<
   TFeatures extends TableFeatures,
   TData extends RowData,
 >({
-  table,
+  table: tableProp,
   getRowGroup,
   renderGroupHeader,
   onRowActivate,
@@ -160,33 +255,115 @@ export function DataGrid<
   "aria-label": ariaLabel,
   className,
   trailingRows,
+  trailingCard,
   rowProps,
   selection,
   selectAllLabel = "Select all loaded rows",
   getRowLabel,
+  cardMode = "auto",
+  toolbar,
+  emptyMessage,
 }: DataGridProps<TFeatures, TData>) {
+  // Every grid is built with `dataGridFeatures`; the generic stays loose so
+  // callers keep their own inferred table type.
+  const table = tableProp as unknown as TanstackTable<GridFeatures, TData>;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
   const [focusedRowIndex, setFocusedRowIndex] = React.useState(-1);
+  const belowMd = useBelowMd();
+  const asCards = cardMode === "always" || (cardMode === "auto" && belowMd);
 
   const canSearch = searchable;
   const [globalFilter, setGlobalFilterText] = React.useState("");
+  // A selection belongs to the rows it was made on: narrowing the visible
+  // rows drops it rather than leaving hidden rows selected.
+  const clearSelectionOnNarrow = () => {
+    if (selection && selection.count > 0) selection.clear();
+  };
   const setGlobalFilter = (value: string) => {
     setGlobalFilterText(value);
     setFocusedRowIndex(-1);
+    if (value.trim() !== globalFilter.trim()) clearSelectionOnNarrow();
   };
+  const [columnFilters, setColumnFilters] = React.useState<
+    Record<string, string>
+  >({});
+
+  const leafColumns = table.getAllLeafColumns() as GridColumn<TData>[];
+  const filterColumns = leafColumns.filter(
+    (column) =>
+      (column.columnDef.meta as DataGridColumnMeta | undefined)?.filter,
+  );
+  const sortableColumns = leafColumns.filter(
+    (column) =>
+      typeof column.getCanSort === "function" && column.getCanSort(),
+  );
+  const sorting = table.store?.state?.sorting ?? [];
+  const isSorted = sorting.length > 0;
 
   const allRows = table.getRowModel().rows;
-  const rows = React.useMemo(
-    () =>
-      canSearch && globalFilter.trim()
-        ? allRows.filter((row) => rowMatchesSearch(row.original, globalFilter))
-        : allRows,
-    [allRows, canSearch, globalFilter],
+  const activeFilters = Object.entries(columnFilters).filter(
+    ([, value]) => value !== "",
+  );
+  // Grids hold at most a few hundred rows; filtering each render is cheap and
+  // keeps the row list in step with whatever the table's sort produced.
+  let rows = allRows;
+  if (activeFilters.length > 0) {
+    rows = rows.filter((row) =>
+      activeFilters.every(([id, value]) => {
+        const column = leafColumns.find((col) => col.id === id);
+        return !column || filterValueOf(row, column) === value;
+      }),
+    );
+  }
+  if (canSearch && globalFilter.trim()) {
+    rows = rows.filter((row) => rowMatchesSearch(row.original, globalFilter));
+  }
+  const filterOptions = filterColumns.map((column) => {
+    const values = new Set<string>();
+    for (const row of allRows) values.add(filterValueOf(row, column));
+    const options = [...values]
+      .filter((value) => value !== EMPTY_FILTER_VALUE)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return { column, options, hasEmpty: values.has(EMPTY_FILTER_VALUE) };
+  }).filter(
+    // A filter with one choice filters nothing; keep it only while it is set.
+    ({ column, options, hasEmpty }) =>
+      options.length + (hasEmpty ? 1 : 0) > 1 || Boolean(columnFilters[column.id]),
   );
   const headerGroups = table.getHeaderGroups();
   const rowCount = rows.length;
   const totalCount = allRows.length;
+  const narrowed = Boolean(globalFilter.trim()) || activeFilters.length > 0;
+  // Row ids in visible order (sorted, filtered, searched): selection ranges
+  // and select-all run over these, never over the data's own order.
+  const visibleIds = rows.map((row) => row.id);
+  const visibleSelectedCount = selection
+    ? visibleIds.reduce((n, id) => n + (selection.isSelected(id) ? 1 : 0), 0)
+    : 0;
+  const allVisibleSelected =
+    rowCount > 0 && visibleSelectedCount === rowCount;
+  const selectAllChecked: boolean | "indeterminate" = allVisibleSelected
+    ? true
+    : (selection?.count ?? 0) > 0
+      ? "indeterminate"
+      : false;
+  const toggleSelectAll = () => {
+    if (!selection) return;
+    if (allVisibleSelected) selection.clear();
+    else selection.selectAll(visibleIds);
+  };
+
+  function setSort(value: string) {
+    if (typeof table.setSorting !== "function") return;
+    setFocusedRowIndex(-1);
+    if (!value) {
+      table.setSorting([]);
+      return;
+    }
+    const [id, direction] = value.split(":");
+    table.setSorting([{ id, desc: direction === "desc" }]);
+  }
 
   // The handler reads the latest rows/state through a ref so the window
   // listener is attached once, not re-bound on every data change.
@@ -194,6 +371,7 @@ export function DataGrid<
     rowCount,
     focusedRowIndex,
     rows,
+    visibleIds,
     onRowActivate,
     onRowDelete,
     selection,
@@ -203,6 +381,7 @@ export function DataGrid<
       rowCount,
       focusedRowIndex,
       rows,
+      visibleIds,
       onRowActivate,
       onRowDelete,
       selection,
@@ -223,7 +402,7 @@ export function DataGrid<
       ) {
         if (state.rowCount === 0) return;
         event.preventDefault();
-        state.selection.selectAll();
+        state.selection.selectAll(state.visibleIds);
         return;
       }
       if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -248,11 +427,12 @@ export function DataGrid<
             state.selection.extend(
               state.rows[state.focusedRowIndex]?.id ?? null,
               target.id,
+              state.visibleIds,
             );
           }
         }
         containerRef.current
-          ?.querySelectorAll("tbody tr[data-grid-row]")
+          ?.querySelectorAll("[data-grid-row]")
           [clamped]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       };
 
@@ -308,7 +488,7 @@ export function DataGrid<
             break;
           }
           event.preventDefault();
-          state.selection.toggle(row.id, event.shiftKey);
+          state.selection.toggle(row.id, event.shiftKey, state.visibleIds);
           break;
         }
         case "Escape":
@@ -323,228 +503,465 @@ export function DataGrid<
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [listenOnWindow]);
 
+  const showSortSelect = asCards && sortableColumns.length > 0;
+  // Cards have no header row, so their select-all checkbox lives here.
+  const showCardSelectAll = asCards && selection != null;
+  const showToolbar =
+    canSearch ||
+    filterOptions.length > 0 ||
+    showSortSelect ||
+    showCardSelectAll ||
+    toolbar != null;
+  const sortValue = sorting[0]
+    ? `${sorting[0].id}:${sorting[0].desc ? "desc" : "asc"}`
+    : "";
+
+  const groupFor = (row: TData) => (isSorted ? undefined : getRowGroup?.(row));
+
+  const noMatch = narrowed && rowCount === 0 && totalCount > 0;
+  const emptyText = noMatch
+    ? globalFilter.trim()
+      ? <>No rows match &ldquo;{globalFilter}&rdquo;.</>
+      : "No rows match these filters."
+    : totalCount === 0
+      ? emptyMessage
+      : null;
+
+  // Card roles are a function of the column model only.
+  const hasExplicitTitle = leafColumns.some(
+    (column) =>
+      (column.columnDef.meta as DataGridColumnMeta | undefined)?.card ===
+      "title",
+  );
+  const roles = leafColumns.map((column, index) =>
+    cardRole(column, index, hasExplicitTitle),
+  );
+
+  // Row (table) and card (phone) share these handlers, so a click, tap,
+  // shift-click or double-click means the same thing in both layouts.
+  type RowExtra = React.HTMLAttributes<HTMLElement> | undefined;
+
+  const handleRowClick = (
+    event: React.MouseEvent<HTMLElement>,
+    extra: RowExtra,
+    row: Row<GridFeatures, TData>,
+    rowIndex: number,
+  ) => {
+    extra?.onClick?.(event);
+    if (event.defaultPrevented) return;
+    setFocusedRowIndex(rowIndex);
+    if (selection) {
+      selection.click(
+        row.id,
+        { shift: event.shiftKey, toggle: event.ctrlKey || event.metaKey },
+        visibleIds,
+      );
+      return;
+    }
+    onRowActivate?.(row.original);
+  };
+
+  const handleRowMouseDown = (
+    event: React.MouseEvent<HTMLElement>,
+    extra: RowExtra,
+  ) => {
+    extra?.onMouseDown?.(event);
+    // Shift-click selects a range; keep the browser from also highlighting
+    // the text in between.
+    if (selection && event.shiftKey) event.preventDefault();
+  };
+
+  const handleRowDoubleClick = (
+    event: React.MouseEvent<HTMLElement>,
+    extra: RowExtra,
+    row: Row<GridFeatures, TData>,
+  ) => {
+    extra?.onDoubleClick?.(event);
+    if (event.defaultPrevented || !selection || !onRowActivate) return;
+    if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+    onRowActivate(row.original);
+  };
+
+  const rowCheckbox = (
+    row: Row<GridFeatures, TData>,
+    rowIndex: number,
+    rowSelected: boolean,
+  ) =>
+    selection ? (
+      <Checkbox
+        checked={rowSelected}
+        tabIndex={-1}
+        aria-label={getRowLabel ? getRowLabel(row.original) : "Select row"}
+        onClick={(event) => {
+          // The checkbox toggles (shift adds the range from the anchor); it
+          // never collapses the selection the way a plain row click does.
+          event.preventDefault();
+          event.stopPropagation();
+          setFocusedRowIndex(rowIndex);
+          selection.toggle(row.id, event.shiftKey, visibleIds);
+        }}
+        onMouseDown={(event) => {
+          if (event.shiftKey) event.preventDefault();
+        }}
+        onDoubleClick={(event) => event.stopPropagation()}
+      />
+    ) : null;
+
   return (
     <div
       ref={containerRef}
-      className={cn("relative w-full min-w-0 max-w-full overflow-x-auto", className)}
-    >
-      {canSearch && (
-        <div className="flex items-center gap-2 border-b px-3 py-2">
-          <div className="relative min-w-0 flex-1">
-            <Search
-              aria-hidden
-              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-            />
-            <input
-              ref={searchRef}
-              type="search"
-              value={globalFilter}
-              onChange={(event) => setGlobalFilter(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (globalFilter) setGlobalFilter("");
-                  else event.currentTarget.blur();
-                }
-              }}
-              placeholder={searchPlaceholder}
-              aria-label={ariaLabel ? `Search ${ariaLabel}` : "Search rows"}
-              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-8 text-sm shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-search-cancel-button]:hidden"
-            />
-            {globalFilter && (
-              <button
-                type="button"
-                aria-label="Clear search"
-                onClick={() => {
-                  setGlobalFilter("");
-                  searchRef.current?.focus();
-                }}
-                className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:text-foreground"
-              >
-                <X className="size-4" />
-              </button>
-            )}
-          </div>
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {globalFilter ? `${rowCount} of ${totalCount}` : `${totalCount} rows`}
-          </span>
-        </div>
+      data-grid-mode={asCards ? "cards" : "table"}
+      className={cn(
+        "relative w-full min-w-0 max-w-full",
+        !asCards && "overflow-x-auto",
+        className,
       )}
-      <table
-        aria-label={ariaLabel}
-        className="w-full caption-bottom text-sm"
-      >
-        <thead className="[&_tr]:border-b">
-          {headerGroups.map((headerGroup) => (
-            <tr key={headerGroup.id}>
-              {selection && (
-                <th className="h-10 w-10 px-3 align-middle">
-                  <Checkbox
-                    checked={
-                      selection.allSelected
-                        ? true
-                        : selection.count > 0
-                          ? "indeterminate"
-                          : false
-                    }
-                    disabled={rowCount === 0}
-                    aria-label={selectAllLabel}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      if (selection.allSelected) selection.clear();
-                      else selection.selectAll();
-                    }}
-                  />
-                </th>
-              )}
-              {headerGroup.headers.map((header) => {
-                const meta = header.column.columnDef.meta as
-                  | DataGridColumnMeta
-                  | undefined;
-                return (
-                  <th
-                    key={header.id}
-                    colSpan={header.colSpan}
-                    className={cn(
-                      "h-10 whitespace-nowrap px-3 text-left align-middle font-medium text-muted-foreground",
-                      meta?.align === "right" && "text-right",
-                      meta?.headClassName,
-                    )}
-                  >
-                    {header.isPlaceholder ? null : (
-                      <FlexRender header={header} />
-                    )}
-                  </th>
-                );
-              })}
-            </tr>
-          ))}
-        </thead>
-        <tbody className="[&_tr:last-child]:border-0">
-          {rows.map((row, rowIndex) => {
-            const extra = rowProps?.(row.original, rowIndex);
-            const group = getRowGroup?.(row.original);
-            const previousGroup =
-              rowIndex > 0 ? getRowGroup?.(rows[rowIndex - 1].original) : undefined;
-            const showGroupHeader =
-              group !== undefined && group !== previousGroup;
-            const rowSelected = selection?.isSelected(row.id) ?? false;
-            return (
-              <React.Fragment key={row.id}>
-                {showGroupHeader && (
-                  <tr className="border-b bg-muted/50">
-                    <td
-                      colSpan={row.getAllCells().length + (selection ? 1 : 0)}
-                      className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-                    >
-                      {renderGroupHeader ? renderGroupHeader(group) : group}
-                    </td>
-                  </tr>
-                )}
-                <tr
-                  data-grid-row=""
-                  {...extra}
-                  {...(selection
-                    ? {
-                        "aria-selected": rowSelected,
-                        "data-state": rowSelected ? "selected" : undefined,
-                      }
-                    : {})}
-                  className={cn(
-                    "group border-b transition-colors hover:bg-muted/40",
-                    (onRowActivate || selection) && "cursor-pointer",
-                    rowSelected && "bg-primary/10 hover:bg-primary/15",
-                    rowIndex === focusedRowIndex &&
-                      "bg-primary/5 ring-2 ring-inset ring-primary/50",
-                    rowSelected &&
-                      rowIndex === focusedRowIndex &&
-                      "bg-primary/10",
-                    extra?.className,
-                  )}
-                  onMouseDown={(event) => {
-                    extra?.onMouseDown?.(event);
-                    // Shift-click selects a range; keep the browser from
-                    // also highlighting the text in between.
-                    if (selection && event.shiftKey) event.preventDefault();
+    >
+      {showToolbar && (
+        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+          {showCardSelectAll && (
+            <label className="inline-flex min-h-8 items-center gap-2 pr-1 text-sm text-muted-foreground">
+              <Checkbox
+                checked={selectAllChecked}
+                disabled={rowCount === 0}
+                aria-label={selectAllLabel}
+                onClick={(event) => {
+                  event.preventDefault();
+                  toggleSelectAll();
+                }}
+              />
+              <span aria-hidden>All</span>
+            </label>
+          )}
+          {canSearch && (
+            <div className="relative min-w-[10rem] flex-1">
+              <Search
+                aria-hidden
+                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <input
+                ref={searchRef}
+                type="search"
+                value={globalFilter}
+                onChange={(event) => setGlobalFilter(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (globalFilter) setGlobalFilter("");
+                    else event.currentTarget.blur();
+                  }
+                }}
+                placeholder={
+                  asCards
+                    ? searchPlaceholder.replace(/\s*\(press \/ to focus\)$/, "")
+                    : searchPlaceholder
+                }
+                aria-label={ariaLabel ? `Search ${ariaLabel}` : "Search rows"}
+                className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-8 text-sm shadow-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-search-cancel-button]:hidden"
+              />
+              {globalFilter && (
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setGlobalFilter("");
+                    searchRef.current?.focus();
                   }}
-                  onClick={(event) => {
-                    extra?.onClick?.(event);
-                    if (event.defaultPrevented) return;
-                    setFocusedRowIndex(rowIndex);
-                    if (selection) {
-                      selection.click(row.id, {
-                        shift: event.shiftKey,
-                        toggle: event.ctrlKey || event.metaKey,
-                      });
-                      return;
-                    }
-                    onRowActivate?.(row.original);
-                  }}
-                  onDoubleClick={(event) => {
-                    extra?.onDoubleClick?.(event);
-                    if (event.defaultPrevented || !selection || !onRowActivate) return;
-                    if (event.shiftKey || event.ctrlKey || event.metaKey) return;
-                    onRowActivate(row.original);
-                  }}
+                  className="absolute right-1 top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded text-muted-foreground hover:text-foreground"
                 >
-                  {selection && (
-                    <td className="w-10 px-3 align-middle">
-                      <Checkbox
-                        checked={rowSelected}
-                        tabIndex={-1}
-                        aria-label={
-                          getRowLabel ? getRowLabel(row.original) : "Select row"
-                        }
-                        onClick={(event) => {
-                          // The checkbox toggles (shift adds the range from
-                          // the anchor); it never collapses the selection
-                          // the way a plain row click does.
-                          event.preventDefault();
-                          event.stopPropagation();
-                          setFocusedRowIndex(rowIndex);
-                          selection.toggle(row.id, event.shiftKey);
-                        }}
-                        onMouseDown={(event) => {
-                          if (event.shiftKey) event.preventDefault();
-                        }}
-                      />
-                    </td>
-                  )}
-                  {row.getAllCells().map((cell) => {
-                    const meta = cell.column.columnDef.meta as
-                      | DataGridColumnMeta
-                      | undefined;
-                    return (
-                      <td
-                        key={cell.id}
-                        className={cn(
-                          "whitespace-nowrap p-3 align-middle",
-                          meta?.align === "right" && "text-right",
-                          meta?.cellClassName,
-                        )}
-                      >
-                        <FlexRender cell={cell} />
-                      </td>
-                    );
-                  })}
-                </tr>
-              </React.Fragment>
+                  <X className="size-4" />
+                </button>
+              )}
+            </div>
+          )}
+          {filterOptions.map(({ column, options, hasEmpty }) => {
+            const meta = column.columnDef.meta as DataGridColumnMeta | undefined;
+            const label = columnLabel(column) || column.id;
+            return (
+              <select
+                key={column.id}
+                aria-label={`Filter by ${label.toLowerCase()}`}
+                value={columnFilters[column.id] ?? ""}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setColumnFilters((current) => ({
+                    ...current,
+                    [column.id]: value,
+                  }));
+                  setFocusedRowIndex(-1);
+                  clearSelectionOnNarrow();
+                }}
+                className={selectClassName}
+              >
+                <option value="">
+                  {meta?.filterAllLabel ?? `All ${label.toLowerCase()}`}
+                </option>
+                {options.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+                {hasEmpty && (
+                  <option value={EMPTY_FILTER_VALUE}>No {label.toLowerCase()}</option>
+                )}
+              </select>
             );
           })}
-          {canSearch && globalFilter && rowCount === 0 && (
-            <tr>
-              <td
-                colSpan={table.getAllLeafColumns().length + (selection ? 1 : 0)}
-                className="px-3 py-6 text-center text-sm text-muted-foreground"
-              >
-                No rows match &ldquo;{globalFilter}&rdquo;.
-              </td>
-            </tr>
+          {showSortSelect && (
+            <select
+              aria-label="Sort by"
+              value={sortValue}
+              onChange={(event) => setSort(event.target.value)}
+              className={selectClassName}
+            >
+              <option value="">Default order</option>
+              {sortableColumns.flatMap((column) => {
+                const label = columnLabel(column) || column.id;
+                return [
+                  <option key={`${column.id}:asc`} value={`${column.id}:asc`}>
+                    {label} ↑
+                  </option>,
+                  <option key={`${column.id}:desc`} value={`${column.id}:desc`}>
+                    {label} ↓
+                  </option>,
+                ];
+              })}
+            </select>
           )}
-          {trailingRows}
-        </tbody>
-      </table>
+          {toolbar}
+          {(canSearch || filterOptions.length > 0) && (
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {narrowed ? `${rowCount} of ${totalCount}` : `${totalCount} rows`}
+            </span>
+          )}
+        </div>
+      )}
+      {asCards ? (
+        <>
+          <ul aria-label={ariaLabel} className="text-sm">
+            {rows.map((row, rowIndex) => {
+              const extra = rowProps?.(row.original, rowIndex) as
+                | React.HTMLAttributes<HTMLElement>
+                | undefined;
+              const group = groupFor(row.original);
+              const previousGroup =
+                rowIndex > 0 ? groupFor(rows[rowIndex - 1].original) : undefined;
+              const showGroupHeader =
+                group !== undefined && group !== previousGroup;
+              const rowSelected = selection?.isSelected(row.id) ?? false;
+              return (
+                <React.Fragment key={row.id}>
+                  {showGroupHeader && (
+                    <li className="border-b bg-muted/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {renderGroupHeader ? renderGroupHeader(group) : group}
+                    </li>
+                  )}
+                  <DataGridCard
+                    cells={row.getAllCells()}
+                    roles={roles}
+                    focused={rowIndex === focusedRowIndex}
+                    clickable={onRowActivate != null || selection != null}
+                    selected={selection ? rowSelected : undefined}
+                    leading={rowCheckbox(row, rowIndex, rowSelected)}
+                    extra={extra}
+                    onClick={(event) =>
+                      handleRowClick(event, extra, row, rowIndex)
+                    }
+                    onMouseDown={(event) => handleRowMouseDown(event, extra)}
+                    onDoubleClick={(event) =>
+                      handleRowDoubleClick(event, extra, row)
+                    }
+                  />
+                </React.Fragment>
+              );
+            })}
+            {emptyText && (
+              <li className="px-4 py-6 text-center text-sm text-muted-foreground">
+                {emptyText}
+              </li>
+            )}
+          </ul>
+          {trailingCard ??
+            (trailingRows ? (
+              <div className="overflow-x-auto border-t">
+                <table className="w-full text-sm">
+                  <tbody>{trailingRows}</tbody>
+                </table>
+              </div>
+            ) : null)}
+        </>
+      ) : (
+        <table aria-label={ariaLabel} className="w-full caption-bottom text-sm">
+          <thead className="[&_tr]:border-b">
+            {headerGroups.map((headerGroup) => (
+              <tr key={headerGroup.id}>
+                {selection && (
+                  <th className="h-10 w-10 px-3 align-middle">
+                    <Checkbox
+                      checked={selectAllChecked}
+                      disabled={rowCount === 0}
+                      aria-label={selectAllLabel}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        toggleSelectAll();
+                      }}
+                    />
+                  </th>
+                )}
+                {headerGroup.headers.map((header) => {
+                  const meta = header.column.columnDef.meta as
+                    | DataGridColumnMeta
+                    | undefined;
+                  const column = header.column as GridColumn<TData>;
+                  const canSort =
+                    !header.isPlaceholder &&
+                    typeof column.getCanSort === "function" &&
+                    column.getCanSort();
+                  const sorted = canSort ? column.getIsSorted() : false;
+                  return (
+                    <th
+                      key={header.id}
+                      colSpan={header.colSpan}
+                      aria-sort={
+                        sorted === "asc"
+                          ? "ascending"
+                          : sorted === "desc"
+                            ? "descending"
+                            : undefined
+                      }
+                      className={cn(
+                        "h-10 whitespace-nowrap px-3 text-left align-middle font-medium text-muted-foreground",
+                        meta?.align === "right" && "text-right",
+                        meta?.headClassName,
+                      )}
+                    >
+                      {header.isPlaceholder ? null : canSort ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            setFocusedRowIndex(-1);
+                            column.getToggleSortingHandler()?.(event);
+                          }}
+                          className={cn(
+                            "-mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            meta?.align === "right" && "flex-row-reverse",
+                            sorted && "text-foreground",
+                          )}
+                        >
+                          <FlexRender header={header} />
+                          {sorted === "asc" ? (
+                            <ArrowUp aria-hidden className="size-3.5" />
+                          ) : sorted === "desc" ? (
+                            <ArrowDown aria-hidden className="size-3.5" />
+                          ) : (
+                            <ArrowUpDown
+                              aria-hidden
+                              className="size-3.5 opacity-40"
+                            />
+                          )}
+                        </button>
+                      ) : (
+                        <FlexRender header={header} />
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
+          <tbody className="[&_tr:last-child]:border-0">
+            {rows.map((row, rowIndex) => {
+              const extra = rowProps?.(row.original, rowIndex);
+              const group = groupFor(row.original);
+              const previousGroup =
+                rowIndex > 0 ? groupFor(rows[rowIndex - 1].original) : undefined;
+              const showGroupHeader =
+                group !== undefined && group !== previousGroup;
+              const rowSelected = selection?.isSelected(row.id) ?? false;
+              const handlerExtra = extra as RowExtra;
+              return (
+                <React.Fragment key={row.id}>
+                  {showGroupHeader && (
+                    <tr className="border-b bg-muted/50">
+                      <td
+                        colSpan={row.getAllCells().length + (selection ? 1 : 0)}
+                        className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        {renderGroupHeader ? renderGroupHeader(group) : group}
+                      </td>
+                    </tr>
+                  )}
+                  <tr
+                    data-grid-row=""
+                    {...extra}
+                    {...(selection
+                      ? {
+                          "aria-selected": rowSelected,
+                          "data-state": rowSelected ? "selected" : undefined,
+                        }
+                      : {})}
+                    className={cn(
+                      "group border-b transition-colors hover:bg-muted/40",
+                      (onRowActivate || selection) && "cursor-pointer",
+                      rowSelected && "bg-primary/10 hover:bg-primary/15",
+                      rowIndex === focusedRowIndex &&
+                        "bg-primary/5 ring-2 ring-inset ring-primary/50",
+                      rowSelected &&
+                        rowIndex === focusedRowIndex &&
+                        "bg-primary/10",
+                      extra?.className,
+                    )}
+                    onMouseDown={(event) =>
+                      handleRowMouseDown(event, handlerExtra)
+                    }
+                    onClick={(event) =>
+                      handleRowClick(event, handlerExtra, row, rowIndex)
+                    }
+                    onDoubleClick={(event) =>
+                      handleRowDoubleClick(event, handlerExtra, row)
+                    }
+                  >
+                    {selection && (
+                      <td className="w-10 px-3 align-middle">
+                        {rowCheckbox(row, rowIndex, rowSelected)}
+                      </td>
+                    )}
+                    {row.getAllCells().map((cell) => {
+                      const meta = cell.column.columnDef.meta as
+                        | DataGridColumnMeta
+                        | undefined;
+                      return (
+                        <td
+                          key={cell.id}
+                          className={cn(
+                            "whitespace-nowrap p-3 align-middle",
+                            meta?.align === "right" && "text-right",
+                            meta?.cellClassName,
+                          )}
+                        >
+                          <FlexRender cell={cell} />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+            {emptyText && (
+              <tr>
+                <td
+                  colSpan={leafColumns.length + (selection ? 1 : 0)}
+                  className="px-3 py-6 text-center text-sm text-muted-foreground"
+                >
+                  {emptyText}
+                </td>
+              </tr>
+            )}
+            {trailingRows}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

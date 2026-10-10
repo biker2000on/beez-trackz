@@ -49,6 +49,7 @@ import {
   type MiteCount,
   type MiteMethod,
 } from "./hooks";
+import { RawMiteCountsGrid, TreatmentEffectGrid } from "./varroa-grids";
 
 export const METHOD_LABELS: Record<string, string> = {
   alcohol_wash: "Alcohol wash",
@@ -302,85 +303,26 @@ export function VarroaPanel({
               These counts have no days-on-board, so they cannot be shown as a
               mites-per-day rate. Edit them to add exposure duration.
             </p>
-            <ul className="grid gap-2">
-              {rawBoards.map((row) => (
-                <li
-                  key={row.id}
-                  className="flex items-center justify-between gap-3 text-sm"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">
-                      {row.method === "sticky_board"
-                        ? `${row.mitesCount} mites (board drop)`
-                        : `${row.mitesCount} mites (visual)`}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatDate(row.date)}
-                      {row.notes ? ` · ${row.notes}` : ""}
-                    </span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-1">
-                    <span className="text-xs text-muted-foreground">
-                      {METHOD_LABELS[row.method] ?? row.method}
-                    </span>
-                    {canEdit ? (
-                      <>
-                        <Button type="button" variant="ghost" size="icon-sm" aria-label="Edit count" onClick={() => openEdit(row)}>
-                          <Pencil className="size-3.5" />
-                        </Button>
-                        <Button type="button" variant="ghost" size="icon-sm" aria-label="Delete count" onClick={() => setDeleting(row)}>
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </>
-                    ) : null}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <RawMiteCountsGrid
+              counts={rawBoards}
+              canEdit={canEdit}
+              onEdit={openEdit}
+              onDelete={setDeleting}
+            />
           </CardContent>
         </Card>
       ) : null}
 
-      <div className="grid gap-3">
-        {report.data.treatments.map((treatment) => {
-          const before = treatment.beforeRate ?? treatment.beforeMitesPer100;
-          const after = treatment.afterRate ?? treatment.afterMitesPer100;
-          const unit =
-            treatment.beforeRateKind === "per_day" ||
-            treatment.afterRateKind === "per_day"
-              ? "/ day"
-              : "/ 100";
-          return (
-            <Card key={treatment.id}>
-              <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm">
-                <div>
-                  <p className="font-medium">{treatment.product}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatDate(treatment.dateApplied)}
-                    {treatment.method ? ` · ${treatment.method}` : ""}
-                  </p>
-                </div>
-                <div className="text-right">
-                  {treatment.efficacyPercent == null ? (
-                    <span className="text-xs text-muted-foreground">
-                      {treatment.beforeRate != null && treatment.afterRate == null
-                        ? "No matching after count"
-                        : "Needs before/after counts"}
-                    </span>
-                  ) : (
-                    <>
-                      <p className="font-semibold tabular-nums">{treatment.efficacyPercent.toFixed(0)}% reduction</p>
-                      <p className="text-xs text-muted-foreground tabular-nums">
-                        {before?.toFixed(1)} → {after?.toFixed(1)} {unit}
-                      </p>
-                    </>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      {report.data.treatments.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Treatment efficacy</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TreatmentEffectGrid treatments={report.data.treatments} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {canEdit ? <Dialog open={open} onOpenChange={(next) => {
         setOpen(next);

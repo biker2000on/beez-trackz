@@ -101,7 +101,7 @@ export function JarsTab() {
   const columns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
+        columnHelper.accessor((r) => r.honeyOz ?? undefined, { sortUndefined: "last",
           id: "size",
           header: "Size",
           meta: {
@@ -124,7 +124,7 @@ export function JarsTab() {
             </Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => (homeId ? ((byJarSize.get(r.jarSizeId) ?? {})[homeId] ?? 0) : r.onHand), {
           id: "atHome",
           header: "At home",
           meta: {
@@ -146,7 +146,7 @@ export function JarsTab() {
           },
         }),
         ...away.map((location) =>
-          columnHelper.display({
+          columnHelper.accessor((r) => (byJarSize.get(r.jarSizeId) ?? {})[location.id] ?? 0, {
             id: `away-${location.id}`,
             header: location.name,
             meta: {
@@ -162,7 +162,7 @@ export function JarsTab() {
         ),
         ...(away.length > 0
           ? [
-              columnHelper.display({
+              columnHelper.accessor((r) => r.onHand, {
                 id: "total",
                 header: "Total",
                 meta: {
@@ -179,7 +179,7 @@ export function JarsTab() {
               }),
             ]
           : []),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.jarred, {
           id: "jarred",
           header: "Jarred",
           meta: rightAligned,
@@ -187,7 +187,7 @@ export function JarsTab() {
             <Dim faded={row.isActive === false}>{row.jarred}</Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.sold, {
           id: "sold",
           header: "Sold",
           meta: rightAligned,
@@ -195,7 +195,7 @@ export function JarsTab() {
             <Dim faded={row.isActive === false}>{row.sold}</Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.givenAway, {
           id: "given",
           header: "Given",
           meta: rightAligned,
@@ -203,7 +203,7 @@ export function JarsTab() {
             <Dim faded={row.isActive === false}>{row.givenAway}</Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.adjusted, {
           id: "adjusted",
           header: "Adjusted",
           meta: rightAligned,
@@ -213,7 +213,7 @@ export function JarsTab() {
             </Dim>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.defaultPrice ?? undefined, { sortUndefined: "last",
           id: "price",
           header: "Price",
           meta: rightAligned,

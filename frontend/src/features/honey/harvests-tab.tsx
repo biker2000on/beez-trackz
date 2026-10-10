@@ -45,14 +45,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
 import { ApiError } from "@/lib/api";
@@ -68,13 +60,14 @@ import {
   useHiveOptions,
 } from "./hooks";
 import { sessionFinalized } from "./session-detail";
-import type { HarvestSessionRow } from "./types";
+import type { HarvestRow, HarvestSessionRow } from "./types";
 
 const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<
   typeof gridFeatures,
   HarvestSessionRow
 >();
+const harvestColumnHelper = createColumnHelper<typeof gridFeatures, HarvestRow>();
 
 const rightAligned: DataGridColumnMeta = {
   align: "right",
@@ -118,9 +111,78 @@ export function HarvestsTab() {
 
   // Session entries live on their session's page; listing them here as well
   // double-counted every entry with no marker of where it belonged.
-  const standalone = (harvests.data ?? []).filter(
-    (harvest) => !harvest.sessionId,
+  const standalone = React.useMemo(
+    () => (harvests.data ?? []).filter((harvest) => !harvest.sessionId),
+    [harvests.data],
   );
+
+  const harvestColumns = React.useMemo(
+    () =>
+      harvestColumnHelper.columns([
+        harvestColumnHelper.accessor((h) => h.date, {
+          id: "date",
+          header: "Date",
+          meta: { card: "subtitle" } satisfies DataGridColumnMeta,
+          cell: ({ getValue }) => formatDate(getValue()),
+        }),
+        harvestColumnHelper.accessor((h) => h.hiveName, {
+          id: "hive",
+          header: "Hive",
+          meta: { card: "title", cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+        }),
+        harvestColumnHelper.accessor((h) => h.apiaryName, {
+          id: "apiary",
+          header: "Apiary",
+          meta: {
+            cellClassName: "text-muted-foreground",
+            filter: true,
+            filterAllLabel: "All apiaries",
+          } satisfies DataGridColumnMeta,
+        }),
+        harvestColumnHelper.accessor(
+          (h) => (h.directWeight ? undefined : h.superWeightBefore),
+          {
+            id: "before",
+            header: "Super before",
+            sortUndefined: "last",
+            meta: rightAligned,
+            cell: ({ row: { original: h } }) =>
+              h.directWeight ? (
+                <span className="text-xs text-muted-foreground">
+                  Weighed directly
+                </span>
+              ) : (
+                formatHoney(h.superWeightBefore)
+              ),
+          },
+        ),
+        harvestColumnHelper.accessor(
+          (h) => (h.directWeight ? undefined : h.superWeightAfter),
+          {
+            id: "after",
+            header: "Super after",
+            sortUndefined: "last",
+            meta: rightAligned,
+            cell: ({ row: { original: h } }) =>
+              h.directWeight ? "—" : formatHoney(h.superWeightAfter),
+          },
+        ),
+        harvestColumnHelper.accessor((h) => h.calculatedHoneyWeight, {
+          id: "honey",
+          header: "Honey",
+          meta: { align: "right", cellClassName: "font-medium tabular-nums" } satisfies DataGridColumnMeta,
+          cell: ({ getValue }) => formatHoney(getValue()),
+        }),
+      ]),
+    [formatHoney],
+  );
+
+  const harvestTable = useTable({
+    features: gridFeatures,
+    columns: harvestColumns,
+    data: standalone,
+    getRowId: (harvest) => harvest.id,
+  });
 
   const sessionRows = React.useMemo(
     () => sessions.data ?? [],
@@ -130,20 +192,21 @@ export function HarvestsTab() {
   const sessionColumns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
+        columnHelper.accessor((s) => s.date, {
           id: "date",
           header: "Date",
           cell: ({ row }) => formatDate(row.original.date),
         }),
-        columnHelper.display({
+        columnHelper.accessor((s) => s.apiaryName, {
           id: "apiary",
           header: "Apiary",
-          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          meta: { cellClassName: "font-medium", filter: true, filterAllLabel: "All apiaries" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.apiaryName,
         }),
-        columnHelper.display({
+        columnHelper.accessor((s) => (sessionFinalized(s.totalExtractedWeight) ? "Finalized" : "In progress"), {
           id: "status",
           header: "Status",
+          meta: { card: "badge", filter: true, filterAllLabel: "Any status" } satisfies DataGridColumnMeta,
           cell: ({ row }) => {
             const finalized = sessionFinalized(
               row.original.totalExtractedWeight,
@@ -155,19 +218,19 @@ export function HarvestsTab() {
             );
           },
         }),
-        columnHelper.display({
+        columnHelper.accessor((s) => s.entryCount, {
           id: "hives",
           header: "Hives",
           meta: rightAligned,
           cell: ({ row }) => row.original.entryCount,
         }),
-        columnHelper.display({
+        columnHelper.accessor((s) => s.calculatedTotal, {
           id: "calculated",
           header: "Calculated",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.calculatedTotal),
         }),
-        columnHelper.display({
+        columnHelper.accessor((s) => s.totalExtractedWeight ?? undefined, { sortUndefined: "last",
           id: "extracted",
           header: "Extracted",
           meta: rightAligned,
@@ -278,51 +341,12 @@ export function HarvestsTab() {
           </p>
         ) : (
           <div className="rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Hive</TableHead>
-                  <TableHead>Apiary</TableHead>
-                  <TableHead className="text-right">Super before</TableHead>
-                  <TableHead className="text-right">Super after</TableHead>
-                  <TableHead className="text-right">Honey</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {standalone.map((harvest) => (
-                  <TableRow key={harvest.id}>
-                    <TableCell>{formatDate(harvest.date)}</TableCell>
-                    <TableCell className="font-medium">
-                      {harvest.hiveName}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {harvest.apiaryName}
-                    </TableCell>
-                    {harvest.directWeight ? (
-                      <TableCell
-                        colSpan={2}
-                        className="text-right text-xs text-muted-foreground"
-                      >
-                        Weighed directly
-                      </TableCell>
-                    ) : (
-                      <>
-                        <TableCell className="text-right tabular-nums">
-                          {formatHoney(harvest.superWeightBefore)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatHoney(harvest.superWeightAfter)}
-                        </TableCell>
-                      </>
-                    )}
-                    <TableCell className="text-right font-medium tabular-nums">
-                      {formatHoney(harvest.calculatedHoneyWeight)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataGrid
+              table={harvestTable}
+              aria-label="Individual harvests"
+              listenOnWindow={false}
+              searchable={standalone.length > 8}
+            />
           </div>
         )}
       </section>

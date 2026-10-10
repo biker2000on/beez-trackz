@@ -66,11 +66,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useShortcut } from "@/components/shortcuts/provider";
 
 import { FeedingDialog } from "@/features/feedings/feeding-dialog";
-import { useUnits } from "@/lib/use-units";
 import {
-  feederTypeLabel,
-  feedingTypeLabel,
-  formatFeedingAmount,
   useHiveFeedings,
   useCloseFeeding,
   useRefillFeeding,
@@ -86,6 +82,7 @@ import type { HiveTimelineEntry } from "@/features/operations/hooks";
 import { VarroaPanel } from "@/features/operations/varroa-panel";
 import { HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
+import { FeedingsGrid, SplitsGrid } from "./hive-record-grids";
 import { HiveOverviewTab } from "./overview-tab";
 import {
   useArchiveHive,
@@ -560,7 +557,6 @@ function FeedingsList({
   canEdit: boolean;
 }) {
   const feedings = useHiveFeedings(hiveId);
-  const units = useUnits();
   const closeFeeding = useCloseFeeding();
   const refillFeeding = useRefillFeeding();
   const deleteFeeding = useDeleteFeeding();
@@ -617,83 +613,18 @@ function FeedingsList({
       ) : (feedings.data?.length ?? 0) === 0 ? (
         <p className="text-sm text-muted-foreground">No feedings recorded.</p>
       ) : (
-        <ul className="grid gap-2">
-          {feedings.data?.map((feeding) => (
-            <li
-              key={feeding.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-            >
-              <div className="min-w-0">
-                <p className="font-medium">
-                  {feedingTypeLabel(feeding.type)} —{" "}
-                  {formatFeedingAmount(
-                    feeding.quantity,
-                    feeding.quantityUnit,
-                    units.units,
-                  )}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Fed {formatDate(feeding.dateFed)}
-                  {feeding.feederType &&
-                    ` · ${feederTypeLabel(feeding.feederType)}`}
-                  {feeding.status === "closed"
-                    ? ` · closed ${formatDate(feeding.dateEmpty ?? feeding.closedAt ?? feeding.dateFed)}`
-                    : feeding.status === "unverified"
-                      ? " · no recorded end — verify in the field"
-                      : " · feeder on the hive"}
-                </p>
-              </div>
-              {canEdit ? <div className="flex items-center gap-2">
-                {feeding.status === "open" && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onRefill(feeding.id)}
-                      disabled={refillFeeding.isPending}
-                    >
-                      Refill
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        onClose(feeding.id, "emptied", "Feeder closed")
-                      }
-                      disabled={closeFeeding.isPending}
-                    >
-                      Close
-                    </Button>
-                  </>
-                )}
-                {feeding.status === "unverified" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      onClose(
-                        feeding.id,
-                        "verified_closed",
-                        "Verified — no feeder on the hive",
-                      )
-                    }
-                    disabled={closeFeeding.isPending}
-                  >
-                    Verify &amp; close
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onDelete(feeding.id)}
-                  disabled={deleteFeeding.isPending}
-                >
-                  Delete
-                </Button>
-              </div> : null}
-            </li>
-          ))}
-        </ul>
+        <FeedingsGrid
+          feedings={feedings.data ?? []}
+          canEdit={canEdit}
+          actions={{
+            onRefill,
+            onClose,
+            onDelete,
+            refilling: refillFeeding.isPending,
+            closing: closeFeeding.isPending,
+            deleting: deleteFeeding.isPending,
+          }}
+        />
       )}
     </div>
   );
@@ -709,44 +640,7 @@ function SplitsList({ hiveId }: { hiveId: string }) {
       </p>
     );
   }
-  return (
-    <ul className="grid gap-2">
-      {splits.data?.map((split) => {
-        const isParent = split.parentHiveId === hiveId;
-        const otherId = isParent ? split.childHiveId : split.parentHiveId;
-        const otherLabel = isParent ? split.childLabel : split.parentLabel;
-        return (
-          <li
-            key={split.id}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-          >
-            <div className="min-w-0">
-              <p className="font-medium">
-                {isParent ? "Split into" : "Split from"}{" "}
-                <Link
-                  href={`/yard/hives/${otherId}`}
-                  className="text-primary underline-offset-4 hover:underline"
-                >
-                  {otherLabel}
-                </Link>
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {formatDate(split.splitDate)} · {split.splitType}
-                {split.framesMoved != null &&
-                  ` · ${split.framesMoved} frames moved`}
-              </p>
-              {split.notes && (
-                <p className="text-xs text-muted-foreground">{split.notes}</p>
-              )}
-            </div>
-            <Badge variant={isParent ? "secondary" : "outline"}>
-              {isParent ? "Parent" : "Child"}
-            </Badge>
-          </li>
-        );
-      })}
-    </ul>
-  );
+  return <SplitsGrid hiveId={hiveId} splits={splits.data ?? []} />;
 }
 
 function LocationHistory({ hiveId }: { hiveId: string }) {

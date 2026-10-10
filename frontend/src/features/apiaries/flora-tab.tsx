@@ -2,13 +2,12 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Flower2, Trash2 } from "lucide-react";
+import { Flower2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
 import { ApiError } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -29,9 +28,10 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { formatDate, todayInput } from "@/features/hives/lib";
+import { todayInput } from "@/features/hives/lib";
 import { useUnits } from "@/lib/use-units";
 import { FlowCalendarCard } from "./flow-calendar";
+import { ActiveBloomsGrid, BloomHistoryGrid } from "./flora-grids";
 import { ScalePanel } from "./scale-panel";
 import {
   useApiary,
@@ -339,37 +339,12 @@ export function FloraTab({
                   : "Nothing blooming right now in this elevation band."}
               </p>
             ) : (
-              <ul className="grid gap-2">
-                {active.data?.map((bloom) => (
-                  <li
-                    key={bloom.id}
-                    className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-medium">{bloom.species}</p>
-                      <p className="text-xs text-muted-foreground">
-                        Since {formatDate(bloom.dateFirstSeen)}
-                        {bloom.abundance != null &&
-                          ` · abundance ${bloom.abundance}/5`}
-                        {` · ${bloom.elevationBandLabel}`}
-                        {bloom.elevationM != null
-                          ? ` (${units.formatElevation(bloom.elevationM)})`
-                          : ""}
-                      </p>
-                    </div>
-                    {canEdit ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onEndBloom(bloom.id)}
-                        disabled={endBloom.isPending}
-                      >
-                        End bloom
-                      </Button>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
+              <ActiveBloomsGrid
+                blooms={active.data ?? []}
+                canEdit={canEdit}
+                ending={endBloom.isPending}
+                onEnd={onEndBloom}
+              />
             )}
           </CardContent>
         </Card>
@@ -388,41 +363,11 @@ export function FloraTab({
                   : "No blooms recorded in this elevation band."}
               </p>
             ) : (
-              <ul className="grid gap-1.5">
-                {history.data?.map((bloom) => (
-                  <li
-                    key={bloom.id}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="truncate">{bloom.species}</span>
-                      <Badge variant="outline">{bloom.year}</Badge>
-                      {bloom.elevationBand ? (
-                        <Badge variant="outline">
-                          {bloom.elevationBandLabel}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="text-xs text-muted-foreground">
-                        {formatDate(bloom.dateFirstSeen)}
-                        {bloom.dateLastSeen &&
-                          ` – ${formatDate(bloom.dateLastSeen)}`}
-                      </span>
-                      {canEdit ? (
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Delete ${bloom.species} observation`}
-                          onClick={() => onDeleteBloom(bloom.id)}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <BloomHistoryGrid
+                blooms={history.data ?? []}
+                canEdit={canEdit}
+                onDelete={onDeleteBloom}
+              />
             )}
           </CardContent>
         </Card>

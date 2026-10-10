@@ -141,7 +141,7 @@ export function HivesListPage() {
               columnHelper.display({
                 id: "select",
                 header: () => <span className="sr-only">Selected</span>,
-                meta: { headClassName: "w-10" } satisfies DataGridColumnMeta,
+                meta: { headClassName: "w-10", card: "badge" } satisfies DataGridColumnMeta,
                 cell: ({ row }) => (
                   <Checkbox
                     checked={selected.has(row.original.id)}
@@ -153,10 +153,10 @@ export function HivesListPage() {
               }),
             ]
           : []),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.positionLabel, {
           id: "hive",
           header: "Hive",
-          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          meta: { cellClassName: "font-medium", card: "title" } satisfies DataGridColumnMeta,
           cell: ({ row: { original: hive } }) => (
             <>
               {/* The name stays a link in bulk mode so a row can be
@@ -176,17 +176,17 @@ export function HivesListPage() {
             </>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.apiaryName, {
           id: "apiary",
           header: "Apiary",
           cell: ({ row }) => row.original.apiaryName,
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.status, {
           id: "status",
           header: "Status",
           cell: ({ row }) => <HiveStatusBadge status={row.original.status} />,
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.installedDate, {
           id: "installed",
           header: "Installed",
           meta: {

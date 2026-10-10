@@ -256,3 +256,44 @@ test("shift+arrow extends from the keyboard and select all says it means loaded 
   await expect(page.getByText("50 selected", { exact: true })).toBeVisible();
   await expect(row(page, 60)).toHaveAttribute("aria-selected", "false");
 });
+
+test("on a phone the ledger is cards that select by tap and checkbox, with select all above them", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApp(page);
+  await page.goto("/production/activity");
+
+  const list = page.getByRole("list", { name: "Honey activity" });
+  await expect(list).toBeVisible();
+  await expect(page.getByRole("table", { name: "Honey activity" })).toHaveCount(0);
+  const cards = list.locator("[data-grid-card]");
+  await expect(cards).toHaveCount(50);
+  /** Tap a card on its Amount label (never on a link or the action button). */
+  const tapCard = (index: number) =>
+    cards.nth(index).getByText("Amount", { exact: true }).click();
+
+  // A tap selects one card, like a row click.
+  await tapCard(1);
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+  await expect(cards.nth(1)).toHaveAttribute("data-state", "selected");
+  await expect(cards.nth(1).getByRole("checkbox")).toHaveAttribute("data-state", "checked");
+
+  // A card's checkbox adds to the selection instead of replacing it.
+  await cards.nth(4).getByRole("checkbox").click();
+  await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
+  await expect(cards.nth(1)).toHaveAttribute("data-state", "selected");
+  await expect(cards.nth(4)).toHaveAttribute("data-state", "selected");
+  await expect(cards.nth(2)).not.toHaveAttribute("data-state", "selected");
+
+  // A plain tap elsewhere collapses to that card.
+  await tapCard(6);
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+  await expect(cards.nth(4)).not.toHaveAttribute("data-state", "selected");
+
+  // Cards have no header row: select all sits above them.
+  await page.getByRole("checkbox", { name: "Select all loaded activity rows" }).click();
+  await expect(page.getByText("50 loaded rows selected", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByText(/\d+ selected/)).toHaveCount(0);
+});

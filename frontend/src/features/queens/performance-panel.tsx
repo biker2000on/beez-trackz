@@ -58,7 +58,7 @@ export function QueenPerformancePanel() {
   const columns = React.useMemo(
     () =>
       columnHelper.columns([
-        columnHelper.display({
+        columnHelper.accessor((q) => (q.apiaryName && q.hiveName ? `${q.apiaryName} · ${q.hiveName}` : `Queen ${q.id.slice(0, 8)}`), {
           id: "queen",
           header: "Queen / hive",
           cell: ({ row: { original: queen } }) => (
@@ -74,7 +74,7 @@ export function QueenPerformancePanel() {
             </>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => matingById.get(r.id)?.matedAtApiaryName ?? "", {
           id: "matedAt",
           header: "Mated at",
           meta: {
@@ -83,7 +83,7 @@ export function QueenPerformancePanel() {
           cell: ({ row }) =>
             matingById.get(row.original.id)?.matedAtApiaryName ?? "—",
         }),
-        columnHelper.display({
+        columnHelper.accessor((q) => q.overallScore, {
           id: "overall",
           header: "Overall",
           meta: rightAligned,
@@ -95,25 +95,25 @@ export function QueenPerformancePanel() {
             </span>
           ),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.broodScore, {
           id: "brood",
           header: "Brood",
           meta: rightAligned,
           cell: ({ row }) => row.original.broodScore.toFixed(0),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.temperamentScore, {
           id: "temperament",
           header: "Temperament",
           meta: rightAligned,
           cell: ({ row }) => row.original.temperamentScore.toFixed(0),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.yieldPounds, {
           id: "yield",
           header: "Yield",
           meta: rightAligned,
           cell: ({ row }) => formatHoney(row.original.yieldPounds),
         }),
-        columnHelper.display({
+        columnHelper.accessor((r) => r.inspectionCount, {
           id: "inspections",
           header: "Inspections",
           meta: rightAligned,
