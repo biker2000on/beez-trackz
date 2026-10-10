@@ -62,6 +62,7 @@ const ROUTES = [
   "/sales/consignment/warm",
   "/sales/customers",
   "/sales/expenses",
+  "/sales/expenses/categorize",
   "/sales/warm",
   "/stock/equipment",
   "/stock/bulk",

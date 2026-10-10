@@ -48,6 +48,8 @@ export interface FolioImportItem {
 
 export interface FolioImportList {
   items: FolioImportItem[];
+  /** Rows in the view; more than `items.length` when `limit` cut it short. */
+  total?: number;
   counts: FolioImportCounts;
   expenseCategories: string[];
   otherIncomeCategories: string[];
@@ -68,8 +70,11 @@ export function formatFolioAmount(
   return direction === "income" ? `+${format(amount)}` : format(amount);
 }
 
-/** Where the To-categorize list opens filtered to unlinked deposits. */
-export const UNLINKED_INCOME_HREF = "/sales/expenses?folio=unlinked#folio-imports";
+/** The bulk Categorize page for imported entries. */
+export const CATEGORIZE_HREF = "/sales/expenses/categorize";
+
+/** The Categorize page filtered to deposits not linked to a sale. */
+export const UNLINKED_INCOME_HREF = `${CATEGORIZE_HREF}?status=unlinked`;
 
 export interface FolioSaleCandidate {
   id: string;
@@ -86,11 +91,19 @@ export interface FolioSaleCandidate {
  */
 export type FolioImportView = "attention" | "unlinked" | "all";
 
-export function useFolioImports(view: FolioImportView = "attention") {
+/** The most rows GET /folio-imports returns (folioListMaxLimit). */
+export const FOLIO_IMPORTS_MAX_LIMIT = 20000;
+
+export function useFolioImports(
+  view: FolioImportView = "attention",
+  limit?: number,
+) {
   return useQuery({
-    queryKey: ["folio-imports", view],
+    queryKey: ["folio-imports", view, limit ?? null],
     queryFn: () =>
-      api.get<FolioImportList>("/folio-imports", { params: { view } }),
+      api.get<FolioImportList>("/folio-imports", {
+        params: limit ? { view, limit } : { view },
+      }),
   });
 }
 
@@ -138,4 +151,47 @@ export function useAcceptFolioImport() {
 
 export function useKeepFolioImport() {
   return useFolioMutation((id: string) => api.post(`/folio-imports/${id}/keep`));
+}
+
+/** One id a bulk request refused (400 `rejected`), and why. */
+export interface FolioBulkRejection {
+  id: string;
+  reason: string;
+}
+
+/** The per-id refusals carried by a bulk request's 400, if any. */
+export function folioBulkRejections(error: unknown): FolioBulkRejection[] {
+  const body = (error as { body?: unknown } | null)?.body;
+  const rejected = (body as { rejected?: unknown } | null)?.rejected;
+  return Array.isArray(rejected) ? (rejected as FolioBulkRejection[]) : [];
+}
+
+interface FolioBulkResult {
+  success: boolean;
+  updated: number;
+}
+
+/**
+ * Categorize many entries in one all-or-nothing request: expenses (refunds
+ * included) or income, never both.
+ */
+export function useBulkCategorizeFolioImports() {
+  return useFolioMutation(
+    ({ ids, category }: { ids: string[]; category: string }) =>
+      api.put<FolioBulkResult>("/folio-imports/category", { ids, category }),
+  );
+}
+
+/** "Accept Folio" for many flagged entries, all-or-nothing. */
+export function useBulkAcceptFolioImports() {
+  return useFolioMutation((ids: string[]) =>
+    api.post<FolioBulkResult>("/folio-imports/accept", { ids }),
+  );
+}
+
+/** "Keep Atlas version" for many flagged entries, all-or-nothing. */
+export function useBulkKeepFolioImports() {
+  return useFolioMutation((ids: string[]) =>
+    api.post<FolioBulkResult>("/folio-imports/keep", { ids }),
+  );
 }

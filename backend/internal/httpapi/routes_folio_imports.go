@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -49,6 +50,9 @@ const unlinkedIncomeSQL = `oi.deleted_at IS NULL AND oi.sale_id IS NULL AND oi.a
 func (s *Server) mountFolioImports(r chi.Router) {
 	admin := r.With(s.requireAdmin)
 	admin.Get("/folio-imports", s.handleFolioEntryList)
+	admin.Put("/folio-imports/category", s.handleFolioImportBulkCategory)
+	admin.Post("/folio-imports/accept", s.handleFolioImportBulkAccept)
+	admin.Post("/folio-imports/keep", s.handleFolioImportBulkKeep)
 	admin.Put("/folio-imports/{id}/category", s.handleFolioImportCategory)
 	admin.Put("/folio-imports/{id}/sale", s.handleFolioImportSale)
 	admin.Get("/folio-imports/{id}/sale-candidates", s.handleFolioEntrySaleCandidates)
@@ -78,13 +82,32 @@ type folioImportItem struct {
 	Deleted         bool          `json:"deleted"`
 }
 
-// GET /folio-imports?view=attention|unlinked|all — attention (the default) is
-// the "To categorize" list plus every conflict; unlinked is imported income
-// not linked to an Atlas sale (unlinkedIncomeSQL); all is every imported
-// entry.
+// folioListDefaultLimit / folioListMaxLimit bound GET /folio-imports. The
+// default suits the summary card; the Categorize page asks for the maximum so
+// a long history is listed whole. Rows needing attention sort first in every
+// view, so a capped list never hides one behind categorized history.
+const (
+	folioListDefaultLimit = 1000
+	folioListMaxLimit     = 20000
+)
+
+// GET /folio-imports?view=attention|unlinked|all&limit=N — attention (the
+// default) is the "To categorize" list plus every conflict; unlinked is
+// imported income not linked to an Atlas sale (unlinkedIncomeSQL); all is
+// every imported entry. `total` is how many rows the view holds, so a client
+// can tell when `limit` cut the list short.
 func (s *Server) handleFolioEntryList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	view := r.URL.Query().Get("view")
+	limit := folioListDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = min(parsed, folioListMaxLimit)
+	}
 	filter := `COALESCE(e.deleted_at, oi.deleted_at) IS NULL
 		AND (COALESCE(e.category, oi.category) = 'uncategorized' OR fi.state IS NOT NULL)`
 	switch view {
@@ -92,6 +115,17 @@ func (s *Server) handleFolioEntryList(w http.ResponseWriter, r *http.Request) {
 		filter = `(COALESCE(e.deleted_at, oi.deleted_at) IS NULL OR fi.state IS NOT NULL)`
 	case "unlinked":
 		filter = `fi.direction = 'income' AND ` + unlinkedIncomeSQL
+	}
+	const fromSQL = `
+		FROM folio_imports fi
+		JOIN gnucash_books b ON b.id = fi.book_id
+		LEFT JOIN expenses e ON e.id = fi.expense_id
+		LEFT JOIN other_income oi ON oi.id = fi.income_id
+		LEFT JOIN sales s ON s.id = oi.sale_id`
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) `+fromSQL+` WHERE `+filter).Scan(&total); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT fi.id, fi.book_id, b.label, b.retired_at IS NOT NULL, fi.transaction_guid,
@@ -102,14 +136,13 @@ func (s *Server) handleFolioEntryList(w http.ResponseWriter, r *http.Request) {
 			NULLIF(concat_ws(' — ', s.order_number, s.customer_name), ''),
 			fi.state, fi.message, fi.pending,
 			COALESCE(e.deleted_at, oi.deleted_at) IS NOT NULL
-		FROM folio_imports fi
-		JOIN gnucash_books b ON b.id = fi.book_id
-		LEFT JOIN expenses e ON e.id = fi.expense_id
-		LEFT JOIN other_income oi ON oi.id = fi.income_id
-		LEFT JOIN sales s ON s.id = oi.sale_id
+		`+fromSQL+`
 		WHERE `+filter+`
-		ORDER BY fi.state IS NULL, COALESCE(e.expense_date, oi.income_date) DESC, fi.created_at DESC
-		LIMIT 1000`)
+		ORDER BY fi.state IS NULL,
+			NOT (COALESCE(e.deleted_at, oi.deleted_at) IS NULL
+				AND COALESCE(e.category, oi.category) = 'uncategorized'),
+			COALESCE(e.expense_date, oi.income_date) DESC, fi.created_at DESC
+		LIMIT $1`, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
@@ -147,6 +180,7 @@ func (s *Server) handleFolioEntryList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":                 items,
+		"total":                 total,
 		"counts":                counts,
 		"expenseCategories":     gnucashsync.ExpenseCategories,
 		"otherIncomeCategories": otherIncomeCategories,
@@ -228,27 +262,235 @@ func (s *Server) handleFolioImportCategory(w http.ResponseWriter, r *http.Reques
 			if err != nil {
 				return err
 			}
-			if row.EntityDeleted {
-				return app.Conflict(op, "This entry was removed from Atlas")
+			if err := folioCheckCategory(op, row, req.Category); err != nil {
+				return err
 			}
-			if row.Direction == gnucashsync.ImportExpense {
-				if req.Category != "uncategorized" && !expenseCategories[req.Category] {
-					return app.Invalid(op, "unknown expense category %q", req.Category).WithField("category")
-				}
-				_, err = uow.Exec(ctx, `UPDATE expenses SET category = $2 WHERE id = $1`, *row.ExpenseID, req.Category)
-				return app.Internal(op, err)
-			}
-			if !containsString(otherIncomeCategories, req.Category) {
-				return app.Invalid(op, "unknown income category %q", req.Category).WithField("category")
-			}
-			_, err = uow.Exec(ctx, `UPDATE other_income SET category = $2 WHERE id = $1`, *row.IncomeID, req.Category)
-			return app.Internal(op, err)
+			return folioApplyCategory(ctx, uow, op, row, req.Category)
 		})
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// folioCheckCategory is the validation every categorize path shares: the
+// entry still exists in Atlas and the category is one its direction allows
+// (expense categories for expenses and refunds, other-income categories for
+// income). "uncategorized" puts an entry back on the list.
+func folioCheckCategory(op string, row folioImportRow, category string) error {
+	if row.EntityDeleted {
+		return app.Conflict(op, "This entry was removed from Atlas")
+	}
+	if row.Direction == gnucashsync.ImportExpense {
+		if row.ExpenseID == nil || (category != "uncategorized" && !expenseCategories[category]) {
+			return app.Invalid(op, "unknown expense category %q", category).WithField("category")
+		}
+		return nil
+	}
+	if row.IncomeID == nil || !containsString(otherIncomeCategories, category) {
+		return app.Invalid(op, "unknown income category %q", category).WithField("category")
+	}
+	return nil
+}
+
+// folioApplyCategory writes a category folioCheckCategory accepted. Atlas
+// only; Folio is not written.
+func folioApplyCategory(ctx context.Context, uow *app.UnitOfWork, op string, row folioImportRow, category string) error {
+	var err error
+	if row.Direction == gnucashsync.ImportExpense {
+		_, err = uow.Exec(ctx, `UPDATE expenses SET category = $2 WHERE id = $1`, *row.ExpenseID, category)
+	} else {
+		_, err = uow.Exec(ctx, `UPDATE other_income SET category = $2 WHERE id = $1`, *row.IncomeID, category)
+	}
+	return app.Internal(op, err)
+}
+
+// folioBulkMaxIDs bounds one bulk request.
+const folioBulkMaxIDs = 2000
+
+// folioBulkRejection is one id a bulk request refused, and why.
+type folioBulkRejection struct {
+	ID     uuid.UUID `json:"id"`
+	Reason string    `json:"reason"`
+}
+
+// folioBulkError carries the per-id refusals out of the transaction, which
+// it rolls back: bulk changes are all-or-nothing.
+type folioBulkError struct {
+	message  string
+	rejected []folioBulkRejection
+}
+
+func (e *folioBulkError) Error() string { return e.message }
+
+// folioBulkIDs de-duplicates a bulk request's ids, keeping request order.
+func folioBulkIDs(raw []uuid.UUID) ([]uuid.UUID, error) {
+	if len(raw) > folioBulkMaxIDs {
+		return nil, errors.New("too many entries in one request")
+	}
+	seen := make(map[uuid.UUID]bool, len(raw))
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, id := range raw {
+		if id == uuid.Nil || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("choose at least one entry")
+	}
+	return ids, nil
+}
+
+// loadFolioImportsByIDs locks and loads the given entries, in request order.
+// Ids with no entry are returned separately.
+func loadFolioImportsByIDs(ctx context.Context, q app.Querier, ids []uuid.UUID) ([]folioImportRow, []uuid.UUID, error) {
+	rows, err := q.Query(ctx, folioImportSelect+` WHERE fi.id = ANY($1) ORDER BY fi.id FOR UPDATE OF fi`, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	byID := make(map[uuid.UUID]folioImportRow, len(ids))
+	for rows.Next() {
+		row, err := scanFolioImportRow(rows)
+		if err != nil {
+			return nil, nil, err
+		}
+		byID[row.ID] = row
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	found := make([]folioImportRow, 0, len(byID))
+	var missing []uuid.UUID
+	for _, id := range ids {
+		if row, ok := byID[id]; ok {
+			found = append(found, row)
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	return found, missing, nil
+}
+
+// runFolioBulk loads and locks the ids, asks check for the rows it refuses,
+// and only when none is refused applies apply to each row — all in one
+// transaction. Any refusal saves nothing and answers 400 with every
+// offending id and its reason.
+func (s *Server) runFolioBulk(w http.ResponseWriter, r *http.Request, rawIDs []uuid.UUID, op string,
+	check func(rows []folioImportRow) []folioBulkRejection,
+	apply func(ctx context.Context, uow *app.UnitOfWork, row folioImportRow) error,
+) {
+	ids, err := folioBulkIDs(rawIDs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	err = app.NewRunner(s.pool).Run(r.Context(), s.gnucashActor(r),
+		func(ctx context.Context, uow *app.UnitOfWork) error {
+			rows, missing, err := loadFolioImportsByIDs(ctx, uow, ids)
+			if err != nil {
+				return app.Internal(op, err)
+			}
+			var rejected []folioBulkRejection
+			for _, id := range missing {
+				rejected = append(rejected, folioBulkRejection{ID: id, Reason: "Imported entry not found"})
+			}
+			rejected = append(rejected, check(rows)...)
+			if len(rejected) > 0 {
+				noun := "entries"
+				if len(rejected) == 1 {
+					noun = "entry"
+				}
+				return &folioBulkError{
+					message: strconv.Itoa(len(rejected)) + " selected " + noun +
+						" can't be changed; nothing was saved",
+					rejected: rejected,
+				}
+			}
+			for _, row := range rows {
+				if err := apply(ctx, uow, row); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	var bulk *folioBulkError
+	if errors.As(err, &bulk) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": bulk.message, "rejected": bulk.rejected})
+		return
+	}
+	if err != nil {
+		writeAppError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "updated": len(ids)})
+}
+
+// PUT /folio-imports/category {"ids": [...], "category": "..."} — categorize
+// many imported entries at once, in one transaction, with the single-row
+// rules (folioCheckCategory). The entries must all be one kind — expenses
+// (refunds included) or income — since the two have different categories,
+// and an entry deleted in Folio must be settled (accept or keep) first. Any
+// refusal saves nothing and answers 400 listing each offending id.
+func (s *Server) handleFolioImportBulkCategory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs      []uuid.UUID `json:"ids"`
+		Category string      `json:"category"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	const op = "categorize imported entries"
+	s.runFolioBulk(w, r, req.IDs, op,
+		func(rows []folioImportRow) []folioBulkRejection {
+			return folioBulkCategoryRejections(op, rows, req.Category)
+		},
+		func(ctx context.Context, uow *app.UnitOfWork, row folioImportRow) error {
+			return folioApplyCategory(ctx, uow, op, row, req.Category)
+		})
+}
+
+// folioBulkCategoryRejections is the bulk categorize check. In a mixed
+// selection the smaller kind is what does not belong (a tie names the
+// income); every other row gets the single-row check.
+func folioBulkCategoryRejections(op string, rows []folioImportRow, category string) []folioBulkRejection {
+	expenses, income := 0, 0
+	for _, row := range rows {
+		if row.Direction == gnucashsync.ImportExpense {
+			expenses++
+		} else {
+			income++
+		}
+	}
+	var minority gnucashsync.ImportDirection
+	if expenses > 0 && income > 0 {
+		minority = gnucashsync.ImportIncome
+		if expenses < income {
+			minority = gnucashsync.ImportExpense
+		}
+	}
+	var rejected []folioBulkRejection
+	for _, row := range rows {
+		var reason string
+		switch {
+		case minority != "" && row.Direction == minority:
+			reason = "Select only expenses or only income"
+		case row.State == "remote_deleted" && !row.EntityDeleted:
+			reason = "Deleted in Folio: accept or keep it first"
+		default:
+			if err := folioCheckCategory(op, row, category); err != nil {
+				reason = appMessage(err)
+			}
+		}
+		if reason != "" {
+			rejected = append(rejected, folioBulkRejection{ID: row.ID, Reason: reason})
+		}
+	}
+	return rejected
 }
 
 func containsString(list []string, value string) bool {
@@ -403,34 +645,86 @@ func (s *Server) resolveFolioImport(w http.ResponseWriter, r *http.Request, acce
 			if row.State == "" {
 				return app.Conflict(op, "This entry has nothing to resolve")
 			}
-			var pending *folioPending
-			if len(row.Pending) > 0 {
-				var decoded folioPending
-				if json.Unmarshal(row.Pending, &decoded) == nil {
-					pending = &decoded
-				}
-			}
-			switch {
-			case accept && row.State == "remote_deleted":
-				if err := folioSoftDeleteEntity(ctx, uow, row, "Deleted in Folio", actor); err != nil {
-					return app.Internal(op, err)
-				}
-			case accept && row.State == "remote_changed" && pending != nil:
-				if err := folioApplyPending(ctx, uow, row, *pending, nil, actor); err != nil {
-					return app.Internal(op, err)
-				}
-				return nil
-			case !accept && pending != nil:
-				// Keep Atlas's entry; acknowledge the Folio values as seen.
-				return app.Internal(op, folioStoreSnapshot(ctx, uow, row.ID, *pending, nil))
-			}
-			_, err = uow.Exec(ctx, `
-				UPDATE folio_imports SET state = NULL, message = NULL, pending = NULL WHERE id = $1`, row.ID)
-			return app.Internal(op, err)
+			return folioResolveRow(ctx, uow, op, row, accept, actor)
 		})
 	if err != nil {
 		writeAppError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+}
+
+// folioResolveRow settles one flagged entry: accept takes Folio's side
+// (apply the changed version, or remove an entry deleted in Folio); keep
+// leaves Atlas as it is and records the Folio version as seen. Shared by the
+// single-row and bulk routes.
+func folioResolveRow(ctx context.Context, uow *app.UnitOfWork, op string, row folioImportRow,
+	accept bool, actor *uuid.UUID) error {
+	var pending *folioPending
+	if len(row.Pending) > 0 {
+		var decoded folioPending
+		if json.Unmarshal(row.Pending, &decoded) == nil {
+			pending = &decoded
+		}
+	}
+	switch {
+	case accept && row.State == "remote_deleted":
+		if err := folioSoftDeleteEntity(ctx, uow, row, "Deleted in Folio", actor); err != nil {
+			return app.Internal(op, err)
+		}
+	case accept && row.State == "remote_changed" && pending != nil:
+		if err := folioApplyPending(ctx, uow, row, *pending, nil, actor); err != nil {
+			return app.Internal(op, err)
+		}
+		return nil
+	case !accept && pending != nil:
+		// Keep Atlas's entry; acknowledge the Folio values as seen.
+		return app.Internal(op, folioStoreSnapshot(ctx, uow, row.ID, *pending, nil))
+	}
+	_, err := uow.Exec(ctx, `
+		UPDATE folio_imports SET state = NULL, message = NULL, pending = NULL WHERE id = $1`, row.ID)
+	return app.Internal(op, err)
+}
+
+// POST /folio-imports/accept {"ids": [...]} — "Accept Folio" for many flagged
+// entries in one transaction: apply each changed version, remove each entry
+// deleted in Folio. Every entry must be flagged, with a Folio version Atlas
+// can take ("unrepresentable" ones can only be kept). All-or-nothing.
+func (s *Server) handleFolioImportBulkAccept(w http.ResponseWriter, r *http.Request) {
+	s.resolveFolioImports(w, r, true)
+}
+
+// POST /folio-imports/keep {"ids": [...]} — "Keep Atlas version" for many
+// flagged entries in one transaction. All-or-nothing.
+func (s *Server) handleFolioImportBulkKeep(w http.ResponseWriter, r *http.Request) {
+	s.resolveFolioImports(w, r, false)
+}
+
+func (s *Server) resolveFolioImports(w http.ResponseWriter, r *http.Request, accept bool) {
+	var req struct {
+		IDs []uuid.UUID `json:"ids"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	actor := actorID(r)
+	const op = "resolve imported entries"
+	s.runFolioBulk(w, r, req.IDs, op,
+		func(rows []folioImportRow) []folioBulkRejection {
+			var rejected []folioBulkRejection
+			for _, row := range rows {
+				switch {
+				case row.State == "":
+					rejected = append(rejected, folioBulkRejection{ID: row.ID, Reason: "Nothing to resolve"})
+				case accept && row.State == "unrepresentable":
+					rejected = append(rejected, folioBulkRejection{ID: row.ID,
+						Reason: "Atlas can't take the Folio version of this entry: keep it instead"})
+				}
+			}
+			return rejected
+		},
+		func(ctx context.Context, uow *app.UnitOfWork, row folioImportRow) error {
+			return folioResolveRow(ctx, uow, op, row, accept, actor)
+		})
 }

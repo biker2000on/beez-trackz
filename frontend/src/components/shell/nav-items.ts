@@ -68,7 +68,8 @@ export const NAV_ITEMS: NavItem[] = [
     { label: "Market day", href: "/sales/market-day" },
     { label: "Consignment", href: "/sales/consignment" },
     { label: "Customers & wholesale", href: "/sales/customers" },
-    { label: "Expenses", href: "/sales/expenses" },
+    { label: "Expenses", href: "/sales/expenses", exact: true },
+    { label: "Categorize", href: "/sales/expenses/categorize", keywords: ["folio imported uncategorized income refunds bulk"] },
   ] },
   { label: "Stock", shortLabel: "Stock", href: "/stock", icon: Package, shortcutKey: "e", adminOnly: true, matches: ["/equipment"], keywords: ["inventory equipment gear"], children: [
     { label: "Equipment", href: "/stock/equipment" },
