@@ -184,7 +184,7 @@ test("Production keeps the same workflow groups on hidden detail routes", async 
     "Active batches", "Harvest history", "Bottling", "Lots & labels", "Hive products", "Activity", "Serial lookup",
   ]);
 
-  await page.goto("/production/activity");
+  await page.goto("/production/serials");
   await expect(nav.getByRole("link")).toHaveText([
     "Active batches", "Harvest history", "Bottling", "Lots & labels", "Hive products", "Activity", "Serial lookup",
   ]);
@@ -243,7 +243,7 @@ test("Today and Yard remain pinned in the mobile bottom bar", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/production/activity");
+  await page.goto("/stock/movements");
   const mainNav = page.getByRole("navigation", { name: "Mobile navigation" });
   await expect(mainNav.getByRole("link", { name: "Today" })).toBeVisible();
   await expect(mainNav.getByRole("link", { name: "Apiaries" })).toBeVisible();

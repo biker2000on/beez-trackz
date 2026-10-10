@@ -204,7 +204,7 @@ export function HoneyOverview() {
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle className="text-base">Recent activity</CardTitle>
             <Button asChild variant="ghost" size="sm">
-              <Link href="/production/activity">
+              <Link href="/stock/movements">
                 Full ledger
                 <ArrowRight />
               </Link>

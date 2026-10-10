@@ -18,6 +18,12 @@ export interface NavRoute {
   exact?: boolean;
   adminOnly?: boolean;
   requiresEdit?: boolean;
+  /**
+   * A shortcut to a page another area owns (Production › Activity is
+   * Stock › Movements). It is listed for wayfinding but never marks its
+   * parent area active: only the owning area lights up on that page.
+   */
+  alias?: boolean;
   children?: readonly NavRoute[];
 }
 
@@ -54,7 +60,7 @@ export const NAV_ITEMS: NavItem[] = [
     { label: "Bottling", href: "/production/jars" },
     { label: "Lots & labels", href: "/production/lots" },
     { label: "Hive products", href: "/production/products" },
-    { label: "Activity", href: "/production/activity" },
+    { label: "Activity", href: "/stock/movements", alias: true, keywords: ["movements ledger"] },
     { label: "Serial lookup", href: "/production/serials" },
   ] },
   { label: "Sales", shortLabel: "Sales", href: "/sales", icon: Receipt, shortcutKey: "c", adminOnly: true, children: [
@@ -69,6 +75,7 @@ export const NAV_ITEMS: NavItem[] = [
     { label: "Bulk honey", href: "/stock/bulk" },
     { label: "Packaging", href: "/stock/packaging" },
     { label: "Finished goods", href: "/stock/finished" },
+    { label: "Movements", href: "/stock/movements", keywords: ["activity ledger jarring sales give-aways adjustments"] },
     { label: "Counts & equipment actions", href: "/equipment", exact: true },
   ] },
   { label: "Insights", shortLabel: "Insights", href: "/insights", icon: ChartNoAxesCombined, shortcutKey: "i", children: [
@@ -185,7 +192,9 @@ export function routePath(href: string) {
 
 export function isNavRouteActive(route: NavRoute, currentHref: string): boolean {
   if (
-    route.children?.some((child) => isNavRouteActive(child, currentHref))
+    route.children?.some(
+      (child) => !child.alias && isNavRouteActive(child, currentHref),
+    )
   ) {
     return true;
   }
