@@ -12,6 +12,8 @@ const (
 	UserPreferencesTransform                  = "user-preferences-v1"
 	HarvestLotVarietalNameTransform           = "harvest-lot-varietal-name-v1"
 	HarvestLotPulledOnTransform               = "harvest-lot-pulled-on-v1"
+	ConsignmentLocationPricesTransform        = "consignment-location-prices-v1"
+	CustomerCompanyNameTransform              = "customer-company-name-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -126,6 +128,29 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		// restores with pulled_on NULL; nothing is derived for it.
 		AddedColumns: map[string][]string{
 			"harvest_lots": {"pulled_on"},
+		},
+	},
+	{
+		LegacyMigration: 60, BaselineMigration: 7,
+		Name: ConsignmentLocationPricesTransform,
+		// Per-store wholesale and shelf prices: a new, empty domain. An older
+		// artifact restores with no store prices, which settles exactly as it
+		// did before the table existed.
+		NewDomains: emptyNewDomains("consignment_location_prices"),
+		AddedReferenceChecks: []string{
+			"consignment_location_prices_location_id_fkey",
+			"consignment_location_prices_jar_size_id_fkey",
+			"consignment_location_prices_product_id_fkey",
+			"consignment_location_prices_created_by_fkey",
+		},
+	},
+	{
+		LegacyMigration: 61, BaselineMigration: 8,
+		Name: CustomerCompanyNameTransform,
+		// The business a customer represents, nullable. An older artifact's
+		// customer restores with company_name NULL; nothing is derived for it.
+		AddedColumns: map[string][]string{
+			"customers": {"company_name"},
 		},
 	},
 }

@@ -16,53 +16,15 @@ import { ArrowRight, Plus, Store, Warehouse } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { ShortcutForm } from "@/components/ui/shortcut-form";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { formatMoney } from "@/features/honey/format";
 import { ApiError } from "@/lib/api";
 
-import { useCustomers, useWholesalePriceLists } from "./api";
-import {
-  useCreateStockLocation,
-  useStockLocations,
-  type StockLocation,
-  type StockPriceBasis,
-  type StockSettlementCadence,
-} from "./stock-locations-api";
+import { consignmentTerms, StockLocationDialog } from "./stock-location-form";
+import { useStockLocations, type StockLocation } from "./stock-locations-api";
 
-/** Plain-English terms, so the card says what the shop actually keeps. */
-export function consignmentTerms(location: StockLocation): string {
-  switch (location.priceBasis) {
-    case "commission":
-      return `${((location.commissionBps ?? 0) / 100).toLocaleString(undefined, {
-        maximumFractionDigits: 2,
-      })}% commission`;
-    case "wholesale_list":
-      return location.wholesalePriceListName
-        ? `Wholesale · ${location.wholesalePriceListName}`
-        : "Wholesale price list";
-    default:
-      return "Full retail remitted";
-  }
-}
+// Kept here so existing imports of the terms helper keep working.
+export { consignmentTerms };
 
 export function ConsignmentPage() {
   const locations = useStockLocations();
@@ -132,7 +94,7 @@ export function ConsignmentPage() {
         </div>
       )}
 
-      <AddLocationDialog open={addOpen} onOpenChange={setAddOpen} />
+      <StockLocationDialog open={addOpen} onOpenChange={setAddOpen} />
     </div>
   );
 }
@@ -194,202 +156,5 @@ function Stat({
         {value}
       </p>
     </div>
-  );
-}
-
-function AddLocationDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const create = useCreateStockLocation();
-  const customers = useCustomers();
-  const priceLists = useWholesalePriceLists();
-  const [name, setName] = React.useState("");
-  const [customerId, setCustomerId] = React.useState("none");
-  const [priceBasis, setPriceBasis] = React.useState<StockPriceBasis>("commission");
-  const [commission, setCommission] = React.useState("30");
-  const [priceListId, setPriceListId] = React.useState("none");
-  const [cadence, setCadence] = React.useState<StockSettlementCadence>("monthly");
-  const [notes, setNotes] = React.useState("");
-
-  React.useEffect(() => {
-    if (open) return;
-    // Reset only on close, so a failed save keeps what was typed.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setName("");
-     
-    setNotes("");
-  }, [open]);
-
-  const commissionPercent = Number(commission);
-  const valid =
-    name.trim().length > 0 &&
-    (priceBasis !== "commission" ||
-      (Number.isFinite(commissionPercent) &&
-        commissionPercent >= 0 &&
-        commissionPercent <= 100)) &&
-    (priceBasis !== "wholesale_list" || priceListId !== "none");
-
-  function submit() {
-    if (!valid) return;
-    create.mutate(
-      {
-        name: name.trim(),
-        isConsignment: true,
-        customerId: customerId === "none" ? undefined : customerId,
-        priceBasis,
-        commissionPercent:
-          priceBasis === "commission" ? commissionPercent : undefined,
-        wholesalePriceListId:
-          priceBasis === "wholesale_list" && priceListId !== "none"
-            ? priceListId
-            : undefined,
-        settlementCadence: cadence,
-        notes: notes.trim() || undefined,
-      },
-      { onSuccess: () => onOpenChange(false) },
-    );
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add a stock location</DialogTitle>
-          <DialogDescription>
-            Where finished goods sit when they are not at home. Linking a
-            customer lets the settlement invoice them directly.
-          </DialogDescription>
-        </DialogHeader>
-        <ShortcutForm
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            submit();
-          }}
-          onSubmitAndReset={submit}
-        >
-          <div className="grid gap-1">
-            <Label htmlFor="location-name">Name</Label>
-            <Input
-              id="location-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Bike shop"
-            />
-          </div>
-          <div className="grid gap-1">
-            <Label>Customer</Label>
-            <Select value={customerId} onValueChange={setCustomerId}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Not linked</SelectItem>
-                {(customers.data ?? []).map((customer) => (
-                  <SelectItem key={customer.id} value={customer.id}>
-                    {customer.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="grid gap-1">
-              <Label>They are paid by</Label>
-              <Select
-                value={priceBasis}
-                onValueChange={(value) => setPriceBasis(value as StockPriceBasis)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="commission">Commission %</SelectItem>
-                  <SelectItem value="wholesale_list">Wholesale price list</SelectItem>
-                  <SelectItem value="retail">Nothing (full retail to you)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {priceBasis === "commission" && (
-              <div className="grid gap-1">
-                <Label htmlFor="location-commission">Their cut (%)</Label>
-                <Input
-                  id="location-commission"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  value={commission}
-                  onChange={(event) => setCommission(event.target.value)}
-                />
-              </div>
-            )}
-            {priceBasis === "wholesale_list" && (
-              <div className="grid gap-1">
-                <Label>Price list</Label>
-                <Select value={priceListId} onValueChange={setPriceListId}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Choose a list</SelectItem>
-                    {(priceLists.data ?? []).map((list) => (
-                      <SelectItem key={list.id} value={list.id}>
-                        {list.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-          </div>
-          <div className="grid gap-1">
-            <Label>Settles</Label>
-            <Select
-              value={cadence}
-              onValueChange={(value) =>
-                setCadence(value as StockSettlementCadence)
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="weekly">Weekly</SelectItem>
-                <SelectItem value="biweekly">Every two weeks</SelectItem>
-                <SelectItem value="monthly">Monthly</SelectItem>
-                <SelectItem value="quarterly">Quarterly</SelectItem>
-                <SelectItem value="on_request">On request</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="location-notes">Notes</Label>
-            <Textarea
-              id="location-notes"
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Who to hand jars to, shelf position, anything else."
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!valid || create.isPending}>
-              {create.isPending ? "Saving…" : "Add location"}
-            </Button>
-          </DialogFooter>
-        </ShortcutForm>
-      </DialogContent>
-    </Dialog>
   );
 }

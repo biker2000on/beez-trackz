@@ -150,6 +150,11 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 	if err != nil {
 		return out, err
 	}
+	terms := ConsignmentTerms{Basis: basis, CommissionBPS: commissionBPS, PriceListID: priceList}
+	book, err := LoadConsignmentPriceBook(ctx, uow, location, priceList)
+	if err != nil {
+		return out, dbError(op, err)
+	}
 	type prepared struct {
 		item                      uuid.UUID
 		kind, label               string
@@ -169,16 +174,17 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		}
 		var p prepared
 		p.jar, p.product, p.sold, p.returned, p.count = line.JarSizeID, line.ProductID, line.QuantitySold, line.QuantityReturned, line.CountOnShelf
+		var listPrice *int64
 		if p.jar != nil {
 			p.item, err = production.EnsureJarItem(ctx, uow, *p.jar)
 			p.kind = KindJar
-			err2 := uow.QueryRow(ctx, `SELECT label,default_price_cents FROM jar_sizes WHERE id=$1`, *p.jar).Scan(&p.label, &p.price)
+			err2 := uow.QueryRow(ctx, `SELECT label,default_price_cents FROM jar_sizes WHERE id=$1`, *p.jar).Scan(&p.label, &listPrice)
 			if err == nil {
 				err = err2
 			}
 		} else {
 			p.item, err = production.EnsureProductItem(ctx, uow, *p.product)
-			err2 := uow.QueryRow(ctx, `SELECT kind,name,default_price_cents FROM product_catalog WHERE id=$1`, *p.product).Scan(&p.kind, &p.label, &p.price)
+			err2 := uow.QueryRow(ctx, `SELECT kind,name,default_price_cents FROM product_catalog WHERE id=$1`, *p.product).Scan(&p.kind, &p.label, &listPrice)
 			if err == nil {
 				err = err2
 			}
@@ -186,6 +192,11 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		if err != nil {
 			return out, err
 		}
+		var listCents int64
+		if listPrice != nil {
+			listCents = *listPrice
+		}
+		skuPrices := book.SKU(p.jar, p.product, p.label, listCents)
 		key := p.item.String()
 		if line.HarvestLotID != nil {
 			if p.jar == nil {
@@ -209,27 +220,21 @@ func ApplySettlement(ctx context.Context, uow *app.UnitOfWork, in ApplySettlemen
 		if p.sold+p.returned > p.available {
 			return out, app.Precondition(op, "%s: report accounts for %d but only %d are on the shelf", p.label, p.sold+p.returned, p.available)
 		}
+		// The shelf price the store charged: the report's, else the store's
+		// own shelf price, else the SKU's list price. What the operator is
+		// owed per unit follows from the store's terms (ConsignmentUnitSplit,
+		// shared with every preview of this number).
+		p.price = skuPrices.DefaultShelfCents()
 		if line.UnitPriceCents != nil {
 			p.price = *line.UnitPriceCents
 		}
-		if p.sold > 0 && p.price <= 0 {
-			return out, app.Invalid(op, "%s: unit price is required", p.label)
-		}
-		unitOwed, unitCommission := p.price, int64(0)
-		if basis == "commission" && commissionBPS != nil {
-			unitCommission = (p.price*int64(*commissionBPS) + 5000) / 10000
-			unitOwed = p.price - unitCommission
-		} else if basis == "wholesale_list" {
-			if p.jar == nil {
-				return out, app.Invalid(op, "wholesale price lists do not price catalog products")
+		var unitOwed, unitCommission int64
+		if p.sold > 0 {
+			var problem string
+			unitOwed, unitCommission, problem = ConsignmentUnitSplit(terms, skuPrices, p.price)
+			if problem != "" {
+				return out, app.Invalid(op, "%s", problem)
 			}
-			if err := uow.QueryRow(ctx, `SELECT unit_price_cents FROM wholesale_price_list_items WHERE price_list_id=$1 AND jar_size_id=$2`, priceList, *p.jar).Scan(&unitOwed); err != nil {
-				return out, app.NotFound(op, "wholesale list does not price %s", p.label)
-			}
-			if unitOwed > p.price {
-				unitOwed = p.price
-			}
-			unitCommission = p.price - unitOwed
 		}
 		owed += unitOwed * int64(p.sold)
 		commission += unitCommission * int64(p.sold)

@@ -59,6 +59,8 @@ func (s *Server) mountStockLocations(r chi.Router) {
 	admin.Get("/stock-locations/inventory", s.stockInventoryHandler)
 	admin.Get("/stock-locations/{id}", s.stockLocationDetail)
 	admin.Patch("/stock-locations/{id}", s.stockLocationUpdate)
+	// Replaces the store's whole per-SKU price sheet (wholesale + shelf).
+	admin.Put("/stock-locations/{id}/prices", s.stockLocationPricesReplace)
 	// Soft-deletes; refuses while stock is still standing there.
 	admin.Delete("/stock-locations/{id}", s.stockLocationDelete)
 
@@ -124,8 +126,8 @@ type stockLocationRow struct {
 	OutstandingBalance money `json:"outstandingBalance"`
 }
 
-const stockLocationSelect = `
-	SELECT l.id, l.name, COALESCE(l.slug, ''), l.is_home, l.is_consignment, l.customer_id, c.name,
+var stockLocationSelect = `
+	SELECT l.id, l.name, COALESCE(l.slug, ''), l.is_home, l.is_consignment, l.customer_id, ` + customerDisplayNameSQL("c") + `,
 	       l.price_basis, l.commission_bps, l.wholesale_price_list_id, w.name,
 	       l.settlement_cadence, l.address, l.notes, l.is_active, l.created_at, l.updated_at
 	FROM inventory_locations l
@@ -318,9 +320,9 @@ func (payload *stockLocationPayload) normalize() error {
 	if payload.PriceBasis == "commission" && payload.CommissionPercent == nil {
 		return stockBadRequest("commissionPercent is required for the commission basis")
 	}
-	if payload.PriceBasis == "wholesale_list" && payload.WholesalePriceListID == nil {
-		return stockBadRequest("wholesalePriceListId is required for the wholesale basis")
-	}
+	// The wholesale basis no longer needs a price list: a store can be priced
+	// entirely by its own per-SKU wholesale prices (PUT .../prices), and the
+	// list, when set, is the fallback for jars the store has no price for.
 	return nil
 }
 
@@ -485,11 +487,17 @@ func (s *Server) stockLocationDelete(w http.ResponseWriter, r *http.Request) {
 // for catalog products and for jars in the legacy-unassigned lot, and those
 // collapse into one row per SKU.
 type stockShelfRow struct {
-	JarSizeID    *uuid.UUID `json:"jarSizeId"`
-	ProductID    *uuid.UUID `json:"productId"`
-	Label        string     `json:"label"`
-	Kind         string     `json:"kind"`
-	UnitPrice    *money     `json:"unitPrice"`
+	JarSizeID *uuid.UUID `json:"jarSizeId"`
+	ProductID *uuid.UUID `json:"productId"`
+	Label     string     `json:"label"`
+	Kind      string     `json:"kind"`
+	// UnitPrice is the effective shelf price at this location: the store's
+	// own shelf price when it has one, else the SKU's list price.
+	UnitPrice *money `json:"unitPrice"`
+	// OwedPrice is what the operator is owed per unit sold here under the
+	// store's current terms — the same arithmetic a settlement records. Null
+	// at home, or when the terms cannot price the SKU yet.
+	OwedPrice    *money     `json:"owedPrice"`
 	OnHand       int        `json:"onHand"`
 	HarvestLotID *uuid.UUID `json:"harvestLotId"`
 	LotCode      *string    `json:"lotCode"`
@@ -516,6 +524,9 @@ type stockSKUCatalog struct {
 	ProductKinds map[uuid.UUID]string
 	ProductPrice map[uuid.UUID]money
 	ProductOrder []uuid.UUID
+	// Active marks SKUs that can still be sent out (jar_sizes.is_active /
+	// product_catalog.is_active), keyed by jar size or product id.
+	Active map[uuid.UUID]bool
 }
 
 func stockLoadSKUs(ctx context.Context, q inspectionQuerier) (stockSKUCatalog, error) {
@@ -525,9 +536,10 @@ func stockLoadSKUs(ctx context.Context, q inspectionQuerier) (stockSKUCatalog, e
 		ProductNames: map[uuid.UUID]string{},
 		ProductKinds: map[uuid.UUID]string{},
 		ProductPrice: map[uuid.UUID]money{},
+		Active:       map[uuid.UUID]bool{},
 	}
 	rows, err := q.Query(ctx, `
-		SELECT id, label, default_price_cents FROM jar_sizes ORDER BY sort_order, label`)
+		SELECT id, label, default_price_cents, is_active FROM jar_sizes ORDER BY sort_order, label`)
 	if err != nil {
 		return catalog, err
 	}
@@ -535,12 +547,14 @@ func stockLoadSKUs(ctx context.Context, q inspectionQuerier) (stockSKUCatalog, e
 		var id uuid.UUID
 		var label string
 		var price *money
-		if err := rows.Scan(&id, &label, &price); err != nil {
+		var active bool
+		if err := rows.Scan(&id, &label, &price, &active); err != nil {
 			rows.Close()
 			return catalog, err
 		}
 		catalog.JarLabels[id] = label
 		catalog.JarPrices[id] = price
+		catalog.Active[id] = active
 		catalog.JarOrder = append(catalog.JarOrder, id)
 	}
 	jarErr := rows.Err()
@@ -550,7 +564,7 @@ func stockLoadSKUs(ctx context.Context, q inspectionQuerier) (stockSKUCatalog, e
 	}
 
 	productRows, err := q.Query(ctx, `
-		SELECT id, name, size_label, kind, default_price_cents
+		SELECT id, name, size_label, kind, default_price_cents, is_active
 		FROM product_catalog ORDER BY lower(name), size_label NULLS FIRST`)
 	if err != nil {
 		return catalog, err
@@ -561,9 +575,11 @@ func stockLoadSKUs(ctx context.Context, q inspectionQuerier) (stockSKUCatalog, e
 		var name, kind string
 		var sizeLabel *string
 		var price money
-		if err := productRows.Scan(&id, &name, &sizeLabel, &kind, &price); err != nil {
+		var active bool
+		if err := productRows.Scan(&id, &name, &sizeLabel, &kind, &price, &active); err != nil {
 			return catalog, err
 		}
+		catalog.Active[id] = active
 		label := name
 		if sizeLabel != nil && *sizeLabel != "" {
 			label = name + " · " + *sizeLabel
@@ -715,22 +731,285 @@ func (s *Server) stockLocationShelf(
 			out = append(out, row)
 		}
 	}
+	pricing, err := stockLoadPricing(ctx, q, locationID)
+	if err != nil {
+		return nil, catalog, err
+	}
 	for _, id := range catalog.JarOrder {
 		jarID := id
+		shelfPrice, owedPrice := pricing.shelfAndOwed(pricing.sku(catalog, &jarID, nil),
+			catalog.JarPrices[id] != nil)
 		emit(jars[id], func(row *stockShelfRow) {
 			row.JarSizeID, row.Label, row.Kind = &jarID, catalog.JarLabels[id], saleKindJar
-			row.UnitPrice = catalog.JarPrices[id]
+			row.UnitPrice, row.OwedPrice = shelfPrice, owedPrice
 		})
 	}
 	for _, id := range catalog.ProductOrder {
 		productID := id
-		price := catalog.ProductPrice[id]
+		shelfPrice, owedPrice := pricing.shelfAndOwed(pricing.sku(catalog, nil, &productID), true)
 		emit(products[id], func(row *stockShelfRow) {
 			row.ProductID, row.Label, row.Kind = &productID, catalog.ProductNames[id], catalog.ProductKinds[id]
-			row.UnitPrice = &price
+			row.UnitPrice, row.OwedPrice = shelfPrice, owedPrice
 		})
 	}
 	return out, catalog, nil
+}
+
+// --- per-store prices ------------------------------------------------------
+
+// stockPricing is one location's terms and price book, loaded once so every
+// shelf row and price-sheet entry is priced by sales.ConsignmentUnitSplit —
+// the function settlement itself uses.
+type stockPricing struct {
+	consignee bool
+	terms     sales.ConsignmentTerms
+	book      sales.ConsignmentPriceBook
+}
+
+func stockLoadPricing(ctx context.Context, q inspectionQuerier, locationID uuid.UUID) (stockPricing, error) {
+	var pricing stockPricing
+	var kind string
+	var home bool
+	err := q.QueryRow(ctx, `
+		SELECT kind, is_home, price_basis, commission_bps, wholesale_price_list_id
+		FROM inventory_locations WHERE id=$1`, locationID).
+		Scan(&kind, &home, &pricing.terms.Basis, &pricing.terms.CommissionBPS, &pricing.terms.PriceListID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pricing, nil
+	}
+	if err != nil {
+		return pricing, err
+	}
+	pricing.consignee = kind == "consignee" && !home
+	if !pricing.consignee {
+		return pricing, nil
+	}
+	pricing.book, err = sales.LoadConsignmentPriceBook(ctx, q, locationID, pricing.terms.PriceListID)
+	return pricing, err
+}
+
+// sku assembles one SKU's prices at this location from the catalog.
+func (p stockPricing) sku(catalog stockSKUCatalog, jar, product *uuid.UUID) sales.ConsignmentSKUPrices {
+	var label string
+	var list int64
+	if jar != nil {
+		label = catalog.JarLabels[*jar]
+		if price := catalog.JarPrices[*jar]; price != nil {
+			list = int64(*price)
+		}
+	} else if product != nil {
+		label = catalog.ProductNames[*product]
+		list = int64(catalog.ProductPrice[*product])
+	}
+	return p.book.SKU(jar, product, label, list)
+}
+
+// shelfAndOwed is the effective shelf price and what the operator is owed per
+// unit sold at it. The shelf price is null only for a SKU with neither a list
+// price (hasList) nor a store shelf price; owed is null at home or when the
+// terms cannot price the SKU (sales.ConsignmentUnitSplit reports a problem).
+func (p stockPricing) shelfAndOwed(
+	prices sales.ConsignmentSKUPrices, hasList bool,
+) (shelf, owed *money) {
+	if prices.StoreShelfCents != nil || hasList {
+		value := money(prices.DefaultShelfCents())
+		shelf = &value
+	}
+	if !p.consignee {
+		return shelf, nil
+	}
+	unitOwed, _, problem := sales.ConsignmentUnitSplit(p.terms, prices, prices.DefaultShelfCents())
+	if problem != "" {
+		return shelf, nil
+	}
+	value := money(unitOwed)
+	return shelf, &value
+}
+
+// stockOwedSplit divides one unit's shelf price between what the operator is
+// owed and what the shop keeps, through the same function settlement uses.
+// ok is false when the terms cannot price the SKU.
+func stockOwedSplit(
+	location stockLocationRow,
+	prices sales.ConsignmentSKUPrices,
+	shelf money,
+) (owed, commission money, ok bool) {
+	terms := sales.ConsignmentTerms{
+		Basis: location.PriceBasis, CommissionBPS: location.CommissionBps,
+		PriceListID: location.WholesalePriceListID,
+	}
+	unitOwed, unitCommission, problem := sales.ConsignmentUnitSplit(terms, prices, int64(shelf))
+	return money(unitOwed), money(unitCommission), problem == ""
+}
+
+// stockLocationPrice is one SKU on a store's price sheet.
+type stockLocationPrice struct {
+	JarSizeID *uuid.UUID `json:"jarSizeId"`
+	ProductID *uuid.UUID `json:"productId"`
+	Label     string     `json:"label"`
+	Kind      string     `json:"kind"`
+	// ListPrice is the SKU's own default price.
+	ListPrice *money `json:"listPrice"`
+	// PriceListPrice is the store's wholesale price list item for the jar.
+	PriceListPrice *money `json:"priceListPrice"`
+	// The store's own prices; null when unset.
+	WholesalePrice *money `json:"wholesalePrice"`
+	ShelfPrice     *money `json:"shelfPrice"`
+}
+
+func stockCentsPtr(cents *int64) *money {
+	if cents == nil {
+		return nil
+	}
+	value := money(*cents)
+	return &value
+}
+
+// stockLocationPrices is the store's price sheet: every active SKU that can
+// be consigned, plus any retired SKU the store still has a price for, in
+// catalog order (jars, then products).
+func stockLocationPrices(catalog stockSKUCatalog, pricing stockPricing) []stockLocationPrice {
+	out := make([]stockLocationPrice, 0, len(catalog.JarOrder)+len(catalog.ProductOrder))
+	if !pricing.consignee {
+		return out
+	}
+	for _, id := range catalog.JarOrder {
+		jarID := id
+		_, priced := pricing.book.Jars[id]
+		if !catalog.Active[id] && !priced {
+			continue
+		}
+		prices := pricing.sku(catalog, &jarID, nil)
+		out = append(out, stockLocationPrice{
+			JarSizeID: &jarID, Label: catalog.JarLabels[id], Kind: saleKindJar,
+			ListPrice:      catalog.JarPrices[id],
+			PriceListPrice: stockCentsPtr(prices.PriceListCents),
+			WholesalePrice: stockCentsPtr(prices.StoreWholesaleCents),
+			ShelfPrice:     stockCentsPtr(prices.StoreShelfCents),
+		})
+	}
+	for _, id := range catalog.ProductOrder {
+		productID := id
+		_, priced := pricing.book.Products[id]
+		if !catalog.Active[id] && !priced {
+			continue
+		}
+		prices := pricing.sku(catalog, nil, &productID)
+		list := catalog.ProductPrice[id]
+		out = append(out, stockLocationPrice{
+			ProductID: &productID, Label: catalog.ProductNames[id], Kind: catalog.ProductKinds[id],
+			ListPrice:      &list,
+			WholesalePrice: stockCentsPtr(prices.StoreWholesaleCents),
+			ShelfPrice:     stockCentsPtr(prices.StoreShelfCents),
+		})
+	}
+	return out
+}
+
+type stockLocationPriceInput struct {
+	JarSizeID      *uuid.UUID `json:"jarSizeId"`
+	ProductID      *uuid.UUID `json:"productId"`
+	WholesalePrice *money     `json:"wholesalePrice"`
+	ShelfPrice     *money     `json:"shelfPrice"`
+}
+
+type stockLocationPricesRequest struct {
+	Prices []stockLocationPriceInput `json:"prices"`
+}
+
+// normalize validates the sheet and drops entries that set no price.
+func (req stockLocationPricesRequest) normalize() ([]stockLocationPriceInput, error) {
+	out := make([]stockLocationPriceInput, 0, len(req.Prices))
+	seen := make(map[string]bool, len(req.Prices))
+	for _, entry := range req.Prices {
+		if (entry.JarSizeID == nil) == (entry.ProductID == nil) {
+			return nil, stockBadRequest("each price needs exactly one of jarSizeId or productId")
+		}
+		if (entry.WholesalePrice != nil && *entry.WholesalePrice < 0) ||
+			(entry.ShelfPrice != nil && *entry.ShelfPrice < 0) {
+			return nil, stockBadRequest("prices must not be negative")
+		}
+		key := stockLineKey(stockTransferLine{JarSizeID: entry.JarSizeID, ProductID: entry.ProductID})
+		if seen[key] {
+			return nil, stockBadRequest("each item can be priced only once")
+		}
+		seen[key] = true
+		if entry.WholesalePrice == nil && entry.ShelfPrice == nil {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// PUT /stock-locations/{id}/prices — replace the store's whole price sheet.
+//
+// The body is the complete set; anything not in it is removed, and an entry
+// with neither price is the same as leaving it out. Settlement freezes the
+// prices it resolves into sale_items, so this changes future reports only.
+func (s *Server) stockLocationPricesReplace(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req stockLocationPricesRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	entries, err := req.normalize()
+	if err != nil {
+		equipWriteError(w, err)
+		return
+	}
+	err = s.runInUnitOfWork(r, func(ctx context.Context, uow *app.UnitOfWork) error {
+		var locationID uuid.UUID
+		err := uow.QueryRow(ctx, `
+			SELECT id FROM inventory_locations
+			WHERE (id=$1 OR (source_type='stock_location' AND source_id=$1))
+			  AND deleted_at IS NULL AND kind='consignee' AND NOT is_home
+			ORDER BY (id=$1) DESC LIMIT 1
+			FOR UPDATE`, id).Scan(&locationID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return equipFail(http.StatusNotFound, "location not found, or home cannot be priced")
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := uow.Exec(ctx,
+			`DELETE FROM consignment_location_prices WHERE location_id=$1`, locationID); err != nil {
+			return err
+		}
+		actor := actorID(r)
+		for _, entry := range entries {
+			var wholesale, shelf *int64
+			if entry.WholesalePrice != nil {
+				value := int64(*entry.WholesalePrice)
+				wholesale = &value
+			}
+			if entry.ShelfPrice != nil {
+				value := int64(*entry.ShelfPrice)
+				shelf = &value
+			}
+			if _, err := uow.Exec(ctx, `
+				INSERT INTO consignment_location_prices
+					(location_id, jar_size_id, product_id, wholesale_price_cents, shelf_price_cents, created_by)
+				VALUES ($1,$2,$3,$4,$5,$6)`,
+				locationID, entry.JarSizeID, entry.ProductID, wholesale, shelf, actor); err != nil {
+				if pgErrCode(err) == "23503" {
+					return stockBadRequest("unknown jarSizeId or productId")
+				}
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
 // stockInventoryLot is one harvest lot of one SKU across every location, so
@@ -908,11 +1187,17 @@ func (s *Server) stockLocationDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	locationID := locations[0].ID
-	shelf, _, err := s.stockLocationShelf(ctx, s.pool, locationID)
+	shelf, catalog, err := s.stockLocationShelf(ctx, s.pool, locationID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	pricing, err := stockLoadPricing(ctx, s.pool, locationID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	prices := stockLocationPrices(catalog, pricing)
 
 	// Unsettled = reported sold but not yet paid for. Straight off the sale's
 	// invoiced-vs-collected columns; consignment adds no payment table.
@@ -972,6 +1257,7 @@ func (s *Server) stockLocationDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"location":    locations[0],
 		"shelf":       shelf,
+		"prices":      prices,
 		"unsettled":   unsettled,
 		"movements":   movements,
 		"settlements": settlements,
@@ -992,6 +1278,117 @@ type stockMovementRow struct {
 	IsReversal   bool       `json:"isReversal"`
 	ReversedBy   *uuid.UUID `json:"reversedByMovementId"`
 	SettlementID *uuid.UUID `json:"settlementId"`
+	// Lines is what the operation moved at this location, per (SKU, lot),
+	// signed from this location's view. Label, LotCode and VarietalName above
+	// are set only when every line agrees (Label falls back to "Mixed").
+	Lines []stockMovementLine `json:"lines"`
+}
+
+// stockMovementLine is one (SKU, lot) of one operation at one location.
+type stockMovementLine struct {
+	JarSizeID    *uuid.UUID `json:"jarSizeId"`
+	ProductID    *uuid.UUID `json:"productId"`
+	Label        string     `json:"label"`
+	Kind         string     `json:"kind"`
+	LotCode      *string    `json:"lotCode"`
+	VarietalName *string    `json:"varietalName"`
+	Quantity     int        `json:"quantity"`
+}
+
+// stockMovementLines reads the per-(SKU, lot) lines of the given operations
+// at one location, sorted by varietal, lot code, then label.
+func (s *Server) stockMovementLines(
+	ctx context.Context, locationID uuid.UUID, operationIDs []uuid.UUID,
+) (map[uuid.UUID][]stockMovementLine, error) {
+	out := make(map[uuid.UUID][]stockMovementLine, len(operationIDs))
+	if len(operationIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT m.operation_id, js.id, pc.id,
+		       COALESCE(js.label, pc.name || COALESCE(' · ' || NULLIF(pc.size_label, ''), ''), 'unknown'),
+		       CASE WHEN js.id IS NOT NULL THEN $3::text ELSE COALESCE(pc.kind, 'other') END,
+		       hl.lot_code, hv.name, SUM(m.quantity)::int
+		FROM inventory_movements m
+		LEFT JOIN jar_sizes js ON js.item_id = m.item_id
+		LEFT JOIN product_catalog pc ON pc.item_id = m.item_id
+		LEFT JOIN inventory_lots lot ON lot.id = m.lot_id
+		LEFT JOIN product_batches pb ON pb.inventory_lot_id = lot.id
+		LEFT JOIN harvest_lots hl ON hl.id = COALESCE(CASE WHEN lot.source_type = 'harvest_lot' THEN lot.source_id END, pb.harvest_lot_id)
+		LEFT JOIN honey_varietals hv ON hv.id = hl.varietal_id
+		WHERE m.location_id = $1 AND m.operation_id = ANY($2)
+		GROUP BY m.operation_id, m.item_id, js.id, pc.id, js.label, pc.name, pc.size_label, pc.kind,
+		         hl.id, hl.lot_code, hv.name
+		HAVING SUM(m.quantity) <> 0`, locationID, operationIDs, saleKindJar)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var operationID uuid.UUID
+		var line stockMovementLine
+		if err := rows.Scan(&operationID, &line.JarSizeID, &line.ProductID, &line.Label, &line.Kind,
+			&line.LotCode, &line.VarietalName, &line.Quantity); err != nil {
+			return nil, err
+		}
+		out[operationID] = append(out[operationID], line)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, lines := range out {
+		stockSortMovementLines(lines)
+	}
+	return out, nil
+}
+
+// stockSortMovementLines orders lines by varietal, then lot code (unnamed
+// lots last), then label.
+func stockSortMovementLines(lines []stockMovementLine) {
+	sort.SliceStable(lines, func(i, j int) bool {
+		a, b := lines[i], lines[j]
+		if stockLessLot(a.VarietalName, a.LotCode, b.VarietalName, b.LotCode) {
+			return true
+		}
+		if stockLessLot(b.VarietalName, b.LotCode, a.VarietalName, a.LotCode) {
+			return false
+		}
+		return strings.ToLower(a.Label) < strings.ToLower(b.Label)
+	})
+}
+
+// stockSummarizeMovement sets a row's label, lot code and varietal from its
+// lines: each only when every line agrees. A label that differs reads
+// "Mixed"; a lot code or varietal that differs is null.
+func stockSummarizeMovement(row *stockMovementRow) {
+	if len(row.Lines) == 0 {
+		return
+	}
+	first := row.Lines[0]
+	label, lotCode, varietal := first.Label, first.LotCode, first.VarietalName
+	sameLabel, sameLot, sameVarietal := true, true, true
+	equal := func(a, b *string) bool {
+		if a == nil || b == nil {
+			return a == nil && b == nil
+		}
+		return *a == *b
+	}
+	for _, line := range row.Lines[1:] {
+		sameLabel = sameLabel && line.Label == label
+		sameLot = sameLot && equal(line.LotCode, lotCode)
+		sameVarietal = sameVarietal && equal(line.VarietalName, varietal)
+	}
+	row.Label = "Mixed"
+	if sameLabel {
+		row.Label = label
+	}
+	row.LotCode, row.VarietalName = nil, nil
+	if sameLot {
+		row.LotCode = lotCode
+	}
+	if sameVarietal {
+		row.VarietalName = varietal
+	}
 }
 
 // stockMovementHistory is one location's operation history. The row id is
@@ -1054,9 +1451,28 @@ func (s *Server) stockMovementHistory(
 			&row.ReversedBy, &row.SettlementID); err != nil {
 			return nil, err
 		}
+		row.Lines = []stockMovementLine{}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	ids := make([]uuid.UUID, 0, len(out))
+	for _, row := range out {
+		ids = append(ids, row.ID)
+	}
+	lines, err := s.stockMovementLines(ctx, locationID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if found := lines[out[i].ID]; found != nil {
+			out[i].Lines = found
+			stockSummarizeMovement(&out[i])
+		}
+	}
+	return out, nil
 }
 
 // --- transfers -------------------------------------------------------------
@@ -1906,38 +2322,6 @@ type stockSettlementRequest struct {
 	PaymentMethod string                     `json:"paymentMethod"`
 	OrderNumber   *string                    `json:"orderNumber"`
 	Notes         *string                    `json:"notes"`
-}
-
-// stockOwedSplit divides one unit's shelf price between what the operator is
-// owed and what the shop keeps, in exact integer cents.
-func stockOwedSplit(
-	location stockLocationRow,
-	retail money,
-	wholesale *money,
-) (owed, commission money) {
-	switch location.PriceBasis {
-	case "commission":
-		bps := money(0)
-		if location.CommissionBps != nil {
-			bps = money(*location.CommissionBps)
-		}
-		// Round the shop's cut half away from zero so the two halves always
-		// add back up to the shelf price.
-		commission = (retail*bps + stockBasisPointsPerUnit/2) / stockBasisPointsPerUnit
-		return retail - commission, commission
-	case "wholesale_list":
-		if wholesale != nil && *wholesale <= retail {
-			return *wholesale, retail - *wholesale
-		}
-		if wholesale != nil {
-			// A list price above the shelf price means the operator takes the
-			// whole sale rather than being owed more than the shop collected.
-			return retail, 0
-		}
-		return retail, 0
-	default:
-		return retail, 0
-	}
 }
 
 // POST /stock-locations/{id}/settlements — "record their report".

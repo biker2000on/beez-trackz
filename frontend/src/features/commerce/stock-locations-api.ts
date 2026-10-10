@@ -66,8 +66,38 @@ export interface StockShelfRow extends StockLotRef {
   productId: string | null;
   label: string;
   kind: string;
+  /** The effective shelf price: what the shop sells one unit for. */
   unitPrice: number | null;
+  /**
+   * What the operator is owed per unit sold: the store's wholesale price on a
+   * wholesale basis, shelf less commission on commission, shelf on retail.
+   * Older servers do not send it.
+   */
+  owedPrice?: number | null;
   onHand: number;
+}
+
+/**
+ * One consignable SKU's prices at one store. `wholesalePrice` and
+ * `shelfPrice` are this store's overrides (null = fall back); the list and
+ * price-list prices are what they fall back to.
+ */
+export interface StockLocationPrice {
+  jarSizeId: string | null;
+  productId: string | null;
+  label: string;
+  kind: string;
+  listPrice: number;
+  priceListPrice: number | null;
+  wholesalePrice: number | null;
+  shelfPrice: number | null;
+}
+
+export interface StockLocationPriceBody {
+  jarSizeId: string | null;
+  productId: string | null;
+  wholesalePrice: number | null;
+  shelfPrice: number | null;
 }
 
 /** A SKU's stock split by lot, each with its own per-location breakdown. */
@@ -95,10 +125,22 @@ export interface StockInventory {
   items: StockInventoryRow[];
 }
 
+/** One SKU/lot an operation moved, signed against this location. */
+export interface StockMovementLine {
+  jarSizeId: string | null;
+  productId: string | null;
+  label: string;
+  kind: string;
+  lotCode: string | null;
+  varietalName: string | null;
+  quantity: number;
+}
+
 export interface StockMovement {
   id: string;
   date: string;
   kind: "transfer" | "return" | "adjustment";
+  /** Set when every line agrees; "Mixed" when the operation spans SKUs. */
   label: string;
   /** Signed against this location: negative left, positive arrived. */
   quantity: number;
@@ -110,6 +152,11 @@ export interface StockMovement {
   isReversal: boolean;
   reversedByMovementId: string | null;
   settlementId: string | null;
+  /**
+   * Everything the operation moved. A multi-line transfer is one movement
+   * with several lines; reversing it undoes them all. Older servers omit it.
+   */
+  lines?: StockMovementLine[];
 }
 
 export interface StockUnsettledSale {
@@ -157,6 +204,8 @@ export interface StockLocationDetail {
   unsettled: StockUnsettledSale[];
   movements: StockMovement[];
   settlements: StockSettlement[];
+  /** One row per consignable SKU; older servers omit it. */
+  prices?: StockLocationPrice[];
 }
 
 export interface StockStatementLine {
@@ -326,6 +375,15 @@ export function useUpdateStockLocation() {
       isActive: boolean;
     }) => api.patch(`/stock-locations/${id}`, body),
     "Location updated",
+  );
+}
+
+/** Replace a store's whole per-SKU price set (PUT semantics). */
+export function useUpdateStockPrices(locationId: string) {
+  return useStockMutation(
+    (body: { prices: StockLocationPriceBody[] }) =>
+      api.put(`/stock-locations/${locationId}/prices`, body),
+    "Prices saved",
   );
 }
 

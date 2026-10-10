@@ -39,6 +39,7 @@ var Domains = []Domain{
 	domain("wholesale_price_lists"), domain("wholesale_price_list_items"),
 	domain("sales"), domain("sale_items"), domain("stock_locations"),
 	domain("stock_movements"), domain("consignment_settlements"),
+	domain("consignment_location_prices"),
 	domain("equipment_types"), domain("equipment_type_components"),
 	domain("equipment_stock"), domain("equipment_stock_adjustments"),
 	domain("equipment_deployments"), domain("equipment_deployment_returns"),

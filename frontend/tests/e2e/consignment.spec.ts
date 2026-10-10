@@ -309,27 +309,30 @@ test("sending stock picks a lot with its home count and posts harvestLotId; any 
   await dialog.getByRole("combobox", { name: "Line 1 varietal" }).click();
   await expect(page.getByRole("option", { name: /Any lot \(oldest first\)/ })).toBeVisible();
   await expect(
-    page.getByRole("option", { name: /Sourwood · 2026-SOURWOOD-01 · 12 at home/ }),
+    page.getByRole("option", { name: /Sourwood · 2026-SOURWOOD-01 · 12 left/ }),
   ).toBeVisible();
   await expect(
-    page.getByRole("option", { name: /Wildflower · 2026-WILDFLOWER-01 · 8 at home/ }),
+    page.getByRole("option", { name: /Wildflower · 2026-WILDFLOWER-01 · 8 left/ }),
   ).toBeVisible();
   await page.getByRole("option", { name: /Sourwood · 2026-SOURWOOD-01/ }).click();
 
-  // Quantity is capped at that lot's home count, not the SKU's.
+  // Quantity is capped at that lot's home count, not the SKU's — too many is
+  // refused out loud rather than silently clamped.
   const qty = dialog.getByRole("textbox", { name: "Line 1 quantity" });
   await expect(qty).toHaveAttribute("max", "12");
   await qty.fill("30");
-  await expect(dialog.getByRole("button", { name: "Send 12 units" })).toBeVisible();
+  await expect(dialog.getByText(/Only 12 left at home/)).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Send 30 units" })).toBeDisabled();
   await qty.fill("6");
 
-  // A second line that does not care which lot goes.
+  // A second line that does not care which lot goes. What line 1 takes is no
+  // longer offered: 20 quarts at home − 6 = 14.
   await dialog.getByRole("button", { name: "Add a line" }).click();
   await dialog.getByRole("combobox", { name: "Line 2 size" }).click();
   await page.getByRole("option", { name: /Quart/ }).click();
   await expect(dialog.getByRole("textbox", { name: "Line 2 quantity" })).toHaveAttribute(
     "max",
-    "20",
+    "14",
   );
   await dialog.getByRole("textbox", { name: "Line 2 quantity" }).fill("2");
 

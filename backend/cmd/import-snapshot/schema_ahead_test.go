@@ -34,6 +34,7 @@ func TestUserPreferencesSchemaAheadSplit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	applied = withoutEmptyNewDomains(applied)
 	if len(applied) != 1 || applied[0].Name != snapshot.UserPreferencesTransform {
 		t.Fatalf("applied migrations = %+v", applied)
 	}
@@ -86,12 +87,40 @@ func TestUserPreferencesSplitDoesNotApplyAtMigration57(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 0 {
+	if applied = withoutEmptyNewDomains(applied); len(applied) != 0 {
 		t.Fatalf("migration-57 artifact was transformed: %+v", applied)
 	}
 	if _, present := decodeEnvelope(t, artifact.Records["user_settings"][0])["theme"]; !present {
 		t.Fatal("migration-57 artifact data was mutated")
 	}
+}
+
+// withoutEmptyNewDomains drops applied migrations that only added a newer,
+// empty domain (e.g. consignment_location_prices at 00060): an older artifact
+// gains an empty record set for it, which is not the transform under test.
+func withoutEmptyNewDomains(applied []snapshot.AppliedPostArtifactMigration) []snapshot.AppliedPostArtifactMigration {
+	empty := map[int64]map[string]bool{}
+	for _, migration := range snapshot.PostArtifactMigrations {
+		for _, domain := range migration.NewDomains {
+			if domain.ExpectedEmpty {
+				if empty[migration.LegacyMigration] == nil {
+					empty[migration.LegacyMigration] = map[string]bool{}
+				}
+				empty[migration.LegacyMigration][domain.Domain] = true
+			}
+		}
+	}
+	out := applied[:0:0]
+	for _, migration := range applied {
+		onlyEmpty := len(migration.Domains) > 0
+		for _, domain := range migration.Domains {
+			onlyEmpty = onlyEmpty && empty[migration.Migration][domain]
+		}
+		if !onlyEmpty {
+			out = append(out, migration)
+		}
+	}
+	return out
 }
 
 func testEnvelope(t *testing.T, domain, id string, fields map[string]any) snapshot.RecordEnvelope {

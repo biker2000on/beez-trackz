@@ -114,7 +114,9 @@ Expense date, constrained category, description, amount, optional apiary,
 hive, harvest lot, season, vendor, quantity/unit, notes, and created_at.
 
 ### customers and wholesale pricing
-Customers store contact fields, explicit email opt-in, referral code, and
+Customers store an optional company name (`company_name`, nullable,
+migration 00061 / baseline 00008; `name` is the contact person), contact
+fields, explicit email opt-in, referral code, and
 referral source; email uniqueness is case-insensitive. Wholesale price lists
 store a minimum order and per-jar-size prices.
 

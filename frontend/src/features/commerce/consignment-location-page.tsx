@@ -28,7 +28,10 @@ import {
 } from "@tanstack/react-table";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronRight,
   ClipboardCheck,
+  Pencil,
   Plus,
   RotateCcw,
   Send,
@@ -38,6 +41,16 @@ import {
   X,
 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,7 +83,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { formatDate, formatMoney, todayISO } from "@/features/honey/format";
 import { ApiError } from "@/lib/api";
 
-import { consignmentTerms } from "./consignment-page";
+import { consignmentTerms, StockLocationDialog } from "./stock-location-form";
 import {
   useRecordStockSettlement,
   useReverseStockMovement,
@@ -78,12 +91,15 @@ import {
   useStockLocationDetail,
   useStockReturn,
   useStockTransfer,
+  useUpdateStockPrices,
   useVoidStockSettlement,
   type StockInventoryLot,
   type StockInventoryRow,
   type StockLocation,
   type StockLocationDetail,
+  type StockLocationPrice,
   type StockLotRef,
+  type StockMovementLine,
   type StockSettlementLine,
   type StockSettlementLineBody,
   type StockShelfRow,
@@ -164,7 +180,7 @@ type MovementRow = StockLocationDetail["movements"][number];
 const shelfHelper = createColumnHelper<typeof gridFeatures, StockShelfRow>();
 const unsettledHelper = createColumnHelper<typeof gridFeatures, UnsettledRow>();
 const settlementHelper = createColumnHelper<typeof gridFeatures, SettlementRow>();
-const movementHelper = createColumnHelper<typeof gridFeatures, MovementRow>();
+const movementHelper = createColumnHelper<typeof gridFeatures, MovementGridRow>();
 
 const shelfColumns = shelfHelper.columns([
   shelfHelper.display({
@@ -194,9 +210,22 @@ const shelfColumns = shelfHelper.columns([
     cell: ({ row }) => row.original.onHand,
   }),
   shelfHelper.display({
-    id: "price",
-    header: "Price",
-    meta: rightAligned,
+    id: "yourPrice",
+    header: "Your price",
+    meta: {
+      align: "right",
+      cellClassName: "font-medium tabular-nums",
+    } satisfies DataGridColumnMeta,
+    cell: ({ row }) =>
+      row.original.owedPrice != null ? formatMoney(row.original.owedPrice) : "—",
+  }),
+  shelfHelper.display({
+    id: "theirPrice",
+    header: "Their price",
+    meta: {
+      align: "right",
+      cellClassName: "tabular-nums text-muted-foreground",
+    } satisfies DataGridColumnMeta,
     cell: ({ row }) =>
       row.original.unitPrice != null ? formatMoney(row.original.unitPrice) : "—",
   }),
@@ -287,6 +316,8 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
   const [sendOpen, setSendOpen] = React.useState(false);
   const [returnOpen, setReturnOpen] = React.useState(false);
   const [reportOpen, setReportOpen] = React.useState(false);
+  const [termsOpen, setTermsOpen] = React.useState(false);
+  const [pricesOpen, setPricesOpen] = React.useState(false);
 
   if (detail.isPending) return <Skeleton className="h-96 w-full" />;
   if (detail.isError) {
@@ -329,6 +360,7 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
             <Store className="size-5 shrink-0 text-primary" />
             <span className="min-w-0 truncate">{location.name}</span>
             {location.isConsignment && <Badge variant="accent">Consignment</Badge>}
+            {!location.isActive && <Badge variant="outline">inactive</Badge>}
           </h1>
           <p className="text-sm text-muted-foreground">
             {consignmentTerms(location)} · settles{" "}
@@ -337,6 +369,10 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => setTermsOpen(true)}>
+            <Pencil />
+            Edit terms
+          </Button>
           <Button type="button" variant="outline" size="sm" onClick={() => setSendOpen(true)}>
             <Send />
             Send stock
@@ -403,6 +439,14 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
         </CardContent>
       </Card>
 
+      {data.prices && (
+        <PricesCard
+          location={location}
+          prices={data.prices}
+          onEdit={() => setPricesOpen(true)}
+        />
+      )}
+
       {data.unsettled.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
@@ -434,6 +478,19 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
         location={location}
         shelf={data.shelf}
       />
+      <StockLocationDialog
+        open={termsOpen}
+        onOpenChange={setTermsOpen}
+        location={location}
+      />
+      {data.prices && (
+        <EditPricesDialog
+          open={pricesOpen}
+          onOpenChange={setPricesOpen}
+          location={location}
+          prices={data.prices}
+        />
+      )}
     </div>
   );
 }
@@ -465,6 +522,324 @@ function ErrorBanner({ message }: { message: string }) {
   );
 }
 
+// --- per-store prices ------------------------------------------------------
+
+const priceHelper = createColumnHelper<typeof gridFeatures, StockLocationPrice>();
+
+/** What "your price to them" falls back to when this store has none set. */
+function wholesaleFallback(row: StockLocationPrice): { value: number; source: string } {
+  return row.priceListPrice != null
+    ? { value: row.priceListPrice, source: "price list" }
+    : { value: row.listPrice, source: "list price" };
+}
+
+/** A set price, or the fallback in muted text naming where it comes from. */
+function PriceOrFallback({
+  value,
+  fallback,
+}: {
+  value: number | null;
+  fallback: { value: number; source: string };
+}) {
+  if (value != null) return <>{formatMoney(value)}</>;
+  return (
+    <span className="text-muted-foreground">
+      {formatMoney(fallback.value)}
+      <span className="ml-1 text-xs">({fallback.source})</span>
+    </span>
+  );
+}
+
+/** One sentence on which of the two prices decides what this store owes. */
+function pricesExplainer(location: StockLocation): string {
+  switch (location.priceBasis) {
+    case "wholesale_list":
+      return "You are owed your price for each jar they sell, whatever they charge. Their shelf price is kept for reference.";
+    case "commission":
+      return `You are owed their shelf price less their ${consignmentTerms(location)}. Your price to them only applies on a wholesale basis.`;
+    default:
+      return "You are owed their full shelf price. Your price to them only applies on a wholesale basis.";
+  }
+}
+
+function PricesCard({
+  location,
+  prices,
+  onEdit,
+}: {
+  location: StockLocation;
+  prices: StockLocationPrice[];
+  onEdit: () => void;
+}) {
+  const data = React.useMemo(
+    () => [...prices].sort((a, b) => a.label.localeCompare(b.label)),
+    [prices],
+  );
+  const columns = React.useMemo(
+    () =>
+      priceHelper.columns([
+        priceHelper.display({
+          id: "item",
+          header: "Item",
+          meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+          cell: ({ row }) => row.original.label,
+        }),
+        priceHelper.display({
+          id: "wholesale",
+          header: "Your price to them",
+          meta: rightAligned,
+          cell: ({ row }) => (
+            <PriceOrFallback
+              value={row.original.wholesalePrice}
+              fallback={wholesaleFallback(row.original)}
+            />
+          ),
+        }),
+        priceHelper.display({
+          id: "shelf",
+          header: "Their shelf price",
+          meta: rightAligned,
+          cell: ({ row }) => (
+            <PriceOrFallback
+              value={row.original.shelfPrice}
+              fallback={{ value: row.original.listPrice, source: "list price" }}
+            />
+          ),
+        }),
+      ]),
+    [],
+  );
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data,
+    getRowId: (row) => skuKey(row),
+  });
+  return (
+    <Card>
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 pb-3">
+        <div className="grid gap-1">
+          <CardTitle className="text-base">Prices</CardTitle>
+          <p className="text-xs text-muted-foreground">{pricesExplainer(location)}</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onEdit}
+          disabled={prices.length === 0}
+        >
+          <Pencil />
+          Edit prices
+        </Button>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        {prices.length === 0 ? (
+          <p className="py-4 text-sm text-muted-foreground">
+            Nothing consignable to price yet.
+          </p>
+        ) : (
+          <DataGrid table={table} aria-label="Prices" listenOnWindow={false} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+interface PriceEntry {
+  wholesale: string;
+  shelf: string;
+}
+
+function moneyText(value: number | null): string {
+  return value != null ? value.toFixed(2) : "";
+}
+
+/** Blank is "no override" (null); anything else must be a non-negative amount. */
+function parseMoneyEntry(text: string): { value: number | null; valid: boolean } {
+  const trimmed = text.trim();
+  if (trimmed === "") return { value: null, valid: true };
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return { value: null, valid: false };
+  return { value: Math.round(value * 100) / 100, valid: true };
+}
+
+function EditPricesDialog({
+  open,
+  onOpenChange,
+  location,
+  prices,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  location: StockLocation;
+  prices: StockLocationPrice[];
+}) {
+  const save = useUpdateStockPrices(location.id);
+  const [entries, setEntries] = React.useState<Record<string, PriceEntry>>({});
+
+  React.useEffect(() => {
+    if (!open) return;
+    // Load the saved prices each time the dialog opens.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setEntries(
+      Object.fromEntries(
+        prices.map((row) => [
+          skuKey(row),
+          { wholesale: moneyText(row.wholesalePrice), shelf: moneyText(row.shelfPrice) },
+        ]),
+      ),
+    );
+    // `prices` is deliberately left out: a refetch must not wipe typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const data = React.useMemo(
+    () => [...prices].sort((a, b) => a.label.localeCompare(b.label)),
+    [prices],
+  );
+
+  let invalid: string | null = null;
+  const body = data.map((row) => {
+    const entry = entries[skuKey(row)] ?? { wholesale: "", shelf: "" };
+    const wholesale = parseMoneyEntry(entry.wholesale);
+    const shelf = parseMoneyEntry(entry.shelf);
+    if (!wholesale.valid || !shelf.valid) {
+      invalid ??= `${row.label}: prices must be blank or an amount of zero or more.`;
+    }
+    return {
+      jarSizeId: row.jarSizeId,
+      productId: row.productId,
+      wholesalePrice: wholesale.value,
+      shelfPrice: shelf.value,
+    };
+  });
+  const overrides = body.filter(
+    (row) => row.wholesalePrice != null || row.shelfPrice != null,
+  ).length;
+  const error = save.error instanceof Error ? save.error.message : null;
+
+  const columns = React.useMemo(() => {
+    function priceCell(
+      field: keyof PriceEntry,
+      label: (row: StockLocationPrice) => string,
+      placeholder: (row: StockLocationPrice) => string,
+    ) {
+      return function PriceCell({
+        row: { original: row },
+      }: {
+        row: { original: StockLocationPrice };
+      }) {
+        const key = skuKey(row);
+        const entry = entries[key] ?? { wholesale: "", shelf: "" };
+        return (
+          <DataGridCellAction>
+            <Input
+              aria-label={label(row)}
+              type="number"
+              min="0"
+              step="0.01"
+              value={entry[field]}
+              placeholder={placeholder(row)}
+              onChange={(event) =>
+                setEntries((current) => ({
+                  ...current,
+                  [key]: {
+                    ...(current[key] ?? { wholesale: "", shelf: "" }),
+                    [field]: event.target.value,
+                  },
+                }))
+              }
+            />
+          </DataGridCellAction>
+        );
+      };
+    }
+    return priceHelper.columns([
+      priceHelper.display({
+        id: "item",
+        header: "Item",
+        meta: { cellClassName: "font-medium" } satisfies DataGridColumnMeta,
+        cell: ({ row }) => row.original.label,
+      }),
+      priceHelper.display({
+        id: "wholesale",
+        header: "Your price to them ($)",
+        meta: { headClassName: "w-32" } satisfies DataGridColumnMeta,
+        cell: priceCell(
+          "wholesale",
+          (row) => `${row.label} your price to them`,
+          (row) => wholesaleFallback(row).value.toFixed(2),
+        ),
+      }),
+      priceHelper.display({
+        id: "shelf",
+        header: "Their shelf price ($)",
+        meta: { headClassName: "w-32" } satisfies DataGridColumnMeta,
+        cell: priceCell(
+          "shelf",
+          (row) => `${row.label} their shelf price`,
+          (row) => row.listPrice.toFixed(2),
+        ),
+      }),
+    ]);
+  }, [entries]);
+  const table = useTable({
+    features: gridFeatures,
+    columns,
+    data,
+    getRowId: (row) => skuKey(row),
+  });
+
+  function submit() {
+    if (invalid || save.isPending) return;
+    save.mutate({ prices: body }, { onSuccess: () => onOpenChange(false) });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Prices at {location.name}</DialogTitle>
+          <DialogDescription>
+            {pricesExplainer(location)} Leave a box blank to use the price shown
+            in grey (the price list if one is linked, otherwise your list price).
+          </DialogDescription>
+        </DialogHeader>
+        <ShortcutForm
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+          onSubmitAndReset={submit}
+        >
+          {(invalid || error) && <ErrorBanner message={invalid ?? error ?? ""} />}
+          <div className="overflow-x-auto">
+            <DataGrid
+              table={table}
+              aria-label={`${location.name} prices`}
+              listenOnWindow={false}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {overrides} of {data.length} {data.length === 1 ? "item" : "items"} with a
+            price set for this store
+          </p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={invalid != null || save.isPending}>
+              {save.isPending ? "Saving…" : "Save prices"}
+            </Button>
+          </DialogFooter>
+        </ShortcutForm>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // --- send stock ------------------------------------------------------------
 
 /** "Any lot" is the empty string: the line submits no `harvestLotId`. */
@@ -475,6 +850,11 @@ interface SendLine {
   sku: string;
   lot: string;
   qty: string;
+}
+
+/** A send line's whole-unit count; blank or unevaluated text counts as 0. */
+function qtyOf(line: SendLine): number {
+  return Math.max(0, Math.trunc(Number(line.qty) || 0));
 }
 
 type SendableSku = StockInventoryRow & {
@@ -532,18 +912,92 @@ function SendStockDialog({
     .filter((row) => row.atHome > 0);
   const skuByKey = new Map(available.map((row) => [row.key, row]));
 
-  /** How many of this line's (SKU, lot) are at home — the input's cap. */
+  // Every count below is "what is left after the OTHER lines in this dialog",
+  // so two lines of Sourwood quarts cannot each claim the same twelve jars.
+
+  /** Units of this SKU the other lines (pinned or any-lot) already take. */
+  function skuTakenByOthers(line: SendLine, skuKeyValue: string): number {
+    return lines.reduce(
+      (sum, other) =>
+        other.id !== line.id && other.sku === skuKeyValue
+          ? sum + qtyOf(other)
+          : sum,
+      0,
+    );
+  }
+
+  /** Units of this (SKU, lot) the other lines pinned to that lot take. */
+  function lotTakenByOthers(line: SendLine, skuKeyValue: string, lotId: string): number {
+    return lines.reduce(
+      (sum, other) =>
+        other.id !== line.id && other.sku === skuKeyValue && other.lot === lotId
+          ? sum + qtyOf(other)
+          : sum,
+      0,
+    );
+  }
+
+  /** What is left at home of a SKU for this line. */
+  function skuLeftFor(line: SendLine, sku: SendableSku): number {
+    return Math.max(0, sku.atHome - skuTakenByOthers(line, sku.key));
+  }
+
+  /** What is left at home of one lot for this line, bounded by the SKU. */
+  function lotLeftFor(
+    line: SendLine,
+    sku: SendableSku,
+    lot: SendableSku["homeLots"][number],
+  ): number {
+    const lotLeft = lot.atHome - lotTakenByOthers(line, sku.key, lot.harvestLotId!);
+    return Math.max(0, Math.min(lotLeft, skuLeftFor(line, sku)));
+  }
+
+  /** The input's cap: this line's (SKU, lot) after every other line. */
   function capOf(line: SendLine): number {
     const sku = skuByKey.get(line.sku);
     if (!sku) return 0;
-    if (line.lot === ANY_LOT) return sku.atHome;
-    return sku.homeLots.find((lot) => lot.harvestLotId === line.lot)?.atHome ?? 0;
+    if (line.lot === ANY_LOT) return skuLeftFor(line, sku);
+    const lot = sku.homeLots.find((row) => row.harvestLotId === line.lot);
+    return lot ? lotLeftFor(line, sku, lot) : 0;
   }
+
+  /** The earlier line this one repeats (same SKU and same lot choice). */
+  function duplicateOf(line: SendLine, index: number): number | null {
+    if (!line.sku) return null;
+    const first = lines.findIndex(
+      (other) => other.sku === line.sku && other.lot === line.lot,
+    );
+    return first >= 0 && first < index ? first + 1 : null;
+  }
+
+  const lineErrors = new Map<number, string>();
+  lines.forEach((line, index) => {
+    const sku = skuByKey.get(line.sku);
+    if (!sku) return;
+    const repeats = duplicateOf(line, index);
+    if (repeats != null) {
+      lineErrors.set(
+        line.id,
+        `Same size and lot as line ${repeats}. Add the units to that line instead.`,
+      );
+      return;
+    }
+    const qty = qtyOf(line);
+    const cap = capOf(line);
+    if (qty > cap) {
+      lineErrors.set(
+        line.id,
+        cap === 0
+          ? "None left at home after the other lines."
+          : `Only ${cap} left at home after the other lines.`,
+      );
+    }
+  });
 
   const body: StockTransferLineBody[] = lines.flatMap((line) => {
     const sku = skuByKey.get(line.sku);
     if (!sku) return [];
-    const quantity = Math.min(capOf(line), Math.max(0, Math.trunc(Number(line.qty) || 0)));
+    const quantity = qtyOf(line);
     if (quantity === 0) return [];
     return [
       {
@@ -554,6 +1008,7 @@ function SendStockDialog({
     ];
   });
   const totalUnits = body.reduce((sum, line) => sum + line.quantity, 0);
+  const hasLineErrors = lineErrors.size > 0;
 
   const error =
     transfer.error instanceof Error ? transfer.error.message : null;
@@ -565,7 +1020,7 @@ function SendStockDialog({
   }
 
   function submit() {
-    if (body.length === 0) return;
+    if (body.length === 0 || hasLineErrors) return;
     transfer.mutate(
       { date, lines: body, notes: notes.trim() || undefined },
       { onSuccess: () => onOpenChange(false) },
@@ -614,101 +1069,131 @@ function SendStockDialog({
                 const sku = skuByKey.get(line.sku);
                 const cap = capOf(line);
                 const n = index + 1;
+                const lineError = lineErrors.get(line.id);
+                const sizeOptions = available
+                  .map((row) => ({ row, left: skuLeftFor(line, row) }))
+                  .filter(({ row, left }) => left > 0 || row.key === line.sku);
+                // Lots another line already pins are hidden: a second line for
+                // the same lot is a duplicate, not a new choice.
+                const lotOptions = sku
+                  ? sku.homeLots
+                      .map((lot) => ({ lot, left: lotLeftFor(line, sku, lot) }))
+                      .filter(
+                        ({ lot, left }) =>
+                          lot.harvestLotId === line.lot ||
+                          (left > 0 &&
+                            !lines.some(
+                              (other) =>
+                                other.id !== line.id &&
+                                other.sku === line.sku &&
+                                other.lot === lot.harvestLotId,
+                            )),
+                      )
+                  : [];
                 return (
-                  <div
-                    key={line.id}
-                    data-testid="send-line"
-                    className="grid gap-2 sm:grid-cols-[1fr_1.4fr_6rem_auto] sm:items-end"
-                  >
-                    <div className="grid gap-1">
-                      <Label htmlFor={`send-size-${line.id}`}>Size</Label>
-                      <Select
-                        value={line.sku}
-                        onValueChange={(value) =>
-                          patchLine(line.id, { sku: value, lot: ANY_LOT, qty: "" })
+                  <div key={line.id} data-testid="send-line" className="grid gap-1">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_1.4fr_6rem_auto] sm:items-end">
+                      <div className="grid gap-1">
+                        <Label htmlFor={`send-size-${line.id}`}>Size</Label>
+                        <Select
+                          value={line.sku}
+                          onValueChange={(value) =>
+                            patchLine(line.id, { sku: value, lot: ANY_LOT, qty: "" })
+                          }
+                        >
+                          <SelectTrigger
+                            id={`send-size-${line.id}`}
+                            aria-label={`Line ${n} size`}
+                          >
+                            <SelectValue placeholder="Pick a size" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {sizeOptions.map(({ row, left }) => (
+                              <SelectItem key={row.key} value={row.key}>
+                                {row.label}
+                                <span className="text-xs text-muted-foreground">
+                                  {` · ${left} left at home`}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid gap-1">
+                        <Label htmlFor={`send-lot-${line.id}`}>Varietal / lot</Label>
+                        <Select
+                          value={line.lot}
+                          onValueChange={(value) =>
+                            patchLine(line.id, { lot: value === "any" ? ANY_LOT : value })
+                          }
+                          disabled={!sku}
+                        >
+                          <SelectTrigger
+                            id={`send-lot-${line.id}`}
+                            aria-label={`Line ${n} varietal`}
+                          >
+                            <SelectValue placeholder="Any lot (oldest first)" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="any">
+                              Any lot (oldest first)
+                              {sku && (
+                                <span className="text-xs text-muted-foreground">
+                                  {` · ${skuLeftFor(line, sku)} left`}
+                                </span>
+                              )}
+                            </SelectItem>
+                            {lotOptions.map(({ lot, left }) => (
+                              <SelectItem key={lot.harvestLotId!} value={lot.harvestLotId!}>
+                                {lotLabel(lot)}
+                                <span className="text-xs text-muted-foreground">
+                                  {` · ${left} left`}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid gap-1">
+                        <Label htmlFor={`send-qty-${line.id}`}>Units</Label>
+                        <Input
+                          id={`send-qty-${line.id}`}
+                          aria-label={`Line ${n} quantity`}
+                          type="number"
+                          min="0"
+                          max={cap}
+                          disabled={!sku}
+                          value={line.qty}
+                          placeholder={sku ? `≤ ${cap}` : "0"}
+                          aria-invalid={lineError ? true : undefined}
+                          aria-describedby={lineError ? `send-error-${line.id}` : undefined}
+                          onChange={(event) =>
+                            patchLine(line.id, { qty: event.target.value })
+                          }
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`Remove line ${n}`}
+                        disabled={lines.length === 1}
+                        onClick={() =>
+                          setLines((current) => current.filter((row) => row.id !== line.id))
                         }
                       >
-                        <SelectTrigger
-                          id={`send-size-${line.id}`}
-                          aria-label={`Line ${n} size`}
-                        >
-                          <SelectValue placeholder="Pick a size" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {available.map((row) => (
-                            <SelectItem key={row.key} value={row.key}>
-                              {row.label}
-                              <span className="text-xs text-muted-foreground">
-                                {` · ${row.atHome} at home`}
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        <X />
+                      </Button>
                     </div>
-                    <div className="grid gap-1">
-                      <Label htmlFor={`send-lot-${line.id}`}>Varietal / lot</Label>
-                      <Select
-                        value={line.lot}
-                        onValueChange={(value) =>
-                          patchLine(line.id, { lot: value === "any" ? ANY_LOT : value })
-                        }
-                        disabled={!sku}
+                    {lineError && (
+                      <p
+                        id={`send-error-${line.id}`}
+                        role="alert"
+                        className="text-xs text-destructive"
                       >
-                        <SelectTrigger
-                          id={`send-lot-${line.id}`}
-                          aria-label={`Line ${n} varietal`}
-                        >
-                          <SelectValue placeholder="Any lot (oldest first)" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="any">
-                            Any lot (oldest first)
-                            {sku && (
-                              <span className="text-xs text-muted-foreground">
-                                {` · ${sku.atHome} at home`}
-                              </span>
-                            )}
-                          </SelectItem>
-                          {sku?.homeLots.map((lot) => (
-                            <SelectItem key={lot.harvestLotId!} value={lot.harvestLotId!}>
-                              {lotLabel(lot)}
-                              <span className="text-xs text-muted-foreground">
-                                {` · ${lot.atHome} at home`}
-                              </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid gap-1">
-                      <Label htmlFor={`send-qty-${line.id}`}>Units</Label>
-                      <Input
-                        id={`send-qty-${line.id}`}
-                        aria-label={`Line ${n} quantity`}
-                        type="number"
-                        min="0"
-                        max={cap}
-                        disabled={!sku}
-                        value={line.qty}
-                        placeholder="0"
-                        onChange={(event) =>
-                          patchLine(line.id, { qty: event.target.value })
-                        }
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove line ${n}`}
-                      disabled={lines.length === 1}
-                      onClick={() =>
-                        setLines((current) => current.filter((row) => row.id !== line.id))
-                      }
-                    >
-                      <X />
-                    </Button>
+                        Line {n}: {lineError}
+                      </p>
+                    )}
                   </div>
                 );
               })}
@@ -741,7 +1226,10 @@ function SendStockDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={totalUnits === 0 || transfer.isPending}>
+            <Button
+              type="submit"
+              disabled={totalUnits === 0 || hasLineErrors || transfer.isPending}
+            >
               {transfer.isPending ? "Sending…" : `Send ${totalUnits} units`}
             </Button>
           </DialogFooter>
@@ -923,6 +1411,28 @@ function monthBounds(iso: string): { start: string; end: string } {
   };
 }
 
+/** The shelf price a report line uses: what was typed, else the store's. */
+function reportShelfPrice(row: StockShelfRow, entry: ReportRow): number {
+  return entry.price.trim() === "" ? (row.unitPrice ?? 0) : Number(entry.price) || 0;
+}
+
+/**
+ * What the operator is owed per unit sold on a report line. A wholesale store
+ * owes your price whatever it charged; commission and retail follow the shelf
+ * price actually charged.
+ */
+function owedPerUnit(
+  row: StockShelfRow,
+  entry: ReportRow,
+  location: StockLocation,
+  commissionRate: number,
+): number {
+  if (location.priceBasis === "wholesale_list" && row.owedPrice != null) {
+    return row.owedPrice;
+  }
+  return reportShelfPrice(row, entry) * (1 - commissionRate);
+}
+
 function RecordReportDialog({
   open,
   onOpenChange,
@@ -957,6 +1467,8 @@ function RecordReportDialog({
   const commissionRate =
     location.priceBasis === "commission" ? (location.commissionBps ?? 0) / 10000 : 0;
 
+  const wholesale = location.priceBasis === "wholesale_list";
+
   const reportData = React.useMemo(() => sortShelf(shelf), [shelf]);
 
   const lines: StockSettlementLineBody[] = [];
@@ -967,8 +1479,7 @@ function RecordReportDialog({
     const entry = rows[key] ?? emptyReportRow;
     const sold = Math.max(0, Math.trunc(Number(entry.sold) || 0));
     const returned = Math.max(0, Math.trunc(Number(entry.returned) || 0));
-    const price =
-      entry.price.trim() === "" ? (row.unitPrice ?? 0) : Number(entry.price) || 0;
+    const price = reportShelfPrice(row, entry);
     const count = entry.count.trim() === "" ? undefined : Math.max(0, Number(entry.count) || 0);
     if (sold === 0 && returned === 0 && count === undefined) continue;
     if (sold + returned > row.onHand) {
@@ -986,7 +1497,7 @@ function RecordReportDialog({
     });
     // Mirrors the server's split so the operator sees the cheque total before
     // sending; the server recomputes it in exact cents.
-    owed += sold * price * (1 - commissionRate);
+    owed += sold * owedPerUnit(row, entry, location, commissionRate);
   }
   owed = Math.round(owed * 100) / 100;
 
@@ -1076,16 +1587,46 @@ function RecordReportDialog({
       }),
       shelfHelper.display({
         id: "price",
-        header: "Price",
+        header: "Their price",
         meta: { headClassName: "w-24" } satisfies DataGridColumnMeta,
         cell: numberCell(
           "price",
           (row) => `${shelfRowName(row)} shelf price`,
           (row) => ({
             step: "0.01",
-            placeholder: row.unitPrice != null ? String(row.unitPrice) : "0.00",
+            placeholder: row.unitPrice != null ? row.unitPrice.toFixed(2) : "0.00",
           }),
         ),
+      }),
+      ...(wholesale
+        ? [
+            shelfHelper.display({
+              id: "yourPrice",
+              header: "Your price",
+              meta: rightAligned,
+              cell: ({ row }) =>
+                row.original.owedPrice != null
+                  ? formatMoney(row.original.owedPrice)
+                  : "—",
+            }),
+          ]
+        : []),
+      shelfHelper.display({
+        id: "owed",
+        header: "Owed",
+        meta: {
+          align: "right",
+          cellClassName: "font-medium tabular-nums",
+        } satisfies DataGridColumnMeta,
+        cell: ({ row: { original: row } }) => {
+          const entry = rows[lotKey(row)] ?? emptyReportRow;
+          const sold = Math.max(0, Math.trunc(Number(entry.sold) || 0));
+          if (sold === 0) return <span className="text-muted-foreground">—</span>;
+          return formatMoney(
+            Math.round(sold * owedPerUnit(row, entry, location, commissionRate) * 100) /
+              100,
+          );
+        },
       }),
       shelfHelper.display({
         id: "count",
@@ -1098,7 +1639,7 @@ function RecordReportDialog({
         ),
       }),
     ]);
-  }, [rows]);
+  }, [rows, wholesale, location, commissionRate]);
   const reportTable = useTable({
     features: gridFeatures,
     columns: reportColumns,
@@ -1238,6 +1779,13 @@ function RecordReportDialog({
             <p className="text-xs text-muted-foreground">
               {location.name} keeps {(commissionRate * 100).toFixed(2)}% of each
               sale; the figure above is your share.
+            </p>
+          )}
+          {wholesale && (
+            <p className="text-xs text-muted-foreground">
+              {location.name} pays your price for each jar sold, whatever they
+              charged; their price is recorded for reference only. Set your
+              price per jar under Prices on this page.
             </p>
           )}
           <div className="grid gap-1">
@@ -1409,10 +1957,34 @@ function movementDim(row: MovementRow) {
 }
 
 /** "lot 2025-SW · Sourwood", or whichever half the movement carries. */
-function movementLot(row: MovementRow): string | null {
+function movementLot(row: {
+  lotCode: string | null;
+  varietalName: string | null;
+}): string | null {
   if (row.lotCode && row.varietalName) return `lot ${row.lotCode} · ${row.varietalName}`;
   if (row.lotCode) return `lot ${row.lotCode}`;
   return row.varietalName;
+}
+
+function signed(quantity: number): string {
+  return quantity > 0 ? `+${quantity}` : String(quantity);
+}
+
+/**
+ * A row of the movements grid: an operation, or (when its parent is
+ * expanded) one of the lines that operation moved.
+ */
+interface MovementGridRow {
+  key: string;
+  movement: MovementRow;
+  /** Null on the operation row itself. */
+  line: StockMovementLine | null;
+  lineCount: number;
+  expanded: boolean;
+}
+
+function canReverse(row: MovementRow): boolean {
+  return !row.isReversal && !row.reversedByMovementId && !row.settlementId;
 }
 
 function MovementHistory({
@@ -1421,41 +1993,137 @@ function MovementHistory({
   movements: StockLocationDetail["movements"];
 }) {
   const reverse = useReverseStockMovement();
-  const data = React.useMemo(() => movements, [movements]);
+  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set());
+  const [confirming, setConfirming] = React.useState<MovementRow | null>(null);
+
+  const toggle = React.useCallback((id: string) => {
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const data = React.useMemo<MovementGridRow[]>(
+    () =>
+      movements.flatMap((movement) => {
+        const lines = movement.lines ?? [];
+        const lineCount = lines.length;
+        const isOpen = lineCount > 1 && expanded.has(movement.id);
+        const parent: MovementGridRow = {
+          key: movement.id,
+          movement,
+          line: null,
+          lineCount,
+          expanded: isOpen,
+        };
+        if (!isOpen) return [parent];
+        return [
+          parent,
+          ...lines.map((line, index) => ({
+            key: `${movement.id}:${index}`,
+            movement,
+            line,
+            lineCount,
+            expanded: false,
+          })),
+        ];
+      }),
+    [movements, expanded],
+  );
+
   const columns = React.useMemo(
     () =>
       movementHelper.columns([
         movementHelper.display({
+          id: "expand",
+          header: "",
+          meta: { cellClassName: "w-8 p-1" } satisfies DataGridColumnMeta,
+          cell: ({ row: { original: row } }) =>
+            row.line == null && row.lineCount > 1 ? (
+              <DataGridCellAction>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-expanded={row.expanded}
+                  aria-label={`${row.expanded ? "Hide" : "Show"} the ${row.lineCount} lines of this ${row.movement.kind}`}
+                  onClick={() => toggle(row.movement.id)}
+                >
+                  {row.expanded ? <ChevronDown /> : <ChevronRight />}
+                </Button>
+              </DataGridCellAction>
+            ) : null,
+        }),
+        movementHelper.display({
           id: "date",
           header: "Date",
-          cell: ({ row: { original: row } }) => (
-            <Dimmed dim={movementDim(row)}>{formatDate(row.date)}</Dimmed>
-          ),
+          cell: ({ row: { original: row } }) =>
+            row.line ? null : (
+              <Dimmed dim={movementDim(row.movement)}>
+                {formatDate(row.movement.date)}
+              </Dimmed>
+            ),
         }),
         movementHelper.display({
           id: "what",
           header: "What",
           meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: row } }) => (
-            <Dimmed dim={movementDim(row)}>
-              {row.kind}
-              {row.isReversal && " (reversal)"}
-              {row.counterpartyName && (
-                <span className="ml-2 text-xs text-muted-foreground">
-                  {row.quantity > 0 ? "from" : "to"} {row.counterpartyName}
-                </span>
-              )}
-            </Dimmed>
-          ),
+          cell: ({ row: { original: row } }) => {
+            if (row.line) return null;
+            const movement = row.movement;
+            return (
+              <Dimmed dim={movementDim(movement)}>
+                {movement.kind}
+                {movement.isReversal && " (reversal)"}
+                {movement.counterpartyName && (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {movement.quantity > 0 ? "from" : "to"} {movement.counterpartyName}
+                  </span>
+                )}
+              </Dimmed>
+            );
+          },
         }),
         movementHelper.display({
           id: "item",
           header: "Item",
           cell: ({ row: { original: row } }) => {
-            const lot = movementLot(row);
+            if (row.line) {
+              const lot = movementLot(row.line);
+              return (
+                <Dimmed dim={movementDim(row.movement)} className="pl-6">
+                  {row.line.label}
+                  {lot && (
+                    <span className="ml-2 text-xs text-muted-foreground">{lot}</span>
+                  )}
+                </Dimmed>
+              );
+            }
+            const movement = row.movement;
+            const lot = movementLot(movement);
+            if (row.lineCount > 1) {
+              // Name what the lines share, if anything: "Quart" when every
+              // line is a quart, a lot when every line is the same lot.
+              const shared = [
+                movement.label && movement.label !== "Mixed" ? movement.label : null,
+                lot,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <Dimmed dim={movementDim(movement)}>
+                  {row.lineCount} lines
+                  {shared && (
+                    <span className="ml-2 text-xs text-muted-foreground">{shared}</span>
+                  )}
+                </Dimmed>
+              );
+            }
             return (
-              <Dimmed dim={movementDim(row)}>
-                {row.label}
+              <Dimmed dim={movementDim(movement)}>
+                {movement.label}
                 {lot && (
                   <span className="ml-2 text-xs text-muted-foreground">{lot}</span>
                 )}
@@ -1468,8 +2136,11 @@ function MovementHistory({
           header: "Qty",
           meta: rightAligned,
           cell: ({ row: { original: row } }) => (
-            <Dimmed dim={movementDim(row)}>
-              {row.quantity > 0 ? `+${row.quantity}` : row.quantity}
+            <Dimmed
+              dim={movementDim(row.movement)}
+              className={row.line ? "text-muted-foreground" : undefined}
+            >
+              {signed(row.line ? row.line.quantity : row.movement.quantity)}
             </Dimmed>
           ),
         }),
@@ -1477,40 +2148,95 @@ function MovementHistory({
           id: "actions",
           header: "",
           meta: { cellClassName: "p-1 text-right" } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: row } }) =>
-            !row.isReversal && !row.reversedByMovementId && !row.settlementId ? (
+          cell: ({ row: { original: row } }) => {
+            if (row.line || !canReverse(row.movement)) return null;
+            const units = Math.abs(row.movement.quantity);
+            const many = row.lineCount > 1;
+            return (
               <DataGridCellAction className="flex justify-end">
                 <Button
                   type="button"
                   size="sm"
                   variant="ghost"
                   disabled={reverse.isPending}
-                  onClick={() => reverse.mutate({ id: row.id })}
+                  title={`Undo this whole ${row.movement.kind} (${units} ${units === 1 ? "unit" : "units"})`}
+                  onClick={() => setConfirming(row.movement)}
                 >
                   <RotateCcw />
-                  Reverse
+                  {many ? "Reverse all" : "Reverse"}
                 </Button>
               </DataGridCellAction>
-            ) : null,
+            );
+          },
         }),
       ]),
-    [reverse],
+    [reverse.isPending, toggle],
   );
   const table = useTable({
     features: gridFeatures,
     columns,
     data,
-    getRowId: (row) => row.id,
+    getRowId: (row) => row.key,
   });
   if (movements.length === 0) return null;
+
+  const confirmUnits = confirming ? Math.abs(confirming.quantity) : 0;
+  const confirmLines = confirming?.lines?.length ?? 0;
+
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Movements</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
-        <DataGrid table={table} aria-label="Movements" listenOnWindow={false} />
+        <DataGrid
+          table={table}
+          aria-label="Movements"
+          listenOnWindow={false}
+          onRowActivate={(row) => {
+            if (row.line == null && row.lineCount > 1) toggle(row.movement.id);
+          }}
+          rowProps={(row) =>
+            row.line ? { className: "bg-muted/30 text-sm" } : undefined
+          }
+        />
       </CardContent>
+      <AlertDialog
+        open={confirming !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirming(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmLines > 1 ? "Reverse this whole " : "Reverse this "}
+              {confirming?.kind ?? "movement"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirming
+                ? `The ${confirming.kind} from ${formatDate(confirming.date)} moved ${confirmUnits} ${confirmUnits === 1 ? "unit" : "units"}${
+                    confirmLines > 1 ? ` across ${confirmLines} lines` : ""
+                  }. Reversing records an equal and opposite movement for ${
+                    confirmLines > 1 ? "every line" : "it"
+                  }; the original stays in the history.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (confirming) reverse.mutate({ id: confirming.id });
+                setConfirming(null);
+              }}
+            >
+              {confirmLines > 1 ? `Reverse all ${confirmUnits} units` : "Reverse"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

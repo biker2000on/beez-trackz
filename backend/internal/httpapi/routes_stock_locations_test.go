@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/biker2000on/beez-trackz/backend/internal/app/production"
+	"github.com/biker2000on/beez-trackz/backend/internal/app/sales"
 	"github.com/google/uuid"
 )
 
@@ -20,35 +21,104 @@ import (
 func TestStockOwedSplitStaysExactCents(t *testing.T) {
 	t.Parallel()
 	bps := 3000
+	jar := sales.ConsignmentSKUPrices{Label: "Pint", ListPriceCents: 1200}
 	commissionShop := stockLocationRow{PriceBasis: "commission", CommissionBps: &bps}
-	owed, commission := stockOwedSplit(commissionShop, 1200, nil)
-	if owed != 840 || commission != 360 {
-		t.Errorf("30%% of $12.00 split as owed=%d commission=%d, want 840/360", owed, commission)
+	owed, commission, ok := stockOwedSplit(commissionShop, jar, 1200)
+	if !ok || owed != 840 || commission != 360 {
+		t.Errorf("30%% of $12.00 split as owed=%d commission=%d (%v), want 840/360", owed, commission, ok)
 	}
 	// The two halves must always add back up to the shelf price, including
 	// where the split does not land on a whole cent.
 	for _, retail := range []money{1, 7, 99, 1233, 4999} {
-		owed, commission := stockOwedSplit(commissionShop, retail, nil)
+		owed, commission, _ := stockOwedSplit(commissionShop, jar, retail)
 		if owed+commission != retail {
 			t.Errorf("split of %d lost a cent: %d + %d", retail, owed, commission)
 		}
 	}
 
 	retailShop := stockLocationRow{PriceBasis: "retail"}
-	if owed, commission := stockOwedSplit(retailShop, 1200, nil); owed != 1200 || commission != 0 {
+	if owed, commission, _ := stockOwedSplit(retailShop, jar, 1200); owed != 1200 || commission != 0 {
 		t.Errorf("retail basis = %d/%d, want 1200/0", owed, commission)
 	}
 
 	wholesaleShop := stockLocationRow{PriceBasis: "wholesale_list"}
-	list := money(700)
-	if owed, commission := stockOwedSplit(wholesaleShop, 1200, &list); owed != 700 || commission != 500 {
+	list := int64(700)
+	listed := jar
+	listed.PriceListCents = &list
+	if owed, commission, _ := stockOwedSplit(wholesaleShop, listed, 1200); owed != 700 || commission != 500 {
 		t.Errorf("wholesale basis = %d/%d, want 700/500", owed, commission)
 	}
 	// A list price above the shelf price must not owe the operator more than
 	// the shop actually collected.
-	above := money(1500)
-	if owed, commission := stockOwedSplit(wholesaleShop, 1200, &above); owed != 1200 || commission != 0 {
+	above := int64(1500)
+	listed.PriceListCents = &above
+	if owed, commission, _ := stockOwedSplit(wholesaleShop, listed, 1200); owed != 1200 || commission != 0 {
 		t.Errorf("list above shelf = %d/%d, want 1200/0", owed, commission)
+	}
+	// The store's own wholesale price is owed as is: not capped at the shelf
+	// price, and the store's margin never goes negative.
+	store := int64(1500)
+	overridden := listed
+	overridden.StoreWholesaleCents = &store
+	if owed, commission, _ := stockOwedSplit(wholesaleShop, overridden, 1200); owed != 1500 || commission != 0 {
+		t.Errorf("store wholesale above shelf = %d/%d, want 1500/0", owed, commission)
+	}
+	// Neither a store price nor a list item: the unit cannot be priced.
+	if _, _, ok := stockOwedSplit(wholesaleShop, jar, 1200); ok {
+		t.Error("a wholesale store priced a jar with no wholesale price")
+	}
+}
+
+func TestStockPricesRequestValidation(t *testing.T) {
+	t.Parallel()
+	jar, product := uuid.New(), uuid.New()
+	price := money(700)
+	negative := money(-1)
+	entries, err := stockLocationPricesRequest{Prices: []stockLocationPriceInput{
+		{JarSizeID: &jar, WholesalePrice: &price},
+		{ProductID: &product},
+	}}.normalize()
+	if err != nil || len(entries) != 1 || entries[0].JarSizeID == nil {
+		t.Fatalf("normalize = %+v, %v; want the jar entry only (the priceless product dropped)", entries, err)
+	}
+	for name, req := range map[string]stockLocationPricesRequest{
+		"no SKU":    {Prices: []stockLocationPriceInput{{WholesalePrice: &price}}},
+		"both SKUs": {Prices: []stockLocationPriceInput{{JarSizeID: &jar, ProductID: &product, WholesalePrice: &price}}},
+		"negative":  {Prices: []stockLocationPriceInput{{JarSizeID: &jar, ShelfPrice: &negative}}},
+		"duplicate": {Prices: []stockLocationPriceInput{{JarSizeID: &jar, WholesalePrice: &price}, {JarSizeID: &jar}}},
+	} {
+		if _, err := req.normalize(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestStockMovementSummaryNamesOnlyWhatAllLinesShare(t *testing.T) {
+	t.Parallel()
+	sourwood, wildflower := "Sourwood", "Wildflower"
+	lotA, lotB := "L-1", "L-2"
+	mixed := stockMovementRow{Label: "Pint", Quantity: 48, Lines: []stockMovementLine{
+		{Label: "Pint", VarietalName: &wildflower, LotCode: &lotB, Quantity: 12},
+		{Label: "Pint", VarietalName: &sourwood, LotCode: &lotA, Quantity: 36},
+	}}
+	stockSortMovementLines(mixed.Lines)
+	stockSummarizeMovement(&mixed)
+	if *mixed.Lines[0].VarietalName != "Sourwood" {
+		t.Errorf("lines not sorted by varietal: %+v", mixed.Lines)
+	}
+	if mixed.Label != "Pint" || mixed.LotCode != nil || mixed.VarietalName != nil || mixed.Quantity != 48 {
+		t.Errorf("mixed-lot summary = %q %v %v %d, want Pint/nil/nil/48",
+			mixed.Label, mixed.LotCode, mixed.VarietalName, mixed.Quantity)
+	}
+
+	items := stockMovementRow{Lines: []stockMovementLine{
+		{Label: "Pint", VarietalName: &sourwood, LotCode: &lotA},
+		{Label: "Quart", VarietalName: &sourwood, LotCode: &lotA},
+	}}
+	stockSummarizeMovement(&items)
+	if items.Label != "Mixed" || items.LotCode == nil || *items.VarietalName != "Sourwood" {
+		t.Errorf("mixed-item summary = %q %v %v, want Mixed/L-1/Sourwood",
+			items.Label, items.LotCode, items.VarietalName)
 	}
 }
 
@@ -61,9 +131,10 @@ func TestStockLocationPayloadValidation(t *testing.T) {
 	if err := commission.normalize(); err == nil {
 		t.Error("the commission basis was accepted without a percentage")
 	}
+	// A wholesale store can be priced entirely by its own per-SKU prices.
 	wholesale := &stockLocationPayload{Name: "Bike shop", PriceBasis: "wholesale_list"}
-	if err := wholesale.normalize(); err == nil {
-		t.Error("the wholesale basis was accepted without a price list")
+	if err := wholesale.normalize(); err != nil {
+		t.Errorf("the wholesale basis was refused without a price list: %v", err)
 	}
 	plain := &stockLocationPayload{Name: "  Bike shop  "}
 	if err := plain.normalize(); err != nil {
