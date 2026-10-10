@@ -47,6 +47,7 @@ import {
   customerDisplayName,
   useCustomers,
   useWholesalePriceLists,
+  type Customer,
 } from "@/features/commerce/api";
 import {
   LotLinesEditor,
@@ -113,13 +114,13 @@ const saleSchema = z.object({
 });
 type SaleValues = z.infer<typeof saleSchema>;
 
-function saleDefaults(): SaleValues {
+function saleDefaults(customerId?: string): SaleValues {
   return {
     date: todayISO(),
     location: "",
     stockLocationId: "home",
     customerName: "",
-    customerId: "none",
+    customerId: customerId ?? "none",
     channel: "direct",
     paymentMethod: "cash",
     delivery: "now",
@@ -170,10 +171,13 @@ export function RecordSaleDialog({
   open,
   onOpenChange,
   inventory,
+  customer,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   inventory: HoneyInventoryRow[];
+  /** Opened from a customer: the sale starts with them chosen. */
+  customer?: Customer;
 }) {
   const mutation = useRecordSale();
   const locations = useSaleLocations();
@@ -185,7 +189,7 @@ export function RecordSaleDialog({
   const catalog = useProductCatalog();
   const form = useForm<SaleValues>({
     resolver: zodResolver(saleSchema),
-    defaultValues: saleDefaults(),
+    defaultValues: saleDefaults(customer?.id),
   });
   const [colonies, setColonies] = React.useState<ColonyDraft[]>([]);
   const [offers, setOffers] = React.useState<Record<string, HiveSaleOffer>>({});
@@ -247,7 +251,7 @@ export function RecordSaleDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    form.reset(saleDefaults());
+    form.reset(saleDefaults(customer?.id));
     // Each opening is a new sale draft.
     resetLines();
     setColonies([]);
@@ -263,7 +267,7 @@ export function RecordSaleDialog({
     setShowDetails(false);
     mutation.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, resetLines]);
+  }, [open, resetLines, customer?.id]);
 
   const jarUnits = lines.filled.reduce(
     (sum, row) => sum + (row.sku.jarSizeId ? row.quantity : 0),
@@ -303,7 +307,7 @@ export function RecordSaleDialog({
   const total = subtotal - discountAmount;
 
   function resetSaleDraft() {
-    form.reset(saleDefaults());
+    form.reset(saleDefaults(customer?.id));
     resetLines();
     setColonies([]);
     setOffers({});
@@ -505,7 +509,7 @@ export function RecordSaleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-3 sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Record a sale</DialogTitle>
+          <DialogTitle>{customer ? `Record a sale for ${customerDisplayName(customer)}` : "Record a sale"}</DialogTitle>
           <DialogDescription>
             Each jar line names its varietal / lot. Past dates are allowed.
           </DialogDescription>

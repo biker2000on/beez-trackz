@@ -28,6 +28,25 @@ const JAR_PINT = "dddddddd-4444-4444-4444-444444444444";
 const JAR_QUART = "eeeeeeee-5555-5555-5555-555555555555";
 const PRODUCT = "ffffffff-6666-6666-6666-666666666666";
 const AS_OF = "2026-09-03T12:00:00Z";
+const CUSTOMER = "abababab-7777-4777-8777-777777777777";
+
+function customer() {
+  return {
+    id: CUSTOMER,
+    name: "Jane Doe",
+    companyName: "Carolina Pedal Works",
+    email: "jane@example.com",
+    phone: null,
+    notes: null,
+    emailOptIn: false,
+    referralCode: null,
+    referredBy: null,
+    orderCount: 3,
+    lifetimeRevenue: 180,
+    lastOrderDate: "2026-08-20",
+    reorderReminderDue: false,
+  };
+}
 
 function harvestLot(id: string, lotCode: string, varietalName: string, lbs: number) {
   return {
@@ -300,6 +319,9 @@ async function mockApp(page: Page, posted: Posted[] = []) {
     if (path.endsWith("/products")) {
       return route.fulfill({ json: catalog() });
     }
+    if (path.endsWith("/customers")) {
+      return route.fulfill({ json: [customer()] });
+    }
     return route.fulfill({ json: [] });
   });
 }
@@ -384,6 +406,27 @@ test("a sale is lines of size and lot: empty sizes and lots hidden, a lone lot p
     orderStatus: "paid",
     lines: [{ kind: "jar", jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 2, unitPrice: 10 }],
   });
+});
+
+test("tapping a customer records a sale for them", async ({ page }) => {
+  const posted: Posted[] = [];
+  await mockApp(page, posted);
+  await page.goto("/sales/customers");
+
+  await page.getByRole("table", { name: "Customers" }).getByText("Carolina Pedal Works").click();
+  const dialog = page.getByRole("dialog", {
+    name: "Record a sale for Carolina Pedal Works — Jane Doe",
+  });
+  await expect(dialog).toBeVisible();
+
+  await dialog.getByRole("combobox", { name: "Line 1 size" }).click();
+  await page.getByRole("option", { name: /Pint/ }).click();
+  await dialog.getByRole("textbox", { name: "Line 1 quantity" }).fill("1");
+  await dialog.getByRole("button", { name: "Record sale" }).click();
+
+  await expect.poll(() => posted.length).toBe(1);
+  expect(posted[0].path).toBe("/api/v1/sales");
+  expect(posted[0].body).toMatchObject({ customerId: CUSTOMER });
 });
 
 test("giving jars away names the lot of every line and totals jars · oz", async ({

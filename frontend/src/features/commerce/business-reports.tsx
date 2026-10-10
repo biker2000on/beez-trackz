@@ -16,7 +16,7 @@ import {
   createColumnHelper,
   useTable,
 } from "@tanstack/react-table";
-import { Bell, DollarSign, Link2, Plus, Trash2, Users } from "lucide-react";
+import { Bell, DollarSign, Link2, Pencil, Plus, Receipt, Trash2, Users } from "lucide-react";
 
 import {
   AlertDialog,
@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/data-grid";
 import { Textarea } from "@/components/ui/textarea";
 import { useApiaryOptions, useHiveOptions, useJarInventory } from "@/features/honey/hooks";
+import { RecordSaleDialog } from "@/features/honey/record-sale-dialog";
 import { formatDate, formatLbs, formatMoney, todayISO } from "@/features/honey/format";
 import {
   customerContactName,
@@ -695,14 +696,16 @@ export function CustomersPanel() {
   const priceLists = useWholesalePriceLists();
   const [customerOpen, setCustomerOpen] = React.useState(false);
   const [editCustomer, setEditCustomer] = React.useState<Customer | null>(null);
+  const [saleCustomer, setSaleCustomer] = React.useState<Customer | null>(null);
   const [priceOpen, setPriceOpen] = React.useState(false);
+  const inventory = useJarInventory();
   if (customers.isPending || priceLists.isPending) return <Skeleton className="h-64" />;
   if (customers.isError || priceLists.isError) return <ErrorText />;
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setPriceOpen(true)}><DollarSign /> New wholesale list</Button><Button size="sm" onClick={() => setCustomerOpen(true)}><Plus /> Add customer</Button></div>
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="size-4" /> Customers</CardTitle></CardHeader><CardContent className="p-0"><CustomersTable rows={customers.data} onEdit={setEditCustomer} /></CardContent></Card>
+        <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="size-4" /> Customers</CardTitle></CardHeader><CardContent className="p-0"><CustomersTable rows={customers.data} onEdit={setEditCustomer} onSell={setSaleCustomer} /></CardContent></Card>
         <Card><CardHeader><CardTitle className="text-base">Wholesale price lists</CardTitle></CardHeader><CardContent className="grid gap-3">{priceLists.data.length === 0 ? <p className="text-sm text-muted-foreground">No wholesale pricing yet.</p> : priceLists.data.map((list) => <div key={list.id} className="rounded-md border p-3 text-sm"><div className="flex justify-between gap-2"><p className="font-medium">{list.name}</p><span>{formatMoney(list.minimumOrderAmount)} minimum</span></div><p className="mt-1 text-xs text-muted-foreground">{list.items.map((item) => `${item.label} ${formatMoney(item.unitPrice)}`).join(" · ")}</p></div>)}</CardContent></Card>
       </div>
       <CustomerDialog open={customerOpen} onOpenChange={setCustomerOpen} />
@@ -714,12 +717,24 @@ export function CustomersPanel() {
         />
       )}
       <PriceListDialog open={priceOpen} onOpenChange={setPriceOpen} />
+      {saleCustomer && (
+        <RecordSaleDialog
+          open
+          onOpenChange={(open) => !open && setSaleCustomer(null)}
+          inventory={inventory.data ?? []}
+          customer={saleCustomer}
+        />
+      )}
     </div>
   );
 }
 
 const customerHelper = createColumnHelper<typeof gridFeatures, Customer>();
-const customerColumns = customerHelper.columns([
+function customerColumns(
+  onSell: (customer: Customer) => void,
+  onEdit: (customer: Customer) => void,
+) {
+  return customerHelper.columns([
   customerHelper.display({
     id: "name",
     header: "Customer",
@@ -766,19 +781,44 @@ const customerColumns = customerHelper.columns([
     meta: rightAligned,
     cell: ({ row }) => formatMoney(row.original.lifetimeRevenue),
   }),
-]);
+  customerHelper.display({
+    id: "actions",
+    header: "",
+    meta: { cellClassName: "p-1 text-right", card: "actions" } satisfies DataGridColumnMeta,
+    cell: ({ row }) => (
+      <DataGridCellAction className="flex justify-end gap-1">
+        <Button size="sm" onClick={() => onSell(row.original)}>
+          <Receipt /> Record sale
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Edit ${customerDisplayName(row.original)}`}
+          onClick={() => onEdit(row.original)}
+        >
+          <Pencil />
+        </Button>
+      </DataGridCellAction>
+    ),
+  }),
+  ]);
+}
 
+/** Tapping a customer starts a sale for them; the pencil edits them. */
 function CustomersTable({
   rows,
   onEdit,
+  onSell,
 }: {
   rows: Customer[];
   onEdit: (customer: Customer) => void;
+  onSell: (customer: Customer) => void;
 }) {
   const data = React.useMemo(() => rows, [rows]);
+  const columns = React.useMemo(() => customerColumns(onSell, onEdit), [onSell, onEdit]);
   const table = useTable({
     features: gridFeatures,
-    columns: customerColumns,
+    columns,
     data,
     getRowId: (row) => row.id,
   });
@@ -786,7 +826,7 @@ function CustomersTable({
     <DataGrid
       table={table}
       aria-label="Customers"
-      onRowActivate={(row) => onEdit(row)}
+      onRowActivate={(row) => onSell(row)}
     />
   );
 }
