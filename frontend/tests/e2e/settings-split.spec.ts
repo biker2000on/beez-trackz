@@ -300,6 +300,11 @@ test("every configuration object has exactly one editor", async ({ page }) => {
     // The heading is rendered by the page itself, so waiting on it means the
     // route (not just the shell) is mounted before anything is counted.
     await expect(page.locator("h1")).toBeVisible();
+    // Editors that load their own data mount after the heading; wait for the
+    // ones this surface should own so a slow one is not counted as missing.
+    for (const object of CONFIG_OBJECTS.filter((candidate) => candidate.href === surface)) {
+      await expect(page.locator(`[data-config-editor="${object.key}"]`).first()).toBeAttached();
+    }
     const keys = await page
       .locator("[data-config-editor]")
       .evaluateAll((nodes) =>
