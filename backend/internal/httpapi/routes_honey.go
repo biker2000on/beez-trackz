@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -48,6 +49,7 @@ func (s *Server) mountHoney(r chi.Router) {
 	admin.Get("/sales", s.honeyListSalesHandler)
 	admin.Post("/sales", s.honeyRecordSale)
 	admin.Patch("/sales/{id}", s.honeyUpdateSale)
+	admin.Patch("/sales/{id}/details", s.honeyUpdateSaleDetails)
 	admin.Delete("/sales/{id}", s.honeyCancelSale)
 	admin.Get("/sales/locations", s.honeySaleLocations)
 	admin.Get("/honey/sale-locations", s.honeySaleLocations)
@@ -1224,6 +1226,82 @@ func (s *Server) honeyUpdateSale(w http.ResponseWriter, r *http.Request) {
 			return sales.CancelSale(ctx, uow, sales.CancelSaleInput{SaleID: id, Reason: req.CancellationReason})
 		}
 		return sales.UpdateSale(ctx, uow, sales.UpdateSaleInput{SaleID: id, OrderStatus: req.OrderStatus, AmountPaidCents: paid, PaymentMethod: req.PaymentMethod, DueDateSet: req.DueDate != nil, DueDate: due, TaxCents: tax})
+	})
+	if err != nil {
+		writeCommandError(w, err)
+		return
+	}
+	writeApplicationResult(w, result)
+}
+
+// PATCH /sales/{id}/details edits who a sale was to and its context after the
+// fact: customerId (uuid, or null to clear), customerName (a walk-in name for
+// the receipt), location and notes. Only fields present in the body change;
+// an explicit null clears one. Amounts, lines, inventory and status are never
+// touched — see sales.UpdateSaleDetails for the customer, consignment and
+// Folio rules.
+func (s *Server) honeyUpdateSaleDetails(w http.ResponseWriter, r *http.Request) {
+	id, err := uuidParam(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var body map[string]json.RawMessage
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	for key := range body {
+		switch key {
+		case "customerId", "customerName", "location", "notes":
+		default:
+			writeError(w, http.StatusBadRequest, "unknown field: "+key)
+			return
+		}
+	}
+	in := sales.UpdateSaleDetailsInput{SaleID: id}
+	if raw, ok := body["customerId"]; ok {
+		in.CustomerSet = true
+		if string(raw) != "null" {
+			var text string
+			if err := json.Unmarshal(raw, &text); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid customerId")
+				return
+			}
+			parsed, err := uuid.Parse(text)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid customerId")
+				return
+			}
+			in.CustomerID = &parsed
+		}
+	}
+	for _, field := range []struct {
+		key   string
+		set   *bool
+		value **string
+	}{
+		{"customerName", &in.CustomerNameSet, &in.CustomerName},
+		{"location", &in.LocationSet, &in.Location},
+		{"notes", &in.NotesSet, &in.Notes},
+	} {
+		raw, ok := body[field.key]
+		if !ok {
+			continue
+		}
+		*field.set = true
+		if string(raw) == "null" {
+			continue
+		}
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			writeError(w, http.StatusBadRequest, field.key+" must be a string or null")
+			return
+		}
+		*field.value = &text
+	}
+	result, err := s.runApplicationCommand(r, http.StatusOK, func(ctx context.Context, uow *app.UnitOfWork) (any, error) {
+		return sales.UpdateSaleDetails(ctx, uow, in)
 	})
 	if err != nil {
 		writeCommandError(w, err)

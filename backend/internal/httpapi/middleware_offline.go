@@ -98,6 +98,8 @@ func migratedOfflineCommand(method, path string) bool {
 		return true
 	case method == http.MethodPatch && len(parts) == 4 && resource == "sales":
 		return true
+	case method == http.MethodPatch && len(parts) == 5 && resource == "sales" && parts[4] == "details":
+		return true
 	case method == http.MethodPost && len(parts) == 5 && resource == "harvest-sessions" && parts[4] == "entries":
 		return true
 	case method == http.MethodPost && len(parts) == 3 && resource == "harvest-lots":

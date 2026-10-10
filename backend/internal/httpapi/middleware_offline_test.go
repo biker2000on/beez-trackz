@@ -95,6 +95,8 @@ func TestMigratedOfflineCommandsUseTransactionalReceipts(t *testing.T) {
 		{http.MethodPost, "/api/v1/sales", true},
 		{http.MethodPatch, "/api/v1/honey/sales/abc", false},
 		{http.MethodPatch, "/api/v1/sales/abc", true},
+		{http.MethodPatch, "/api/v1/sales/abc/details", true},
+		{http.MethodPatch, "/api/v1/sales/abc/other", false},
 		{http.MethodPost, "/api/v1/harvest-sessions/abc/entries", true},
 		{http.MethodPost, "/api/v1/harvest-lots", true},
 		{http.MethodPost, "/api/v1/feedings/abc/refill", true},

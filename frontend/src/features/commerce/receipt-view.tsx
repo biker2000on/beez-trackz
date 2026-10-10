@@ -1,7 +1,8 @@
 "use client";
 
+import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Printer } from "lucide-react";
+import { Pencil, Printer } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +13,7 @@ import { api } from "@/lib/api";
 
 import Link from "next/link";
 import { OrderActions } from "./order-actions";
+import { SaleDetailsDialog } from "./sale-details-dialog";
 import { SaleSerials } from "./sale-serials";
 
 interface Receipt {
@@ -22,6 +24,7 @@ interface Receipt {
 }
 
 export function ReceiptView({ saleId }: { saleId: string }) {
+  const [editing, setEditing] = React.useState(false);
   const receipt = useQuery({
     queryKey: ["commerce", "receipt", saleId],
     queryFn: () => api.get<Receipt>(`/sales/${saleId}/receipt`),
@@ -35,13 +38,19 @@ export function ReceiptView({ saleId }: { saleId: string }) {
   const { sale } = receipt.data;
   return (
     <div className="mx-auto grid max-w-2xl gap-4">
-      <header className="atlas-heading print:hidden"><div><p className="atlas-eyebrow">Sales / Order record</p><h1 className="text-2xl font-semibold">{sale.orderNumber ?? "Order"}</h1><Link href="/sales" className="text-sm underline">Orders & register</Link></div><div>
+      <header className="atlas-heading print:hidden"><div><p className="atlas-eyebrow">Sales / Order record</p><h1 className="text-2xl font-semibold">{sale.orderNumber ?? "Order"}</h1><Link href="/sales" className="text-sm underline">Orders & register</Link></div><div className="flex flex-wrap gap-2">
+        {sale.orderStatus !== "cancelled" && (
+          <Button variant="outline" onClick={() => setEditing(true)}>
+            <Pencil /> Edit details
+          </Button>
+        )}
         <Button variant="outline" onClick={() => window.print()}>
           <Printer /> Print
         </Button>
       </div>
       </header>
       <OrderActions sale={sale}/>
+      <SaleDetailsDialog sale={sale} open={editing} onOpenChange={setEditing} />
       <Card className="print:border-0 print:shadow-none">
         <CardHeader className="border-b">
           <p className="text-xs font-medium uppercase tracking-[0.2em] text-primary">

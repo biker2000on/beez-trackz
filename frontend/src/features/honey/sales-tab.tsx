@@ -9,7 +9,7 @@ import {
   createColumnHelper,
   useTable,
 } from "@tanstack/react-table";
-import { Ban, Check, FileText, PackageCheck } from "lucide-react";
+import { Ban, Check, FileText, PackageCheck, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -31,6 +31,7 @@ import {
   dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SaleDetailsDialog } from "@/features/commerce/sale-details-dialog";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError, OfflineQueuedError, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -85,6 +86,7 @@ export function SalesTab() {
     },
   });
   const [confirmSale, setConfirmSale] = React.useState<HoneySale | null>(null);
+  const [editSale, setEditSale] = React.useState<HoneySale | null>(null);
 
   const data = React.useMemo(() => sales.data ?? [], [sales.data]);
 
@@ -222,6 +224,7 @@ export function SalesTab() {
           header: "",
           meta: {
             cellClassName: "align-top p-1 text-right",
+            card: "actions",
           } satisfies DataGridColumnMeta,
           cell: ({ row: { original: sale } }) => (
             <DataGridCellAction
@@ -269,6 +272,18 @@ export function SalesTab() {
                     <PackageCheck className="size-4" />
                   </Button>
                 )}
+              {sale.orderStatus !== "cancelled" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Edit sale details"
+                  title="Edit details"
+                  onClick={() => setEditSale(sale)}
+                >
+                  <Pencil className="size-4" />
+                </Button>
+              )}
               <Button
                 type="button"
                 variant="ghost"
@@ -344,6 +359,14 @@ export function SalesTab() {
         onRowActivate={(sale) => router.push(`/sales/${sale.id}`)}
         onRowDelete={(sale) => {
           if (sale.orderStatus !== "cancelled") setConfirmSale(sale);
+        }}
+      />
+
+      <SaleDetailsDialog
+        sale={editSale}
+        open={editSale !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditSale(null);
         }}
       />
 

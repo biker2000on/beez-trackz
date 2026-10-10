@@ -498,6 +498,35 @@ export function useUpdateSale() {
   });
 }
 
+/**
+ * Fields of PATCH /sales/{id}/details. Only the keys present are changed; an
+ * explicit null clears one. `customerId: null` with a `customerName` is a
+ * walk-in with no saved customer.
+ */
+export interface SaleDetailsPatch {
+  customerId?: string | null;
+  customerName?: string | null;
+  location?: string | null;
+  notes?: string | null;
+}
+
+/**
+ * Edit who a sale was to and its context after the fact. Never touches
+ * amounts, lines, inventory or status. Refreshes the sale lists (`honey`), the
+ * receipt and customer stats (`commerce`), and the sales workbench.
+ */
+export function useUpdateSaleDetails() {
+  return useHoneyMutation({
+    mutationFn: ({ id, ...body }: SaleDetailsPatch & { id: string }) =>
+      api.patch(`/sales/${id}/details`, body),
+    successMessage: "Sale details saved",
+    // ["settings", "gnucash"]: an edited customer can put a pushed sale back
+    // in the Folio pending count.
+    invalidate: [["commerce"], ["workbench"], ["settings", "gnucash"]],
+    silentError: true,
+  });
+}
+
 /** Delete one or more timeline entries (movements and/or sales). */
 export function useDeleteTimelineEntries() {
   const queryClient = useQueryClient();
