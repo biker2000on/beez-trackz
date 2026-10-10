@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,5 +241,20 @@ func TestSalesRegisterMergesGiveAwaysAndOwnUse(t *testing.T) {
 	}
 	if only := fetchSalesRegister(t, server, "sales"); len(only.Entries) != 1 || only.Entries[0].Sale == nil {
 		t.Errorf("kind=sales = %+v", only.Entries)
+	}
+
+	// The movements ledger words own use as such, and a gift as a gift.
+	ledger := fetchHoneyActivity(t, server, url.Values{"type": {"give_away"}})
+	ownUseRows, giftRows := 0, 0
+	for _, entry := range ledger.Entries {
+		switch {
+		case strings.HasPrefix(entry.Description, "Kept for own use"):
+			ownUseRows++
+		case strings.HasPrefix(entry.Description, "Gave away"):
+			giftRows++
+		}
+	}
+	if ownUseRows != 1 || giftRows != 2 {
+		t.Errorf("ledger own-use/gift rows = %d/%d, want 1/2: %+v", ownUseRows, giftRows, ledger.Entries)
 	}
 }

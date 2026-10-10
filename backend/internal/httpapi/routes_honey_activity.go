@@ -333,6 +333,7 @@ var honeyActivityFeedSQL = `
 		       COALESCE(SUM(m.quantity) FILTER (WHERE i.kind = 'jar'), 0)::int AS jars,
 		       MIN(js.label) FILTER (WHERE i.kind = 'jar') AS jar_label,
 		       o.details ->> 'notes' AS notes,
+		       COALESCE(original.details, o.details) ->> 'purpose' AS purpose,
 		       COALESCE(bool_or(m.item_id = $1), false) AS has_bulk,
 		       COUNT(DISTINCT js.id)::int AS jar_size_count,
 		       COALESCE(array_agg(DISTINCT 'jar:' || js.id::text)
@@ -411,7 +412,9 @@ var honeyActivityFeedSQL = `
 		       reverses_operation_id, bulk_lbs, jars, jar_label, notes,
 		       NULL::bigint AS total_cents, NULL::text AS order_status,
 		       NULL::text AS location, NULL::text AS customer_name,
-		       NULL::text AS summary,
+		       -- An operation has no sale summary; the slot carries a give-away's
+		       -- purpose (gift / own_use) so own use reads as such.
+		       purpose AS summary,
 		       item_label, item_count, item_keys,
 		       varietal, lot_code, lot_count, varietal_keys,
 		       from_location, to_location, location_keys,
@@ -585,6 +588,9 @@ func (s *Server) honeyActivityHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			base = honeyActivityOperationEntry(
 				id, occurredAt, kind, reason, reversesID, bulkLbs, jars, jarLabel, notes)
+			if base.Type == "give_away" && summary != nil && *summary == production.GiveAwayPurposeOwnUse {
+				base.Description = strings.Replace(base.Description, "Gave away", "Kept for own use", 1)
+			}
 		}
 		entries = append(entries, honeyActivityEntry{
 			honeyTimelineEntry: base,
