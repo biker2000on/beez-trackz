@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -350,7 +351,7 @@ func TestFolioImportLinksIncomeToASale(t *testing.T) {
 		t.Fatalf("deposit %+v", deposit)
 	}
 	response, body = call(t, server.profitabilityAnalytics,
-		adminRequest(http.MethodGet, "/api/v1/analytics/profitability", nil))
+		adminRequest(http.MethodGet, "/api/v1/analytics/profitability?year="+strconv.Itoa(time.Now().Year()), nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("profitability: %d %v", response.Code, body)
 	}
@@ -469,7 +470,7 @@ func TestFolioImportRefundIsANegativeExpense(t *testing.T) {
 	}
 
 	response, body = call(t, server.profitabilityAnalytics,
-		adminRequest(http.MethodGet, "/api/v1/analytics/profitability", nil))
+		adminRequest(http.MethodGet, "/api/v1/analytics/profitability?year="+strconv.Itoa(time.Now().Year()), nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("profitability: %d %v", response.Code, body)
 	}
