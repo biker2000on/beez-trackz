@@ -1,11 +1,15 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/biker2000on/beez-trackz/backend/internal/audioformat"
 )
 
 func TestWhisperTranscribeSendsMultipartAndParsesText(t *testing.T) {
@@ -62,12 +66,57 @@ func TestWhisperFilenameByMime(t *testing.T) {
 		"audio/mpeg":             "audio.mp3",
 		"audio/mp4":              "audio.m4a",
 		"audio/ogg":              "audio.ogg",
+		"audio/aac":              "audio.aac",
 		"audio/webm;codecs=opus": "audio.webm",
 		"":                       "audio.webm",
 	} {
 		if got := whisperFilename(mime); got != want {
 			t.Errorf("whisperFilename(%q) = %q, want %q", mime, got, want)
 		}
+	}
+}
+
+// Uploaded phone recordings must arrive at Whisper with their own container
+// extension and identical bytes, including an M4A file mislabeled by a client.
+func TestWhisperUploadedRecorderFormats(t *testing.T) {
+	for _, tc := range []struct {
+		filename string
+		data     []byte
+	}{
+		{"audio.m4a", []byte("\x00\x00\x00\x18ftypM4A \x00\x00\x00\x00isommp42")},
+		{"audio.aac", []byte{0xff, 0xf1, 0x50, 0x80}},
+		{"audio.webm", []byte{0x1a, 0x45, 0xdf, 0xa3, 0x9f}},
+	} {
+		t.Run(tc.filename, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseMultipartForm(1 << 20); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				defer r.MultipartForm.RemoveAll()
+				file, header, err := r.FormFile("file")
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				defer file.Close()
+				got, err := io.ReadAll(file)
+				if err != nil || !bytes.Equal(got, tc.data) || header.Filename != tc.filename {
+					t.Errorf("provider received filename=%s, bytes=%x, error=%v", header.Filename, got, err)
+				}
+				_, _ = w.Write([]byte(`{"text":"Checked hive A1"}`))
+			}))
+			defer server.Close()
+			format, err := audioformat.Detect(tc.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewWhisper(server.URL, "").Transcribe(context.Background(), tc.data, format.MIME); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

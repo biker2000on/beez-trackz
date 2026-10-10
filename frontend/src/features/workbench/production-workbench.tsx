@@ -48,7 +48,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
   return (
     <WorkbenchShell
       title="Production"
-      description="Harvest to finished stock on one screen: open extraction sessions, bulk by lot, lots waiting on a bottling run, and the jars those runs produce. Every quantity is read from the inventory ledger."
+      description="Extract, bottle, and follow each lot into finished stock."
       freshness={data?.freshness}
       asOf={data?.asOf}
       isPending={workbench.isPending}
@@ -72,7 +72,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
         step={1}
         panelKey="open-sessions"
         title="Extraction in progress"
-        description="Per-hive entries write harvest operations to the ledger."
+        description="Open sessions with harvest entries and a clear next step."
         count={openSessions.length}
         empty="No session is open. Start one from a harvest-ready hive on Today, or with the command above."
       >
@@ -130,7 +130,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
         step={2}
         panelKey="bulk-on-hand"
         title="Bulk honey by lot"
-        description="Available pounds per harvest lot, from inventory_available."
+        description="Available honey, grouped by its source lot."
         count={bulkOnHand.length}
         empty="No bulk honey on hand."
       >
@@ -142,7 +142,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             title={
               <>
                 <Link
-                  href="/production/lots"
+                  href={`/production/lots/${lot.lotId}`}
                   className="underline-offset-4 hover:underline"
                 >
                   {lot.lotCode}
@@ -183,10 +183,10 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
       <WorkbenchPanel
         step={3}
         panelKey="awaiting-bottling"
-        title="Waiting on a bottling run"
-        description="Bulk that has a lot and no run yet."
+        title="Available for bottling"
+        description="Bulk stock you may choose to bottle. This is available material, not unfinished work."
         count={awaiting.length}
-        empty="Nothing is waiting to be bottled."
+        empty="No bulk stock available for bottling."
       >
         {awaiting.map((lot) => (
           <WorkbenchRow
@@ -229,7 +229,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             title={
               <>
                 <Link
-                  href="/production/jars"
+                  href="/stock/finished"
                   className="underline-offset-4 hover:underline"
                 >
                   {jar.label}
@@ -259,7 +259,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
         ))}
       </WorkbenchPanel>
 
-      <WorkbenchPanel
+      {batches.length > 0 && <WorkbenchPanel
         step={5}
         panelKey="product-batches"
         title="Product batches"
@@ -272,7 +272,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             key={batch.id}
             rowKey={batch.id}
             kind="product-batch"
-            title={batch.productName}
+            title={<Link href={`/production/products/batches/${batch.id}`} className="hover:underline">{batch.productName}</Link>}
             facts={
               <p className="text-xs text-muted-foreground">
                 {batch.onHand} on hand
@@ -288,6 +288,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
           </WorkbenchRow>
         ))}
       </WorkbenchPanel>
+      }
     </WorkbenchShell>
   );
 }

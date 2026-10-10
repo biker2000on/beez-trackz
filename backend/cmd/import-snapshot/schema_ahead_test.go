@@ -157,7 +157,7 @@ func TestFolioBooksAndImportsLeavesOlderSyncStateUnassigned(t *testing.T) {
 }
 
 // withoutEmptyNewDomains drops applied migrations that only added a newer,
-// empty domain (e.g. consignment_location_prices at 00060): an older artifact
+// empty domain (e.g. consignment_location_prices at 00062): an older artifact
 // gains an empty record set for it, which is not the transform under test.
 func withoutEmptyNewDomains(applied []snapshot.AppliedPostArtifactMigration) []snapshot.AppliedPostArtifactMigration {
 	empty := map[int64]map[string]bool{}

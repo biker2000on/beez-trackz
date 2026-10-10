@@ -199,16 +199,17 @@ interface CanvasInnerProps {
   apiary: ApiaryDetail;
   hives: CanvasHive[];
   initialLayout: CanvasLayout;
+  onHiveSelect?: (hiveId: string) => void;
 }
 
-export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) {
+export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: CanvasInnerProps) {
   const apiaryId = apiary.id;
   const router = useRouter();
   const canvasApi = useCanvasApi(apiaryId);
   const access = useAccessProfile();
   // The detail page already blocks the pointer for viewers, but that does not
   // stop keys — the keyboard path checks the role itself.
-  const canEdit = ["admin", "editor"].includes(
+  const canEdit = !onHiveSelect && ["admin", "editor"].includes(
     apiaryRole(access.data, apiaryId) ?? "",
   );
 
@@ -660,21 +661,23 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
   const handleHiveRightClick = useCallback(
     (hiveId: string, sx: number, sy: number) => {
+      if (!canEdit) return;
       setContextMenu({ type: "hive", position: screenToLocal(sx, sy), hiveId });
     },
-    [screenToLocal],
+    [screenToLocal, canEdit],
   );
 
   const handleNorthRightClick = useCallback(
     (sx: number, sy: number) => {
+      if (!canEdit) return;
       setContextMenu({ type: "north", position: screenToLocal(sx, sy) });
     },
-    [screenToLocal],
+    [screenToLocal, canEdit],
   );
 
   const openHive = useCallback(
-    (hiveId: string) => router.push(`/yard/hives/${hiveId}`),
-    [router],
+    (hiveId: string) => onHiveSelect ? onHiveSelect(hiveId) : router.push(`/yard/hives/${hiveId}`),
+    [router, onHiveSelect],
   );
 
   const handleAddStand = useCallback(
@@ -1307,8 +1310,8 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
 
   const modeText = {
     view: hasLocation
-      ? "View mode — map pans and zooms; double-click a hive to open it"
-      : "View mode — double-click a hive to open it, right-click for actions",
+      ? "View mode — map pans and zooms; select a hive to open it"
+      : "View mode — select a hive to open it, right-click for actions",
     edit: hasLocation
       ? "Edit mode — drag a stand to set its GPS; hive moves save instantly"
       : "Edit mode — hive moves save instantly; stand layout saves with Save",
@@ -1323,6 +1326,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
     <div ref={containerRef} className="relative w-full min-w-0 max-w-full">
       <div className="absolute left-2 top-2 z-20">
         <CanvasToolbar
+          readOnly={!canEdit}
           editMode={editMode}
           saveState={saveState}
           hasLocation={hasLocation}
@@ -1331,6 +1335,7 @@ export function CanvasInner({ apiary, hives, initialLayout }: CanvasInnerProps) 
           sunEnabled={sunEnabled}
           addHiveEnabled={emptySlotTargets.length > 0}
           onToggleEditMode={() => {
+            if (!canEdit) return;
             setEditMode((prev) => !prev);
             setRotatingStandId(null);
             rotationDrag.current = null;

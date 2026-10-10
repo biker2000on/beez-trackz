@@ -19,7 +19,7 @@ function handleUnauthorized(path: string) {
   window.location.assign("/login");
 }
 
-export type TranscriptionMode = "single" | "batch";
+export type TranscriptionMode = "single" | "batch" | "apiary";
 
 export type TranscriptionStatus =
   | "pending"
@@ -60,6 +60,11 @@ export interface ParsedMiteCount {
 
 /** One parsed inspection, annotated with a fuzzy hive match in batch mode. */
 export interface ParsedInspection {
+  itemKey?: string;
+  scope?: "hive" | "apiary";
+  equipmentActions?: EquipmentAction[];
+  reviewRequired?: boolean;
+  evidence?: string;
   hiveReference?: string | null;
   queenSeen?: boolean | null;
   queenHealth?: string | null;
@@ -121,6 +126,11 @@ export interface Transcription {
   error: string | null;
   ownerType: "hive" | "apiary";
   ownerId: string;
+  mode?: TranscriptionMode;
+  captureId?: string;
+  observedAt?: string;
+  timeZone?: string;
+  outcomes?: VisitOutcome[];
   currentVersionId?: string | null;
   versions?: TranscriptVersion[];
   createdAt: string;
@@ -134,6 +144,34 @@ export interface Transcription {
 /** One confirmed inspection sent to POST /transcriptions/{id}/confirm. */
 export interface ConfirmInspection extends ParsedInspection {
   hiveId?: string | null;
+  observedAt?: string;
+}
+
+export interface EquipmentAction {
+  kind: "deploy" | "return";
+  referenceId: string;
+  sourceLocationId?: string;
+  quantity: number;
+  accepted: boolean;
+  description?: string;
+}
+
+export interface VisitOutcome {
+  scope?: "hive" | "apiary";
+  hiveId?: string;
+  apiaryId?: string;
+  observedAt?: string;
+  sourceVersionId?: string;
+
+  itemKey: string;
+  status: string;
+  inspectionIds?: string[];
+  apiaryInspectionIds?: string[];
+  feedingIds?: string[];
+  treatmentEventIds?: string[];
+  queenEventIds?: string[];
+  miteCountIds?: string[];
+  operationIds?: string[];
 }
 
 export interface ConfirmResult {
@@ -143,6 +181,9 @@ export interface ConfirmResult {
   treatmentEventIds: string[];
   queenEventIds: string[];
   miteCountIds: string[];
+  apiaryInspectionIds?: string[];
+  operationIds?: string[];
+  outcomes?: VisitOutcome[];
 }
 
 /** Subset of the hive list/detail response used by this feature. */
@@ -164,9 +205,14 @@ export interface ApiarySummary {
 
 export interface UploadTranscriptionInput {
   audio: Blob;
+  fileName?: string;
   ownerType: "hive" | "apiary";
   ownerId: string;
   mode: TranscriptionMode;
+  captureId?: string;
+  observedAt?: string;
+  timeZone?: string;
+  replacesMediaFileId?: string;
 }
 
 /** Maps a recording mime type to a sensible upload filename. */
@@ -182,15 +228,24 @@ function audioFileName(mimeType: string): string {
  */
 export async function uploadTranscription({
   audio,
+  fileName,
   ownerType,
   ownerId,
   mode,
+  captureId,
+  observedAt,
+  timeZone,
+  replacesMediaFileId,
 }: UploadTranscriptionInput): Promise<{ mediaFileId: string }> {
   const form = new FormData();
-  form.append("audio", audio, audioFileName(audio.type));
+  form.append("audio", audio, fileName || audioFileName(audio.type));
   form.append("ownerType", ownerType);
   form.append("ownerId", ownerId);
   form.append("mode", mode);
+  if (captureId) form.append("captureId", captureId);
+  if (observedAt) form.append("observedAt", observedAt);
+  if (timeZone) form.append("timeZone", timeZone);
+  if (replacesMediaFileId) form.append("replacesMediaFileId", replacesMediaFileId);
 
   const res = await fetch("/api/v1/transcriptions", {
     method: "POST",
@@ -267,11 +322,30 @@ export function confirmTranscription(
   id: string,
   mode: TranscriptionMode,
   inspections: ConfirmInspection[],
+  options?: { versionId?: string | null; mutationId?: string; manualEntry?: boolean },
 ): Promise<ConfirmResult> {
   return api.post<ConfirmResult>(`/transcriptions/${id}/confirm`, {
     mode,
     inspections,
-  });
+    versionId: options?.versionId,
+    manualEntry: options?.manualEntry,
+  }, { headers: options?.mutationId ? { "X-Offline-Mutation-ID": options.mutationId } : undefined });
+}
+
+export function listTranscriptions(ownerType: "hive" | "apiary", ownerId: string): Promise<Transcription[]> {
+  return api.get("/transcriptions", { params: { ownerType, ownerId } });
+}
+
+export interface ApiaryInspection {
+  id: string;
+  apiaryId: string;
+  observedAt: string;
+  notes: string;
+  createdAt: string;
+}
+
+export function listApiaryInspections(apiaryId: string): Promise<ApiaryInspection[]> {
+  return api.get("/apiary-inspections", { params: { apiaryId } });
 }
 
 export function listHives(): Promise<HiveSummary[]> {

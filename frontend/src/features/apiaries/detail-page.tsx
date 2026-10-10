@@ -6,9 +6,7 @@ import {
   ArrowLeft,
   CircleDashed,
   Hexagon,
-  LayoutDashboard,
   ListChecks,
-  Map,
   MapPin,
   Mic,
   Pencil,
@@ -18,7 +16,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 import { useShortcut } from "@/components/shortcuts/provider";
 import { useSearchParamState } from "@/lib/url-state";
 import ApiaryCanvas from "@/features/canvas";
@@ -38,7 +36,7 @@ import { apiaryRole, useAccessProfile } from "@/features/access/api";
 // recording are dedicated routes reached from the overview/header.
 export const APIARY_TABS = ["overview", "layout"] as const;
 
-export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
+export function ApiaryDetailPage({ apiaryId, section }: { apiaryId: string; section?: "overview" | "layout" }) {
   const apiary = useApiary(apiaryId);
   const hives = useApiaryHives(apiaryId);
   // Same query key the overview uses, so the frost read costs no extra fetch.
@@ -51,7 +49,8 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
   const [editOpen, setEditOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   // Deep-linkable and back-button safe: the active tab lives in the URL.
-  const [tab, setTab] = useSearchParamState("tab", "overview", APIARY_TABS);
+  const [legacyTab] = useSearchParamState("tab", "layout", APIARY_TABS);
+  const tab = section ?? legacyTab;
 
   useShortcut(
     "e",
@@ -149,10 +148,10 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
                 {/* Batch transcription used to be an orphan route with no
                     inbound link; the yard you are standing in is its natural
                     entry point. */}
-                <Button asChild variant="outline">
-                  <Link href={`/yard/transcribe?apiary=${apiaryId}`}>
+                <Button asChild>
+                  <Link href={`/yard/apiaries/${apiaryId}/visit`}>
                     <Mic />
-                    Voice walkthrough
+                    Record visit
                   </Link>
                 </Button>
                 <Button asChild variant="outline">
@@ -192,41 +191,27 @@ export function ApiaryDetailPage({ apiaryId }: { apiaryId: string }) {
         </div>
       </header>
 
-      <Tabs value={tab} onValueChange={setTab} className="min-w-0">
-        {/* Record tabs stay a scroll strip on mobile (DESIGN.md). `py-1 -my-1`
-            keeps the focus ring from being clipped by the scroll container. */}
-        <div className="-my-1 -mx-4 snap-x scroll-px-4 overflow-x-auto px-4 py-1 md:mx-0 md:px-0">
-          <TabsList className="min-h-11 min-w-max">
-            <TabsTrigger value="overview" className="min-h-9 snap-start">
-              <LayoutDashboard />
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="layout" className="min-h-9 snap-start">
-              <Map />
-              Layout
-            </TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="overview">
+      <nav aria-label="Apiary pages" className="flex flex-wrap gap-x-4 gap-y-1 border-b">{[["/layout", "Map"], ["/overview", "Overview & conditions"], ["/inspections", "Apiary observations"], ["/flora", "Flora"], ["/photos", "Photos"]].map(([suffix,label])=><Link key={label} href={`/yard/apiaries/${apiaryId}${suffix}`} className="inline-flex min-h-11 items-center text-sm font-medium underline-offset-4 hover:underline">{label}</Link>)}{canEdit&&<Link className="inline-flex min-h-11 items-center text-sm underline" href={`/yard/apiaries/${apiaryId}/visit?scope=batch`}>Multi-hive walkthrough</Link>}</nav>
+        {tab === "overview" && <section>
           <OverviewTab
             apiaryId={apiaryId}
             hives={hives.data ?? []}
             hivesReady={!hives.isPending}
           />
-        </TabsContent>
-        <TabsContent value="layout" className="min-w-0">
+        </section>}
+        {tab === "layout" && <section className="min-w-0">
           <div className="relative">
             {!canEdit ? (
               <span className="absolute right-3 top-3 z-20 rounded-full border bg-background/90 px-2 py-1 text-xs font-medium shadow-sm">
                 View only
               </span>
             ) : null}
-            <div className={!canEdit ? "pointer-events-none" : undefined}>
+            <div>
               <ApiaryCanvas apiaryId={apiaryId} />
             </div>
           </div>
-        </TabsContent>
-      </Tabs>
+        </section>}
+
 
       <ApiaryFormDialog
         open={editOpen}

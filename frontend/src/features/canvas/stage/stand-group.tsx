@@ -112,8 +112,10 @@ function HiveNode({
           const screen = pointerScreenPosition(e);
           if (screen) onRightClick(hive.hiveId, screen.x, screen.y);
         }}
-        onDblClick={() => onOpen(hive.hiveId)}
-        onDblTap={() => onOpen(hive.hiveId)}
+        onClick={(e) => { if (!editMode) { e.cancelBubble = true; onOpen(hive.hiveId); } }}
+        onTap={(e) => { if (!editMode) { e.cancelBubble = true; onOpen(hive.hiveId); } }}
+        onDblClick={() => { if (editMode) onOpen(hive.hiveId); }}
+        onDblTap={() => { if (editMode) onOpen(hive.hiveId); }}
       />
       <Arrow
         points={[arrow.startX, arrow.startY, arrow.endX, arrow.endY]}

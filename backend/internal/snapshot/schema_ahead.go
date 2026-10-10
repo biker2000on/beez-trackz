@@ -14,6 +14,8 @@ const (
 	HarvestLotPulledOnTransform               = "harvest-lot-pulled-on-v1"
 	ConsignmentLocationPricesTransform        = "consignment-location-prices-v1"
 	CustomerCompanyNameTransform              = "customer-company-name-v1"
+	AtlasVoiceTransform                       = "atlas-voice-v1"
+	AtlasStockTransform                       = "atlas-stock-v1"
 	FolioBooksAndImportsTransform             = "folio-books-and-imports-v1"
 	SaleItemsHarvestLotTransform              = "sale-items-harvest-lot-v1"
 )
@@ -134,6 +136,38 @@ var PostArtifactMigrations = []PostArtifactMigration{
 	},
 	{
 		LegacyMigration: 60, BaselineMigration: 7,
+		Name: AtlasVoiceTransform,
+		// Voice capture metadata on media and parsed inspections on transcripts,
+		// all nullable or defaulted; an older artifact restores without them,
+		// and with no apiary-level inspections or confirmations.
+		AddedColumns: map[string][]string{
+			"media_files": {"audio_sha256", "capture_actor_id", "capture_id", "capture_mode",
+				"observed_at", "replaces_media_file_id", "time_zone"},
+			"transcript_versions": {"parsed_inspections"},
+		},
+		NewDomains: emptyNewDomains("apiary_inspections", "transcription_confirmations"),
+		AddedReferenceChecks: []string{
+			"media_files_capture_actor_id_fkey",
+			"media_files_replaces_media_file_id_fkey",
+			"apiary_inspections_apiary_id_fkey",
+			"apiary_inspections_created_by_fkey",
+			"apiary_inspections_source_media_file_id_fkey",
+			"apiary_inspections_source_transcript_version_id_fkey",
+			"transcription_confirmations_media_file_id_fkey",
+			"transcription_confirmations_source_transcript_version_id_fkey",
+			"transcription_confirmations_actor_id_fkey",
+		},
+	},
+	{
+		LegacyMigration: 61, BaselineMigration: 8,
+		Name: AtlasStockTransform,
+		// When a harvest session was closed, nullable.
+		AddedColumns: map[string][]string{
+			"harvest_sessions": {"closed_at"},
+		},
+	},
+	{
+		LegacyMigration: 62, BaselineMigration: 9,
 		Name: ConsignmentLocationPricesTransform,
 		// Per-store wholesale and shelf prices: a new, empty domain. An older
 		// artifact restores with no store prices, which settles exactly as it
@@ -147,7 +181,7 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		},
 	},
 	{
-		LegacyMigration: 61, BaselineMigration: 8,
+		LegacyMigration: 63, BaselineMigration: 10,
 		Name: CustomerCompanyNameTransform,
 		// The business a customer represents, nullable. An older artifact's
 		// customer restores with company_name NULL; nothing is derived for it.

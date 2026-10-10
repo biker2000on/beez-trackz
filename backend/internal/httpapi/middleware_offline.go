@@ -90,6 +90,8 @@ func migratedOfflineCommand(method, path string) bool {
 	}
 	resource := parts[2]
 	switch {
+	case method == http.MethodPost && len(parts) == 3 && resource == "inspection-visits":
+		return true
 	case method == http.MethodPost && len(parts) == 4 && resource == "honey" && parts[3] == "jarring":
 		return true
 	case method == http.MethodPost && len(parts) == 3 && resource == "sales":
@@ -296,6 +298,17 @@ func (s *Server) offlineMutations(next http.Handler) http.Handler {
 		requestHash := hex.EncodeToString(digest[:])
 
 		if migratedOfflineCommand(r.Method, r.URL.Path) {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/v1/inspection-visits" {
+				// Manual visits have always used a canonical capture hash, including
+				// online requests without this header. Let their transactional runner
+				// validate and replay that identity after checking scope/permissions.
+				// Comparing the transport hash here would strand existing receipts.
+				next.ServeHTTP(w, r.WithContext(context.WithValue(
+					r.Context(), offlineIdentityContextKey{}, app.Identity{
+						UserID: user.ID, MutationID: mutationID, RequestHash: requestHash,
+					})))
+				return
+			}
 			var state string
 			var status *int
 			var body []byte

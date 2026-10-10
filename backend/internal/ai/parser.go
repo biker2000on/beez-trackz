@@ -10,7 +10,19 @@ import (
 )
 
 // ParsedInspection is one structured inspection extracted from a transcription.
+type EquipmentProposal struct {
+	Kind        string `json:"kind"`
+	ReferenceID string `json:"referenceId"`
+	Quantity    int    `json:"quantity"`
+	Accepted    bool   `json:"accepted"`
+	Description string `json:"description"`
+}
+
 type ParsedInspection struct {
+	EquipmentActions []EquipmentProposal `json:"equipmentActions,omitempty"`
+
+	ItemKey        string       `json:"itemKey,omitempty"`
+	Scope          string       `json:"scope,omitempty"`
 	HiveReference  *string      `json:"hiveReference,omitempty"`
 	QueenSeen      *bool        `json:"queenSeen,omitempty"`
 	QueenHealth    *string      `json:"queenHealth,omitempty"`
@@ -69,7 +81,7 @@ type TranscriptionResult struct {
 // Prompt revisions recorded on transcript versions / parse lineage.
 const (
 	STTPromptRevision   = "stt-v1"
-	ParsePromptRevision = "extract-v2"
+	ParsePromptRevision = "extract-v3"
 )
 
 // Prompts ported VERBATIM from src/lib/ai/transcription-parser.ts.
@@ -91,6 +103,7 @@ Return ONLY valid JSON with this exact shape (omit fields that aren't mentioned)
   "feedings": [{"type": "sugar_syrup_1to1|sugar_syrup_2to1|dry_sugar|pollen_patty|fondant|other", "quantity": number, "quantityUnit": "lbs|oz|quarts|gallons", "feederType": "entrance|top|frame|baggie|bucket|open|other", "notes": "optional"}],
   "queenEvents": [{"eventType": "observed|introduced|superseded|missing|dead|requeened", "notes": "optional"}],
   "miteCounts": [{"method": "alcohol_wash|sugar_roll|sticky_board|visual", "mitesCount": number, "sampleSize": "optional number of bees tested", "notes": "optional"}],
+  "equipmentActions": [{"kind":"deploy|return", "quantity": positive integer, "description":"exact equipment action and equipment description from speech"}],
   "notes": "any additional observations not captured above"
 }
 
@@ -104,6 +117,7 @@ Rules:
 - "1:1" syrup maps to sugar_syrup_1to1 and "2:1" maps to sugar_syrup_2to1.
 - A treatment belongs in both treatments and the operational treatment timeline.
 - Only include fields that are clearly mentioned or implied in the text
+- Equipment actions are proposals only. For adding/installing equipment emit deploy; for removing/returning emit return. Retain the equipment description so the operator can select actual stock. Never invent IDs or mark a proposed action accepted. Unclear quantities stay in notes.
 - Return ONLY the JSON object, no markdown, no explanation`
 
 const batchModePrompt = `You are a beekeeping inspection data extractor. Given a transcription of a beekeeper describing inspections of MULTIPLE hives, identify each hive reference and extract structured fields for each.
@@ -126,7 +140,8 @@ Return ONLY valid JSON as an array with this exact shape:
     "feedings": [{"type": "sugar_syrup_1to1|sugar_syrup_2to1|dry_sugar|pollen_patty|fondant|other", "quantity": number, "quantityUnit": "lbs|oz|quarts|gallons", "feederType": "entrance|top|frame|baggie|bucket|open|other", "notes": "optional"}],
     "queenEvents": [{"eventType": "observed|introduced|superseded|missing|dead|requeened", "notes": "optional"}],
     "miteCounts": [{"method": "alcohol_wash|sugar_roll|sticky_board|visual", "mitesCount": number, "sampleSize": "optional number of bees tested", "notes": "optional"}],
-    "notes": "any additional observations not captured above"
+    "equipmentActions": [{"kind":"deploy|return", "quantity": positive integer, "description":"exact equipment action and equipment description from speech"}],
+  "notes": "any additional observations not captured above"
   }
 ]
 
@@ -141,11 +156,15 @@ Rules:
 - Extract every feeding, treatment, queen event, and structured mite count mentioned for each hive.
 - "1:1" syrup maps to sugar_syrup_1to1 and "2:1" maps to sugar_syrup_2to1.
 - Only include fields that are clearly mentioned or implied
-- If a statement applies to all hives (e.g. "treated all hives with oxalic acid"), include it in each hive's data
+- Yard-wide observations must be a separate item with scope "apiary" and notes. Never copy yard observations or commands to every hive. Hive items have scope "hive". A command without an explicit hive target stays in apiary notes for review.
+- Equipment actions are proposals only: adding/installing means deploy, removing/returning means return. Retain exact equipment descriptions; never invent stock IDs or mark an action accepted. Unclear quantities stay in notes.
 - Return ONLY the JSON array, no markdown, no explanation`
 
 // BuildPrompt returns the extraction prompt for a mode ("single" or "batch").
 func BuildPrompt(mode string) string {
+	if mode == "apiary" {
+		return `Extract only apiary-level observations from the transcript. Return one JSON object with "scope":"apiary" and "notes" retaining the complete account. Do not assign observations to any hive or emit operational actions. Return only JSON.`
+	}
 	if mode == "batch" {
 		return batchModePrompt
 	}
@@ -236,6 +255,9 @@ var validMiteMethods = map[string]bool{
 // validateParsedInspection ports the legacy field-by-field validator.
 func validateParsedInspection(raw map[string]any) ParsedInspection {
 	var result ParsedInspection
+	if scope, ok := raw["scope"].(string); ok && (scope == "apiary" || scope == "hive") {
+		result.Scope = scope
+	}
 
 	if s, ok := raw["hiveReference"].(string); ok {
 		result.HiveReference = &s
@@ -359,6 +381,20 @@ func validateParsedInspection(raw map[string]any) ParsedInspection {
 		result.MiteCounts = out
 	}
 
+	if actions, ok := raw["equipmentActions"].([]any); ok {
+		for _, value := range actions {
+			m, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind, _ := m["kind"].(string)
+			quantity, valid := nonNegativeInt(m["quantity"])
+			description := trimmedString(m["description"])
+			if (kind == "deploy" || kind == "return") && valid && quantity > 0 && description != nil {
+				result.EquipmentActions = append(result.EquipmentActions, EquipmentProposal{Kind: kind, Quantity: quantity, Description: *description})
+			}
+		}
+	}
 	result.Notes = trimmedString(raw["notes"])
 	return result
 }
@@ -427,22 +463,29 @@ func MatchHiveReferences(inspections []ParsedInspection, hives []HiveRef) []Matc
 	out := make([]MatchedInspection, 0, len(inspections))
 	for _, insp := range inspections {
 		matched := MatchedInspection{ParsedInspection: insp}
-		if insp.HiveReference != nil {
+
+		if insp.HiveReference != nil && insp.Scope != "apiary" {
 			ref := strings.ToLower(strings.TrimSpace(*insp.HiveReference))
+			exact := []string{}
+			partial := []string{}
 			for _, h := range hives {
 				label := strings.ToLower(strings.TrimSpace(h.PositionLabel))
-				// An empty side makes strings.Contains true for everything —
-				// a whitespace reference would pre-select the first hive.
 				if ref == "" || label == "" {
 					continue
 				}
-				if ref == label || strings.Contains(ref, label) || strings.Contains(label, ref) {
-					id := h.ID
-					matched.MatchedHiveID = &id
-					break
+				if ref == label {
+					exact = append(exact, h.ID)
+				} else if strings.Contains(ref, label) || strings.Contains(label, ref) {
+					partial = append(partial, h.ID)
 				}
 			}
+			if len(exact) == 1 {
+				matched.MatchedHiveID = &exact[0]
+			} else if len(exact) == 0 && len(partial) == 1 {
+				matched.MatchedHiveID = &partial[0]
+			}
 		}
+
 		out = append(out, matched)
 	}
 	return out

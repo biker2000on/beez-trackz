@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { OperationWork } from "./operation-work";
 import { Badge } from "@/components/ui/badge";
 
 import { useWorkToday } from "./api";
@@ -50,7 +51,7 @@ export function TodayView({
   const counts = today.data?.counts;
 
   return (
-    <WorkSurface
+    <div className="atlas-workspace"><WorkSurface
       title={title}
       description={description}
       sections={sections}
@@ -72,6 +73,6 @@ export function TodayView({
           </p>
         ) : null
       }
-    />
+    /><OperationWork/></div>
   );
 }

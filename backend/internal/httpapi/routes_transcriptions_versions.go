@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -20,14 +19,15 @@ import (
 )
 
 type transcriptionSourceCounts struct {
-	Inspections int
-	Feedings    int
-	Treatments  int
-	MiteCounts  int
+	Inspections       int
+	Feedings          int
+	Treatments        int
+	MiteCounts        int
+	ApiaryInspections int
 }
 
 func (c transcriptionSourceCounts) total() int {
-	return c.Inspections + c.Feedings + c.Treatments + c.MiteCounts
+	return c.Inspections + c.Feedings + c.Treatments + c.MiteCounts + c.ApiaryInspections
 }
 
 type transcriptionQuerier interface {
@@ -47,8 +47,9 @@ func transcriptionSourceCountsOn(ctx context.Context, q transcriptionQuerier, me
 			     OR (source_media->>'mediaFileId') = $1::text),
 			(SELECT count(*) FROM feedings WHERE source_media_file_id = $1),
 			(SELECT count(*) FROM treatment_events WHERE source_media_file_id = $1),
-			(SELECT count(*) FROM mite_counts WHERE source_media_file_id = $1)`,
-		mediaID).Scan(&c.Inspections, &c.Feedings, &c.Treatments, &c.MiteCounts)
+			(SELECT count(*) FROM mite_counts WHERE source_media_file_id = $1),
+ (SELECT count(*) FROM apiary_inspections WHERE source_media_file_id = $1)`,
+		mediaID).Scan(&c.Inspections, &c.Feedings, &c.Treatments, &c.MiteCounts, &c.ApiaryInspections)
 	return c, err
 }
 
@@ -624,7 +625,19 @@ func (s *Server) reparseCreateHive(w http.ResponseWriter, r *http.Request, row *
 		writeError(w, http.StatusBadRequest, "hiveId is required to create "+what)
 		return false
 	}
-	return s.requireHiveRole(w, r, *item.HiveID, true)
+	if !s.requireHiveRole(w, r, *item.HiveID, true) {
+		return false
+	}
+	var apiaryID uuid.UUID
+	if err := s.pool.QueryRow(r.Context(), `SELECT apiary_id FROM hives WHERE id=$1`, *item.HiveID).Scan(&apiaryID); err != nil {
+		writeError(w, 400, "Hive not found")
+		return false
+	}
+	if (row.OwnerType == "hive" && *item.HiveID != row.OwnerID) || (row.OwnerType == "apiary" && apiaryID != row.OwnerID) {
+		writeError(w, 400, "Hive does not belong to recording scope")
+		return false
+	}
+	return true
 }
 
 // POST /transcriptions/{id}/apply-reparse — apply only the accepted proposals.
@@ -670,7 +683,16 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 	}
 	defer tx.Rollback(ctx)
 
-	now := time.Now()
+	var current *uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT current_transcript_version_id FROM media_files WHERE id=$1 FOR UPDATE`, id).Scan(&current); err != nil {
+		writeError(w, 404, "Recording not found")
+		return
+	}
+	if current == nil || *current != versionID {
+		writeError(w, 409, "Transcript changed; review the current version")
+		return
+	}
+	now := row.ObservedAt
 	updated, created := 0, 0
 	for _, item := range req.Accept {
 		switch item.Kind {
@@ -734,11 +756,11 @@ func (s *Server) handleTranscriptionApplyReparse(w http.ResponseWriter, r *http.
 					 stores_honey, stores_pollen, temperament, pests, treatments, notes, source_media,
 					 source_media_file_id, source_transcript_version_id,
 					 frames_of_bees, frames_of_brood, frames_of_stores)
-				VALUES ($1, now(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+				VALUES ($1, $17, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 				*item.HiveID, fields.QueenSeen, fields.QueenHealth, fields.BroodPattern,
 				clampRating(fields.StoresHoney), clampRating(fields.StoresPollen), clampRating(fields.Temperament),
 				pestsJSON, treatmentsJSON, fields.Notes, sourceMedia, row.ID, versionID,
-				fields.FramesOfBees, fields.FramesOfBrood, fields.FramesOfStores); err != nil {
+				fields.FramesOfBees, fields.FramesOfBrood, fields.FramesOfStores, now); err != nil {
 				writeError(w, http.StatusInternalServerError, "database error")
 				return
 			}

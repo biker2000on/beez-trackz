@@ -123,7 +123,7 @@ func (s *Service) Transfer(
 		}
 	}
 	operation.Lines = movements
-	recorded, err := s.inventory.Record(ctx, uow, operation)
+	recorded, err := s.inventory.RecordAvailable(ctx, uow, operation)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -138,10 +138,10 @@ func allocateLine(
 	itemID, locationID uuid.UUID, quantity int, lotID *uuid.UUID,
 ) ([]production.Allocation, error) {
 	if lotID != nil {
-		return production.AllocateLot(ctx, uow, "inventory_balances",
+		return production.AllocateLot(ctx, uow, "inventory_available",
 			itemID, locationID, quantity, *lotID)
 	}
-	allocations, _, err := production.AllocateFIFO(ctx, uow, "inventory_balances",
+	allocations, _, err := production.AllocateFIFO(ctx, uow, "inventory_available",
 		itemID, locationID, quantity, nil)
 	return allocations, err
 }
