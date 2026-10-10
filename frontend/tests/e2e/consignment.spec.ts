@@ -408,7 +408,8 @@ test("their report is one row per lot, refuses an over-count by varietal, and po
     .getByRole("textbox", { name: "Quart · Wildflower · 2026-WILDFLOWER-01 returned" })
     .fill("2");
   // 3 × $18 less the 30% cut.
-  await expect(dialog.getByText("$37.80")).toBeVisible();
+  // The per-line Owed cell and the total both read $37.80; check the total.
+  await expect(dialog.locator("span", { hasText: "$37.80" })).toBeVisible();
   await dialog.getByRole("button", { name: "Record report" }).click();
 
   await expect.poll(() => posted.length).toBe(1);
