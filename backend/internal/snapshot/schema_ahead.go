@@ -20,6 +20,7 @@ const (
 	SaleItemsHarvestLotTransform              = "sale-items-harvest-lot-v1"
 	FolioRefundsAndDeletionsTransform         = "folio-refunds-and-deletions-v1"
 	SaleCustomerNameSnapshotTransform         = "sale-customer-name-snapshot-v1"
+	FinanceCategoriesTransform                = "finance-categories-v1"
 )
 
 // PostArtifactMigration is the format-v1 declaration for a schema migration
@@ -42,9 +43,11 @@ type PostArtifactMigration struct {
 	AddedReferenceChecks []string
 }
 
-// NewDomainMigration declares either an empty newly-created domain or a
-// deterministic cross-domain derivation. GeneratedColumns are supplied by the
-// target database and are checked for presence, but not against a source value.
+// NewDomainMigration declares an empty newly-created domain, a deterministic
+// cross-domain derivation, or a domain the migration creates already seeded
+// with fixed rows (SeedRecords, keyed by KeyField). GeneratedColumns are
+// supplied by the target database and are checked for presence, but not
+// against a source value.
 type NewDomainMigration struct {
 	Domain           string
 	KeyField         string
@@ -54,6 +57,11 @@ type NewDomainMigration struct {
 	CopiedColumns    []string
 	GeneratedColumns []string
 	ExpectedEmpty    bool
+	// SeedRecords are the rows the migration itself inserts: every portable
+	// column except GeneratedColumns. An artifact older than the migration
+	// restores with exactly these records (a record the artifact carries
+	// wins by KeyField), because the data it holds was valid against them.
+	SeedRecords []map[string]any
 }
 
 // PostArtifactMigrations is the single ordered declaration of portable
@@ -249,6 +257,75 @@ var PostArtifactMigrations = []PostArtifactMigration{
 		// customer but stored no name (company, else the customer's name). No
 		// record-shape change; an older artifact restores its sales as they were.
 	},
+	{
+		LegacyMigration: 68, BaselineMigration: 15,
+		Name: FinanceCategoriesTransform,
+		// Expense and income categories become rows. The migration seeds one
+		// row per key the dropped CHECK lists allowed, with fixed ids, so an
+		// older artifact restores with exactly those categories — every
+		// category its expenses and income carry is among them. Dropping the
+		// two CHECKs changes no record shape.
+		NewDomains: []NewDomainMigration{{
+			Domain: "finance_categories", KeyField: "id",
+			SeedRecords:      FinanceCategorySeeds(),
+			GeneratedColumns: []string{"created_at", "updated_at"},
+		}},
+		AddedReferenceChecks: []string{"finance_categories_created_by_fkey"},
+	},
+}
+
+// financeCategorySeed is one row migration 00068/00015 inserts.
+type financeCategorySeed struct {
+	id, kind, key, label string
+	sortOrder            int
+	system               bool
+}
+
+var financeCategorySeeds = []financeCategorySeed{
+	{"00000000-0000-0000-0000-000000000301", "expense", "bees_queens", "Bees and queens", 10, true},
+	{"00000000-0000-0000-0000-000000000302", "expense", "feed", "Feed", 20, false},
+	{"00000000-0000-0000-0000-000000000303", "expense", "treatments", "Treatments", 30, false},
+	{"00000000-0000-0000-0000-000000000304", "expense", "packaging", "Packaging", 40, false},
+	{"00000000-0000-0000-0000-000000000305", "expense", "equipment", "Equipment", 50, false},
+	{"00000000-0000-0000-0000-000000000306", "expense", "mileage", "Mileage", 60, false},
+	{"00000000-0000-0000-0000-000000000307", "expense", "market_fees", "Market fees", 70, false},
+	{"00000000-0000-0000-0000-000000000308", "expense", "labor", "Labor", 80, false},
+	{"00000000-0000-0000-0000-000000000309", "expense", "other", "Other", 90, false},
+	{"00000000-0000-0000-0000-000000000310", "expense", "grocery", "Grocery", 100, false},
+	{"00000000-0000-0000-0000-000000000311", "expense", "uncategorized", "Uncategorized", 0, true},
+	{"00000000-0000-0000-0000-000000000351", "income", "uncategorized", "Uncategorized", 0, true},
+	{"00000000-0000-0000-0000-000000000352", "income", "sales_deposit", "Sales deposit", 10, true},
+	{"00000000-0000-0000-0000-000000000353", "income", "honey_sales", "Honey sales", 20, false},
+	{"00000000-0000-0000-0000-000000000354", "income", "colony_sales", "Colony sales", 30, false},
+	{"00000000-0000-0000-0000-000000000355", "income", "product_sales", "Product sales", 40, false},
+	{"00000000-0000-0000-0000-000000000356", "income", "pollination", "Pollination", 50, false},
+	{"00000000-0000-0000-0000-000000000357", "income", "services", "Services", 60, false},
+	{"00000000-0000-0000-0000-000000000358", "income", "grant", "Grant", 70, false},
+	{"00000000-0000-0000-0000-000000000359", "income", "other", "Other", 80, false},
+}
+
+// FinanceCategorySeeds returns the finance_categories rows migration
+// 00068/00015 inserts, as portable records without the generated timestamps.
+// TestFinanceCategorySeedsMatchMigration keeps it equal to the migration.
+func FinanceCategorySeeds() []map[string]any {
+	out := make([]map[string]any, len(financeCategorySeeds))
+	for index, seed := range financeCategorySeeds {
+		out[index] = map[string]any{
+			"id": seed.id, "kind": seed.kind, "key": seed.key, "label": seed.label,
+			"sort_order": seed.sortOrder, "archived_at": nil, "is_system": seed.system,
+			"created_by": nil,
+		}
+	}
+	return out
+}
+
+// FinanceCategorySeedIDs lists the fixed ids of the seeded categories.
+func FinanceCategorySeedIDs() []string {
+	out := make([]string, len(financeCategorySeeds))
+	for index, seed := range financeCategorySeeds {
+		out[index] = seed.id
+	}
+	return out
 }
 
 // maxBaselineMigration is the newest post-reset baseline migration declared
@@ -402,6 +479,9 @@ func deriveNewDomainRecords(artifact *Artifact, declaration NewDomainMigration) 
 		}
 		return []RecordEnvelope{}, nil
 	}
+	if len(declaration.SeedRecords) > 0 {
+		return seededNewDomainRecords(artifact, declaration)
+	}
 	sources := artifact.Records[declaration.ValuesFromDomain]
 	if len(sources) == 0 {
 		return []RecordEnvelope{}, nil
@@ -441,6 +521,47 @@ func deriveNewDomainRecords(artifact *Artifact, declaration NewDomainMigration) 
 		data := map[string]any{declaration.KeyField: key}
 		for _, column := range declaration.CopiedColumns {
 			data[column] = values[column]
+		}
+		envelope := RecordEnvelope{
+			Domain: declaration.Domain, ID: id,
+			CanonicalizationVersion: CanonicalizationVersion,
+			DigestAlgorithm:         DigestAlgorithmVersion,
+		}
+		if err := rewriteEnvelopeData(&envelope, data); err != nil {
+			return nil, err
+		}
+		out = append(out, envelope)
+	}
+	return out, nil
+}
+
+// seededNewDomainRecords keeps the artifact's own records for the domain and
+// adds every declared seed row whose key the artifact does not already carry.
+func seededNewDomainRecords(artifact *Artifact, declaration NewDomainMigration) ([]RecordEnvelope, error) {
+	existing := map[string]bool{}
+	for _, record := range artifact.Records[declaration.Domain] {
+		id, err := CanonicalJSON(record.ID)
+		if err != nil {
+			return nil, err
+		}
+		existing[string(id)] = true
+	}
+	out := append([]RecordEnvelope{}, artifact.Records[declaration.Domain]...)
+	for _, seed := range declaration.SeedRecords {
+		key, present := seed[declaration.KeyField]
+		if !present {
+			return nil, fmt.Errorf("%s seed record lacks %s", declaration.Domain, declaration.KeyField)
+		}
+		id, err := MarshalCanonical(key)
+		if err != nil {
+			return nil, err
+		}
+		if existing[string(id)] {
+			continue
+		}
+		data := make(map[string]any, len(seed))
+		for column, value := range seed {
+			data[column] = value
 		}
 		envelope := RecordEnvelope{
 			Domain: declaration.Domain, ID: id,

@@ -1153,12 +1153,6 @@ func (s *Server) publicHoneyStorySubscribe(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusCreated, map[string]any{"success": true})
 }
 
-var expenseCategories = map[string]bool{
-	"bees_queens": true, "feed": true, "treatments": true, "packaging": true,
-	"equipment": true, "mileage": true, "market_fees": true, "labor": true,
-	"other": true, "grocery": true,
-}
-
 func (s *Server) expenseList(w http.ResponseWriter, r *http.Request) {
 	year := r.URL.Query().Get("year")
 	// Soft-deleted expenses never appear in listings or aggregates.
@@ -1246,23 +1240,45 @@ func (s *Server) expenseCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	date, err := parseDate(req.ExpenseDate)
-	if err != nil || !expenseCategories[req.Category] ||
+	category := strings.TrimSpace(req.Category)
+	if err != nil || category == "" ||
 		strings.TrimSpace(req.Description) == "" || req.Amount < 0 {
 		writeError(w, http.StatusBadRequest, "date, category, description, and non-negative amount are required")
 		return
 	}
+	ctx := r.Context()
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// An active expense category (finance_categories). 'uncategorized' is
+	// only for what the Folio import brings in, never a manual entry.
+	if category == financeUncategorized {
+		writeError(w, http.StatusBadRequest, "choose a category for the expense")
+		return
+	}
+	if err := requireFinanceCategory(ctx, tx, "record expense", financeKindExpense, category); err != nil {
+		writeAppError(w, err)
+		return
+	}
 	var id uuid.UUID
-	err = s.pool.QueryRow(r.Context(), `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO expenses
 			(expense_date, category, description, amount_cents, apiary_id, hive_id,
 			 harvest_lot_id, season, vendor, quantity, unit, notes, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
-		date, req.Category, strings.TrimSpace(req.Description), req.Amount,
+		date, category, strings.TrimSpace(req.Description), req.Amount,
 		req.ApiaryID, req.HiveID, req.HarvestLotID, honeyTrimPtr(req.Season),
 		honeyTrimPtr(req.Vendor), req.Quantity, honeyTrimPtr(req.Unit),
 		honeyTrimPtr(req.Notes), actorID(r)).Scan(&id)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid apiary, hive, or harvest lot")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})

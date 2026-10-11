@@ -18,8 +18,12 @@ var SaleLineKinds = []string{
 	"tincture",
 }
 
-// ExpenseCategories is the expenses.category CHECK list (00002 + the later
-// grocery addition). Each needs an expense account.
+// ExpenseCategories are the built-in expense categories migration
+// 00068/00015 seeds into finance_categories (the CHECK list that table
+// replaced, without 'uncategorized'). The live list is the table — operators
+// add their own — and each category an expense is pushed under needs an
+// expense account; an unmapped one fails that row with MissingMapping. This
+// list is only the default for callers with no database (tests, fixtures).
 var ExpenseCategories = []string{
 	"bees_queens",
 	"feed",
@@ -74,26 +78,57 @@ func (m AccountMapping) Normalize() AccountMapping {
 		COGS:               strings.TrimSpace(m.COGS),
 		Inventory:          strings.TrimSpace(m.Inventory),
 	}
-	out.Revenue = normalizeGUIDs(m.Revenue, SaleLineKinds)
-	out.Expenses = normalizeGUIDs(m.Expenses, ExpenseCategories)
+	out.Revenue = normalizeGUIDs(m.Revenue, func(key string) bool { return containsKey(SaleLineKinds, key) })
+	// Expense categories are operator-managed rows (finance_categories), so
+	// Normalize keeps any well-formed category key; RestrictExpenses drops
+	// the keys that are not categories when the mapping is saved.
+	out.Expenses = normalizeGUIDs(m.Expenses, IsCategoryKey)
 	return out
 }
 
-// normalizeGUIDs keeps only known keys with a non-empty GUID. An unknown key
-// is dropped rather than stored: the CHECK lists are the source of truth, and
-// a stale key would quietly shadow a rename.
-func normalizeGUIDs(in map[string]string, allowed []string) map[string]string {
+// RestrictExpenses keeps only the expense mappings whose key is one of the
+// given categories. A key that names no category is dropped rather than
+// stored: a stale key would quietly shadow a category added later.
+func (m AccountMapping) RestrictExpenses(categories []string) AccountMapping {
+	out := m
+	out.Expenses = normalizeGUIDs(m.Expenses, func(key string) bool { return containsKey(categories, key) })
+	return out
+}
+
+// IsCategoryKey reports whether key has the shape of a finance_categories key
+// (the table's CHECK): a lowercase letter, then lowercase letters, digits or
+// underscores, at most 63 characters.
+func IsCategoryKey(key string) bool {
+	if key == "" || len(key) > 63 || key[0] < 'a' || key[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(key); i++ {
+		c := key[i]
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func containsKey(list []string, key string) bool {
+	for _, item := range list {
+		if item == key {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeGUIDs keeps only permitted keys with a non-empty GUID.
+func normalizeGUIDs(in map[string]string, permitted func(string) bool) map[string]string {
 	if len(in) == 0 {
 		return nil
-	}
-	permitted := make(map[string]bool, len(allowed))
-	for _, key := range allowed {
-		permitted[key] = true
 	}
 	out := make(map[string]string, len(in))
 	for key, guid := range in {
 		guid = strings.TrimSpace(guid)
-		if guid == "" || !permitted[key] {
+		if guid == "" || !permitted(key) {
 			continue
 		}
 		out[key] = guid

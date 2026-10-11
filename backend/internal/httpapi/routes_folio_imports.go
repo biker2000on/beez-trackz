@@ -21,20 +21,19 @@ import (
 // writes to Folio (see routes_folio_import.go), and an imported entry is
 // never pushed back.
 
-// otherIncomeCategories is the other_income.category CHECK list (00064/00011).
+// Income categories are finance_categories rows of kind 'income' (00068/00015,
+// operator-managed). Two keys carry meaning here:
 //
-// sales_deposit is "this money is sales Atlas already recorded": it, and any
-// entry linked to a specific sale, is excluded from reported income so the
-// same revenue is not counted twice. The *_sales categories are for sales
-// Atlas never recorded — history from before Atlas, typically.
+// sales_deposit (system) is "this money is sales Atlas already recorded": it,
+// and any entry linked to a specific sale, is excluded from reported income
+// so the same revenue is not counted twice. The built-in *_sales categories
+// are for sales Atlas never recorded — history from before Atlas, typically.
+// A category the operator adds counts as ordinary other income, like grant
+// or services.
 //
 // There is no "refund" category: a refund from a supplier is a NEGATIVE
 // expense (gnucashsync.ClassifyImport), and money paid back to a customer is
 // negative other income in whatever category the original income had.
-var otherIncomeCategories = []string{
-	"uncategorized", "sales_deposit", "honey_sales", "colony_sales",
-	"product_sales", "pollination", "services", "grant", "other",
-}
 
 // unlinkedIncomeSQL selects, over other_income aliased oi, the deposits that
 // may be Atlas sales nobody has linked yet: live, positive, not linked to a
@@ -178,12 +177,25 @@ func (s *Server) handleFolioEntryList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+	// The categories a picker may offer: active ones, in display order.
+	// Expenses leave out 'uncategorized' (nothing is filed there by hand);
+	// income keeps it first, as the "back on the list" choice.
+	expenseKeys, err := financeCategoryKeys(ctx, s.pool, financeKindExpense, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	incomeKeys, err := financeCategoryKeys(ctx, s.pool, financeKindIncome, true)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":                 items,
 		"total":                 total,
 		"counts":                counts,
-		"expenseCategories":     gnucashsync.ExpenseCategories,
-		"otherIncomeCategories": otherIncomeCategories,
+		"expenseCategories":     withoutKey(expenseKeys, financeUncategorized),
+		"otherIncomeCategories": incomeKeys,
 	})
 }
 
@@ -262,7 +274,11 @@ func (s *Server) handleFolioImportCategory(w http.ResponseWriter, r *http.Reques
 			if err != nil {
 				return err
 			}
-			if err := folioCheckCategory(op, row, req.Category); err != nil {
+			verdict, err := folioCategoryVerdicts(ctx, uow, op, req.Category)
+			if err != nil {
+				return err
+			}
+			if err := folioCheckCategory(op, row, req.Category, verdict); err != nil {
 				return err
 			}
 			return folioApplyCategory(ctx, uow, op, row, req.Category)
@@ -274,22 +290,55 @@ func (s *Server) handleFolioImportCategory(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
+// folioCategoryVerdict is one requested category checked against
+// finance_categories once per kind (requireFinanceCategory, which also locks
+// the category row for the transaction): nil where it is an active category
+// of that kind, else the refusal.
+type folioCategoryVerdict struct {
+	expense error
+	income  error
+}
+
+func folioCategoryVerdicts(ctx context.Context, q app.Querier, op, category string) (folioCategoryVerdict, error) {
+	var verdict folioCategoryVerdict
+	for _, kind := range []string{financeKindExpense, financeKindIncome} {
+		err := requireFinanceCategory(ctx, q, op, kind, category)
+		if err != nil && app.IsKind(err, app.KindInternal) {
+			return verdict, err
+		}
+		if kind == financeKindExpense {
+			verdict.expense = err
+		} else {
+			verdict.income = err
+		}
+	}
+	return verdict, nil
+}
+
 // folioCheckCategory is the validation every categorize path shares: the
-// entry still exists in Atlas and the category is one its direction allows
-// (expense categories for expenses and refunds, other-income categories for
-// income). "uncategorized" puts an entry back on the list.
-func folioCheckCategory(op string, row folioImportRow, category string) error {
+// entry still exists in Atlas and the category is an active category of its
+// direction (expense categories for expenses and refunds, income categories
+// for income). "uncategorized" — a system category of both kinds — puts an
+// entry back on the list. Re-choosing the category an entry already has is
+// allowed even when that category has since been archived.
+func folioCheckCategory(op string, row folioImportRow, category string, verdict folioCategoryVerdict) error {
 	if row.EntityDeleted {
 		return app.Conflict(op, "This entry was removed from Atlas")
 	}
 	if row.Direction == gnucashsync.ImportExpense {
-		if row.ExpenseID == nil || (category != "uncategorized" && !expenseCategories[category]) {
+		if row.ExpenseID == nil {
 			return app.Invalid(op, "unknown expense category %q", category).WithField("category")
+		}
+		if verdict.expense != nil && row.Category != category {
+			return verdict.expense
 		}
 		return nil
 	}
-	if row.IncomeID == nil || !containsString(otherIncomeCategories, category) {
+	if row.IncomeID == nil {
 		return app.Invalid(op, "unknown income category %q", category).WithField("category")
+	}
+	if verdict.income != nil && row.Category != category {
+		return verdict.income
 	}
 	return nil
 }
@@ -380,7 +429,7 @@ func loadFolioImportsByIDs(ctx context.Context, q app.Querier, ids []uuid.UUID) 
 // transaction. Any refusal saves nothing and answers 400 with every
 // offending id and its reason.
 func (s *Server) runFolioBulk(w http.ResponseWriter, r *http.Request, rawIDs []uuid.UUID, op string,
-	check func(rows []folioImportRow) []folioBulkRejection,
+	check func(ctx context.Context, uow *app.UnitOfWork, rows []folioImportRow) ([]folioBulkRejection, error),
 	apply func(ctx context.Context, uow *app.UnitOfWork, row folioImportRow) error,
 ) {
 	ids, err := folioBulkIDs(rawIDs)
@@ -398,7 +447,11 @@ func (s *Server) runFolioBulk(w http.ResponseWriter, r *http.Request, rawIDs []u
 			for _, id := range missing {
 				rejected = append(rejected, folioBulkRejection{ID: id, Reason: "Imported entry not found"})
 			}
-			rejected = append(rejected, check(rows)...)
+			refused, err := check(ctx, uow, rows)
+			if err != nil {
+				return err
+			}
+			rejected = append(rejected, refused...)
 			if len(rejected) > 0 {
 				noun := "entries"
 				if len(rejected) == 1 {
@@ -446,8 +499,12 @@ func (s *Server) handleFolioImportBulkCategory(w http.ResponseWriter, r *http.Re
 	}
 	const op = "categorize imported entries"
 	s.runFolioBulk(w, r, req.IDs, op,
-		func(rows []folioImportRow) []folioBulkRejection {
-			return folioBulkCategoryRejections(op, rows, req.Category)
+		func(ctx context.Context, uow *app.UnitOfWork, rows []folioImportRow) ([]folioBulkRejection, error) {
+			verdict, err := folioCategoryVerdicts(ctx, uow, op, req.Category)
+			if err != nil {
+				return nil, err
+			}
+			return folioBulkCategoryRejections(op, rows, req.Category, verdict), nil
 		},
 		func(ctx context.Context, uow *app.UnitOfWork, row folioImportRow) error {
 			return folioApplyCategory(ctx, uow, op, row, req.Category)
@@ -457,7 +514,7 @@ func (s *Server) handleFolioImportBulkCategory(w http.ResponseWriter, r *http.Re
 // folioBulkCategoryRejections is the bulk categorize check. In a mixed
 // selection the smaller kind is what does not belong (a tie names the
 // income); every other row gets the single-row check.
-func folioBulkCategoryRejections(op string, rows []folioImportRow, category string) []folioBulkRejection {
+func folioBulkCategoryRejections(op string, rows []folioImportRow, category string, verdict folioCategoryVerdict) []folioBulkRejection {
 	expenses, income := 0, 0
 	for _, row := range rows {
 		if row.Direction == gnucashsync.ImportExpense {
@@ -482,7 +539,7 @@ func folioBulkCategoryRejections(op string, rows []folioImportRow, category stri
 		case row.State == "remote_deleted" && !row.EntityDeleted:
 			reason = "Deleted in Folio: accept or keep it first"
 		default:
-			if err := folioCheckCategory(op, row, category); err != nil {
+			if err := folioCheckCategory(op, row, category, verdict); err != nil {
 				reason = appMessage(err)
 			}
 		}
@@ -491,15 +548,6 @@ func folioBulkCategoryRejections(op string, rows []folioImportRow, category stri
 		}
 	}
 	return rejected
-}
-
-func containsString(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }
 
 // PUT /folio-imports/{id}/sale {"saleId": "..." | null} — say which Atlas sale
@@ -711,7 +759,7 @@ func (s *Server) resolveFolioImports(w http.ResponseWriter, r *http.Request, acc
 	actor := actorID(r)
 	const op = "resolve imported entries"
 	s.runFolioBulk(w, r, req.IDs, op,
-		func(rows []folioImportRow) []folioBulkRejection {
+		func(_ context.Context, _ *app.UnitOfWork, rows []folioImportRow) ([]folioBulkRejection, error) {
 			var rejected []folioBulkRejection
 			for _, row := range rows {
 				switch {
@@ -722,7 +770,7 @@ func (s *Server) resolveFolioImports(w http.ResponseWriter, r *http.Request, acc
 						Reason: "Atlas can't take the Folio version of this entry: keep it instead"})
 				}
 			}
-			return rejected
+			return rejected, nil
 		},
 		func(ctx context.Context, uow *app.UnitOfWork, row folioImportRow) error {
 			return folioResolveRow(ctx, uow, op, row, accept, actor)

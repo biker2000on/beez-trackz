@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Milk, Package, ShieldAlert, SlidersHorizontal, Wheat } from "lucide-react";
+import { ArrowRight, Milk, Package, ShieldAlert, SlidersHorizontal, Tags, Wheat } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { JarSizesSection } from "@/features/settings/jar-sizes-section";
@@ -9,6 +9,7 @@ import { SettingsSection } from "@/features/settings/settings-section";
 import { TreatmentProductsSection } from "@/features/settings/treatment-products-section";
 
 import { AdminGate } from "./admin-gate";
+import { FinanceCategoriesSection } from "./finance-categories-section";
 import { OperationPolicyForm } from "./policy-form";
 
 /** Catalogs whose editor is owned by the workspace that uses them. */
@@ -42,8 +43,9 @@ export function OperationSetupView() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Operation setup</h1>
         <p className="text-sm text-muted-foreground">
-          Jar sizes, treatment withdrawals and the thresholds the yard queue
-          works from. Integrations and access live under Admin.
+          Jar sizes, treatment withdrawals, expense and income categories and
+          the thresholds the yard queue works from. Integrations and access
+          live under Admin.
         </p>
       </div>
       <AdminGate>
@@ -64,6 +66,15 @@ export function OperationSetupView() {
             defaultOpen={false}
           >
             <TreatmentProductsSection />
+          </SettingsSection>
+          <SettingsSection
+            title="Expense and income categories"
+            description="The categories expenses and imported income are filed under, and that the Folio mapping and reports group by."
+            icon={Tags}
+            anchor="finance-categories"
+            defaultOpen={false}
+          >
+            <FinanceCategoriesSection />
           </SettingsSection>
           <SettingsSection
             title="Thresholds and yard-visit labor"

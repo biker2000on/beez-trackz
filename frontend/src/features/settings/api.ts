@@ -284,7 +284,9 @@ export interface GnuCashSettings {
   /** True exactly when restoreState is "installed". */
   restorePending: boolean;
   /** Kinds and categories come from the server so the editor cannot drift
-   * from the database CHECK lists. */
+   * from the database: sale kinds are a CHECK list, expense categories the
+   * operator's finance_categories (every key but "uncategorized", archived
+   * ones included; labels from useFinanceCategories). */
   saleLineKinds: string[];
   expenseCategories: string[];
   /** The book connection these credentials belong to (migration 00064);

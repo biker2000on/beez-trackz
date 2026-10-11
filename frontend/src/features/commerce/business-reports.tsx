@@ -79,6 +79,10 @@ import {
   type ProductionPlan,
   type Profitability,
 } from "./api";
+import {
+  FINANCE_CATEGORIES_HREF,
+  useFinanceCategories,
+} from "@/features/settings/finance-categories-api";
 import { formatFolioAmount, UNLINKED_INCOME_HREF } from "./folio-imports-api";
 
 // --- grid plumbing ---------------------------------------------------------
@@ -471,6 +475,7 @@ function ExpensesTable({
   onDelete: (expense: Expense) => void;
 }) {
   const data = React.useMemo(() => rows, [rows]);
+  const { label: categoryLabel } = useFinanceCategories("expense");
   const columns = React.useMemo(
     () =>
       expenseHelper.columns([
@@ -482,12 +487,11 @@ function ExpensesTable({
         expenseHelper.display({
           id: "category",
           header: "Category",
-          meta: { cellClassName: "capitalize" } satisfies DataGridColumnMeta,
           cell: ({ row }) => (
             <span className="inline-flex flex-wrap items-center gap-1">
-              {row.original.category.replaceAll("_", " ")}
+              {categoryLabel(row.original.category)}
               {row.original.source === "folio" ? (
-                <Badge variant="outline" className="normal-case">Folio</Badge>
+                <Badge variant="outline">Folio</Badge>
               ) : null}
             </span>
           ),
@@ -537,7 +541,7 @@ function ExpensesTable({
           ),
         }),
       ]),
-    [onDelete],
+    [categoryLabel, onDelete],
   );
   const table = useTable({
     features: gridFeatures,
@@ -554,15 +558,25 @@ function ExpensesTable({
   );
 }
 
-const EXPENSE_CATEGORIES = ["bees_queens", "feed", "treatments", "packaging", "equipment", "mileage", "market_fees", "labor", "other", "grocery"];
+/** The category a new expense starts in when the operator's list has it. */
+const DEFAULT_EXPENSE_CATEGORY = "feed";
 
 function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const create = useCreateExpense();
   const apiaries = useApiaryOptions();
   const hives = useHiveOptions();
   const lots = useHarvestLots();
+  // Active expense categories from Operation setup; "uncategorized" is only
+  // for what the Folio import brings in.
+  const { active } = useFinanceCategories("expense");
+  const choices = React.useMemo(() => active.filter((row) => row.key !== "uncategorized"), [active]);
   const [date, setDate] = React.useState(todayISO());
-  const [category, setCategory] = React.useState("feed");
+  const [chosenCategory, setCategory] = React.useState(DEFAULT_EXPENSE_CATEGORY);
+  // A category archived (or never offered) since the draft started falls
+  // back to the first one still on offer.
+  const category = choices.some((row) => row.key === chosenCategory)
+    ? chosenCategory
+    : (choices.find((row) => row.key === DEFAULT_EXPENSE_CATEGORY) ?? choices[0])?.key ?? chosenCategory;
   const [description, setDescription] = React.useState("");
   const [amount, setAmount] = React.useState("");
   const [assignment, setAssignment] = React.useState("general");
@@ -570,7 +584,7 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   const [notes, setNotes] = React.useState("");
   function resetDraft() {
     setDate(todayISO());
-    setCategory("feed");
+    setCategory(DEFAULT_EXPENSE_CATEGORY);
     setDescription("");
     setAmount("");
     setAssignment("general");
@@ -597,7 +611,7 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o
   return (
     <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Add expense</DialogTitle></DialogHeader>
       <ShortcutForm className="grid gap-4" onSubmit={(event) => { event.preventDefault(); save(); }} onSubmitAndReset={() => save(true)} onEscape={() => onOpenChange(false)}>
-        <div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div><div className="grid gap-1.5"><Label>Category</Label><Select value={category} onValueChange={setCategory}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{EXPENSE_CATEGORIES.map((value) => <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>)}</SelectContent></Select></div></div>
+        <div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div><div className="grid gap-1.5"><div className="flex items-baseline justify-between gap-2"><Label htmlFor="expense-category">Category</Label><Link href={FINANCE_CATEGORIES_HREF} className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Manage categories</Link></div><Select value={category} onValueChange={setCategory}><SelectTrigger id="expense-category"><SelectValue /></SelectTrigger><SelectContent>{choices.map((row) => <SelectItem key={row.key} value={row.key}>{row.label}</SelectItem>)}</SelectContent></Select></div></div>
         <div className="grid gap-1.5"><Label>Description</Label><Input value={description} onChange={(e) => setDescription(e.target.value)} /></div>
         <div className="grid grid-cols-2 gap-3"><div className="grid gap-1.5"><Label>Amount</Label><Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} /></div><div className="grid gap-1.5"><Label>Vendor</Label><Input value={vendor} onChange={(e) => setVendor(e.target.value)} /></div></div>
         <div className="grid gap-1.5"><Label>Assign cost</Label><Select value={assignment} onValueChange={setAssignment}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="general">General operation</SelectItem>{(apiaries.data ?? []).map((row) => <SelectItem key={`apiary:${row.id}`} value={`apiary:${row.id}`}>Apiary · {row.name}</SelectItem>)}{(hives.data ?? []).map((row) => <SelectItem key={`hive:${row.id}`} value={`hive:${row.id}`}>Hive · {row.apiaryName} / {row.positionLabel}</SelectItem>)}{(lots.data ?? []).map((row) => <SelectItem key={`lot:${row.id}`} value={`lot:${row.id}`}>Lot · {row.lotCode}</SelectItem>)}</SelectContent></Select></div>

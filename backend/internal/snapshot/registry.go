@@ -57,6 +57,9 @@ var Domains = []Domain{
 	// Folio book connections (00064/00011). No credential lives here: the
 	// token is only ever on the singleton above, and only for the active book.
 	domain("gnucash_books"), domain("other_income"), domain("folio_imports"),
+	// Operator-managed expense and income categories (00068/00015). Seeded:
+	// FinanceCategorySeeds is what an older artifact restores with.
+	domain("finance_categories"),
 }
 
 // LedgerDomains are additive in format v1. Export chooses domains by actual

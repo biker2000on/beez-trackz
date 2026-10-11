@@ -50,6 +50,8 @@ func (s *Server) mountDomains(r chi.Router) {
 	// autopsies, and the derived swarm/split readiness list.
 	s.mountFieldObjects(r)
 	s.mountCommerce(r)
+	// Operator-managed expense and income categories (finance_categories).
+	s.mountFinanceCategories(r)
 	s.mountProducts(r)
 	// Stock locations: finished goods consigned to the bike shop, the
 	// transfers that put them there, and the settlement that pays for them.

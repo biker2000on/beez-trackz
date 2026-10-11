@@ -438,6 +438,14 @@ func databaseNonempty(ctx context.Context, uow *app.UnitOfWork) (bool, error) {
 			predicate = "source_type IS NOT NULL"
 		case "stock_locations":
 			predicate = "slug <> 'home'"
+		case "finance_categories":
+			// Migration 00068/00015 seeds the built-in categories with fixed
+			// ids; only a category the operator added is user data.
+			quoted := make([]string, 0, len(snapshot.FinanceCategorySeedIDs()))
+			for _, id := range snapshot.FinanceCategorySeedIDs() {
+				quoted = append(quoted, "'"+id+"'")
+			}
+			predicate = "id NOT IN (" + strings.Join(quoted, ",") + ")"
 		case "treatment_products":
 			quoted := make([]string, len(seedProducts))
 			for i, value := range seedProducts {
@@ -491,6 +499,7 @@ func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork, clearLe
 				`DELETE FROM inventory_operation_kinds`,
 				`DELETE FROM inventory_location_kinds`,
 				`DELETE FROM inventory_item_kinds`,
+				app.FinanceCategorySeedsYieldSQL,
 			} {
 				if _, err := uow.Exec(ctx, statement); err != nil {
 					return err
@@ -507,6 +516,7 @@ func seededRowsYieldToSnapshot(ctx context.Context, uow *app.UnitOfWork, clearLe
 		`DELETE FROM treatment_products`,
 		`DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`,
 		`DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`,
+		app.FinanceCategorySeedsYieldSQL,
 	} {
 		if _, err := uow.Exec(ctx, statement); err != nil {
 			return err

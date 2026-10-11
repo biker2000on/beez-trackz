@@ -439,6 +439,19 @@ func EnsureLegacyRestoreTargetIsWritable(ctx context.Context, uow *UnitOfWork) e
 	return nil
 }
 
+// FinanceCategorySeedsYieldSQL clears the categories migration 00068/00015
+// seeded on an empty target. The artifact always brings them back: its own
+// finance_categories records, or — for an artifact older than the table —
+// the seed rows the post-artifact declaration adds. Guarded so a dry run
+// against a target that predates the table still works.
+const FinanceCategorySeedsYieldSQL = `DO $$
+BEGIN
+  IF to_regclass('public.finance_categories') IS NOT NULL THEN
+    DELETE FROM finance_categories;
+  END IF;
+END
+$$`
+
 // SeededRowsYieldToSnapshot removes migration seed identities inside the
 // restore transaction. It must run before any snapshot row is inserted.
 func SeededRowsYieldToSnapshot(ctx context.Context, uow *UnitOfWork) error {
@@ -453,6 +466,7 @@ func SeededRowsYieldToSnapshot(ctx context.Context, uow *UnitOfWork) error {
 		{"restore treatment product seeds", `DELETE FROM treatment_products`},
 		{"restore inventory location seeds", `DELETE FROM inventory_locations WHERE id IN ('00000000-0000-0000-0000-000000000201','00000000-0000-0000-0000-000000000202')`},
 		{"restore inventory item seeds", `DELETE FROM inventory_items WHERE id IN ('00000000-0000-0000-0000-000000000101','00000000-0000-0000-0000-000000000102')`},
+		{"restore finance category seeds", FinanceCategorySeedsYieldSQL},
 	}
 	for _, statement := range statements {
 		if _, err := uow.Exec(ctx, statement.sql); err != nil {
