@@ -282,6 +282,11 @@ test("rows keep their colored type badges and show the ledger columns", async ({
   await expect(first).toContainText("Honey house");
   await expect(first).toContainText("First of the season");
   await expect(row(page, 1)).toContainText("−1 jar");
+
+  // Every column fits a laptop-width window: no sideways scrollbar.
+  const grid = page.locator("[data-grid-mode]").first();
+  await expect(grid).toHaveAttribute("data-grid-mode", "table");
+  expect(await grid.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
 
 test("a header click sorts on the server, restarts paging and drops day groups", async ({

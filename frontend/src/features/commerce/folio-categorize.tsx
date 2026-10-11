@@ -884,6 +884,10 @@ export function FolioCategorize() {
         <DataGrid
           table={table}
           aria-label="Imported entries"
+          // A wide editing grid (category picker, sale link, conflict
+          // actions per row): it keeps every column and scrolls sideways on
+          // a laptop rather than folding into tiles; phones still get cards.
+          cardMode="phone"
           searchable={false}
           selection={selection}
           selectAllLabel="Select all shown entries"
