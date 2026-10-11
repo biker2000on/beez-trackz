@@ -137,14 +137,20 @@ export function LotsGrid({
           {
             id: "region",
             header: "Region",
-            meta: { cellClassName: "max-w-48 truncate text-muted-foreground" } satisfies DataGridColumnMeta,
+            meta: {
+              cellClassName: "max-w-48 truncate text-muted-foreground",
+              priority: "secondary",
+            } satisfies DataGridColumnMeta,
             cell: ({ getValue }) => getValue() || "Not published",
           },
         ),
         helper.accessor((lot) => moistureText(lot) ?? "", {
           id: "moisture",
           header: "Moisture",
-          meta: { cellClassName: "text-xs text-muted-foreground" } satisfies DataGridColumnMeta,
+          meta: {
+            cellClassName: "text-xs text-muted-foreground",
+            priority: "secondary",
+          } satisfies DataGridColumnMeta,
           cell: ({ getValue }) => getValue() || "—",
         }),
         helper.accessor(

@@ -175,6 +175,7 @@ const kindColumns = kindHelper.columns([
   kindHelper.display({
     id: "kind",
     header: "Kind",
+    meta: { cellClassName: "whitespace-normal" } satisfies DataGridColumnMeta,
     cell: ({ row }) => (
       <>
         <span className="capitalize">{row.original.kind}</span>
@@ -260,6 +261,7 @@ const harvestLotColumns = harvestLotHelper.columns([
   harvestLotHelper.display({
     id: "lot",
     header: "Lot",
+    meta: { cellClassName: "whitespace-normal break-words" } satisfies DataGridColumnMeta,
     cell: ({ row }) => (
       <>
         <p className="font-medium">{row.original.lotCode}</p>
@@ -493,6 +495,7 @@ function ExpensesTable({
         expenseHelper.display({
           id: "description",
           header: "Description",
+          meta: { cellClassName: "min-w-[10rem] whitespace-normal" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.description,
         }),
         expenseHelper.display({

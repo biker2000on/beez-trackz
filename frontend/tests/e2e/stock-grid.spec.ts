@@ -184,6 +184,19 @@ test("finished goods: counts read as whole numbers, unknown is a dash, filters a
   await expect(grid.locator("tbody tr").last()).toContainText("Gallon");
 });
 
+for (const route of ["/stock/bulk", "/stock/finished"]) {
+  test(`${route} is a table that fits a 1280px laptop without sideways scroll`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(route);
+    const grid = page.locator("[data-grid-mode]").first();
+    await expect(page.getByRole("table", { name: "Stock" }).locator("tbody tr").first()).toBeVisible();
+    await expect(grid).toHaveAttribute("data-grid-mode", "table");
+    expect(await grid.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  });
+}
+
 test("on a phone the stock grid becomes cards with search and a Sort by select", async ({
   page,
 }) => {

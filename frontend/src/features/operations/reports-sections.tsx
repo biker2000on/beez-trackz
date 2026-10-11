@@ -70,14 +70,6 @@ const rightAligned: DataGridColumnMeta = {
   cellClassName: "tabular-nums",
 };
 
-/**
- * The DataGrid table has no `data-pin-first-column` hook into globals.css, so
- * the first column pins itself with the same sticky + card background + 1px
- * edge the old `<Table pinFirstColumn>` styling produced.
- */
-const pinnedFirstColumn =
-  "sticky left-0 z-[1] bg-card after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-border";
-
 export function currentYear(): number {
   return new Date().getFullYear();
 }
@@ -346,7 +338,7 @@ export function EconomicsReport({ year }: { year: number }) {
   if (!economics.data) return <ErrorText />;
   return (
     <Card>
-      <CardContent className="overflow-x-auto p-0">
+      <CardContent className="p-0">
         <EconomicsGrid rows={economics.data.apiaries} />
       </CardContent>
     </Card>
@@ -402,21 +394,22 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
           id: "apiary",
           header: "Apiary",
           meta: {
-            headClassName: pinnedFirstColumn,
-            cellClassName: `font-medium ${pinnedFirstColumn}`,
+            cellClassName: "font-medium whitespace-normal",
           } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.apiaryName,
         }),
         economicsColumnHelper.accessor((r) => r.poundsPerHive, {
           id: "poundsPerHive",
           header: "lb/hive",
-          meta: rightAligned,
+          meta: { ...rightAligned, label: "Pounds per hive" },
           cell: ({ row }) => row.original.poundsPerHive.toFixed(1),
         }),
         economicsColumnHelper.accessor((r) => r.revenueAllocated, {
           id: "revenue",
-          header: "Revenue (invoiced)",
-          meta: rightAligned,
+          header: "Revenue",
+          // The page description says revenue is invoiced order totals; the
+          // long form rides along as the header tooltip and card label.
+          meta: { ...rightAligned, label: "Revenue (invoiced)" },
           cell: ({ row }) => formatMoney(row.original.revenueAllocated),
         }),
         economicsColumnHelper.accessor((r) => r.expenses, {
@@ -436,14 +429,22 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
         }),
         economicsColumnHelper.accessor((r) => r.feedCostPerColony, {
           id: "feedPerColony",
-          header: "Feed/colony",
-          meta: rightAligned,
+          header: "Feed / colony",
+          meta: {
+            ...rightAligned,
+            label: "Feed per colony",
+            priority: "secondary",
+          } satisfies DataGridColumnMeta,
           cell: ({ row }) => formatMoney(row.original.feedCostPerColony),
         }),
         economicsColumnHelper.accessor((r) => r.treatmentCostPerColony, {
           id: "treatmentPerColony",
-          header: "Treatment/colony",
-          meta: rightAligned,
+          header: "Treatment / colony",
+          meta: {
+            ...rightAligned,
+            label: "Treatment per colony",
+            priority: "secondary",
+          } satisfies DataGridColumnMeta,
           cell: ({ row }) => formatMoney(row.original.treatmentCostPerColony),
         }),
         economicsColumnHelper.accessor((r) => r.winterSurvivalRate, {
@@ -460,7 +461,7 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
         economicsColumnHelper.accessor((r) => r.splitChildrenSurviving, {
           id: "splitsSurviving",
           header: "Splits surviving",
-          meta: rightAligned,
+          meta: { ...rightAligned, priority: "secondary" } satisfies DataGridColumnMeta,
           cell: ({ row }) => (
             <>
               {row.original.splitChildrenSurviving}/{row.original.splitsCreated}
@@ -469,8 +470,12 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
         }),
         economicsColumnHelper.accessor((r) => r.introducedQueensActive, {
           id: "queensActive",
-          header: "Introduced queens active",
-          meta: rightAligned,
+          header: "Queens active",
+          meta: {
+            ...rightAligned,
+            label: "Introduced queens active",
+            priority: "secondary",
+          } satisfies DataGridColumnMeta,
           cell: ({ row }) => (
             <>
               {row.original.introducedQueensActive}/

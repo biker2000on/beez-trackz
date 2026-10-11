@@ -501,7 +501,7 @@ export function ActivityTab() {
           header: "Entry",
           meta: {
             card: "title",
-            cellClassName: "min-w-[14rem] whitespace-normal",
+            cellClassName: "min-w-[12rem] whitespace-normal",
           } satisfies DataGridColumnMeta,
           cell: ({ row: { original: entry } }) => (
             <span className="flex min-w-0 items-center gap-2">
@@ -646,8 +646,10 @@ export function ActivityTab() {
           enableSorting: false,
           meta: {
             card: "subtitle",
+            // First to fold into the row's detail line on a narrow window.
+            priority: "secondary",
             cellClassName:
-              "min-w-[8rem] max-w-[16rem] whitespace-normal text-xs text-muted-foreground",
+              "min-w-[7rem] max-w-[16rem] whitespace-normal text-xs text-muted-foreground",
           } satisfies DataGridColumnMeta,
           cell: ({ row: { original: entry } }) => entry.notes ?? null,
         }),

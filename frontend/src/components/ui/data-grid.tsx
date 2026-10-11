@@ -28,6 +28,16 @@
  * one label/value line per column, laid out by `meta.card`. Selectable cards
  * carry a checkbox and a selected tint; a tap selects like a click.
  *
+ * Desktop tables fit their container instead of scrolling sideways: headers
+ * wrap (two short lines beat a scrollbar), the sort arrow sits after the
+ * label and only shows while idle on hover/focus, and cell padding tightens
+ * in narrow containers. When the table's measured width still exceeds its
+ * container (ResizeObserver), columns marked `meta.priority: "secondary"`
+ * move into an expandable detail row, and if that is not enough the grid
+ * renders as cards (tiles on a wide screen). `cardMode="phone"` or "never"
+ * opts out and keeps a horizontally scrolling table with a thin, themed
+ * scrollbar.
+ *
  * Keystrokes inside inputs, menus, and dialogs are left alone, so editable
  * cells (e.g. physical-count drafts) and row action menus keep their native
  * behavior. Cells that must swallow a click (menus, inline inputs) can call
@@ -52,7 +62,14 @@ import type {
   Table as TanstackTable,
   TableFeatures,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronDown,
+  Search,
+  X,
+} from "lucide-react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
@@ -90,6 +107,17 @@ export interface DataGridColumnMeta<TData = unknown> {
   filterValue?: (row: TData) => string | null | undefined;
   /** Label of the filter select's "everything" option. */
   filterAllLabel?: string;
+  /**
+   * Long form of a short header, shown as the header's tooltip. Defaults to
+   * `label` when that differs from a string header.
+   */
+  headerTitle?: string;
+  /**
+   * "secondary" columns are the first to give way when the table is wider
+   * than its container: they leave the table and show in an expandable
+   * detail row (and as ordinary fields on cards).
+   */
+  priority?: "primary" | "secondary";
 }
 
 /**
@@ -224,10 +252,15 @@ interface DataGridProps<
   /** Accessible name of a row's checkbox. */
   getRowLabel?: (row: TData) => string;
   /**
-   * "auto" (default) renders cards below the `md` breakpoint; "never" keeps
-   * the table everywhere (wide matrices that read better scrolled).
+   * "auto" (default) renders cards below the `md` breakpoint and, on wider
+   * screens, whenever the table cannot fit its container even with its
+   * secondary columns folded away; "never" keeps the table everywhere (wide
+   * matrices that read better scrolled), scrolling sideways when it must;
+   * "phone" renders cards below `md` only and otherwise keeps every column,
+   * scrolling sideways when it must (wide editing grids); "always" is cards
+   * everywhere.
    */
-  cardMode?: "auto" | "never" | "always";
+  cardMode?: "auto" | "phone" | "never" | "always";
   /** Extra controls placed in the toolbar beside search and filters. */
   toolbar?: React.ReactNode;
   /** Shown instead of an empty body when the grid has no rows at all. */
@@ -242,6 +275,19 @@ function overlayOpen(): boolean {
     ) != null
   );
 }
+
+/**
+ * How a desktop "auto" grid fits its container: every column, primary columns
+ * with the secondary ones in a detail row, or cards.
+ */
+type FitMode = "full" | "compact" | "cards";
+
+const useIsomorphicLayoutEffect =
+  typeof window === "undefined" ? React.useEffect : React.useLayoutEffect;
+
+/** Dotted underline marking a short header whose long form is its tooltip. */
+const abbrClassName =
+  "underline decoration-dotted decoration-muted-foreground/50 underline-offset-4";
 
 const selectClassName =
   "h-8 min-w-0 max-w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -276,9 +322,19 @@ export function DataGrid<
   const table = tableProp as unknown as TanstackTable<GridFeatures, TData>;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
+  const containerId = React.useId();
   const [focusedRowIndex, setFocusedRowIndex] = React.useState(-1);
+  const tableRef = React.useRef<HTMLTableElement>(null);
   const belowMd = useBelowMd();
-  const asCards = cardMode === "always" || (cardMode === "auto" && belowMd);
+  const [fit, setFit] = React.useState<FitMode>("full");
+  const autoFit = cardMode === "auto" && !belowMd;
+  const asCards =
+    cardMode === "always" ||
+    (cardMode === "phone" && belowMd) ||
+    (cardMode === "auto" && (belowMd || fit === "cards"));
+  const [expandedRows, setExpandedRows] = React.useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const canSearch = searchable;
   const [globalFilter, setGlobalFilterText] = React.useState("");
@@ -305,6 +361,63 @@ export function DataGrid<
     (column) =>
       typeof column.getCanSort === "function" && column.getCanSort(),
   );
+  const secondaryIds = leafColumns
+    .filter(
+      (column) =>
+        (column.columnDef.meta as DataGridColumnMeta | undefined)?.priority ===
+        "secondary",
+    )
+    .map((column) => column.id);
+  const hasSecondary = secondaryIds.length > 0;
+  const compact = autoFit && hasSecondary && fit === "compact";
+  const hiddenIds = compact ? new Set(secondaryIds) : null;
+  const isShown = (columnId: string) => !hiddenIds?.has(columnId);
+
+  // Fit the table to its container. Each overflow seen records the width the
+  // table needed in that mode, so the grid steps back up (cards -> compact ->
+  // full) only once the container is wide enough again — no oscillation, and
+  // layout effects settle before paint, so no flash of an overflowing table.
+  const fitWidths = React.useRef({ full: 0, compact: 0 });
+  const fitRef = React.useRef(fit);
+  useIsomorphicLayoutEffect(() => {
+    fitRef.current = fit;
+    if (!autoFit) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const evaluate = () => {
+      const available = container.clientWidth;
+      if (available === 0) return; // hidden (inactive tab, collapsed panel)
+      const current = fitRef.current;
+      const widths = fitWidths.current;
+      const tableEl = tableRef.current;
+      let next = current;
+      if (current !== "cards" && tableEl && tableEl.offsetWidth > available + 1) {
+        if (current === "full") {
+          widths.full = tableEl.offsetWidth;
+          next = hasSecondary ? "compact" : "cards";
+        } else {
+          widths.compact = tableEl.offsetWidth;
+          next = "cards";
+        }
+      } else if (current === "cards") {
+        const needed = hasSecondary ? widths.compact : widths.full;
+        if (available >= needed) next = hasSecondary ? "compact" : "full";
+      } else if (current === "compact" && available >= widths.full) {
+        next = "full";
+      }
+      if (next !== current) {
+        fitRef.current = next;
+        setFit(next);
+      }
+    };
+    evaluate();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(evaluate);
+    observer.observe(container);
+    if (tableRef.current) observer.observe(tableRef.current);
+    return () => observer.disconnect();
+  }, [autoFit, fit, hasSecondary]);
+
   const sorting = table.store?.state?.sorting ?? [];
   const isSorted = sorting.length > 0;
 
@@ -510,6 +623,9 @@ export function DataGrid<
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [listenOnWindow]);
 
+  // Cards on a desktop-width container (the table did not fit) tile across
+  // the width instead of stretching one card per line.
+  const tiles = asCards && autoFit;
   const showSortSelect = asCards && sortableColumns.length > 0;
   // Cards have no header row, so their select-all checkbox lives here.
   const showCardSelectAll = asCards && selection != null;
@@ -619,9 +735,15 @@ export function DataGrid<
     <div
       ref={containerRef}
       data-grid-mode={asCards ? "cards" : "table"}
+      data-grid-fit={autoFit ? fit : undefined}
       className={cn(
-        "relative w-full min-w-0 max-w-full",
-        !asCards && "overflow-x-auto",
+        "@container relative w-full min-w-0 max-w-full",
+        // A fitted table never overflows; clipping only trims a last column's
+        // hover-only sort arrow. Tables that opt out scroll, thinly.
+        !asCards &&
+          (autoFit
+            ? "overflow-x-clip"
+            : "overflow-x-auto [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"),
         className,
       )}
     >
@@ -747,7 +869,14 @@ export function DataGrid<
       )}
       {asCards ? (
         <>
-          <ul aria-label={ariaLabel} className="text-sm">
+          <ul
+            aria-label={ariaLabel}
+            className={cn(
+              "text-sm",
+              tiles &&
+                "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3 p-3",
+            )}
+          >
             {rows.map((row, rowIndex) => {
               const extra = rowProps?.(row.original, rowIndex) as
                 | React.HTMLAttributes<HTMLElement>
@@ -761,13 +890,19 @@ export function DataGrid<
               return (
                 <React.Fragment key={row.id}>
                   {showGroupHeader && (
-                    <li className="border-b bg-muted/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    <li
+                      className={cn(
+                        "border-b bg-muted/50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground",
+                        tiles && "col-span-full rounded-md border-b-0",
+                      )}
+                    >
                       {renderGroupHeader ? renderGroupHeader(group) : group}
                     </li>
                   )}
                   <DataGridCard
                     cells={row.getAllCells()}
                     roles={roles}
+                    tile={tiles}
                     focused={rowIndex === focusedRowIndex}
                     clickable={onRowActivate != null || selection != null}
                     selected={selection ? rowSelected : undefined}
@@ -785,7 +920,12 @@ export function DataGrid<
               );
             })}
             {emptyText && (
-              <li className="px-4 py-6 text-center text-sm text-muted-foreground">
+              <li
+                className={cn(
+                  "px-4 py-6 text-center text-sm text-muted-foreground",
+                  tiles && "col-span-full",
+                )}
+              >
                 {emptyText}
               </li>
             )}
@@ -800,12 +940,16 @@ export function DataGrid<
             ) : null)}
         </>
       ) : (
-        <table aria-label={ariaLabel} className="w-full caption-bottom text-sm">
+        <table
+          ref={tableRef}
+          aria-label={ariaLabel}
+          className="w-full caption-bottom text-sm [--cell-px:0.5rem] @6xl:[--cell-px:0.75rem]"
+        >
           <thead className="[&_tr]:border-b">
             {headerGroups.map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {selection && (
-                  <th className="h-10 w-10 px-3 align-middle">
+                  <th className="h-10 w-10 px-3 align-bottom pb-2.5">
                     <Checkbox
                       checked={selectAllChecked}
                       disabled={rowCount === 0}
@@ -817,7 +961,7 @@ export function DataGrid<
                     />
                   </th>
                 )}
-                {headerGroup.headers.map((header) => {
+                {headerGroup.headers.filter((header) => isShown(header.column.id)).map((header) => {
                   const meta = header.column.columnDef.meta as
                     | DataGridColumnMeta
                     | undefined;
@@ -827,10 +971,20 @@ export function DataGrid<
                     typeof column.getCanSort === "function" &&
                     column.getCanSort();
                   const sorted = canSort ? column.getIsSorted() : false;
+                  const right = meta?.align === "right";
+                  const headerText = column.columnDef.header;
+                  const longForm =
+                    meta?.headerTitle ??
+                    (meta?.label &&
+                    typeof headerText === "string" &&
+                    meta.label !== headerText
+                      ? meta.label
+                      : undefined);
                   return (
                     <th
                       key={header.id}
                       colSpan={header.colSpan}
+                      title={longForm}
                       aria-sort={
                         sorted === "asc"
                           ? "ascending"
@@ -839,8 +993,12 @@ export function DataGrid<
                             : undefined
                       }
                       className={cn(
-                        "h-10 whitespace-nowrap px-3 text-left align-middle font-medium text-muted-foreground",
-                        meta?.align === "right" && "text-right",
+                        // Labels wrap (balanced, at most a couple of short
+                        // lines) rather than widening the table; bottom
+                        // alignment keeps one- and two-line labels on the
+                        // same baseline over their values.
+                        "h-10 px-(--cell-px) pb-2 pt-2 text-left align-bottom font-medium leading-tight text-muted-foreground [text-wrap:balance]",
+                        right && "text-right",
                         meta?.headClassName,
                       )}
                     >
@@ -852,29 +1010,46 @@ export function DataGrid<
                             column.getToggleSortingHandler()?.(event);
                           }}
                           className={cn(
-                            "-mx-1 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            meta?.align === "right" && "flex-row-reverse",
+                            "group/sort relative -mx-1 inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-left hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            right && "text-right",
                             sorted && "text-foreground",
                           )}
                         >
-                          <FlexRender header={header} />
+                          <span className={cn(longForm && abbrClassName)}>
+                            <FlexRender header={header} />
+                          </span>
                           {sorted === "asc" ? (
-                            <ArrowUp aria-hidden className="size-3.5" />
+                            <ArrowUp aria-hidden className="size-3 shrink-0" />
                           ) : sorted === "desc" ? (
-                            <ArrowDown aria-hidden className="size-3.5" />
+                            <ArrowDown aria-hidden className="size-3 shrink-0" />
                           ) : (
+                            // Idle: takes no width, shown on hover/focus in
+                            // the free space beside the label (left of a
+                            // right-aligned label, right of a left one).
                             <ArrowUpDown
                               aria-hidden
-                              className="size-3.5 opacity-40"
+                              className={cn(
+                                "pointer-events-none absolute top-1/2 hidden size-3 -translate-y-1/2 opacity-50 group-hover/sort:block group-focus-visible/sort:block",
+                                right ? "right-full" : "left-full",
+                              )}
                             />
                           )}
                         </button>
+                      ) : longForm ? (
+                        <span className={cn("cursor-help", abbrClassName)}>
+                          <FlexRender header={header} />
+                        </span>
                       ) : (
                         <FlexRender header={header} />
                       )}
                     </th>
                   );
                 })}
+                {compact && (
+                  <th className="w-8 px-1">
+                    <span className="sr-only">More details</span>
+                  </th>
+                )}
               </tr>
             ))}
           </thead>
@@ -888,12 +1063,23 @@ export function DataGrid<
                 group !== undefined && group !== previousGroup;
               const rowSelected = selection?.isSelected(row.id) ?? false;
               const handlerExtra = extra as RowExtra;
+              const allCells = row.getAllCells();
+              const cells = compact
+                ? allCells.filter((cell) => isShown(cell.column.id))
+                : allCells;
+              const detailCells = compact
+                ? allCells.filter((cell) => !isShown(cell.column.id))
+                : [];
+              const expanded = compact && expandedRows.has(row.id);
+              const spanAll =
+                cells.length + (selection ? 1 : 0) + (compact ? 1 : 0);
+              const detailId = `${containerId}-detail-${row.id}`;
               return (
                 <React.Fragment key={row.id}>
                   {showGroupHeader && (
                     <tr className="border-b bg-muted/50">
                       <td
-                        colSpan={row.getAllCells().length + (selection ? 1 : 0)}
+                        colSpan={spanAll}
                         className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                       >
                         {renderGroupHeader ? renderGroupHeader(group) : group}
@@ -935,7 +1121,7 @@ export function DataGrid<
                         {rowCheckbox(row, rowIndex, rowSelected)}
                       </td>
                     )}
-                    {row.getAllCells().map((cell) => {
+                    {cells.map((cell) => {
                       const meta = cell.column.columnDef.meta as
                         | DataGridColumnMeta
                         | undefined;
@@ -943,7 +1129,7 @@ export function DataGrid<
                         <td
                           key={cell.id}
                           className={cn(
-                            "whitespace-nowrap p-3 align-middle",
+                            "whitespace-nowrap px-(--cell-px) py-3 align-middle",
                             meta?.align === "right" && "text-right",
                             meta?.cellClassName,
                           )}
@@ -952,14 +1138,83 @@ export function DataGrid<
                         </td>
                       );
                     })}
+                    {compact && (
+                      <td className="w-8 px-1 align-middle">
+                        <button
+                          type="button"
+                          aria-expanded={expanded}
+                          aria-controls={expanded ? detailId : undefined}
+                          aria-label={
+                            expanded ? "Hide more details" : "Show more details"
+                          }
+                          title={detailCells
+                            .map((cell) => columnLabel(cell.column))
+                            .filter(Boolean)
+                            .join(", ")}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setExpandedRows((current) => {
+                              const next = new Set(current);
+                              if (next.has(row.id)) next.delete(row.id);
+                              else next.add(row.id);
+                              return next;
+                            });
+                          }}
+                          onDoubleClick={(event) => event.stopPropagation()}
+                          className="grid size-7 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronDown
+                            aria-hidden
+                            className={cn(
+                              "size-4 transition-transform",
+                              expanded && "rotate-180",
+                            )}
+                          />
+                        </button>
+                      </td>
+                    )}
                   </tr>
+                  {expanded && (
+                    <tr id={detailId} data-grid-detail="" className="border-b bg-muted/20">
+                      <td colSpan={spanAll} className="px-3 py-2">
+                        <dl className="flex flex-wrap gap-x-6 gap-y-1">
+                          {detailCells.map((cell) => {
+                            const meta = cell.column.columnDef.meta as
+                              | DataGridColumnMeta
+                              | undefined;
+                            return (
+                              <div
+                                key={cell.id}
+                                className="flex items-baseline gap-2"
+                              >
+                                <dt className="text-xs uppercase tracking-wider text-muted-foreground">
+                                  {columnLabel(cell.column) || cell.column.id}
+                                </dt>
+                                <dd
+                                  className={cn(
+                                    meta?.align === "right" && "tabular-nums",
+                                  )}
+                                >
+                                  <FlexRender cell={cell} />
+                                </dd>
+                              </div>
+                            );
+                          })}
+                        </dl>
+                      </td>
+                    </tr>
+                  )}
                 </React.Fragment>
               );
             })}
             {emptyText && (
               <tr>
                 <td
-                  colSpan={leafColumns.length + (selection ? 1 : 0)}
+                  colSpan={
+                    leafColumns.filter((column) => isShown(column.id)).length +
+                    (selection ? 1 : 0) +
+                    (compact ? 1 : 0)
+                  }
                   className="px-3 py-6 text-center text-sm text-muted-foreground"
                 >
                   {emptyText}

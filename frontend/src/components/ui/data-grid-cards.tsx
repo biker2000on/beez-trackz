@@ -85,6 +85,11 @@ export function cardRole<TFeatures extends TableFeatures, TData extends RowData>
 interface DataGridCardProps<TFeatures extends TableFeatures, TData extends RowData> {
   cells: Cell<TFeatures, TData, unknown>[];
   roles: DataGridCardRole[];
+  /**
+   * Render as a bordered tile in a multi-column grid (cards shown on a wide
+   * container because the table did not fit) instead of a full-width row.
+   */
+  tile?: boolean;
   focused: boolean;
   clickable: boolean;
   /**
@@ -103,6 +108,7 @@ interface DataGridCardProps<TFeatures extends TableFeatures, TData extends RowDa
 export function DataGridCard<TFeatures extends TableFeatures, TData extends RowData>({
   cells,
   roles,
+  tile = false,
   focused,
   clickable,
   selected,
@@ -199,7 +205,9 @@ export function DataGridCard<TFeatures extends TableFeatures, TData extends RowD
         ? { "data-state": selected ? "selected" : undefined }
         : {})}
       className={cn(
-        "border-b p-4 transition-colors last:border-b-0",
+        tile
+          ? "rounded-lg border p-4 transition-colors"
+          : "border-b p-4 transition-colors last:border-b-0",
         clickable && "cursor-pointer active:bg-muted/60",
         selected && "bg-primary/10",
         focused && "bg-primary/5 ring-2 ring-inset ring-primary/50",
