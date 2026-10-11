@@ -53,6 +53,13 @@ export const CONFIG_OBJECTS: ConfigObject[] = [
     contextualLinks: ["/yard/hives"],
   },
   {
+    key: "finance-categories",
+    label: "Expense and income categories",
+    href: "/admin/setup",
+    anchor: "finance-categories",
+    contextualLinks: ["/sales/expenses", "/sales/expenses/categorize", "/admin"],
+  },
+  {
     key: "thresholds",
     label: "Thresholds and the labor flag",
     href: "/admin/setup",

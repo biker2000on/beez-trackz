@@ -242,7 +242,10 @@ export function FolioBookPanel({ data }: { data: GnuCashSettings }) {
 /**
  * "Use one account for every category": the user keeps all beekeeping
  * income and expenses under one Folio account, so every sale-line kind and
- * expense category maps there in one step.
+ * expense category maps there in one step. `data.expenseCategories` is the
+ * server's full list (finance_categories: operator-added and archived
+ * categories included), so the shortcut covers every current category; one
+ * added later starts unmapped and is applied by pressing it again.
  */
 export function OneAccountShortcut({
   data,

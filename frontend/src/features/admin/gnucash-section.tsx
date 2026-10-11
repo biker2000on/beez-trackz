@@ -24,6 +24,10 @@ import {
   type GnuCashSettingsPayload,
 } from "@/features/settings/api";
 import {
+  FINANCE_CATEGORIES_HREF,
+  useFinanceCategories,
+} from "@/features/settings/finance-categories-api";
+import {
   describeRequestError,
   errorMessage,
   humanize,
@@ -128,6 +132,7 @@ export function GnuCashSection() {
   const [loadAccounts, setLoadAccounts] = React.useState(false);
   const accounts = useGnuCashAccounts(loadAccounts);
   const acknowledge = useAcknowledgeGnuCashRestore();
+  const expenseCategories = useFinanceCategories("expense");
 
   if (settings.isError) {
     return (
@@ -465,14 +470,31 @@ export function GnuCashSection() {
         </div>
 
         <div className="grid gap-3">
-          <h4 className="text-sm font-medium">Expenses by category</h4>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h4 className="text-sm font-medium">Expenses by category</h4>
+            <Link
+              href={FINANCE_CATEGORIES_HREF}
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Manage categories
+            </Link>
+          </div>
+          <p className="-mt-1 text-xs text-muted-foreground">
+            A category you add starts unmapped: its expenses wait on
+            reconciliation until it has an account.
+          </p>
           {data.expenseCategories.map((category) => (
             <div
               key={category}
               className="grid gap-1 sm:grid-cols-2 sm:items-center"
             >
               <Label htmlFor={`gnucash-expense-${category}`}>
-                {humanize(category)}
+                {expenseCategories.label(category)}
+                {expenseCategories.byKey.get(category)?.archived ? (
+                  <span className="ml-1 font-normal text-muted-foreground">
+                    Archived
+                  </span>
+                ) : null}
               </Label>
               <AccountSelect
                 id={`gnucash-expense-${category}`}

@@ -67,7 +67,11 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate, formatMoney } from "@/features/honey/format";
-import { errorMessage, humanize } from "@/features/settings/gnucash-format";
+import { errorMessage } from "@/features/settings/gnucash-format";
+import {
+  FINANCE_CATEGORIES_HREF,
+  useFinanceCategories,
+} from "@/features/settings/finance-categories-api";
 import { useRowSelection } from "@/lib/use-row-selection";
 import { cn } from "@/lib/utils";
 
@@ -333,16 +337,34 @@ export function FolioCategorize() {
     () => new Map(allItems.map((item) => [item.id, item])),
     [allItems],
   );
+  // Labels come from the operator's category lists (Operation setup); the
+  // keys a picker offers come with the entries (active categories, in their
+  // display order), else from those lists.
+  const expenseList = useFinanceCategories("expense");
+  const incomeList = useFinanceCategories("income");
+  const labelFor = React.useCallback(
+    (direction: FolioImportItem["direction"], key: string) =>
+      (direction === "income" ? incomeList : expenseList).label(key),
+    [expenseList, incomeList],
+  );
+  /** A label for a key of either kind (the category filter spans both). */
+  const anyLabel = React.useCallback(
+    (key: string) => expenseList.byKey.get(key)?.label ?? incomeList.label(key),
+    [expenseList, incomeList],
+  );
   const expenseCategories = React.useMemo(
-    () => imports.data?.expenseCategories ?? [],
-    [imports.data],
+    () =>
+      (imports.data?.expenseCategories ?? expenseList.active.map((row) => row.key)).filter(
+        (value) => value !== "uncategorized",
+      ),
+    [imports.data, expenseList],
   );
   const incomeCategories = React.useMemo(
     () =>
-      (imports.data?.otherIncomeCategories ?? []).filter(
+      (imports.data?.otherIncomeCategories ?? incomeList.active.map((row) => row.key)).filter(
         (value) => value !== "uncategorized",
       ),
-    [imports.data],
+    [imports.data, incomeList],
   );
   const multipleBooks = React.useMemo(
     () => new Set(allItems.map((item) => item.bookId)).size > 1,
@@ -369,9 +391,9 @@ export function FolioCategorize() {
   const categoryOptions = React.useMemo(
     () =>
       [...new Set(allItems.map((item) => item.category))].sort((a, b) =>
-        humanize(a).localeCompare(humanize(b)),
+        anyLabel(a).localeCompare(anyLabel(b)),
       ),
-    [allItems],
+    [allItems, anyLabel],
   );
 
   const ids = React.useMemo(() => rows.map((item) => item.id), [rows]);
@@ -393,12 +415,13 @@ export function FolioCategorize() {
       categorizeOne.mutate(
         { id: item.id, category },
         {
-          onSuccess: () => toast.success(`Categorized as ${humanize(category)}`),
+          onSuccess: () =>
+            toast.success(`Categorized as ${labelFor(item.direction, category)}`),
           onError: (error) =>
             toast.error(errorMessage(error, "Could not save the category")),
         },
       ),
-    [categorizeOne],
+    [categorizeOne, labelFor],
   );
   const resolveRow = React.useCallback(
     (item: FolioImportItem, accept: boolean) => {
@@ -497,13 +520,18 @@ export function FolioCategorize() {
           </span>
         ),
       }),
-      columnHelper.accessor((item) => humanize(item.category), {
+      columnHelper.accessor((item) => labelFor(item.direction, item.category), {
         id: "category",
         header: "Category",
         meta: { cellClassName: "min-w-[12rem]" } satisfies DataGridColumnMeta,
         cell: ({ row: { original: item } }) => {
-          const choices =
+          const offered =
             item.direction === "expense" ? expenseCategories : incomeCategories;
+          // An entry filed under a category since archived still shows it.
+          const choices =
+            item.category !== "uncategorized" && !offered.includes(item.category)
+              ? [item.category, ...offered]
+              : offered;
           return (
             <DataGridCellAction>
               <Select
@@ -525,7 +553,7 @@ export function FolioCategorize() {
                 <SelectContent>
                   {choices.map((value) => (
                     <SelectItem key={value} value={value}>
-                      {humanize(value)}
+                      {labelFor(item.direction, value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -658,7 +686,7 @@ export function FolioCategorize() {
       }),
     ]);
     return [...base, ...book];
-  }, [busy, expenseCategories, incomeCategories, multipleBooks, resolveRow, setRowCategory]);
+  }, [busy, expenseCategories, incomeCategories, labelFor, multipleBooks, resolveRow, setRowCategory]);
 
   const table = useTable({
     features: dataGridFeatures,
@@ -697,7 +725,7 @@ export function FolioCategorize() {
         onSuccess: () => {
           selection.clear();
           toast.success(
-            `Categorized ${entries(chosen.length)} as ${humanize(category)}` +
+            `Categorized ${entries(chosen.length)} as ${labelFor(kinds.has("income") ? "income" : "expense", category)}` +
               (skipped > 0 ? ` · ${skipped} deleted in Folio skipped` : ""),
           );
         },
@@ -821,11 +849,11 @@ export function FolioCategorize() {
           <option value="">All categories</option>
           {categoryOptions.map((value) => (
             <option key={value} value={value}>
-              {humanize(value)}
+              {anyLabel(value)}
             </option>
           ))}
           {params.category && !categoryOptions.includes(params.category) ? (
-            <option value={params.category}>{humanize(params.category)}</option>
+            <option value={params.category}>{anyLabel(params.category)}</option>
           ) : null}
         </select>
         {filtered && (
@@ -917,6 +945,12 @@ export function FolioCategorize() {
             the Folio transaction stays where it is.
           </p>
         </div>
+        <Link
+          href={FINANCE_CATEGORIES_HREF}
+          className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Manage categories
+        </Link>
       </div>
       {toolbar}
       <p className="text-xs text-muted-foreground">
@@ -956,7 +990,7 @@ export function FolioCategorize() {
               <SelectContent>
                 {bulkChoices.map((value) => (
                   <SelectItem key={value} value={value}>
-                    {humanize(value)}
+                    {labelFor(kinds.has("income") ? "income" : "expense", value)}
                   </SelectItem>
                 ))}
               </SelectContent>

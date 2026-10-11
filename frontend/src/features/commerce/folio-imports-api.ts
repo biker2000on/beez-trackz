@@ -51,7 +51,9 @@ export interface FolioImportList {
   /** Rows in the view; more than `items.length` when `limit` cut it short. */
   total?: number;
   counts: FolioImportCounts;
+  /** Active expense category keys a picker offers, in display order. */
   expenseCategories: string[];
+  /** Active income category keys ("uncategorized" first), in display order. */
   otherIncomeCategories: string[];
 }
 
