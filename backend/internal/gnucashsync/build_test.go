@@ -393,9 +393,19 @@ func TestContentHashTracksTheBody(t *testing.T) {
 func TestNormalizeDropsBlanksAndUnknownKeys(t *testing.T) {
 	mapping := AccountMapping{
 		Revenue:  map[string]string{"jar": " guid ", "not_a_kind": "guid", "colony": "  "},
-		Expenses: map[string]string{"feed": "guid-feed", "not_a_category": "guid"},
+		Expenses: map[string]string{"feed": "guid-feed", "not_a_category": "guid", "Not A Key!": "guid"},
 		Cash:     " acct-cash ",
 	}.Normalize()
+	// Expense categories are operator-managed: Normalize keeps any
+	// well-formed key and drops only a malformed one…
+	if _, present := mapping.Expenses["Not A Key!"]; present {
+		t.Fatal("a malformed category key must not be stored")
+	}
+	if mapping.Expenses["not_a_category"] != "guid" {
+		t.Fatalf("a well-formed category key was dropped by Normalize: %v", mapping.Expenses)
+	}
+	// …and RestrictExpenses, given the live categories, drops the rest.
+	mapping = mapping.RestrictExpenses([]string{"feed", "fuel"})
 	if mapping.Revenue["jar"] != "guid" {
 		t.Fatalf("revenue guid %q not trimmed", mapping.Revenue["jar"])
 	}
@@ -410,5 +420,27 @@ func TestNormalizeDropsBlanksAndUnknownKeys(t *testing.T) {
 	}
 	if mapping.Cash != "acct-cash" || !mapping.Complete() {
 		t.Fatalf("cash %q", mapping.Cash)
+	}
+}
+
+// An operator-added category pushes once it is mapped; until then its
+// expense fails with the same MissingMapping as any unmapped category.
+func TestBuildExpenseWithAnOperatorCategory(t *testing.T) {
+	mapping := AccountMapping{
+		Cash:     "acct-cash",
+		Expenses: map[string]string{"fuel": "acct-fuel"},
+	}.Normalize().RestrictExpenses([]string{"feed", "fuel", "candles"})
+	txn, err := BuildExpense(Expense{ID: "e1", Date: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Category: "fuel", Description: "Truck diesel", AmountCents: 4200}, mapping)
+	if err != nil {
+		t.Fatalf("mapped operator category: %v", err)
+	}
+	if txn.Splits[0].AccountGUID != "acct-fuel" {
+		t.Fatalf("expense split posted to %q", txn.Splits[0].AccountGUID)
+	}
+	_, err = BuildExpense(Expense{ID: "e2", Date: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Category: "candles", Description: "Wicks", AmountCents: 900}, mapping)
+	if err == nil || !strings.Contains(err.Error(), `expense category "candles"`) {
+		t.Fatalf("unmapped operator category: %v", err)
 	}
 }

@@ -262,6 +262,7 @@ func TestBaselineMatchesTheLegacyChain(t *testing.T) {
 		{"items", `SELECT string_agg(id::text || ':' || kind || ':' || canonical_unit, ',' ORDER BY id::text) FROM inventory_items`},
 		{"locations", `SELECT string_agg(id::text || ':' || kind || ':' || is_home::text, ',' ORDER BY id::text) FROM inventory_locations`},
 		{"treatment products", `SELECT string_agg(name_key || ':' || withdrawal_days::text, ',' ORDER BY name_key) FROM treatment_products`},
+		{"finance categories", `SELECT string_agg(id::text || ':' || kind || ':' || key || ':' || label || ':' || sort_order::text || ':' || is_system::text, ',' ORDER BY id::text) FROM finance_categories`},
 	} {
 		var chainValue, baseValue *string
 		if err := chainPool.QueryRow(ctx, seed.query).Scan(&chainValue); err != nil {

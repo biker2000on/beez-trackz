@@ -298,6 +298,9 @@ func compareDerivedDomain(source *artifact, restored map[string]artifactRecord, 
 	if declaration.ExpectedEmpty {
 		return fmt.Sprintf("domain %s has zero records in the re-export and was absent from the older source", declaration.Domain), len(restored) == 0
 	}
+	if len(declaration.SeedRecords) > 0 {
+		return compareSeededDomain(restored, declaration)
+	}
 	values := source.Records[declaration.ValuesFromDomain]
 	if len(values) == 0 {
 		return fmt.Sprintf("domain %s has zero rows because %s is empty", declaration.Domain, declaration.ValuesFromDomain), len(restored) == 0
@@ -335,6 +338,40 @@ func compareDerivedDomain(source *artifact, restored map[string]artifactRecord, 
 	}
 	return fmt.Sprintf("domain %s: %d rows equal the declared derivation from %s for every %s id",
 		declaration.Domain, len(restored), declaration.ValuesFromDomain, declaration.ForEachDomain), true
+}
+
+// compareSeededDomain: a domain its migration creates with fixed seed rows
+// re-exports exactly those rows (the generated timestamps checked only for
+// presence) when the older source did not carry it.
+func compareSeededDomain(restored map[string]artifactRecord, declaration snapshot.NewDomainMigration) (string, bool) {
+	if len(restored) != len(declaration.SeedRecords) {
+		return "", false
+	}
+	for _, seed := range declaration.SeedRecords {
+		encoded, err := snapshot.MarshalCanonical(seed[declaration.KeyField])
+		if err != nil {
+			return "", false
+		}
+		got, present := restored[string(encoded)]
+		if !present {
+			return "", false
+		}
+		actual := make(map[string]any, len(got.Fields))
+		for name, value := range got.Fields {
+			actual[name] = value
+		}
+		for _, column := range declaration.GeneratedColumns {
+			if _, present := actual[column]; !present {
+				return "", false
+			}
+			delete(actual, column)
+		}
+		if !equalJSON(seed, actual) {
+			return "", false
+		}
+	}
+	return fmt.Sprintf("domain %s: %d rows equal the migration's declared seed rows",
+		declaration.Domain, len(restored)), true
 }
 
 func sortedSet(values map[string]bool) []string {

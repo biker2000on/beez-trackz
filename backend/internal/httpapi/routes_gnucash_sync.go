@@ -334,6 +334,11 @@ func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 		formatted := settings.ImportStartDate.Format("2006-01-02")
 		importStart = &formatted
 	}
+	expenseCategories, err := mappableExpenseCategories(r.Context(), s.pool)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		// The book connection these credentials belong to (00064/00011);
 		// null until the first tested connection.
@@ -364,11 +369,27 @@ func (s *Server) handleGnuCashSettings(w http.ResponseWriter, r *http.Request) {
 		// book identity and the reconciliation has not been signed off.
 		// restoreState is the durable column behind it (00049): none,
 		// installed, or reconciled.
-		"restorePending":    settings.restorePending(),
-		"restoreState":      settings.normalizedRestoreState(),
-		"saleLineKinds":     gnucashsync.SaleLineKinds,
-		"expenseCategories": gnucashsync.ExpenseCategories,
+		"restorePending": settings.restorePending(),
+		"restoreState":   settings.normalizedRestoreState(),
+		"saleLineKinds":  gnucashsync.SaleLineKinds,
+		// Every expense category an expense can be pushed under, operator-
+		// added and archived ones included (an archived category's existing
+		// expenses still push), in display order.
+		"expenseCategories": expenseCategories,
 	})
+}
+
+// mappableExpenseCategories is the list of expense categories the Folio
+// account mapping covers: every finance_categories expense key except
+// 'uncategorized', which only imported entries carry and which is never
+// pushed. A new category starts unmapped; its expenses fail to push with
+// MissingMapping (shown on reconciliation) until it is mapped.
+func mappableExpenseCategories(ctx context.Context, q app.Querier) ([]string, error) {
+	keys, err := financeCategoryKeys(ctx, q, financeKindExpense, false)
+	if err != nil {
+		return nil, err
+	}
+	return withoutKey(keys, financeUncategorized), nil
 }
 
 // PUT /settings/gnucash — base URL, token, enable flag, account mapping.
@@ -484,7 +505,11 @@ func (s *Server) handleGnuCashSettingsPut(w http.ResponseWriter, r *http.Request
 			}
 			before := settings.effectiveImportAccounts()
 			if req.AccountMapping != nil {
-				settings.Mapping = req.AccountMapping.Normalize()
+				categories, err := mappableExpenseCategories(ctx, uow)
+				if err != nil {
+					return app.Internal("save gnucash settings", err)
+				}
+				settings.Mapping = req.AccountMapping.Normalize().RestrictExpenses(categories)
 			}
 			if req.ImportAccountGUIDs != nil {
 				settings.ImportAccounts = gnucashsync.NormalizeGUIDList(*req.ImportAccountGUIDs)
