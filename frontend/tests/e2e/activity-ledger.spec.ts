@@ -207,7 +207,7 @@ test("Stock › Movements is in the Stock menu and Production › Activity redir
     "page",
   );
   await expect(
-    mainNav.getByRole("link", { name: "Active batches", exact: true }),
+    mainNav.getByRole("link", { name: "In progress", exact: true }),
   ).not.toHaveAttribute("aria-current", "page");
 
   // The old route keeps working, query and all.

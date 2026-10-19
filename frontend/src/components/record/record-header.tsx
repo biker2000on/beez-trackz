@@ -33,7 +33,8 @@ import {
  * strip. The route layout renders it once, so every tab of a record shares
  * the same h1, the same actions and the same strip.
  *
- * The list link, the `<title>` ("Name · Collection · Brand") and the tabs are
+ * The list link, the `<title>` ("Name · Collection · Brand"; `collectionLabel`
+ * on the index entry overrides the nav label there) and the tabs are
  * all read from the route index: `collectionHref` names the list in
  * `NAV_ITEMS` (defaulting to the index entry that covers the current path)
  * and `tabs` come from `contextualNavRoutes`, never from a hand-written list.
@@ -85,9 +86,8 @@ export function RecordHeader({
       : collection.route.label
     : undefined;
   const collectionTo = collectionHref ?? collection?.route.href;
-  usePageTitle(
-    collectionLabel ? `${name} · ${collectionLabel}` : name,
-  );
+  const titleLabel = collection?.route.collectionLabel ?? collectionLabel;
+  usePageTitle(titleLabel ? `${name} · ${titleLabel}` : name);
 
   const facts = (context ?? []).filter(
     (entry) => entry != null && entry !== false && entry !== "",

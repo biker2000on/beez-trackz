@@ -32,7 +32,7 @@ Retired destinations keep a redirect.
 |---|---|---|
 | Today (t) | `/today` | Visit queue → `/yard/queue` (same items, grouped by apiary). `/today/recommendations` redirects to `/today?view=all`. |
 | Apiaries (y) | `/yard` | Apiary list → `/yard/apiaries`; Hives → `/yard/hives`; Queens → `/yard/queens`; Equipment → `/equipment`; Voice inspection → `/yard/transcribe` (requiresEdit). |
-| Stock (s — free; no earlier `g s` chord) | `/stock` | On hand → `/stock` (exact; bulk / packaging / finished goods as tabs on one page, replacing the three separate pages, which redirect); Active batches → `/production`; Harvests → `/production/harvests`; Bottling → `/production/jars`; Lots & labels → `/production/lots`; Hive products → `/production/products`; Movements → `/stock/movements`. Serial lookup and Varietals are palette entries, not nav. Owner chose the word Stock over Honey/Production on 2026-10-19. |
+| Stock (s — free; no earlier `g s` chord) | `/stock` | On hand → `/stock` (exact; bulk / packaging / finished goods as tabs on one page, replacing the three separate pages, which redirect); In progress (was "Active batches" until Wave 5) → `/production`; Harvests → `/production/harvests`; Bottling → `/production/jars`; Lots & labels → `/production/lots`; Hive products → `/production/products`; Movements → `/stock/movements`. Serial lookup and Varietals are palette entries, not nav. Owner chose the word Stock over Honey/Production on 2026-10-19. |
 | Sales (c) | `/sales` | Orders → `/sales` (exact); Market day; Consignment; Customers; Expenses (Categorize is an in-page link). |
 | Insights (i) | `/insights` | Outcomes; Finance; Sales & planning; Compliance packet; Folio reconciliation. Sub-reports (survival, yield, economics, profitability, bottle next) are in-page sections or links, not nav rows. |
 
@@ -126,7 +126,7 @@ titles.
 - Visit queue: same roll-up grouped by apiary, filtered to field-actionable
   items (*as built:* an item on a hive that is not a lockout notice; the
   hive-less catch-all section is dropped when empty).
-- Active batches (`/production`): show each total once; "Finished stock" is a
+- In progress (`/production`; labelled "Active batches" until Wave 5 polish): show each total once; "Finished stock" is a
   link to Stock on-hand, not a repeat of the numbers. *As built:* the
   "Available for bottling" panel (the same lots at the same balance) is
   merged into Bulk honey by lot, which carries its commands; Finished stock

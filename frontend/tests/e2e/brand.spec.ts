@@ -92,8 +92,9 @@ test("server-rendered document metadata carries the default brand", async ({
 }) => {
   await page.goto("/login");
 
-  // The root metadata `title.default`.
-  await expect(page).toHaveTitle(PRODUCT);
+  // Every page has a title of its own (Wave 4: no bare brand), so the root
+  // metadata is seen through its template: "Page · Brand".
+  await expect(page).toHaveTitle(`Sign in · ${PRODUCT}`);
 
   const description = page.locator('meta[name="description"]');
   await expect(description).toHaveAttribute("content", DEFAULT_TAGLINE);
@@ -152,7 +153,7 @@ test("the web manifest is generated from the resolved brand", async ({
   expect(manifest.scope).toBe("/");
   expect(
     manifest.shortcuts.map((shortcut: { url: string }) => shortcut.url),
-  ).toEqual(["/yard/apiaries", "/yard/hives", "/production"]);
+  ).toEqual(["/yard/apiaries", "/yard/hives", "/stock"]);
 
   expect(JSON.stringify(manifest)).not.toContain(LEGACY_NAME);
 });

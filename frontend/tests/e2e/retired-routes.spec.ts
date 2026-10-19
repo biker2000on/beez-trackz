@@ -167,6 +167,7 @@ const REDIRECTED: Array<[from: string, to: string]> = [
 
 test("every retired destination redirects to the page that replaced it", async ({
   page,
+  baseURL,
 }) => {
   await page.route("**/api/v1/**", (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -183,7 +184,7 @@ test("every retired destination redirects to the page that replaced it", async (
   for (const [from, to] of REDIRECTED) {
     await page.goto(from);
     await expect(page, `${from} should land on ${to}`).toHaveURL(
-      `http://localhost:3010${to}`,
+      new URL(to, baseURL).href,
     );
   }
 });

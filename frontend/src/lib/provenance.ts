@@ -6,6 +6,7 @@
  *
  *   [Obsidian import:obsidian-history-v3-identity; Journal 2025.md; 2025-09-22; current-D1]
  *   [Obsidian identity:obsidian-history-v3-identity; key=current-D1]
+ *   [Obsidian queen:obsidian-history-v3-identity; key=q-2026-a1-swarm]
  *
  * and, on apiaries, the sentence "Created by the curated Obsidian history
  * import." That lineage is worth keeping (it says which journal page a fact
@@ -29,8 +30,13 @@ export interface Provenance {
   sources: ProvenanceSource[];
 }
 
-/** `[<system> import: …]` / `[<system> identity: …]`, never nested. */
-const BRACKETED = /\[([^[\]]*?\b(?:import|identity))\s*:\s*([^[\]]*)\]/gi;
+/**
+ * `[<system> import: …]` / `[<system> identity: …]`, never nested — plus any
+ * other `[Obsidian <kind>: …]` segment the importer wrote (queens carry
+ * `[Obsidian queen: …]`).
+ */
+const BRACKETED =
+  /\[([^[\]]*?\b(?:import|identity)|Obsidian\s+\w+)\s*:\s*([^[\]]*)\]/gi;
 
 /** The one-sentence form the apiary importer wrote into notes. */
 const SENTENCE = /\b(?:Created|Imported) by the (?:curated )?(\w+) (?:history )?import\.?/gi;

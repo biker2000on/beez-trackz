@@ -189,7 +189,10 @@ export function VarroaPanel({
       </div>
     );
   }
-  const counts = report.data.counts;
+  // Arrays default to empty so one missing field cannot take the whole hive
+  // page down to the error boundary.
+  const counts = report.data.counts ?? [];
+  const treatments = report.data.treatments ?? [];
   const latest = report.data.latest ?? counts[counts.length - 1] ?? null;
   const latestDisplay = latest ? miteDisplay(latest) : null;
   const threshold = latest
@@ -313,13 +316,13 @@ export function VarroaPanel({
         </Card>
       ) : null}
 
-      {report.data.treatments.length > 0 ? (
+      {treatments.length > 0 ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Treatment efficacy</CardTitle>
           </CardHeader>
           <CardContent>
-            <TreatmentEffectGrid treatments={report.data.treatments} />
+            <TreatmentEffectGrid treatments={treatments} />
           </CardContent>
         </Card>
       ) : null}

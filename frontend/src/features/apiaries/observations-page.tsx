@@ -1,15 +1,8 @@
 "use client";
-import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { apiaryRole, useAccessProfile } from "@/features/access/api";
-import { Button } from "@/components/ui/button";
 import { NoteText } from "@/components/record/source-note";
 export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
-  const access = useAccessProfile();
-  const editable = ["admin", "editor"].includes(
-    apiaryRole(access.data, apiaryId) ?? "",
-  );
   const records = useQuery({
     queryKey: ["apiary-inspections", apiaryId],
     queryFn: () =>
@@ -25,16 +18,10 @@ export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
   });
   return (
     <div className="atlas-workspace">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Apiary conditions and visit notes, kept separate from hive inspections.
-        </p>
-        {editable && (
-          <Button asChild variant="outline" size="sm">
-            <Link href={`/yard/apiaries/${apiaryId}/visit`}>Record visit</Link>
-          </Button>
-        )}
-      </div>
+      {/* Record visit is the record header's primary action; the body does not repeat it. */}
+      <p className="max-w-prose text-sm text-muted-foreground">
+        Apiary conditions and visit notes, kept separate from hive inspections.
+      </p>
       {records.isPending ? (
         <p>Loading observations...</p>
       ) : records.isError ? (

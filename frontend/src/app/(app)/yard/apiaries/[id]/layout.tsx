@@ -5,7 +5,7 @@ import { ApiaryRecordLayout } from "@/features/apiaries/record-layout";
 import { pageMetadata } from "@/lib/page-title";
 
 // First paint carries the list's title; the record layout replaces it with
-// "Name · Apiary list · Brand" once the apiary has loaded.
+// "Name · Apiaries · Brand" once the apiary has loaded.
 export const metadata = pageMetadata("/yard/apiaries");
 
 /**

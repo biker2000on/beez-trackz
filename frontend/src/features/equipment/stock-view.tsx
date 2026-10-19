@@ -70,7 +70,7 @@ export function EquipmentStockView() {
             <Button asChild variant="outline">
               <Link href="/equipment/types">
                 <Wrench />
-                Types &amp; BOMs
+                Equipment types
               </Link>
             </Button>
             <Button onClick={() => setStockOpen(true)}>
@@ -108,6 +108,17 @@ export function EquipmentStockView() {
               </Button>
             </div>
           )}
+
+          {rows.length > 0 && onHand === 0 && deployed === 0 ? (
+            <p
+              data-testid="equipment-zero"
+              className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground"
+            >
+              Nothing counted yet. Add stock when equipment arrives, or use
+              Physical count to enter what you already own; deploying to a
+              hive moves it from Available to Deployed.
+            </p>
+          ) : null}
 
           <StockTable rows={rows} />
 

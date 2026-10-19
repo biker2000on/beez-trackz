@@ -113,6 +113,9 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
   // A yard with no pin elevation has no band to widen to; the server already
   // fell back to yard scope, so the toggle should say so rather than lie.
   const banded = calendar.data?.elevationBand != null;
+  // Rows default to empty so a thin answer cannot take the Flora tab down to
+  // the error boundary.
+  const rows = calendar.data?.rows ?? [];
 
   return (
     <Card>
@@ -165,7 +168,7 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
           <p className="text-sm text-muted-foreground">
             Could not build the flow calendar for this yard.
           </p>
-        ) : calendar.data.rows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {banded
               ? "No bloom seasons recorded at this elevation band yet. Record blooms over a season and the calendar builds itself."
@@ -173,7 +176,7 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
           </p>
         ) : (
           <ul className="divide-y">
-            {calendar.data.rows.map((row) => (
+            {rows.map((row) => (
               <FlowRow key={`${row.species}-${row.elevationBand ?? "none"}`} row={row} />
             ))}
           </ul>

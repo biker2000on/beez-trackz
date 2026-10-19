@@ -853,7 +853,7 @@ test("§3.2 production runs hive to finished stock without leaving /production",
   // Step 1 — the one starting point.
   await page.goto("/production");
   await expect(
-    page.getByRole("heading", { name: "Active batches", level: 1 }),
+    page.getByRole("heading", { name: "In progress", level: 1 }),
   ).toBeVisible();
   await expectCanonical(page, visited, "/production");
 

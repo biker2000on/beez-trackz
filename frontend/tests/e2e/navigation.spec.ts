@@ -16,6 +16,8 @@ async function mockApp(page: Page) {
           oidcEnabled: false,
           passwordLogin: true,
           displayName: "Navigation test",
+          // The Insights layout reads the admin flag from here (SEAM-019).
+          isAdmin: true,
         },
       });
     }
@@ -203,7 +205,9 @@ test("every hive tab shares one record header, action bar and tab strip", async 
     const strip = page.getByRole("navigation", { name: "Hive pages" });
     await expect(strip.getByRole("link")).toHaveText(HIVE_TABS);
     await expect(strip.getByRole("link", { name: HIVE_TABS[["", "/timeline", "/health", "/equipment", "/queen", "/photos"].indexOf(tab)] })).toHaveAttribute("aria-current", "page");
-    await expect(page.getByRole("link", { name: "Voice inspection" })).toBeVisible();
+    // Scoped to the record: the sidebar lists Voice inspection too (the
+    // hive-scoped action and the area page).
+    await expect(page.getByRole("main").getByRole("link", { name: "Voice inspection" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Log inspection" })).toBeVisible();
     await expect(page.getByRole("button", { name: "More actions" })).toBeVisible();
     await expect(page.locator(".atlas-eyebrow")).toHaveCount(0);
@@ -217,10 +221,10 @@ test("every apiary tab shares one record header and the Map tab claims the bare 
   for (const tab of ["", "/overview", "/layout", "/inspections", "/flora", "/photos", "/timeline", "/labels", "/bulk"]) {
     await page.goto(`/yard/apiaries/a1${tab}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Test Yard");
-    await expect(page).toHaveTitle(/^Test Yard · Apiary list · /);
+    await expect(page).toHaveTitle(/^Test Yard · Apiaries · /);
     const strip = page.getByRole("navigation", { name: "Apiary pages" });
     await expect(strip.getByRole("link")).toHaveText(APIARY_TABS);
-    await expect(page.getByRole("link", { name: "Record visit" })).toBeVisible();
+    await expect(page.getByRole("main").getByRole("link", { name: "Record visit" })).toBeVisible();
     await expect(page.locator(".atlas-eyebrow")).toHaveCount(0);
   }
   await page.goto("/yard/apiaries/a1");
@@ -241,6 +245,10 @@ test("record tab strips stay on one line at 375px and scroll the active tab into
   ] as const) {
     await page.goto(path);
     const strip = page.getByRole("navigation", { name });
+    // The header is a skeleton until the record loads; measure once the strip
+    // has drawn its active tab (`all()` does not wait).
+    const active = strip.getByRole("link", { name: path.endsWith("bulk") ? "Bulk record" : "Photos" });
+    await expect(active).toHaveAttribute("aria-current", "page");
     const tops = new Set<number>();
     for (const link of await strip.getByRole("link").all()) {
       const box = await link.boundingBox();
@@ -248,8 +256,6 @@ test("record tab strips stay on one line at 375px and scroll the active tab into
       tops.add(Math.round(box?.y ?? 0));
     }
     expect(tops.size, `${name} wrapped onto more than one line`).toBe(1);
-    const active = strip.getByRole("link", { name: path.endsWith("bulk") ? "Bulk record" : "Photos" });
-    await expect(active).toHaveAttribute("aria-current", "page");
     await expect(active).toBeInViewport();
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -264,7 +270,7 @@ test("record tab strips stay on one line at 375px and scroll the active tab into
 // same seven rows on every Stock page, including the palette-only ones.
 const STOCK_PAGES = [
   "On hand",
-  "Active batches",
+  "In progress",
   "Harvests",
   "Bottling",
   "Lots & labels",
@@ -278,12 +284,12 @@ test("Stock pages share one phone disclosure and no desktop strip", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/production");
   await expect(
-    page.getByRole("heading", { name: "Active batches", level: 1 }),
+    page.getByRole("heading", { name: "In progress", level: 1 }),
   ).toHaveCount(1);
-  await expect(page).toHaveTitle(/^Active batches · Stock · /);
+  await expect(page).toHaveTitle(/^In progress · Stock · /);
   await expect(page.getByRole("navigation", { name: "Stock pages" })).toHaveCount(0);
   const sidebar = page.getByRole("navigation", { name: "Main navigation" });
-  await expect(sidebar.getByRole("link", { name: "Active batches" })).toHaveAttribute(
+  await expect(sidebar.getByRole("link", { name: "In progress" })).toHaveAttribute(
     "aria-current",
     "page",
   );

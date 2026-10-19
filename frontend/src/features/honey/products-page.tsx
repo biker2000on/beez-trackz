@@ -362,7 +362,7 @@ export function HiveProductsPage() {
           <div>
             <h2 className="text-lg font-semibold">Catalog</h2>
             <p className="text-sm text-muted-foreground">
-              Finished SKUs sold on the same receipt as jars, nucs, and gear.
+              Finished SKUs sold on the same receipt as jars, nucs, and equipment.
             </p>
           </div>
           <AddProductDialog />

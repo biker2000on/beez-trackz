@@ -249,7 +249,7 @@ test("the shelf is one row per lot, grouped by varietal and sorted varietal → 
     page.getByRole("table", { name: "Movements" }).getByText("lot 2026-SOURWOOD-01 · Sourwood"),
   ).toBeVisible();
   await expect(
-    page.getByRole("table", { name: "Reports" }).getByText("3 Quart Sourwood sold"),
+    page.getByRole("table", { name: "Settlements" }).getByText("3 Quart Sourwood sold"),
   ).toBeVisible();
 });
 

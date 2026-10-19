@@ -404,7 +404,8 @@ test("a sale is lines of size and lot: empty sizes and lots hidden, a lone lot p
   expect(posted[0].path).toBe("/api/v1/sales");
   expect(posted[0].body).toMatchObject({
     orderStatus: "paid",
-    paymentMethod: "card",
+    // The dialog defaults to cash; Market day is where a payment is chosen.
+    paymentMethod: "cash",
     lines: [{ kind: "jar", jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 2, unitPrice: 10 }],
   });
 });

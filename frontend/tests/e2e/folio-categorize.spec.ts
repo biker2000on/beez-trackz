@@ -232,7 +232,7 @@ const clickRow = (page: Page, text: string, modifiers?: ("Shift" | "ControlOrMet
   rowNamed(page, text).locator("td").nth(1).click({ modifiers });
 const bulkBar = (page: Page) => page.getByRole("region", { name: "Bulk actions" });
 
-test("the From Folio card on Expenses links to the Categorize page, also in the Sales menu", async ({
+test("the From Folio card on Expenses links to the Categorize page, which Sales owns", async ({
   page,
 }) => {
   await mockApp(page);
@@ -242,9 +242,12 @@ test("the From Folio card on Expenses links to the Categorize page, also in the 
   await link.click();
   await expect(page).toHaveURL(/\/sales\/expenses\/categorize$/);
   await expect(page.getByRole("heading", { name: "Categorize", level: 1 })).toBeVisible();
+  // Categorize is an in-page link from Expenses and a Ctrl-K entry, not a
+  // nav row (ui-coherence brief §3); the title still says which area owns it.
+  await expect(page).toHaveTitle(/^Categorize · Sales · /);
   await expect(
-    page.getByRole("navigation").getByRole("link", { name: "Categorize" }).first(),
-  ).toBeAttached();
+    page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Categorize" }),
+  ).toHaveCount(0);
 });
 
 test("rows show direction badges, signed amounts and status; the status filter lives in the URL", async ({

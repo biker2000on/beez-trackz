@@ -195,7 +195,7 @@ export function ApiaryPhotoTimeline({
         </CardContent>
       </Card>
       {canEdit ? (
-        <TimelineReviewTray apiaryId={apiaryId} candidates={timeline.data.review} />
+        <TimelineReviewTray apiaryId={apiaryId} candidates={timeline.data.review ?? []} />
       ) : null}
     </div>
   );

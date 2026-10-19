@@ -50,8 +50,9 @@ usable with one hand, and dense only where comparison helps a decision.
   labels are at least 11px.
 - Glossary, one word per concept: Apiaries (never Yard as a label, never
   roster); Hive (not colony, except in reports); Stock and Movements (not
-  Production, Honey, Inventory, Activity); Bottling (not Jars); Lots &
-  labels (not Lots & QR); Equipment (not gear, equipment stock, counts &
+  Production, Honey, Inventory, Activity); Bottling (not Jars); In progress (the
+  `/production` page; not Active batches, Production); Lots & labels (not
+  Lots & QR); Equipment (not gear, equipment stock, counts &
   equipment actions); Setup, Operation setup, Access & integrations (not
   Admin); Insights (not Reports); Map (not Layout); Record visit (apiary
   voice), Voice inspection (hive voice), Log inspection (typed form); Visit
@@ -97,7 +98,10 @@ usable with one hand, and dense only where comparison helps a decision.
   owns the way back to the list, the record name with its status badge, one
   context line, the action bar (one primary, at most two secondary, the rest
   behind More; on a phone the primary is full width and 44px tall), the tab
-  strip and `<title>` ("Name · List · Brand"). For hives and apiaries the
+  strip and `<title>` ("Name · List · Brand"; an index entry may carry a
+  `collectionLabel` for that segment, so an apiary reads "Lenoir Apiary ·
+  Apiaries · Brand" while its way-back link still says Apiary list). For
+  hives and apiaries the
   route `layout.tsx` renders it once, so every tab shares it and sub-pages
   render only their body. The tabs come from `contextualNavRoutes`, never
   from a hand-written list; entries flagged `action` (Record visit, Voice
@@ -145,7 +149,7 @@ usable with one hand, and dense only where comparison helps a decision.
   Physical count; what is on hives and the loss report are sections below.
   `/equipment/types` (Setup) lists definitions, bills of materials and unit
   cost only — no quantity columns.
-- Active batches (`/production`): each total appears once. "Extraction in
+- In progress (`/production`, "Active batches" until Wave 5): each total appears once. "Extraction in
   progress" lists only sessions still taking entries; a trued-up session is
   finalized and waits under "Trued up, not yet closed". Bulk honey by lot
   carries the bottling command (there is no second "available for bottling"

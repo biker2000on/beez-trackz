@@ -15,6 +15,12 @@ export interface NavRoute {
   matches?: readonly string[];
   /** Match only this path/query destination, not every descendant path. */
   exact?: boolean;
+  /**
+   * How a record of this list names the list in its `<title>` ("Lenoir
+   * Apiary · Apiaries · Brand"), when the nav label ("Apiary list") would
+   * read oddly there. The way-back link keeps the nav label.
+   */
+  collectionLabel?: string;
   adminOnly?: boolean;
   requiresEdit?: boolean;
   /**
@@ -83,7 +89,12 @@ export const NAV_ITEMS: NavItem[] = [
     keywords: ["yard field colonies"],
     excludes: ["/yard/queue"],
     children: [
-      { label: "Apiary list", href: "/yard/apiaries", keywords: ["roster yards"] },
+      {
+        label: "Apiary list",
+        href: "/yard/apiaries",
+        collectionLabel: "Apiaries",
+        keywords: ["roster yards"],
+      },
       { label: "Hives", href: "/yard/hives", keywords: ["colonies"] },
       { label: "Queens", href: "/yard/queens", keywords: ["genealogy lineage"] },
       {
@@ -118,10 +129,10 @@ export const NAV_ITEMS: NavItem[] = [
         keywords: ["bulk honey packaging finished goods jars inventory"],
       },
       {
-        label: "Active batches",
+        label: "In progress",
         href: "/production",
         exact: true,
-        keywords: ["production workbench extraction sessions"],
+        keywords: ["active batches production workbench extraction sessions"],
       },
       {
         label: "Harvests",

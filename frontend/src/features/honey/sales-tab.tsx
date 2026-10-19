@@ -207,9 +207,10 @@ export function SalesTab() {
                   <span className="text-muted-foreground">—</span>
                 ) : (
                   <ul className="grid gap-0.5">
-                    {sale.lineItems.map((item) => (
+                    {sale.lineItems.map((item, index) => (
                       <li
-                        key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.itemId ?? item.productId}-${item.bottlingRunId ?? ""}`}
+                        // Two lines can share a size with no run (different lots), so the index is part of the key.
+                        key={`${index}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.itemId ?? item.productId}`}
                         className="text-sm"
                       >
                         {item.quantity} × {item.label}

@@ -142,7 +142,10 @@ export function WorkbenchPanel({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="flex items-baseline gap-2 text-sm font-semibold">
-          <span className="rounded-full border px-1.5 text-xs font-mono text-muted-foreground">
+          <span
+            className="rounded-full border px-1.5 text-xs font-mono text-muted-foreground"
+            aria-hidden
+          >
             {step}
           </span>
           {title}

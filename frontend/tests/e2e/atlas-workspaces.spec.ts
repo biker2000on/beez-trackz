@@ -40,7 +40,7 @@ for (const width of [320,390,768]) {
   await page.getByRole("button",{name:"More",exact:true}).click();
   const sheet=page.getByRole("dialog",{name:"More"});
   // The active area (Stock) is expanded; the others are one tap away.
-  for(const name of ["On hand","Active batches","Harvests","Bottling","Lots & labels","Hive products","Movements","Sales","Insights","Setup"]) await expect(sheet.getByRole("link",{name,exact:true})).toBeVisible();
+  for(const name of ["On hand","In progress","Harvests","Bottling","Lots & labels","Hive products","Movements","Sales","Insights","Setup"]) await expect(sheet.getByRole("link",{name,exact:true})).toBeVisible();
   await sheet.getByRole("button",{name:"Expand Sales"}).click();
   for(const name of ["Market day","Customers"]) await expect(sheet.getByRole("link",{name,exact:true})).toBeVisible();
  });
