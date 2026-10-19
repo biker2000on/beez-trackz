@@ -207,7 +207,7 @@ export function YardMap({
   return (
     <div
       ref={elRef}
-      className="absolute inset-0 z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-muted [&_.leaflet-container]:font-sans [&_.leaflet-control-attribution]:bg-background/90 [&_.leaflet-control-attribution]:px-1 [&_.leaflet-control-attribution]:text-[10px] [&_.leaflet-control-attribution]:text-foreground [&_.leaflet-control-attribution_a]:text-foreground [&_.leaflet-control-attribution_a]:underline"
+      className="absolute inset-0 z-0 [&_.leaflet-container]:h-full [&_.leaflet-container]:w-full [&_.leaflet-container]:bg-muted [&_.leaflet-container]:font-sans [&_.leaflet-control-attribution]:bg-background/90 [&_.leaflet-control-attribution]:px-1 [&_.leaflet-control-attribution]:text-[11px] [&_.leaflet-control-attribution]:text-foreground [&_.leaflet-control-attribution_a]:text-foreground [&_.leaflet-control-attribution_a]:underline"
     />
   );
 }

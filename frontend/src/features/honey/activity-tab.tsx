@@ -983,7 +983,7 @@ export function ActivityTab() {
           </Button>
           <Button type="button" variant="ghost" size="sm" onClick={selection.clear}>
             Clear
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
               Esc
             </kbd>
           </Button>

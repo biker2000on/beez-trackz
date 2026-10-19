@@ -890,10 +890,11 @@ test("§3.3 a sale and its settlement live under /sales, with margin read-only i
   const visited = trackNavigation(page);
   await mockApp(page);
 
-  // Step 1 — the one starting point.
+  // Step 1 — the one starting point. The h1 is the page's nav label
+  // (Sales › Orders); "Sales" is the area, named by the sidebar.
   await page.goto("/sales");
   await expect(
-    page.getByRole("heading", { name: "Sales", level: 1 }),
+    page.getByRole("heading", { name: "Orders", level: 1 }),
   ).toBeVisible();
   await expectCanonical(page, visited, "/sales");
 

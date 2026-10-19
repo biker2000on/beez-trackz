@@ -16,7 +16,8 @@
  *    observation it cites ("Feeder placed 724 days ago" generated on
  *    2026-08-11). So the age is read from the largest "N days" in the item's
  *    own words, and `observedAt` is only the fallback when no such number is
- *    present. Stale items are hidden by default behind "Show stale (n)".
+ *    present. Stale items are hidden by default behind "Show stale (n)". An
+ *    item asking for an inspection is never stale: the gap is the point.
  *  - **Primary action** — Log inspection when the card's top item asks for
  *    an inspection, otherwise Open hive.
  *  - **Field-actionable** — what the Visit queue keeps: an item on a hive
@@ -83,7 +84,16 @@ export function evidenceAgeDays(item: WorkItem, asOf: string): number | null {
   return Math.floor((reference - newest) / 86_400_000);
 }
 
+const ASKS_FOR_INSPECTION = /inspect/i;
+
+/**
+ * Stale: evidence older than a season. An item that asks for an inspection
+ * is never stale — "no inspection in 324 days" is the point of the item,
+ * not old evidence, and hiding it would hide exactly the hive most in need
+ * of a look.
+ */
 export function isStale(item: WorkItem, asOf: string): boolean {
+  if (ASKS_FOR_INSPECTION.test(item.title)) return false;
   const age = evidenceAgeDays(item, asOf);
   return age !== null && age >= STALE_AFTER_DAYS;
 }
@@ -116,7 +126,7 @@ function cardKey(item: WorkItem): string {
 
 function primaryFor(top: WorkItem | undefined): PrimaryAction | null {
   if (!top || !top.context.hiveId) return null;
-  return /inspect/i.test(top.title) ? "log-inspection" : "open-hive";
+  return ASKS_FOR_INSPECTION.test(top.title) ? "log-inspection" : "open-hive";
 }
 
 /**

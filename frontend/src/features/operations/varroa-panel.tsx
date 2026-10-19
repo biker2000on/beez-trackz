@@ -572,7 +572,7 @@ function VarroaTrendChart({
               x={pad.left + plotW}
               y={yOf(thresholdPer100, "wash") - 4}
               textAnchor="end"
-              className="fill-destructive text-[9px]"
+              className="fill-destructive text-[11px]"
             >
               {thresholdPer100.toFixed(1)} / 100
             </text>
@@ -592,7 +592,7 @@ function VarroaTrendChart({
             <text
               x={pad.left}
               y={yOf(thresholdPerDay, "board") - 4}
-              className="fill-amber-700 text-[9px] dark:fill-amber-400"
+              className="fill-amber-700 text-[11px] dark:fill-amber-400"
             >
               {thresholdPerDay.toFixed(1)} / day
             </text>
@@ -673,7 +673,7 @@ function VarroaTrendChart({
         <text
           x={pad.left}
           y={height - 8}
-          className="fill-muted-foreground text-[9px]"
+          className="fill-muted-foreground text-[11px]"
         >
           {formatDate(new Date(minT).toISOString())}
         </text>
@@ -681,12 +681,12 @@ function VarroaTrendChart({
           x={pad.left + plotW}
           y={height - 8}
           textAnchor="end"
-          className="fill-muted-foreground text-[9px]"
+          className="fill-muted-foreground text-[11px]"
         >
           {formatDate(new Date(maxT).toISOString())}
         </text>
       </svg>
-      <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
         {present.map((series) => (
           <span key={series} className="inline-flex items-center gap-1.5">
             <span

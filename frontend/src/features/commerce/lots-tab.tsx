@@ -129,7 +129,7 @@ function AutoHint({ on }: { on: boolean }) {
   return (
     <span
       data-testid="auto-hint"
-      className="rounded-sm bg-muted px-1 text-[10px] font-normal uppercase tracking-wide text-muted-foreground"
+      className="rounded-sm bg-muted px-1 text-xs font-normal uppercase tracking-wide text-muted-foreground"
     >
       auto
     </span>

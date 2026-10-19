@@ -1031,7 +1031,7 @@ export function FolioCategorize() {
           )}
           <Button type="button" variant="ghost" size="sm" className="ml-auto" onClick={selection.clear}>
             Clear
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">Esc</kbd>
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">Esc</kbd>
           </Button>
         </div>
       )}

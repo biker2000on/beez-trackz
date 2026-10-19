@@ -305,7 +305,7 @@ export function JarSizesSection() {
                 }
               >
                 <SelectTrigger
-                  className="w-48"
+                  className="w-48 max-w-full"
                   aria-label={`Empty container for ${jar.label}`}
                 >
                   <SelectValue placeholder="Not linked" />

@@ -69,12 +69,12 @@ export function HiveCard({
           {card.hiveId ? (
             <Link
               href={hiveHref(card.hiveId)}
-              className="underline-offset-4 hover:underline"
+              className="min-w-0 break-words underline-offset-4 hover:underline"
             >
               {title}
             </Link>
           ) : (
-            <span>{title}</span>
+            <span className="min-w-0 break-words">{title}</span>
           )}
           {urgent ? (
             <span className="text-xs font-semibold uppercase tracking-wide text-destructive">
@@ -87,7 +87,7 @@ export function HiveCard({
         ) : null}
       </div>
 
-      <p data-testid="work-card-summary" className="text-sm">
+      <p data-testid="work-card-summary" className="break-words text-sm">
         {cardSummary(card)}
       </p>
 

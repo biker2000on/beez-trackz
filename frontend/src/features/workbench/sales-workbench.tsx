@@ -236,7 +236,7 @@ export function SalesWorkbench({ year, embedded = false }: { year?: number; embe
               <>
                 {item.label}
                 {item.lotCode ? (
-                  <span className="rounded-full border px-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <span className="rounded-full border px-1.5 text-xs uppercase tracking-wide text-muted-foreground">
                     {item.lotCode}
                   </span>
                 ) : null}

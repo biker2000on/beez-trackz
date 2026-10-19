@@ -1375,7 +1375,7 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
             step={5}
             className="w-56"
           />
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Azimuth {Math.round(solar.azimuth)}° · solar alt {solar.altitude.toFixed(1)}°
             · rise {formatClock(solar.sunriseMinutes)}
             {solar.sunriseAzimuth != null ? ` @ ${Math.round(solar.sunriseAzimuth)}°` : ""}

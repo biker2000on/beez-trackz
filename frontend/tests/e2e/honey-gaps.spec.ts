@@ -176,7 +176,8 @@ test("market day refuses a paid sale when the jar has no price", async ({
   await expect(page.getByText(/2026-SOURWOOD-01 · 6 left · No price/)).toBeVisible();
   await page.getByRole("button", { name: /Add one Sourwood · Pint/ }).click();
   await expect(
-    page.getByText(/Set a price on Sourwood · Pint/),
+    page.getByText(/Set a price on Sourwood · Pt/),
   ).toBeVisible();
+  await page.getByRole("radio", { name: "Cash" }).click();
   await expect(page.getByRole("button", { name: "Complete sale" })).toBeDisabled();
 });

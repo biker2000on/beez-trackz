@@ -527,7 +527,7 @@ export function SalesTab() {
         ) : (
           <>
             No sales recorded yet. Press{" "}
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">s</kbd>{" "}
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">s</kbd>{" "}
             to record one.
           </>
         )}

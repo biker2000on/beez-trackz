@@ -209,7 +209,7 @@ export function PhotoUpload({
                       alt={asset.originalFileName}
                       className="aspect-square w-full object-cover"
                     />
-                    <span className="block truncate px-1 py-0.5 text-[11px] text-muted-foreground">
+                    <span className="block truncate px-1 py-0.5 text-xs text-muted-foreground">
                       {asset.originalFileName}
                     </span>
                   </button>

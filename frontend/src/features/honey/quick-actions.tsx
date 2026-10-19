@@ -94,7 +94,7 @@ export function HoneyQuickActions({
               >
                 <Icon className="size-4" />
                 {label}
-                <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[10px] text-muted-foreground">
+                <kbd className="ml-auto rounded border bg-muted px-1 font-mono text-[11px] text-muted-foreground">
                   {keyHint}
                 </kbd>
               </DropdownMenuItem>
@@ -113,7 +113,7 @@ export function HoneyQuickActions({
             >
               <Icon />
               {label}
-              <kbd className="rounded border bg-muted px-1 font-mono text-[10px] text-muted-foreground">
+              <kbd className="rounded border bg-muted px-1 font-mono text-[11px] text-muted-foreground">
                 {keyHint}
               </kbd>
             </Button>

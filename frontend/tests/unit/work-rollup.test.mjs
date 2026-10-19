@@ -69,7 +69,9 @@ test("the age is the largest 'N days' the item states about itself", () => {
 });
 
 test("without a stated age the observation date decides, and no date means fresh", () => {
+  // (Not an inspection item: those are never stale, see the test below.)
   const dated = item({
+    title: "Pull honey",
     evidence: [{ text: "Stores heavy", sourceType: "harvest_ready", sourceId: "s", observedAt: "2025-09-01T00:00:00Z" }],
   });
   assert.ok(evidenceAgeDays(dated, AS_OF) >= STALE_AFTER_DAYS);
@@ -107,11 +109,29 @@ test("one card per hive, in the server's order, with the highest priority", () =
   ]);
 });
 
+test("an item asking for an inspection is never stale, however old the gap", () => {
+  const gap = item({
+    title: "Inspect this hive",
+    evidence: [{ text: "No inspection recorded in 324 days", sourceType: "recommendation", sourceId: "s", observedAt: "2025-01-01T00:00:00Z" }],
+  });
+  assert.equal(evidenceAgeDays(gap, AS_OF), 324);
+  assert.equal(isStale(gap, AS_OF), false);
+  const overdue = item({
+    title: "Overdue inspection",
+    evidence: [{ text: "Last looked at 400 days ago", sourceType: "recommendation", sourceId: "s", observedAt: null }],
+  });
+  assert.equal(isStale(overdue, AS_OF), false);
+  const { cards, staleCount } = rollUp([gap], AS_OF, { showStale: false });
+  assert.equal(staleCount, 0);
+  assert.deepEqual(cards.map((card) => card.primary), ["log-inspection"]);
+});
+
 test("stale items hide, and a card with nothing left is dropped", () => {
   const items = [
     item({ id: "fresh" }),
     item({
       id: "old",
+      title: "Check the feeder",
       context: { apiaryId: "ap", apiaryName: "North Ridge", hiveId: "h3", hiveName: "C2", locationId: null },
       evidence: [{ text: "Feeder placed 724 days ago", sourceType: "recommendation", sourceId: "s", observedAt: null }],
     }),
