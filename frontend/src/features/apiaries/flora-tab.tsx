@@ -9,13 +9,14 @@ import { z } from "zod";
 
 import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ShortcutForm } from "@/components/ui/shortcut-form";
@@ -83,6 +84,7 @@ export function FloraTab({
   const deleteBloom = useDeleteBloom();
 
   const [speciesFocused, setSpeciesFocused] = React.useState(false);
+  const [recordOpen, setRecordOpen] = React.useState(false);
 
   const form = useForm<BloomValues>({
     resolver: zodResolver(bloomSchema),
@@ -123,6 +125,7 @@ export function FloraTab({
             : Number(values.elevationM.trim()),
       });
       toast.success("Bloom recorded");
+      setRecordOpen(false);
       form.reset({
         species: "",
         dateFirstSeen: todayInput(),
@@ -161,18 +164,56 @@ export function FloraTab({
 
   return (
     <div className="grid gap-4">
-      <div className={`grid gap-4 ${canEdit ? "lg:grid-cols-2" : ""}`}>
-      {canEdit ? <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Flower2 className="size-4 text-primary" />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-muted-foreground">
+            Elevation band
+          </span>
+          <Select
+            value={band}
+            onValueChange={(next) =>
+              setBand(next as ElevationBandId | typeof ALL_BANDS | typeof NO_BAND)
+            }
+          >
+            <SelectTrigger className="w-56" aria-label="Filter blooms by elevation band">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_BANDS}>All elevations</SelectItem>
+              {(bands.data ?? []).map((entry) => (
+                <SelectItem key={entry.id} value={entry.id}>
+                  {entry.label}
+                  {entry.minM != null || entry.maxM != null
+                    ? ` (${entry.minM != null ? units.formatElevation(entry.minM) : "below"}${
+                        entry.minM != null && entry.maxM != null ? " – " : " "
+                      }${entry.maxM != null ? units.formatElevation(entry.maxM) : "and up"})`
+                    : ""}
+                </SelectItem>
+              ))}
+              <SelectItem value={NO_BAND}>No elevation recorded</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {canEdit ? (
+          <Button onClick={() => setRecordOpen(true)}>
+            <Flower2 className="size-4" />
             Record a bloom
-          </CardTitle>
-          <CardDescription>
-            Track what is flowering near this apiary.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </Button>
+        ) : null}
+      </div>
+
+      {/* The bloom list first; the form waits behind "Record a bloom". */}
+      <Dialog open={recordOpen} onOpenChange={setRecordOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Flower2 className="size-4 text-primary" />
+              Record a bloom
+            </DialogTitle>
+            <DialogDescription>
+              Track what is flowering near this apiary.
+            </DialogDescription>
+          </DialogHeader>
           <ShortcutForm
             onSubmit={form.handleSubmit(onSubmit)}
             onSubmitAndReset={form.handleSubmit(onSubmit)}
@@ -284,47 +325,23 @@ export function FloraTab({
               <Label htmlFor="bloom-notes">Notes</Label>
               <Textarea id="bloom-notes" rows={2} {...form.register("notes")} />
             </div>
-            <Button
-              type="submit"
-              className="justify-self-start"
-              disabled={form.formState.isSubmitting}
-            >
-              {form.formState.isSubmitting ? "Saving…" : "Record bloom"}
-            </Button>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRecordOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={form.formState.isSubmitting}>
+                {form.formState.isSubmitting ? "Saving…" : "Record bloom"}
+              </Button>
+            </div>
           </ShortcutForm>
-        </CardContent>
-      </Card> : null}
+        </DialogContent>
+      </Dialog>
 
-      <div className="grid content-start gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Elevation band
-          </span>
-          <Select
-            value={band}
-            onValueChange={(next) =>
-              setBand(next as ElevationBandId | typeof ALL_BANDS | typeof NO_BAND)
-            }
-          >
-            <SelectTrigger className="w-56" aria-label="Filter blooms by elevation band">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_BANDS}>All elevations</SelectItem>
-              {(bands.data ?? []).map((entry) => (
-                <SelectItem key={entry.id} value={entry.id}>
-                  {entry.label}
-                  {entry.minM != null || entry.maxM != null
-                    ? ` (${entry.minM != null ? units.formatElevation(entry.minM) : "below"}${
-                        entry.minM != null && entry.maxM != null ? " – " : " "
-                      }${entry.maxM != null ? units.formatElevation(entry.maxM) : "and up"})`
-                    : ""}
-                </SelectItem>
-              ))}
-              <SelectItem value={NO_BAND}>No elevation recorded</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Active blooms</CardTitle>
@@ -371,7 +388,6 @@ export function FloraTab({
             )}
           </CardContent>
         </Card>
-        </div>
       </div>
 
       {/* The calendar and the scale are the "will this yard make sourwood"

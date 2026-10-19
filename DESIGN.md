@@ -69,10 +69,19 @@ usable with one hand, and dense only where comparison helps a decision.
   phones the header carries one disclosure labelled "Area · Page" listing
   them. Server pages export `metadata` from `pageMetadata(href)`; client
   titles come from `usePageTitle`; both produce "Page · Area · Brand".
-- RecordPage (`/yard/apiaries/[id]/*`, `/yard/hives/[id]/*`, lots, sessions,
-  sales, consignment locations, stock items): the route layout owns the
-  record header, action bar, tab strip and `<title>` ("Name · Area · Brand");
-  sub-pages render only their body.
+- RecordPage (`/yard/apiaries/[id]/*`, `/yard/hives/[id]/*`, lots, bottling
+  runs, harvest sessions, product batches, orders, consignment locations,
+  stock items): one `RecordHeader` (`components/record/record-header.tsx`)
+  owns the way back to the list, the record name with its status badge, one
+  context line, the action bar (one primary, at most two secondary, the rest
+  behind More; on a phone the primary is full width and 44px tall), the tab
+  strip and `<title>` ("Name · List · Brand"). For hives and apiaries the
+  route `layout.tsx` renders it once, so every tab shares it and sub-pages
+  render only their body. The tabs come from `contextualNavRoutes`, never
+  from a hand-written list; entries flagged `action` (Record visit, Voice
+  inspection) are drawn as actions, not tabs. The strip never wraps: at
+  phone width it scrolls sideways inside its own box with the active tab in
+  view.
 - Retired routes keep a redirect; URLs never change under a rename.
 
 ## Layout and responsive behavior

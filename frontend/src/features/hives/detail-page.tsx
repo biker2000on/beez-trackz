@@ -1,69 +1,28 @@
 "use client";
 
 /**
- * Hive detail.
+ * Hive detail bodies.
  *
- * The strip used to carry nine tabs. It now has three peer views: a default
- * Overview, Timeline, and Health. Equipment, Queen, and Photos are dedicated
- * drill-down routes reached from the overview; timeline subsets remain URL-
- * backed filter chips rather than competing peer tabs.
- *
- * Both the active tab and the active chip live in search params, so a hive is
- * deep-linkable and coming back from an inspection or a session detail does
- * not reset the view.
+ * Overview, Timeline and Health are routes under `/yard/hives/[id]`; the
+ * record layout draws the header and the tab strip once and this component
+ * renders the body for one of the three. Timeline subsets are URL-backed
+ * filter chips (`?view=`), so a hive stays deep-linkable and coming back from
+ * an inspection or a session detail does not reset the view.
  */
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  Archive,
-  ArchiveRestore,
-  Camera,
-  ClipboardList,
-  Droplets,
-  MapPin,
-  Mic,
-  MoreHorizontal,
-  Pencil,
-  Skull,
-  Split,
-} from "lucide-react";
+import { Droplets } from "lucide-react";
+
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSearchParamState } from "@/lib/url-state";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useShortcut } from "@/components/shortcuts/provider";
 
 import { FeedingDialog } from "@/features/feedings/feeding-dialog";
 import {
@@ -73,29 +32,18 @@ import {
   useDeleteFeeding,
 } from "@/features/feedings/hooks";
 import { InspectionCard } from "@/features/inspections/inspection-card";
-import { InspectionFormDialog } from "@/features/inspections/inspection-form-dialog";
 import { useHiveInspections } from "@/features/inspections/hooks";
-import { PhotoUpload } from "@/features/photos/photo-upload";
 import { HivePhotoStrip } from "@/features/photos/hive-strip";
 import { HiveTimeline } from "@/features/operations/hive-timeline";
 import type { HiveTimelineEntry } from "@/features/operations/hooks";
 import { VarroaPanel } from "@/features/operations/varroa-panel";
-import { HiveStatusBadge } from "./hive-card";
-import { HiveFormDialog } from "./hive-form-dialog";
 import { FeedingsGrid, SplitsGrid } from "./hive-record-grids";
 import { HiveOverviewTab } from "./overview-tab";
-import {
-  useArchiveHive,
-  useHive,
-  useHiveLocationHistory,
-  useHiveSplits,
-  useUnarchiveHive,
-} from "./hooks";
-import { DeadoutAutopsyDialog } from "./deadout-autopsy-dialog";
+import { useHive, useHiveLocationHistory, useHiveSplits } from "./hooks";
 import { formatDate } from "./lib";
-import { SplitDialog } from "./split-dialog";
 
 export const HIVE_TABS = ["overview", "timeline", "health"] as const;
+export type HiveTab = (typeof HIVE_TABS)[number];
 
 /**
  * Timeline filter chips. `types` filters the merged timeline; the four chips
@@ -120,7 +68,18 @@ const TIMELINE_FILTERS: {
 
 const FILTER_VALUES = TIMELINE_FILTERS.map((filter) => filter.value);
 
-export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: "overview" | "timeline" | "health" }) {
+/**
+ * The body of the Overview, Timeline and Health tabs. The record header, the
+ * action bar and the tab strip belong to `HiveRecordLayout`; this renders
+ * only what changes between those three tabs.
+ */
+export function HiveDetailPage({
+  hiveId,
+  section = "overview",
+}: {
+  hiveId: string;
+  section?: HiveTab;
+}) {
   const router = useRouter();
   const hive = useHive(hiveId);
   const access = useAccessProfile();
@@ -129,201 +88,27 @@ export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: 
     ["admin", "editor"].includes(
       apiaryRole(access.data, hive.data.apiaryId) ?? "",
     );
-
-  const [legacyTab] = useSearchParamState("tab", "overview", HIVE_TABS);
-  const tab = section ?? legacyTab;
   const [filter, setFilter] = useSearchParamState("view", "all", FILTER_VALUES);
-
-
-  const [editOpen, setEditOpen] = React.useState(false);
-  const [inspectionOpen, setInspectionOpen] = React.useState(false);
   const [feedOpen, setFeedOpen] = React.useState(false);
-  const [photoOpen, setPhotoOpen] = React.useState(false);
-  const [splitOpen, setSplitOpen] = React.useState(false);
-  const [archiveOpen, setArchiveOpen] = React.useState(false);
-  const [deadoutOpen, setDeadoutOpen] = React.useState(false);
-
-  const archiveHive = useArchiveHive();
-  const unarchiveHive = useUnarchiveHive();
-
-  // Every one of these writes; a viewer gets none of them registered, so the
-  // `?` dialog and the command palette stop offering actions that do nothing.
-  const editable = { enabled: canEdit };
-  useShortcut("i", "Log inspection", () => setInspectionOpen(true), editable);
-  useShortcut(
-    "r",
-    "Voice inspection",
-    () => router.push(`/yard/apiaries/${hive.data?.apiaryId}/visit?hive=${hiveId}`),
-    editable,
-  );
-  useShortcut("f", "Record feeding", () => setFeedOpen(true), editable);
-  useShortcut("p", "Add photo", () => setPhotoOpen(true), editable);
-  useShortcut("e", "Edit hive", () => setEditOpen(true), editable);
-  // `t`, not `x` (globally select-all, DESIGN.md) and not `s` (Record sale on
-  // Honey, and the tail of `g s` for Settings).
-  useShortcut("t", "Split hive", () => setSplitOpen(true), editable);
 
   if (hive.isPending) {
-    return (
-      <div className="grid gap-4">
-        <Skeleton className="h-10 w-64" />
-        {/* The action bar is `size="sm"` buttons (h-8); reserving the row
-            keeps the tabs and content from jumping when the hive lands. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Skeleton className="h-8 w-36 rounded-md" />
-          <Skeleton className="h-8 w-20 rounded-md" />
-          <Skeleton className="h-8 w-24 rounded-md" />
-          <Skeleton className="h-8 w-20 rounded-md" />
-        </div>
-        <Skeleton className="h-9 w-full max-w-xl" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
+    return <Skeleton className="h-64 w-full" />;
   }
-  if (hive.isError || !hive.data) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Could not load this hive.{" "}
-        <Link
-          href="/yard/hives"
-          className="font-medium text-primary underline-offset-4 hover:underline"
-        >
-          Back to hives
-        </Link>
-      </p>
-    );
-  }
+  if (hive.isError || !hive.data) return null;
   const data = hive.data;
   const activeFilter =
     TIMELINE_FILTERS.find((entry) => entry.value === filter) ??
     TIMELINE_FILTERS[0];
 
-  async function run(action: () => Promise<unknown>, success: string) {
-    try {
-      await action();
-      toast.success(success);
-    } catch (error) {
-      toast.error(
-        error instanceof ApiError ? error.message : "Something went wrong",
-      );
-    }
-  }
-
   return (
     <div className="grid grid-cols-1 gap-6">
-      <div className="grid gap-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">
-            {data.positionLabel}
-          </h1>
-          <HiveStatusBadge status={data.status} />
-          {data.isArchived && (
-            <Badge variant="outline" className="gap-1">
-              <Archive className="size-3" />
-              Archived
-            </Badge>
-          )}
-        </div>
-        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-          <Link
-            href={`/yard/apiaries/${data.apiaryId}`}
-            className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline"
-          >
-            <MapPin className="size-3.5 text-primary" />
-            {data.apiaryName}
-          </Link>
-          {data.installedDate && (
-            <span>Installed {formatDate(data.installedDate)}</span>
-          )}
-          {data.deadoutDate && (
-            <span className="text-destructive">
-              Deadout {formatDate(data.deadoutDate)}
-            </span>
-          )}
-        </p>
-        {data.lockout?.locked && (
-          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
-            {data.lockout.message}
-          </p>
-        )}
-      </div>
-
-      {canEdit ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild><Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}><Mic className="size-4"/>Voice inspection</Link></Button>
-          <Button size="sm" variant="outline" onClick={() => setInspectionOpen(true)}>
-            <ClipboardList className="size-4" />
-            Log inspection
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setFeedOpen(true)}>
-            <Droplets className="size-4" />
-            Feed
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setPhotoOpen(true)}>
-            <Camera className="size-4" />
-            Photo
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="ghost" aria-label="More hive actions">
-                <MoreHorizontal className="size-4" />
-                More
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem asChild>
-                <Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}>
-                  <Mic className="size-4" />
-                  Voice inspection
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSplitOpen(true)}>
-                <Split className="size-4" />
-                Split hive
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setEditOpen(true)}>
-                <Pencil className="size-4" />
-                Edit hive
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {data.isArchived ? (
-                <DropdownMenuItem
-                  disabled={unarchiveHive.isPending}
-                  onSelect={() =>
-                    void run(
-                      () => unarchiveHive.mutateAsync(data.id),
-                      "Hive unarchived",
-                    )
-                  }
-                >
-                  <ArchiveRestore className="size-4" />
-                  Unarchive
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem onSelect={() => setArchiveOpen(true)}>
-                  <Archive className="size-4" />
-                  Archive
-                </DropdownMenuItem>
-              )}
-              {!data.isArchived && data.status !== "dead" && (
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onSelect={() => setDeadoutOpen(true)}
-                >
-                  <Skull className="size-4" />
-                  Mark deadout
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      ) : null}
-
-      <nav aria-label="Hive pages" className="flex flex-wrap gap-x-4 gap-y-1 border-b">{[["", "Overview"], ["/timeline", "Timeline"], ["/health", "Health"], ["/equipment", "Equipment"], ["/queen", "Queen"], ["/photos", "Photos"]].map(([suffix,label])=><Link key={label} href={`/yard/hives/${data.id}${suffix}`} className="inline-flex min-h-11 items-center text-sm font-medium underline-offset-4 hover:underline">{label}</Link>)}</nav>
-        {tab === "overview" && <section className="pt-1">
+      {section === "overview" && (
+        <section>
           <HiveOverviewTab hiveId={data.id} canEdit={canEdit} />
-        </section>}
-        {tab === "timeline" && <section className="flex min-w-0 flex-col gap-4 pt-1">
+        </section>
+      )}
+      {section === "timeline" && (
+        <section className="flex min-w-0 flex-col gap-4">
           <div className="relative min-w-0">
             <div
               className="-my-1 flex snap-x gap-1.5 overflow-x-auto py-1 md:flex-wrap"
@@ -368,8 +153,10 @@ export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: 
           ) : (
             <HiveTimeline hiveId={data.id} types={activeFilter.types} />
           )}
-        </section>}
-        {tab === "health" && <section className="grid gap-5 pt-1">
+        </section>
+      )}
+      {section === "health" && (
+        <section className="grid gap-5">
           <VarroaPanel hiveId={data.id} canEdit={canEdit} />
           <InspectionSummary
             hiveId={data.id}
@@ -379,79 +166,20 @@ export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: 
             }}
           />
           <HivePhotoStrip hiveId={data.id} canEdit={canEdit} />
-        </section>}
+        </section>
+      )}
 
-
-      {data.notes && (
+      {section === "overview" && data.notes && (
         <div className="rounded-xl border bg-card p-4 text-sm">
-          <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Notes
-          </h2>
+          <h2 className="mb-1 text-sm font-semibold">Notes</h2>
           <p className="whitespace-pre-wrap">{data.notes}</p>
         </div>
       )}
 
-      <HiveFormDialog open={editOpen} onOpenChange={setEditOpen} hive={data} />
-      <InspectionFormDialog
-        open={inspectionOpen}
-        onOpenChange={setInspectionOpen}
-        hiveId={data.id}
-      />
       <FeedingDialog
         open={feedOpen}
         onOpenChange={setFeedOpen}
         hiveId={data.id}
-      />
-      <SplitDialog open={splitOpen} onOpenChange={setSplitOpen} hive={data} />
-
-      <Dialog open={photoOpen} onOpenChange={setPhotoOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add photo</DialogTitle>
-            <DialogDescription>
-              Attach a photo to {data.positionLabel}.
-            </DialogDescription>
-          </DialogHeader>
-          <PhotoUpload
-            ownerType="hive"
-            ownerId={data.id}
-            onUploaded={() => setPhotoOpen(false)}
-          />
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Archive {data.positionLabel}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Archived hives are hidden from lists by default. You can
-              unarchive at any time.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(event) => {
-                event.preventDefault();
-                void run(async () => {
-                  await archiveHive.mutateAsync(data.id);
-                  setArchiveOpen(false);
-                }, "Hive archived");
-              }}
-              disabled={archiveHive.isPending}
-            >
-              {archiveHive.isPending ? "Archiving…" : "Archive"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <DeadoutAutopsyDialog
-        open={deadoutOpen}
-        onOpenChange={setDeadoutOpen}
-        hiveId={data.id}
-        hiveName={data.positionLabel}
       />
     </div>
   );

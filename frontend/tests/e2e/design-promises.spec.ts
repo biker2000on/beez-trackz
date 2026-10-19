@@ -77,19 +77,53 @@ test("mobile route navigation uses named page links instead of a route select (D
   expect(bottomNav).toContain("<SheetTitle>More</SheetTitle>");
   expect(bottomNav).not.toContain("Pages");
 
-  for (const page of [join(srcRoot, "features", "apiaries", "detail-page.tsx"), join(srcRoot, "features", "hives", "detail-page.tsx")]) {
-    const source = readFileSync(page, "utf8");
-    expect(source).not.toContain("<TabsList");
-    expect(source).toContain("<nav aria-label=");
+  // The record tab strip is one primitive, drawn by the route layout from
+  // `contextualNavRoutes`; the tab bodies carry no strip and no h1 of their
+  // own (ui-coherence brief §5).
+  const recordHeader = read(srcRoot, "components", "record", "record-header.tsx");
+  expect(recordHeader).not.toContain("<TabsList");
+  expect(recordHeader).toContain("contextualNavRoutes(");
+  expect(recordHeader).toContain("aria-label={label}");
+  for (const record of ["hives", "apiaries"]) {
+    expect(existsSync(join(srcRoot, "app", "(app)", "yard", record, "[id]", "layout.tsx"))).toBe(true);
+    for (const body of ["detail-page.tsx", "subpage.tsx"]) {
+      const source = read(srcRoot, "features", record, body);
+      expect(source).not.toContain("<h1");
+      expect(source).not.toContain("<nav ");
+    }
+  }
+});
+
+test("record routes carry no eyebrow and no hand-written tab list", () => {
+  const recordBodies = [
+    join(srcRoot, "features", "commerce", "lot-record.tsx"),
+    join(srcRoot, "features", "commerce", "receipt-view.tsx"),
+    join(srcRoot, "features", "commerce", "consignment-location-page.tsx"),
+    join(srcRoot, "features", "honey", "product-batch-record.tsx"),
+    join(srcRoot, "features", "honey", "session-detail.tsx"),
+    join(srcRoot, "features", "equipment", "stock-workspace.tsx"),
+    join(srcRoot, "features", "apiaries", "observations-page.tsx"),
+    join(srcRoot, "features", "apiaries", "hive-labels-page.tsx"),
+    join(srcRoot, "features", "apiaries", "bulk-record-page.tsx"),
+    join(srcRoot, "features", "photos", "apiary-timeline-page.tsx"),
+  ];
+  for (const file of recordBodies) {
+    const source = readFileSync(file, "utf8");
+    expect(source, file).not.toContain("atlas-eyebrow");
+    expect(source, file).not.toContain("<h1");
+  }
+  for (const file of sourceFiles(join(srcRoot, "features"))) {
+    const source = readFileSync(file, "utf8");
+    expect(source, file).not.toMatch(/aria-label="(Hive|Apiary) pages"/);
   }
 });
 
 test("every area page title and h1 come from the route index, not a hand-written string", () => {
   const appRoot = join(srcRoot, "app", "(app)");
   const offenders = sourceFiles(appRoot).filter((file) => {
-    if (!file.endsWith("page.tsx")) return false;
-    // Record routes own their titles until the record-page wave.
-    if (file.includes("[id]") || file.includes("[runId]")) return false;
+    if (!file.endsWith("page.tsx") && !file.endsWith("layout.tsx")) return false;
+    // Record routes export the list's title for first paint; the record
+    // header then sets "Name · List · Brand" from the loaded record.
     const source = readFileSync(file, "utf8");
     return /export const metadata(: Metadata)? = \{/.test(source);
   });

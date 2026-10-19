@@ -27,6 +27,12 @@ export interface NavRoute {
    * row: the sidebar, the phone More sheet and the page disclosure skip it.
    */
   paletteOnly?: boolean;
+  /**
+   * A workflow entry point on a record (Record visit, Voice inspection): in
+   * the sidebar and Ctrl-K like any route, but the record header draws it in
+   * the action bar, never in the tab strip.
+   */
+  action?: boolean;
   /** Descendant paths another area owns, so this prefix must not claim them. */
   excludes?: readonly string[];
   children?: readonly NavRoute[];
@@ -117,7 +123,12 @@ export const NAV_ITEMS: NavItem[] = [
         exact: true,
         keywords: ["production workbench extraction sessions"],
       },
-      { label: "Harvests", href: "/production/harvests", keywords: ["harvest history extraction"] },
+      {
+        label: "Harvests",
+        href: "/production/harvests",
+        matches: ["/production/sessions"],
+        keywords: ["harvest history extraction"],
+      },
       { label: "Bottling", href: "/production/jars", keywords: ["jars jarring runs"] },
       { label: "Lots & labels", href: "/production/lots", keywords: ["qr traceability"] },
       {
@@ -248,7 +259,13 @@ export function allNavItems(): NavItem[] {
   return [...NAV_ITEMS, SETUP_ITEM];
 }
 
-/** Context-only destinations that need a real apiary or hive id. */
+/**
+ * Context-only destinations that need a real apiary or hive id: the record's
+ * tab strip (`RecordHeader`), its sidebar sub-tree and its Ctrl-K commands all
+ * read this one list, so a tab cannot exist on one surface and not another.
+ * Entries flagged `action` are the record's workflows (voice capture); they
+ * are drawn as actions, not tabs.
+ */
 export function contextualNavRoutes(
   parentHref: string,
   pathname: string,
@@ -258,17 +275,26 @@ export function contextualNavRoutes(
     const base = `/yard/apiaries/${apiary}`;
     return [
       { label: "Overview", href: `${base}/overview`, exact: true },
-      { label: "Apiary observations", href: `${base}/inspections` },
-      { label: "Record visit", href: `${base}/visit`, requiresEdit: true },
-      { label: "Map", href: `${base}/layout`, exact: true, keywords: ["layout canvas"] },
+      // The bare record URL still opens the map, so the Map tab claims it.
+      {
+        label: "Map",
+        href: `${base}/layout`,
+        exact: true,
+        matches: [base],
+        keywords: ["layout canvas"],
+      },
+      { label: "Observations", href: `${base}/inspections`, keywords: ["apiary inspections visit notes"] },
       { label: "Flora", href: `${base}/flora`, keywords: ["blooms forage"] },
       { label: "Photos", href: `${base}/photos` },
-      { label: "Print tags", href: `${base}/labels`, keywords: ["labels qr"] },
+      { label: "Timeline", href: `${base}/timeline`, keywords: ["yard photo timeline immich"] },
+      { label: "Labels", href: `${base}/labels`, keywords: ["print tags qr nfc"] },
       { label: "Bulk record", href: `${base}/bulk`, requiresEdit: true },
+      { label: "Record visit", href: `${base}/visit`, requiresEdit: true, action: true },
       {
         label: "Voice walkthrough",
         href: `${base}/visit?scope=batch`,
         requiresEdit: true,
+        action: true,
       },
     ];
   }
@@ -295,6 +321,7 @@ export function contextualNavRoutes(
         href: `/yard/transcribe?hive=${hive}`,
         keywords: ["record transcribe"],
         requiresEdit: true,
+        action: true,
       },
     ];
   }
@@ -375,7 +402,7 @@ export function isNavRouteActive(route: NavRoute, currentHref: string): boolean 
   const [pathname, currentQuery = ""] = currentHref.split("?");
   const path = routePath(route.href);
   if (route.exact) {
-    if (pathname !== path) return false;
+    if (pathname !== path) return route.matches?.includes(pathname) ?? false;
     const routeQuery = route.href.split("?")[1];
     if (!routeQuery) return true;
     const currentParams = new URLSearchParams(currentQuery);

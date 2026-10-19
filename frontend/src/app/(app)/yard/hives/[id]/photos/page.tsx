@@ -1,10 +1,6 @@
-import type { Metadata } from "next";
-
 import { HiveSubpage } from "@/features/hives/subpage";
 
-export const metadata: Metadata = { title: "Hive photos" };
-
-export default async function HivePhotosPage({
+export default async function Page({
   params,
 }: {
   params: Promise<{ id: string }>;

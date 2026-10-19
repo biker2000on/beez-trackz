@@ -1,10 +1,6 @@
-import type { Metadata } from "next";
-
 import { ApiarySubpage } from "@/features/apiaries/subpage";
 
-export const metadata: Metadata = { title: "Apiary flora" };
-
-export default async function ApiaryFloraPage({
+export default async function Page({
   params,
 }: {
   params: Promise<{ id: string }>;

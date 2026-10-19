@@ -1,5 +1,7 @@
 "use client";
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { RecordHeader } from "@/components/record/record-header";
 import { useProductBatches } from "./hooks";
 import { formatDate, formatLbs, formatMoney } from "./format";
 export function ProductBatchRecord({ id }: { id: string }) {
@@ -24,24 +26,31 @@ export function ProductBatchRecord({ id }: { id: string }) {
     );
   return (
     <div className="atlas-workspace">
-      <Link className="text-sm underline" href="/production/products">
-        All product batches
-      </Link>
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">Production / Batch record</p>
-          <h1>{batch.productName}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {batch.kind.replaceAll("_", " ")} / Started{" "}
-            {formatDate(batch.startedAt)} /{" "}
+      <RecordHeader
+        name={batch.productName}
+        collectionHref="/production/products"
+        status={
+          <Badge
+            variant={
+              batch.voidedAt
+                ? "destructive"
+                : batch.finishedAt
+                  ? "secondary"
+                  : "accent"
+            }
+          >
             {batch.voidedAt
               ? "Voided"
               : batch.finishedAt
                 ? "Finished"
                 : "In progress"}
-          </p>
-        </div>
-      </header>
+          </Badge>
+        }
+        context={[
+          batch.kind.replaceAll("_", " "),
+          `Started ${formatDate(batch.startedAt)}`,
+        ]}
+      />
       <section className="atlas-records">
         <div className="atlas-record">
           <h2 className="font-semibold">Inputs and source</h2>

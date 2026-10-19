@@ -24,26 +24,16 @@ export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
   });
   return (
     <div className="atlas-workspace">
-      <Link className="text-sm underline" href={`/yard/apiaries/${apiaryId}`}>
-        Back to apiary
-      </Link>
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">Apiary / Observation history</p>
-          <h1>Apiary observations</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Yard conditions and visit notes, kept separate from hive
-            inspections.
-          </p>
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Yard conditions and visit notes, kept separate from hive inspections.
+        </p>
         {editable && (
-          <Button asChild>
-            <Link href={`/yard/apiaries/${apiaryId}/visit`}>
-              Record observation
-            </Link>
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/yard/apiaries/${apiaryId}/visit`}>Record visit</Link>
           </Button>
         )}
-      </header>
+      </div>
       {records.isPending ? (
         <p>Loading observations...</p>
       ) : records.isError ? (

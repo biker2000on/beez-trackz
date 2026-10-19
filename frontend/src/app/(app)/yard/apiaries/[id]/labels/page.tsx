@@ -1,10 +1,6 @@
-import type { Metadata } from "next";
-
 import { HiveLabelsPage } from "@/features/apiaries/hive-labels-page";
 
-export const metadata: Metadata = { title: "Hive tags" };
-
-export default async function ApiaryLabelsRoute({
+export default async function Page({
   params,
 }: {
   params: Promise<{ id: string }>;

@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useHarvestLots } from "./api";
 import { BottlingDialog } from "./lots-tab";
 import { BottlingRunsGrid } from "./bottling-runs-grid";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { RecordHeader } from "@/components/record/record-header";
 import { formatDate, formatLbs } from "@/features/honey/format";
 export function LotRecord({ id }: { id: string }) {
   const lots = useHarvestLots();
@@ -26,28 +29,40 @@ export function LotRecord({ id }: { id: string }) {
     );
   return (
     <div className="atlas-workspace">
-      <Link href="/production/lots" className="text-sm underline">
-        All lots
-      </Link>
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">Production / Lot record</p>
-          <h1>{lot.lotCode}</h1>
-          <p className="mt-2 text-muted-foreground">
-            {lot.varietalName ?? "Varietal not recorded"} / Extracted{" "}
-            {formatDate(lot.extractionDate)}
+      <RecordHeader
+        name={lot.lotCode}
+        collectionHref="/production/lots"
+        status={
+          lot.isPublic ? <Badge variant="secondary">Public story</Badge> : undefined
+        }
+        context={[
+          lot.varietalName ?? "Varietal not recorded",
+          `Extracted ${formatDate(lot.extractionDate)}`,
+          `${formatLbs(lot.honeyWeightLbs)} extracted`,
+        ]}
+        primary={<Button onClick={() => setBottle(true)}>Bottle this lot</Button>}
+        secondary={
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/api/v1/harvest-lots/${id}/qr`}>Lot QR label</Link>
+          </Button>
+        }
+        more={
+          lot.isPublic ? (
+            <DropdownMenuItem asChild>
+              <Link href={`/honey/${lot.publicSlug}`}>Honey story</Link>
+            </DropdownMenuItem>
+          ) : undefined
+        }
+      >
+        {lot.lockout?.locked && (
+          <p
+            role="alert"
+            className="mt-2 rounded-md border border-destructive p-3 text-sm text-destructive"
+          >
+            {lot.lockout.message}
           </p>
-        </div>
-        <Button onClick={() => setBottle(true)}>Bottle this lot</Button>
-      </header>
-      {lot.lockout?.locked && (
-        <p
-          role="alert"
-          className="rounded-md border border-destructive p-3 text-sm text-destructive"
-        >
-          {lot.lockout.message}
-        </p>
-      )}
+        )}
+      </RecordHeader>
       <section className="atlas-records">
         <div className="atlas-record">
           <h2 className="font-semibold">Source and ancestry</h2>
@@ -75,16 +90,6 @@ export function LotRecord({ id }: { id: string }) {
           <BottlingRunsGrid lotId={id} runs={lot.bottlingRuns} />
         </div>
       </section>
-      <div className="flex flex-wrap gap-3">
-        <Button asChild variant="outline">
-          <Link href={`/api/v1/harvest-lots/${id}/qr`}>Lot QR label</Link>
-        </Button>
-        {lot.isPublic && (
-          <Button asChild variant="outline">
-            <Link href={`/honey/${lot.publicSlug}`}>Honey story</Link>
-          </Button>
-        )}
-      </div>
       {bottle && <BottlingDialog lot={lot} open onOpenChange={setBottle} />}
     </div>
   );
@@ -109,18 +114,20 @@ export function BottlingRunRecord({
     );
   return (
     <div className="atlas-workspace">
-      <Link className="underline" href={`/production/lots/${lotId}`}>
-        Source lot {lot?.lotCode}
-      </Link>
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">Production / Bottling run</p>
-          <h1>
-            {run.quantity} {run.jarSizeLabel ?? "jars"}
-          </h1>
-          <p>{formatDate(run.bottledDate)}</p>
-        </div>
-      </header>
+      <RecordHeader
+        name={`${run.quantity} ${run.jarSizeLabel ?? "jars"}`}
+        collectionHref="/production/lots"
+        context={[
+          <Link
+            key="lot"
+            className="font-medium text-foreground underline-offset-4 hover:underline"
+            href={`/production/lots/${lotId}`}
+          >
+            Lot {lot?.lotCode}
+          </Link>,
+          `Bottled ${formatDate(run.bottledDate)}`,
+        ]}
+      />
       <section className="atlas-records">
         <div className="atlas-record">
           <h2 className="font-semibold">Saved output</h2>

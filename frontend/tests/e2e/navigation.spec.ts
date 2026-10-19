@@ -175,6 +175,89 @@ test("detail pages expose named record destinations and preserve URL state", asy
   await expect(page).toHaveURL("/yard/hives/h1/queen");
 });
 
+// RecordPage (ui-coherence brief §5): the route layout draws the record
+// header once, so every tab of a hive or an apiary has the same h1, the same
+// action bar and the same tab strip, and the title is "Name · List · Brand".
+// The strip comes from `contextualNavRoutes`, so the sidebar and Ctrl-K list
+// the same tabs in the same order.
+const HIVE_TABS = ["Overview", "Timeline", "Health", "Equipment", "Queen", "Photos"];
+const APIARY_TABS = [
+  "Overview",
+  "Map",
+  "Observations",
+  "Flora",
+  "Photos",
+  "Timeline",
+  "Labels",
+  "Bulk record",
+];
+
+test("every hive tab shares one record header, action bar and tab strip", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  for (const tab of ["", "/timeline", "/health", "/equipment", "/queen", "/photos"]) {
+    await page.goto(`/yard/hives/h1${tab}`);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("A1");
+    await expect(page).toHaveTitle(/^A1 · Hives · /);
+    const strip = page.getByRole("navigation", { name: "Hive pages" });
+    await expect(strip.getByRole("link")).toHaveText(HIVE_TABS);
+    await expect(strip.getByRole("link", { name: HIVE_TABS[["", "/timeline", "/health", "/equipment", "/queen", "/photos"].indexOf(tab)] })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("link", { name: "Voice inspection" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Log inspection" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "More actions" })).toBeVisible();
+    await expect(page.locator(".atlas-eyebrow")).toHaveCount(0);
+  }
+});
+
+test("every apiary tab shares one record header and the Map tab claims the bare URL", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  for (const tab of ["", "/overview", "/layout", "/inspections", "/flora", "/photos", "/timeline", "/labels", "/bulk"]) {
+    await page.goto(`/yard/apiaries/a1${tab}`);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Test Yard");
+    await expect(page).toHaveTitle(/^Test Yard · Apiary list · /);
+    const strip = page.getByRole("navigation", { name: "Apiary pages" });
+    await expect(strip.getByRole("link")).toHaveText(APIARY_TABS);
+    await expect(page.getByRole("link", { name: "Record visit" })).toBeVisible();
+    await expect(page.locator(".atlas-eyebrow")).toHaveCount(0);
+  }
+  await page.goto("/yard/apiaries/a1");
+  await expect(
+    page.getByRole("navigation", { name: "Apiary pages" }).getByRole("link", { name: "Map", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+});
+
+// Record tabs never wrap onto a second line: at phone width the strip
+// scrolls sideways inside its own box and the active tab is in view.
+test("record tab strips stay on one line at 375px and scroll the active tab into view", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const [path, name] of [
+    ["/yard/apiaries/a1/bulk", "Apiary pages"],
+    ["/yard/hives/h1/photos", "Hive pages"],
+  ] as const) {
+    await page.goto(path);
+    const strip = page.getByRole("navigation", { name });
+    const tops = new Set<number>();
+    for (const link of await strip.getByRole("link").all()) {
+      const box = await link.boundingBox();
+      expect(box).not.toBeNull();
+      tops.add(Math.round(box?.y ?? 0));
+    }
+    expect(tops.size, `${name} wrapped onto more than one line`).toBe(1);
+    const active = strip.getByRole("link", { name: path.endsWith("bulk") ? "Bulk record" : "Photos" });
+    await expect(active).toHaveAttribute("aria-current", "page");
+    await expect(active).toBeInViewport();
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow, `${path} overflows the viewport`).toBeLessThanOrEqual(0);
+  }
+});
+
 // The Stock area (ui-coherence brief §3) owns the old Production pages. On
 // desktop the sidebar lists the siblings and the page has no strip of its
 // own; on a phone the page header carries one "Area · Page" disclosure, the

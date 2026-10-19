@@ -27,14 +27,12 @@ import {
   useTable,
 } from "@tanstack/react-table";
 import {
-  ArrowLeft,
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
   Pencil,
   RotateCcw,
   Send,
-  Store,
   TriangleAlert,
   Undo2,
 } from "lucide-react";
@@ -51,6 +49,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { RecordHeader } from "@/components/record/record-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -332,59 +332,55 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
 
   return (
     <div className="mx-auto grid w-full max-w-none gap-5">
-      <div>
-        <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href="/sales/consignment">
-            <ArrowLeft />
-            Consignment
-          </Link>
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight">
-            <Store className="size-5 shrink-0 text-primary" />
-            <span className="min-w-0 truncate">{location.name}</span>
+      <RecordHeader
+        name={location.name}
+        collectionHref="/sales/consignment"
+        status={
+          <>
             {location.isConsignment && <Badge variant="accent">Consignment</Badge>}
-            {!location.isActive && <Badge variant="outline">inactive</Badge>}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {consignmentTerms(location)} · settles{" "}
-            {location.settlementCadence.replaceAll("_", " ")}
-            {location.customerName ? ` · ${location.customerName}` : ""}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => setTermsOpen(true)}>
-            <Pencil />
-            Edit terms
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => setSendOpen(true)}>
-            <Send />
-            Send stock
-          </Button>
+            {!location.isActive && <Badge variant="outline">Inactive</Badge>}
+          </>
+        }
+        context={[
+          consignmentTerms(location),
+          `settles ${location.settlementCadence.replaceAll("_", " ")}`,
+          location.customerName,
+        ]}
+        primary={
           <Button
             type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setReturnOpen(true)}
-            disabled={unitsOnShelf === 0}
-          >
-            <Undo2 />
-            Bring stock home
-          </Button>
-          <Button
-            type="button"
-            size="sm"
             onClick={() => setReportOpen(true)}
             disabled={unitsOnShelf === 0}
           >
             <ClipboardCheck />
             Record their report
           </Button>
-        </div>
-      </div>
+        }
+        secondary={
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={() => setSendOpen(true)}>
+              <Send />
+              Send stock
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setReturnOpen(true)}
+              disabled={unitsOnShelf === 0}
+            >
+              <Undo2 />
+              Bring stock home
+            </Button>
+          </>
+        }
+        more={
+          <DropdownMenuItem onSelect={() => setTermsOpen(true)}>
+            <Pencil />
+            Edit terms
+          </DropdownMenuItem>
+        }
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat

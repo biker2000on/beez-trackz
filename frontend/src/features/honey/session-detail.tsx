@@ -12,7 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import Link from "next/link";
-import { ArrowLeft, Plus, Scale, X } from "lucide-react";
+import { Plus, Scale, X } from "lucide-react";
 
 import {
   AlertDialog,
@@ -25,6 +25,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { RecordHeader } from "@/components/record/record-header";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -100,9 +101,11 @@ export function SessionDetail({ id }: { id: string }) {
   if (session.isError) {
     return (
       <div className="mx-auto grid w-full max-w-5xl gap-4">
-        <BackLink />
         <p className="py-8 text-center text-sm text-muted-foreground">
-          Could not load this harvest session. It may have been deleted.
+          Could not load this harvest session. It may have been deleted.{" "}
+          <Link href="/production/harvests" className="underline">
+            Harvests
+          </Link>
         </p>
       </div>
     );
@@ -115,21 +118,20 @@ export function SessionDetail({ id }: { id: string }) {
 
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-6">
-      <div className="grid gap-1">
-        <BackLink />
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">
-            Harvest session · {formatDate(data.date)}
-          </h1>
+      <RecordHeader
+        name={`Harvest ${formatDate(data.date)}`}
+        collectionHref="/production/harvests"
+        status={
           <Badge variant={finalized ? "secondary" : "accent"}>
             {finalized ? "Finalized" : "In progress"}
           </Badge>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {apiaryName ?? "Apiary"}
-          {data.notes ? ` — ${data.notes}` : ""}
-        </p>
-      </div>
+        }
+        context={[
+          apiaryName ?? "Apiary",
+          `${data.entries.length} hive ${data.entries.length === 1 ? "entry" : "entries"}`,
+          data.notes,
+        ]}
+      />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard
@@ -320,18 +322,6 @@ function MoistureCard({
         </ShortcutForm>
       </CardContent>
     </Card>
-  );
-}
-
-function BackLink() {
-  return (
-    <Link
-      href="/production/harvests"
-      className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-    >
-      <ArrowLeft className="size-4" />
-      Harvests
-    </Link>
   );
 }
 

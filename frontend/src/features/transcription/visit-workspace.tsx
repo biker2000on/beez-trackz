@@ -648,19 +648,27 @@ export function VisitWorkspace({
     return <p role="status">Loading this account’s visits…</p>;
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-5 pb-8">
-      <PageHeader
-        subtitle="Speak your observations, review what was heard, and continue through the yard."
-        actions={
-          <Link
-            className="inline-flex min-h-9 items-center text-sm text-muted-foreground underline-offset-4 hover:underline"
-            href={apiaryId ? `/yard/apiaries/${apiaryId}` : "/yard/apiaries"}
-          >
-            {apiaryId
-              ? (ap.data?.find((row) => row.id === apiaryId)?.name ?? "Apiary")
-              : "Apiary list"}
-          </Link>
-        }
-      />
+      {routeApiaryId ? (
+        // Under /yard/apiaries/[id]/visit the record layout owns the header.
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Speak your observations, review what was heard, and continue through
+          the yard.
+        </p>
+      ) : (
+        <PageHeader
+          subtitle="Speak your observations, review what was heard, and continue through the yard."
+          actions={
+            <Link
+              className="inline-flex min-h-9 items-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+              href={apiaryId ? `/yard/apiaries/${apiaryId}` : "/yard/apiaries"}
+            >
+              {apiaryId
+                ? (ap.data?.find((row) => row.id === apiaryId)?.name ?? "Apiary")
+                : "Apiary list"}
+            </Link>
+          }
+        />
+      )}
       {!online && (
         <p role="status" className="rounded-lg border p-3 text-sm">
           Offline · recordings stay on this device until you reconnect.

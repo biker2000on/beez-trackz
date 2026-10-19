@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Nfc, Printer, QrCode } from "lucide-react";
+import { Nfc, Printer, QrCode } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -99,33 +99,17 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
           }
         }
       `}</style>
-      <header className="grid gap-3 print:hidden">
-        <Button
-          asChild
-          variant="ghost"
-          size="sm"
-          className="-ml-3 w-fit text-muted-foreground"
-        >
-          <Link href={`/yard/apiaries/${apiaryId}`}>
-            <ArrowLeft />
-            {apiary.data?.name ?? "Apiary"}
-          </Link>
+      <div className="flex flex-wrap items-end justify-between gap-3 print:hidden">
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Print QR labels at exact MUNBYN stock size, or write the same
+          authenticated hive URL to an NFC tag.
+        </p>
+        <Button disabled={selectedHives.length === 0} onClick={() => window.print()}>
+          <Printer />
+          Print {selectedHives.length} label
+          {selectedHives.length === 1 ? "" : "s"}
         </Button>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Hive tags</h1>
-            <p className="text-sm text-muted-foreground">
-              Print QR labels at exact MUNBYN stock size, or write the same
-              authenticated hive URL to an NFC tag.
-            </p>
-          </div>
-          <Button disabled={selectedHives.length === 0} onClick={() => window.print()}>
-            <Printer />
-            Print {selectedHives.length} label
-            {selectedHives.length === 1 ? "" : "s"}
-          </Button>
-        </div>
-      </header>
+      </div>
 
       <div className="grid gap-4 rounded-xl border p-4 print:hidden">
         <div className="grid max-w-xs gap-2">
@@ -166,10 +150,10 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
               <QrCode className="size-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
                 This apiary has no hives yet, so there is nothing to label. Add
-                hives on the apiary layout, then come back to print tags.
+                hives on the map, then come back to print labels.
               </p>
               <Button asChild variant="outline">
-                <Link href={`/yard/apiaries/${apiaryId}`}>Back to apiary layout</Link>
+                <Link href={`/yard/apiaries/${apiaryId}/layout`}>Open the map</Link>
               </Button>
             </div>
           ) : null}

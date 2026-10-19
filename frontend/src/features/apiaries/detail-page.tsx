@@ -1,229 +1,65 @@
 "use client";
 
-import * as React from "react";
-import Link from "next/link";
-import {
-  ArrowLeft,
-  CircleDashed,
-  Hexagon,
-  ListChecks,
-  MapPin,
-  Mic,
-  Pencil,
-  Trash2,
-  QrCode,
-} from "lucide-react";
-
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-
-import { useShortcut } from "@/components/shortcuts/provider";
-import { useSearchParamState } from "@/lib/url-state";
 import ApiaryCanvas from "@/features/canvas";
 import { useApiaryHives } from "@/features/canvas/lib/use-canvas-data";
-
-import { ApiaryFormDialog } from "./apiary-form-dialog";
-import { DeleteApiaryDialog } from "./delete-apiary-dialog";
-import { OverviewTab } from "./overview-tab";
-import { FrostLine } from "./frost-summary";
-import { useApiary, useApiaryWeather } from "./hooks";
-import { formatElevationM } from "@/features/map/elevation";
-import { formatForageRadius } from "@/features/map/forage-radius";
-import { useUnits } from "@/lib/use-units";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
-// Overview and Layout are the only peer views. Flora, Photos, and bulk
-// recording are dedicated routes reached from the overview/header.
-export const APIARY_TABS = ["overview", "layout"] as const;
+import { OverviewTab } from "./overview-tab";
+import { useApiary } from "./hooks";
 
-export function ApiaryDetailPage({ apiaryId, section }: { apiaryId: string; section?: "overview" | "layout" }) {
+export const APIARY_TABS = ["overview", "layout"] as const;
+export type ApiaryTab = (typeof APIARY_TABS)[number];
+
+/**
+ * The Overview and Map tab bodies. The record header, the action bar and the
+ * tab strip belong to `ApiaryRecordLayout`; the bare record URL still opens
+ * the map.
+ */
+export function ApiaryDetailPage({
+  apiaryId,
+  section = "layout",
+}: {
+  apiaryId: string;
+  section?: ApiaryTab;
+}) {
   const apiary = useApiary(apiaryId);
   const hives = useApiaryHives(apiaryId);
-  // Same query key the overview uses, so the frost read costs no extra fetch.
-  const weather = useApiaryWeather(apiaryId);
-  const units = useUnits();
   const access = useAccessProfile();
   const canEdit = ["admin", "editor"].includes(
     apiaryRole(access.data, apiaryId) ?? "",
   );
-  const [editOpen, setEditOpen] = React.useState(false);
-  const [deleteOpen, setDeleteOpen] = React.useState(false);
-  // Deep-linkable and back-button safe: the active tab lives in the URL.
-  const [legacyTab] = useSearchParamState("tab", "layout", APIARY_TABS);
-  const tab = section ?? legacyTab;
-
-  useShortcut(
-    "e",
-    "Edit apiary",
-    () => {
-      if (canEdit) setEditOpen(true);
-    },
-    { enabled: canEdit },
-  );
 
   if (apiary.isPending) {
-    return (
-      <div className="grid grid-cols-1 gap-5">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-11 w-full max-w-xl" />
-        <Skeleton className="h-[430px] rounded-xl" />
-      </div>
-    );
+    return <Skeleton className="h-[430px] rounded-xl" />;
   }
-
-  if (apiary.isError) {
-    return (
-      <div className="grid min-h-64 place-items-center rounded-xl border border-dashed p-6 text-center">
-        <div>
-          <h1 className="text-lg font-semibold">Could not load this apiary</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            It may have been removed, or the server may be unavailable.
-          </p>
-          <div className="mt-4 flex justify-center gap-2">
-            <Button asChild variant="outline">
-              <Link href="/yard/apiaries">Back to apiaries</Link>
-            </Button>
-            <Button onClick={() => apiary.refetch()}>Retry</Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (apiary.isError) return null;
 
   const detail = apiary.data;
+  if (section === "overview") {
+    return (
+      <section className="grid gap-5">
+        {detail.notes && (
+          <p className="max-w-prose text-sm text-muted-foreground">{detail.notes}</p>
+        )}
+        <OverviewTab
+          apiaryId={apiaryId}
+          hives={hives.data ?? []}
+          hivesReady={!hives.isPending}
+        />
+      </section>
+    );
+  }
   return (
-    <div className="grid grid-cols-1 gap-5">
-      <header className="grid gap-3">
-        <Button
-          asChild
-          variant="ghost"
-          size="sm"
-          className="-ml-3 w-fit text-muted-foreground"
-        >
-          <Link href="/yard/apiaries">
-            <ArrowLeft />
-            Apiaries
-          </Link>
-        </Button>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="truncate text-2xl font-bold tracking-tight">
-              {detail.name}
-            </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5">
-                <Hexagon className="size-4" />
-                {hives.data?.length ?? 0}{" "}
-                {hives.data?.length === 1 ? "hive" : "hives"}
-              </span>
-              {detail.latitude != null && detail.longitude != null && (
-                <>
-                  <span className="inline-flex items-center gap-1.5 font-mono text-xs">
-                    <MapPin className="size-4" />
-                    {detail.latitude.toFixed(4)}, {detail.longitude.toFixed(4)}
-                    {formatElevationM(detail.elevationM, detail.elevationSource)
-                      ? ` · ${formatElevationM(detail.elevationM, detail.elevationSource)}`
-                      : ""}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <CircleDashed className="size-4" />
-                    {formatForageRadius(detail.forageRadiusM, units.units)}{" "}
-                    forage
-                  </span>
-                </>
-              )}
-              {/* Frost sits next to elevation: together they are why two
-                  yards 400 m apart behave differently. */}
-              <FrostLine frost={weather.data?.frost} />
-            </div>
-            {detail.notes && (
-              <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-                {detail.notes}
-              </p>
-            )}
-          </div>
-          <div className="flex shrink-0 flex-wrap gap-2">
-            {canEdit ? (
-              <>
-                {/* Batch transcription used to be an orphan route with no
-                    inbound link; the yard you are standing in is its natural
-                    entry point. */}
-                <Button asChild>
-                  <Link href={`/yard/apiaries/${apiaryId}/visit`}>
-                    <Mic />
-                    Record visit
-                  </Link>
-                </Button>
-                <Button asChild variant="outline">
-                  <Link href={`/yard/apiaries/${apiaryId}/bulk`}>
-                    <ListChecks />
-                    Bulk record
-                  </Link>
-                </Button>
-              </>
-            ) : null}
-            <Button asChild variant="outline">
-              <Link href={`/yard/apiaries/${apiaryId}/labels`}>
-                <QrCode />
-                Print tags
-              </Link>
-            </Button>
-            {canEdit ? (
-              <>
-                <Button variant="outline" onClick={() => setEditOpen(true)}>
-                  <Pencil />
-                  Edit
-                </Button>
-                {access.data?.isAdmin ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete ${detail.name}`}
-                    onClick={() => setDeleteOpen(true)}
-                  >
-                    <Trash2 />
-                  </Button>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        </div>
-      </header>
-
-      <nav aria-label="Apiary pages" className="flex flex-wrap gap-x-4 gap-y-1 border-b">{[["/layout", "Map"], ["/overview", "Overview & conditions"], ["/inspections", "Apiary observations"], ["/flora", "Flora"], ["/photos", "Photos"]].map(([suffix,label])=><Link key={label} href={`/yard/apiaries/${apiaryId}${suffix}`} className="inline-flex min-h-11 items-center text-sm font-medium underline-offset-4 hover:underline">{label}</Link>)}{canEdit&&<Link className="inline-flex min-h-11 items-center text-sm underline" href={`/yard/apiaries/${apiaryId}/visit?scope=batch`}>Multi-hive walkthrough</Link>}</nav>
-        {tab === "overview" && <section>
-          <OverviewTab
-            apiaryId={apiaryId}
-            hives={hives.data ?? []}
-            hivesReady={!hives.isPending}
-          />
-        </section>}
-        {tab === "layout" && <section className="min-w-0">
-          <div className="relative">
-            {!canEdit ? (
-              <span className="absolute right-3 top-3 z-20 rounded-full border bg-background/90 px-2 py-1 text-xs font-medium shadow-sm">
-                View only
-              </span>
-            ) : null}
-            <div>
-              <ApiaryCanvas apiaryId={apiaryId} />
-            </div>
-          </div>
-        </section>}
-
-
-      <ApiaryFormDialog
-        open={editOpen}
-        onOpenChange={setEditOpen}
-        apiary={detail}
-      />
-      <DeleteApiaryDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        apiaryId={apiaryId}
-        apiaryName={detail.name}
-      />
-    </div>
+    <section className="min-w-0">
+      <div className="relative">
+        {!canEdit ? (
+          <span className="absolute right-3 top-3 z-20 rounded-full border bg-background/90 px-2 py-1 text-xs font-medium shadow-sm">
+            View only
+          </span>
+        ) : null}
+        <ApiaryCanvas apiaryId={apiaryId} />
+      </div>
+    </section>
   );
 }

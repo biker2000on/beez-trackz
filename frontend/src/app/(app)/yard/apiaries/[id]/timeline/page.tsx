@@ -1,10 +1,6 @@
-import type { Metadata } from "next";
-
 import { ApiaryTimelinePage } from "@/features/photos/apiary-timeline-page";
 
-export const metadata: Metadata = { title: "Yard timeline" };
-
-export default async function TimelinePage({
+export default async function Page({
   params,
 }: {
   params: Promise<{ id: string }>;

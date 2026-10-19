@@ -1,11 +1,10 @@
-import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiaryDetailPage } from "@/features/apiaries/detail-page";
 
-export const metadata: Metadata = { title: "Apiary" };
+const LEGACY_TABS = new Set(["overview", "layout", "flora", "photos"]);
 
 export default async function ApiaryPage({
   params,
@@ -16,12 +15,13 @@ export default async function ApiaryPage({
 }) {
   const { id } = await params;
   const query = await searchParams;
-  if (query.tab === "flora" || query.tab === "photos") {
+  // The tabs used to live in `?tab=`; every one is a route now.
+  if (typeof query.tab === "string" && LEGACY_TABS.has(query.tab)) {
     redirect(`/yard/apiaries/${id}/${query.tab}`);
   }
-  // The detail page keeps its active tab in a search param.
+  // The bare record URL opens the map.
   return (
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+    <Suspense fallback={<Skeleton className="h-[430px] rounded-xl" />}>
       <ApiaryDetailPage apiaryId={id} />
     </Suspense>
   );

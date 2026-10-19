@@ -19,7 +19,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { usePageTitle } from "@/components/shell/page-header";
+import { RecordHeader } from "@/components/record/record-header";
 import { useStoredFlag } from "@/lib/use-stored-flag";
 import { formatStockQuantity, parseStockQuantity } from "./stock-format";
 
@@ -418,7 +418,6 @@ export function StockWorkspace({
   });
 
   const recordName = allRows[0]?.itemName;
-  usePageTitle(itemId ? `${recordName ?? "Stock item"} · Stock` : undefined);
 
   if (access.isPending) return <p>Loading access...</p>;
   if (!access.data?.isAdmin)
@@ -426,32 +425,20 @@ export function StockWorkspace({
   return (
     <div className={itemId ? "atlas-workspace" : "grid gap-4"}>
       {itemId ? (
-        <header className="atlas-heading">
-          <div>
-            <h1>{recordName ?? "Stock item"}</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Physical stock, commitments, and what is available, in the same
-              location and unit.
-            </p>
-          </div>
-          <Button asChild variant="outline">
-            <Link
-              href={
-                actionCategory === "equipment"
-                  ? "/equipment"
-                  : actionCategory === "bulk"
-                    ? "/production/lots"
-                    : "/production/jars"
-              }
-            >
-              {actionCategory === "equipment"
-                ? "Equipment"
-                : actionCategory === "bulk"
-                  ? "Manage lots"
-                  : "Bottling"}
-            </Link>
-          </Button>
-        </header>
+        <RecordHeader
+          name={recordName ?? "Stock item"}
+          collectionHref={
+            actionCategory === "equipment"
+              ? "/equipment"
+              : actionCategory === "bulk"
+                ? "/production/lots"
+                : "/stock"
+          }
+          context={[
+            allRows[0]?.kind?.replaceAll("_", " "),
+            allRows[0]?.unit && `counted in ${allRows[0].unit}`,
+          ]}
+        />
       ) : null}
       {scoped && (
         <p className="text-xs text-muted-foreground">
