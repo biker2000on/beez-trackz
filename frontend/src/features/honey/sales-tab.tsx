@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils";
 
 import { formatDate, formatMoney } from "./format";
 import { useDeleteSale, useReverseGiveAway, useSalesRegister } from "./hooks";
+import { provenanceBody } from "@/lib/provenance";
 import type {
   HoneySale,
   RegisterGiveAway,
@@ -87,6 +88,29 @@ function Dim({
       {children}
     </div>
   );
+}
+
+/** What a sale line is, in the glossary's words; jars need no word. */
+const LINE_KIND_LABELS: Record<string, string> = {
+  colony: "hive",
+  equipment: "equipment",
+  product: "hive product",
+};
+
+/**
+ * One order line as text: "C2 · Lenoir Apiary (hive)", "3 × 16 oz". The
+ * quantity leads only when it says something — a hive is always one — and
+ * the kind sits in parentheses with real spaces around it, so the line reads
+ * the same in a screen reader and a copied cell as on the page.
+ */
+export function orderLineText(item: {
+  quantity: number;
+  label: string;
+  kind?: string | null;
+}): string {
+  const kind = item.kind && item.kind !== "jar" ? LINE_KIND_LABELS[item.kind] ?? item.kind : null;
+  const lead = kind === "hive" && item.quantity === 1 ? "" : `${item.quantity} × `;
+  return `${lead}${item.label}${kind ? ` (${kind})` : ""}`;
 }
 
 function giveAwayLabel(giveAway: RegisterGiveAway): string {
@@ -172,7 +196,7 @@ export function SalesTab() {
               const giveAway = entry.giveAway;
               const notes =
                 giveAway.notes && giveAway.notes !== giveAway.recipient
-                  ? giveAway.notes
+                  ? provenanceBody(giveAway.notes)
                   : null;
               return (
                 <Dim entry={entry}>
@@ -206,19 +230,15 @@ export function SalesTab() {
                   <span className="text-muted-foreground">—</span>
                 ) : (
                   <ul className="grid gap-0.5">
-                    {sale.lineItems.map((item) => (
+                    {sale.lineItems.map((item, index) => (
                       <li
-                        key={`${item.saleId}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.itemId ?? item.productId}-${item.bottlingRunId ?? ""}`}
+                        // Two lines can share a size with no run (different lots), so the index is part of the key.
+                        key={`${index}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.itemId ?? item.productId}`}
                         className="text-sm"
                       >
-                        {item.quantity} × {item.label}
-                        {item.kind && item.kind !== "jar" && (
-                          <span className="ml-1 text-xs capitalize text-muted-foreground">
-                            ({item.kind})
-                          </span>
-                        )}
+                        {orderLineText(item)}
                         <span className="ml-1 text-xs text-muted-foreground">
-                          @ {formatMoney(item.unitPrice)}
+                          {" "}@ {formatMoney(item.unitPrice)}
                         </span>
                         {item.lotCode && (
                           <span className="block text-xs text-muted-foreground">
@@ -229,9 +249,9 @@ export function SalesTab() {
                     ))}
                   </ul>
                 )}
-                {sale.notes && (
+                {provenanceBody(sale.notes) && (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {sale.notes}
+                    {provenanceBody(sale.notes)}
                   </p>
                 )}
               </Dim>
@@ -510,7 +530,7 @@ export function SalesTab() {
         </p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/production">Back to Honey</Link>
+            <Link href="/stock">Open Stock</Link>
           </Button>
           <Button type="button" size="sm" onClick={() => void register.refetch()}>
             Retry
@@ -526,7 +546,7 @@ export function SalesTab() {
         ) : (
           <>
             No sales recorded yet. Press{" "}
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">s</kbd>{" "}
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">s</kbd>{" "}
             to record one.
           </>
         )}
@@ -600,7 +620,7 @@ export function SalesTab() {
             <AlertDialogTitle>Cancel this sale?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirmSale
-                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled. Jars, colonies, feeders, and equipment this sale moved are restored. The record is kept for the ledger.`
+                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled. Jars, hives, feeders, and equipment this sale moved are restored. The record is kept for the ledger.`
                 : ""}{" "}
               A cancelled sale cannot be reopened.
             </AlertDialogDescription>

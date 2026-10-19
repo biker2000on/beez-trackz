@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
 
 import { YardStatusView } from "@/features/yard/yard-status-view";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Yard" };
+export const metadata = pageMetadata("/yard");
 
 export default function YardPage() {
   return <YardStatusView />;

@@ -186,26 +186,18 @@ test("Stock › Movements is in the Stock menu and Production › Activity redir
   page,
 }) => {
   await mockApp(page);
+  // Serial lookup is a Stock page too (palette-only), so the Stock area is
+  // the one expanded in the sidebar and Movements is one click away.
   await page.goto("/production/serials");
-  // Production keeps an Activity shortcut to the same page.
-  await expect(
-    page
-      .getByRole("navigation", { name: "Production pages" })
-      .getByRole("link", { name: "Activity", exact: true }),
-  ).toHaveAttribute("href", "/stock/movements");
-
   const mainNav = page.getByRole("navigation", { name: "Main navigation" });
   await mainNav.getByRole("link", { name: "Movements", exact: true }).click();
   await expect(page).toHaveURL(/\/stock\/movements$/);
   await expect(page.getByRole("heading", { name: "Movements", level: 1 })).toBeVisible();
-  await expect(page).toHaveTitle(/Movements/);
+  await expect(page).toHaveTitle(/^Movements · Stock · /);
   await expect(rows(page)).toHaveCount(50);
-  // The page sits in the Stock menu, and only Stock lights up for it.
-  await expect(
-    page
-      .getByRole("navigation", { name: "Stock pages" })
-      .getByRole("link", { name: "Movements", exact: true }),
-  ).toBeVisible();
+  // No in-page strip on desktop: the sidebar is the section menu, and only
+  // Stock lights up for this page.
+  await expect(page.getByRole("navigation", { name: "Stock pages" })).toHaveCount(0);
   await expect(mainNav.getByRole("link", { name: "Movements", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
@@ -215,7 +207,7 @@ test("Stock › Movements is in the Stock menu and Production › Activity redir
     "page",
   );
   await expect(
-    mainNav.getByRole("link", { name: "Production", exact: true }),
+    mainNav.getByRole("link", { name: "In progress", exact: true }),
   ).not.toHaveAttribute("aria-current", "page");
 
   // The old route keeps working, query and all.

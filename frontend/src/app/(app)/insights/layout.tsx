@@ -1,12 +1,10 @@
 "use client";
 
-import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 
 import { useQuery } from "@tanstack/react-query";
 
 import { Skeleton } from "@/components/ui/skeleton";
-import { ReportsSectionNav } from "@/features/operations/reports-nav";
 import { api, type AuthStatus } from "@/lib/api";
 
 const ADMIN_REPORT_PREFIXES = [
@@ -23,7 +21,11 @@ function isAdminReportPath(pathname: string) {
   );
 }
 
-/** Insights chrome: the section menu that replaced two nested tab strips. */
+/**
+ * Insights chrome: the admin gate for the finance and planning reports. The
+ * section strip that used to sit here is gone — the sidebar lists the
+ * Insights pages on desktop and `PageHeader` carries them on phones.
+ */
 export default function ReportsLayout({
   children,
 }: {
@@ -43,9 +45,6 @@ export default function ReportsLayout({
 
   return (
     <div className="mx-auto grid w-full max-w-6xl gap-6">
-      <Suspense fallback={<Skeleton className="h-11 w-full max-w-2xl" />}>
-        <ReportsSectionNav />
-      </Suspense>
       {needsAdmin && profile.isPending ? (
         <Skeleton className="h-72 w-full" />
       ) : blocked ? (

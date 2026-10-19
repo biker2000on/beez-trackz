@@ -1,7 +1,8 @@
 import { Suspense } from "react";
+
+import { Skeleton } from "@/components/ui/skeleton";
 import { VisitWorkspace } from "@/features/transcription/visit-workspace";
 
-export const metadata = { title: "Inspection visit" };
 export default async function VisitPage({
   params,
 }: {
@@ -9,7 +10,7 @@ export default async function VisitPage({
 }) {
   const { id } = await params;
   return (
-    <Suspense fallback={<p>Loading visit…</p>}>
+    <Suspense fallback={<Skeleton className="h-64 w-full" />}>
       <VisitWorkspace apiaryId={id} />
     </Suspense>
   );

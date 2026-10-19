@@ -262,7 +262,7 @@ export function QueenFormDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="queen-mated">Mating yard</Label>
+            <Label htmlFor="queen-mated">Mating apiary</Label>
             <Controller
               control={form.control}
               name="matedAtApiaryId"
@@ -288,7 +288,7 @@ export function QueenFormDialog({
             <Textarea
               id="queen-drone-source"
               rows={2}
-              placeholder="Which yards were flooding drones…"
+              placeholder="Which apiaries were flooding drones…"
               {...form.register("droneSourceNote")}
             />
           </div>

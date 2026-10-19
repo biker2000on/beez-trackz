@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/features/hives/lib";
 import { useHiveTimeline, type HiveTimelineEntry } from "./hooks";
+import { NoteText } from "@/components/record/source-note";
 
 const ICONS = {
   inspection: Stethoscope,
@@ -69,11 +70,10 @@ export function HiveTimeline({
                 <Badge variant="outline">{formatDate(entry.date)}</Badge>
               </CardHeader>
               <CardContent className="grid gap-3">
-                {entry.details && (
-                  <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-                    {entry.details}
-                  </p>
-                )}
+                <NoteText
+                  text={entry.details}
+                  className="whitespace-pre-wrap text-sm text-muted-foreground"
+                />
                 {entry.photos.length > 0 && (
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {entry.photos.map((photo) => (

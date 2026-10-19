@@ -4,6 +4,7 @@ import * as React from "react";
 import { Download, Printer } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 
 import { AdminReportGate } from "./reports-nav";
@@ -52,12 +53,7 @@ export function ComplianceView() {
 
   return (
     <div className="grid gap-4">
-      <div className="grid gap-1">
-        <h1 className="text-2xl font-bold tracking-tight">Compliance packet</h1>
-        <p className="text-sm text-muted-foreground">
-          One export for the inspector or market manager.
-        </p>
-      </div>
+      <PageHeader subtitle="Export what the inspector or market manager asks for, in one packet." />
       <AdminReportGate>
         <div className="grid gap-3">
       <p className="text-sm text-muted-foreground">

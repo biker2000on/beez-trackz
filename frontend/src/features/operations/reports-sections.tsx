@@ -12,13 +12,15 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useQueries } from "@tanstack/react-query";
 import {
   createColumnHelper,
   useTable,
 } from "@tanstack/react-table";
 import { DollarSign, HeartPulse, Scale, TrendingUp } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,9 +33,13 @@ import {
 import { YearSelect } from "@/components/ui/year-select";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { type Apiary } from "@/features/apiaries/hooks";
+import type { CanvasLayout } from "@/features/canvas/lib/types";
 import { formatDate } from "@/features/hives/lib";
 import { formatLbs, formatMoney } from "@/features/honey/format";
-import { useNumberParam } from "@/lib/url-state";
+import { useQueens } from "@/features/queens/api";
+import { api } from "@/lib/api";
+import { useSetSearchParams } from "@/lib/url-state";
 import {
   miteDisplay,
   useEconomicsReport,
@@ -45,6 +51,11 @@ import {
   type VarroaFleetHive,
   type YieldReport as YieldReportData,
 } from "./hooks";
+import {
+  resolveQueenLineRows,
+  resolveStandRows,
+  type StandRef,
+} from "./survival-labels";
 import { METHOD_LABELS } from "./varroa-panel";
 
 type YieldHiveRow = YieldReportData["byHive"][number];
@@ -74,9 +85,34 @@ export function currentYear(): number {
   return new Date().getFullYear();
 }
 
-/** Season year from the `year` search param, shared across report sections. */
-export function useReportYear(fallback = currentYear()) {
-  return useNumberParam("year", fallback);
+/**
+ * The season for the whole Insights area, held in the `season` search param
+ * so it survives moving between the hub, its sub-hubs and every report. One
+ * default for all of them — the current year — so the hub's headline numbers
+ * and the report a tile opens never disagree about which season they show.
+ * `year` is read as a legacy alias so shared links from before the rename
+ * still open on their season; writes go to `season`.
+ */
+export function useReportYear(
+  fallback = currentYear(),
+): [number, (next: number) => void] {
+  const params = useSearchParams();
+  const setParams = useSetSearchParams();
+  const raw = params.get("season") ?? params.get("year");
+  const parsed = Number(raw);
+  const value = raw != null && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const set = React.useCallback(
+    (next: number) =>
+      // The legacy key is dropped on write so a link never carries two seasons.
+      setParams({ season: next === fallback ? null : String(next), year: null }),
+    [fallback, setParams],
+  );
+  return [value, set];
+}
+
+/** `href` with the season carried along, for links inside Insights. */
+export function seasonHref(href: string, season: number): string {
+  return `${href}${href.includes("?") ? "&" : "?"}season=${season}`;
 }
 
 export function ReportYearPicker({
@@ -103,26 +139,23 @@ export function ReportYearPicker({
 }
 
 export function ReportHeader({
-  title,
   description,
   year,
   onYearChange,
 }: {
-  title: string;
   description: string;
   year?: number;
   onYearChange?: (year: number) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      {year != null && onYearChange != null && (
-        <ReportYearPicker year={year} onYearChange={onYearChange} />
-      )}
-    </div>
+    <PageHeader
+      subtitle={description}
+      actions={
+        year != null && onYearChange != null ? (
+          <ReportYearPicker year={year} onYearChange={onYearChange} />
+        ) : null
+      }
+    />
   );
 }
 
@@ -137,7 +170,7 @@ export function ReportHighlights({ year }: { year: number }) {
       <ReportStat
         label="Winter survival"
         value={survival.data ? `${survival.data.survivalRate.toFixed(0)}%` : undefined}
-        detail={survival.data ? `${survival.data.survived}/${survival.data.enteredWinter} colonies` : undefined}
+        detail={survival.data ? `${survival.data.survived}/${survival.data.enteredWinter} hives` : undefined}
         icon={HeartPulse}
         loading={survival.isPending}
       />
@@ -174,7 +207,7 @@ export function VarroaFleetSection() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Varroa across the fleet</CardTitle>
+        <CardTitle className="text-base">Varroa across every hive</CardTitle>
         <p className="text-sm text-muted-foreground">
           {fleet.data.overThresholdCount === 0
             ? "No hives over the action level"
@@ -280,7 +313,7 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
   return (
     <DataGrid
       table={table}
-      aria-label="Varroa across the fleet"
+      aria-label="Varroa across every hive"
       listenOnWindow={false}
       onRowActivate={(row) => router.push(`/yard/hives/${row.hiveId}?tab=health`)}
     />
@@ -289,13 +322,61 @@ function VarroaFleetGrid({ hives }: { hives: VarroaFleetHive[] }) {
 
 export function SurvivalReport({ year }: { year: number }) {
   const survival = useSurvivalReport(year);
-  if (survival.isPending) return <Skeleton className="h-64" />;
-  if (!survival.data) return <ErrorText />;
+  const queens = useQueens();
+  // The stand ids in `byStand` live in each apiary's canvas layout; the
+  // report's own `byApiary` says which apiaries to read.
+  const apiaryIds = React.useMemo(
+    () => (survival.data?.byApiary ?? []).map((row) => row.key),
+    [survival.data],
+  );
+  // `combine` is structurally shared, so `layouts.apiaries` is the same
+  // array between renders until a layout actually changes.
+  const layouts = useQueries({
+    queries: apiaryIds.map((id) => ({
+      queryKey: ["apiaries", "detail", id],
+      queryFn: () => api.get<Apiary>(`/apiaries/${id}`),
+    })),
+    combine: (results) => ({
+      pending: results.some((query) => query.isPending),
+      apiaries: results
+        .map((query) => query.data)
+        .filter((apiary): apiary is Apiary => apiary != null),
+    }),
+  });
+  const layoutsPending = layouts.pending;
+  const layoutData = layouts.apiaries;
+
+  const rows = React.useMemo(() => {
+    if (!survival.data) return null;
+    const apiaryNames = new Map(
+      survival.data.byApiary.map((row) => [row.key, row.label]),
+    );
+    const standsByApiary = new Map<string, StandRef[]>();
+    for (const apiary of layoutData) {
+      const stands = (apiary.canvasLayout as CanvasLayout | null)?.stands ?? [];
+      standsByApiary.set(
+        apiary.id,
+        stands.map((stand) => ({ id: stand.id, label: stand.label })),
+      );
+    }
+    return {
+      byStand: resolveStandRows(survival.data.byStand, standsByApiary, apiaryNames),
+      byQueenLine: resolveQueenLineRows(
+        survival.data.byQueenLine,
+        queens.data ?? [],
+      ),
+    };
+  }, [survival.data, queens.data, layoutData]);
+
+  if (survival.isPending || queens.isPending || layoutsPending) {
+    return <Skeleton className="h-64" />;
+  }
+  if (!survival.data || !rows) return <ErrorText />;
   return (
     <div className="grid gap-5">
       <SurvivalTable title="By apiary" rows={survival.data.byApiary} />
-      <SurvivalTable title="By stand position" rows={survival.data.byStand} />
-      <SurvivalTable title="By queen line" rows={survival.data.byQueenLine} />
+      <SurvivalTable title="By stand" rows={rows.byStand} />
+      <SurvivalTable title="By queen line" rows={rows.byQueenLine} />
     </div>
   );
 }
@@ -429,20 +510,20 @@ function EconomicsGrid({ rows }: { rows: EconomicsApiaryRow[] }) {
         }),
         economicsColumnHelper.accessor((r) => r.feedCostPerColony, {
           id: "feedPerColony",
-          header: "Feed / colony",
+          header: "Feed / hive",
           meta: {
             ...rightAligned,
-            label: "Feed per colony",
+            label: "Feed per hive",
             priority: "secondary",
           } satisfies DataGridColumnMeta,
           cell: ({ row }) => formatMoney(row.original.feedCostPerColony),
         }),
         economicsColumnHelper.accessor((r) => r.treatmentCostPerColony, {
           id: "treatmentPerColony",
-          header: "Treatment / colony",
+          header: "Treatment / hive",
           meta: {
             ...rightAligned,
-            label: "Treatment per colony",
+            label: "Treatment per hive",
             priority: "secondary",
           } satisfies DataGridColumnMeta,
           cell: ({ row }) => formatMoney(row.original.treatmentCostPerColony),

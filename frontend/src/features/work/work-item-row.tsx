@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   AlertTriangle,
   CloudOff,
@@ -22,9 +21,9 @@ const SOURCE_META: Record<
   { label: string; icon: typeof Sparkles }
 > = {
   lockout: { label: "Lockout", icon: Lock },
-  recommendation: { label: "Rec", icon: Sparkles },
-  feeding: { label: "Feed", icon: Droplets },
-  harvest_ready: { label: "Harvest", icon: Hexagon },
+  recommendation: { label: "Recommendation", icon: Sparkles },
+  feeding: { label: "Feeding", icon: Droplets },
+  harvest_ready: { label: "Harvest ready", icon: Hexagon },
 };
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -94,7 +93,7 @@ function CommandButton({
       }
       title={blocked ? blocked.reason : undefined}
       onClick={() => onRun(item, command)}
-      className="gap-1.5"
+      className="min-h-11 gap-1.5 sm:min-h-8"
     >
       {blocked?.kind === "offline" ? (
         <CloudOff className="size-3.5" aria-hidden />
@@ -103,38 +102,32 @@ function CommandButton({
         <Lock className="size-3.5" aria-hidden />
       ) : null}
       {command.label}
-      {command.keyboard ? (
-        <kbd className="rounded border bg-background/70 px-1 font-mono text-[10px] leading-none">
-          {command.keyboard}
-        </kbd>
-      ) : null}
       {willQueue ? (
-        <span className="text-[10px] font-normal opacity-80">queues</span>
+        <span className="text-xs font-normal opacity-80">queues</span>
       ) : null}
     </Button>
   );
 }
 
 /**
- * One work item: the action, the evidence that justifies it, and the commands
- * that resolve it — each already answered for this actor and this connection.
+ * One work item inside a hive card: the evidence that justifies it and the
+ * commands that resolve it — each already answered for this actor and this
+ * connection.
  *
- * Nothing on this row is re-derived. Priority, ordering, grouping, permission
- * and offline disposition all arrive decided (§4.2); the row's only judgement
- * is how to draw them.
+ * Nothing on this row is re-derived. Priority, ordering, permission and
+ * offline disposition all arrive decided (§4.2); the row's only judgement is
+ * how to draw them. Keyboard letters are listed in the `?` dialog, not here.
  */
 export function WorkItemRow({
   item,
   focused,
   onRun,
   busy,
-  hiveHref = (hiveId) => `/yard/hives/${hiveId}`,
 }: {
   item: WorkItem;
   focused: boolean;
   onRun: (item: WorkItem, command: WorkCommand) => void;
   busy: boolean;
-  hiveHref?: (hiveId: string) => string;
 }) {
   const online = useOnline();
   const meta = SOURCE_META[item.sourceType] ?? SOURCE_META.recommendation;
@@ -159,18 +152,20 @@ export function WorkItemRow({
       data-status={item.status}
       tabIndex={focused ? 0 : -1}
       className={cn(
-        "grid gap-2 rounded-xl border bg-card p-3 outline-none",
-        urgent && "border-destructive/40",
-        item.sourceType === "lockout" && "border-amber-500/40 bg-amber-500/5",
+        "grid gap-2 rounded-lg border-t py-2 outline-none first:border-t-0",
         focused && "bg-primary/5 ring-1 ring-primary/50",
       )}
     >
       <div className="flex items-start gap-2">
-        <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />
+        <Icon
+          role="img"
+          aria-label={meta.label}
+          className="mt-0.5 size-4 shrink-0 text-primary"
+        />
         <div className="grid min-w-0 flex-1 gap-0.5">
           <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium leading-tight">
             {urgent ? (
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-destructive">
+              <span className="text-xs font-semibold uppercase tracking-wide text-destructive">
                 Urgent
               </span>
             ) : (
@@ -179,21 +174,10 @@ export function WorkItemRow({
               </span>
             )}
             <span data-testid="work-item-title">{item.title}</span>
-            {item.context.hiveId ? (
-              <Link
-                href={hiveHref(item.context.hiveId)}
-                className="truncate text-muted-foreground underline-offset-4 hover:underline"
-              >
-                {item.context.hiveName ?? "hive"}
-              </Link>
-            ) : null}
-            <span className="rounded-full border px-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-              {meta.label}
-            </span>
             {item.status !== "open" ? (
               <span
                 data-testid="work-item-status"
-                className="rounded-full border px-1.5 text-[10px] uppercase tracking-wide text-muted-foreground"
+                className="rounded-full border px-1.5 text-xs capitalize text-muted-foreground"
               >
                 {item.status}
               </span>
@@ -202,13 +186,13 @@ export function WorkItemRow({
           {item.evidence.map((entry, index) => (
             <p
               key={`${entry.sourceType}:${entry.sourceId}:${index}`}
-              className="text-xs text-muted-foreground"
+              className="text-sm text-muted-foreground"
             >
               {entry.text}
             </p>
           ))}
           {item.supersedes.length > 0 ? (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Covers {item.supersedes.length} other item
               {item.supersedes.length === 1 ? "" : "s"} on this hive.
             </p>
@@ -217,7 +201,7 @@ export function WorkItemRow({
       </div>
 
       {item.commands.length > 0 ? (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 pl-6">
           {item.commands.map((command) => (
             <CommandButton
               key={command.id}
@@ -231,14 +215,14 @@ export function WorkItemRow({
       ) : null}
 
       {blocked.length > 0 ? (
-        <ul className="grid gap-0.5" data-testid="work-command-reasons">
+        <ul className="grid gap-0.5 pl-6" data-testid="work-command-reasons">
           {blocked.map(({ command, why }) => (
             <li
               key={command.id}
               data-testid="work-command-reason"
               data-command-id={command.id}
               data-blocked={why.kind}
-              className="flex items-start gap-1.5 text-[11px] text-muted-foreground"
+              className="flex items-start gap-1.5 text-xs text-muted-foreground"
             >
               {why.kind === "forbidden" ? (
                 <Lock className="mt-0.5 size-3 shrink-0" aria-hidden />

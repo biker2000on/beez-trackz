@@ -29,6 +29,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -215,18 +216,6 @@ export function TypesView() {
                   .join(" + "),
         }),
         columnHelper.display({
-          id: "owned",
-          header: "Owned",
-          meta: rightAligned,
-          cell: ({ row }) => row.original.stock?.totalOwned ?? 0,
-        }),
-        columnHelper.display({
-          id: "available",
-          header: "Available",
-          meta: rightAligned,
-          cell: ({ row }) => row.original.stock?.available ?? 0,
-        }),
-        columnHelper.display({
           id: "unitCost",
           header: "Unit cost",
           meta: rightAligned,
@@ -312,22 +301,15 @@ export function TypesView() {
 
   return (
     <div className="grid gap-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            Equipment types &amp; BOMs
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            The catalog behind your equipment stock: types, their varieties,
-            and the bill of materials that lets you build one thing from
-            others.
-          </p>
-        </div>
-        <Button onClick={() => setEditorState({})}>
-          <Plus />
-          New type
-        </Button>
-      </header>
+      <PageHeader
+        subtitle="Define the kinds of equipment you count, and what each one is built from."
+        actions={
+          <Button onClick={() => setEditorState({})}>
+            <Plus />
+            New type
+          </Button>
+        }
+      />
 
       {types.isPending ? (
         <div className="grid gap-3">

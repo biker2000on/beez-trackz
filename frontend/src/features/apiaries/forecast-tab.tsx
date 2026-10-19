@@ -137,7 +137,7 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
                     {outlook.map(({ date, index }) => (
                       <div className="rounded-md border p-2 text-center" key={date}>
                         <p className="text-xs font-semibold">{shortWeekday(date)}</p>
-                        <p className="text-[10px] text-muted-foreground">{shortDate(date)}</p>
+                        <p className="text-xs text-muted-foreground">{shortDate(date)}</p>
                         <p className="mt-2 text-sm font-semibold">
                           {units.formatTemperature(
                             forecast.daily.temperature_2m_max[index],
@@ -148,7 +148,7 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
                             forecast.daily.temperature_2m_min[index],
                           )}
                         </p>
-                        <p className="mt-1 text-[10px] text-sky-700 dark:text-sky-300">
+                        <p className="mt-1 text-xs text-sky-700 dark:text-sky-300">
                           {Math.round(
                             forecast.daily.precipitation_probability_max[index] ??
                               0,
@@ -175,7 +175,7 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
             </CardTitle>
             <CardDescription>
               The past week at this pin, from the same Open-Meteo snapshot —
-              no extra provider. Read it next to the yard&apos;s elevation.
+              no extra provider. Read it next to the apiary&apos;s elevation.
             </CardDescription>
           </CardHeader>
           <CardContent>

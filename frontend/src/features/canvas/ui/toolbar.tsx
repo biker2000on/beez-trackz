@@ -209,7 +209,7 @@ export function CanvasToolbar({
           size="sm"
           onClick={onSetLocation}
           disabled={readOnly}
-          title="Set yard location"
+          title="Set apiary location"
         >
           <MapPin />
           {hasLocation ? "Location" : "Set location"}

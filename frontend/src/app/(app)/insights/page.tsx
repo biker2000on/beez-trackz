@@ -1,10 +1,10 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { ReportsOverview } from "@/features/operations/reports-overview";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Reports" };
+export const metadata = pageMetadata("/insights");
 
 export default function ReportsPage() {
   return (

@@ -90,7 +90,7 @@ export const QueenNode = React.memo(function QueenNode({
         </span>
       </div>
       {marking ? (
-        <p className="mt-0.5 text-[10px] text-muted-foreground">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {marking.name} mark
         </p>
       ) : null}
@@ -100,25 +100,25 @@ export const QueenNode = React.memo(function QueenNode({
           : "Not in a hive"}
       </p>
       {queen.matedAtApiaryName ? (
-        <p className="truncate text-[10px] text-muted-foreground">
+        <p className="truncate text-xs text-muted-foreground">
           Mated at {queen.matedAtApiaryName}
         </p>
       ) : null}
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <span
           className={cn(
-            "inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium",
+            "inline-flex rounded-full px-2 py-0.5 text-xs font-medium",
             STATUS_CLASSES[queen.status] ?? STATUS_CLASSES.active,
           )}
         >
           {STATUS_LABELS[queen.status] ?? queen.status}
         </span>
-        <span className="truncate text-[10px] text-muted-foreground">
+        <span className="truncate text-xs text-muted-foreground">
           {QUEEN_ORIGIN_LABELS[queen.origin] ?? queen.origin}
         </span>
       </div>
       {score != null && (inspections ?? 0) > 0 ? (
-        <div className="mt-1.5 flex items-center justify-between border-t pt-1.5 text-[10px]">
+        <div className="mt-1.5 flex items-center justify-between border-t pt-1.5 text-xs">
           <span className="text-muted-foreground">Performance</span>
           <strong className="text-primary">{score.toFixed(1)}</strong>
         </div>

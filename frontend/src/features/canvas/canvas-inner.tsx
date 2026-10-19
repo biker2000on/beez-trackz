@@ -984,7 +984,7 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
               openHive(hive.id);
             }}
           >
-            View Hive
+            Open hive
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -992,7 +992,7 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
               openHive(hive.id);
             }}
           >
-            New Inspection
+            Log inspection
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -1375,7 +1375,7 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
             step={5}
             className="w-56"
           />
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Azimuth {Math.round(solar.azimuth)}° · solar alt {solar.altitude.toFixed(1)}°
             · rise {formatClock(solar.sunriseMinutes)}
             {solar.sunriseAzimuth != null ? ` @ ${Math.round(solar.sunriseAzimuth)}°` : ""}
@@ -1589,11 +1589,11 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
                 text={
                   !hasLocation
                     ? editMode
-                      ? "Use “Add Stand” to lay out your first hive stand — Set location to put the yard on a map"
+                      ? "Use “Add Stand” to lay out your first hive stand — Set location to put the apiary on a map"
                       : "No stands yet — switch to Edit mode, or Set location for the map"
                     : editMode
                       ? "Use “Add Stand” to drop a stand at the map center"
-                      : "No stands yet — switch to Edit mode to lay out the yard"
+                      : "No stands yet — switch to Edit mode to lay out the apiary"
                 }
                 fontSize={14}
                 fill="#a1a1aa"

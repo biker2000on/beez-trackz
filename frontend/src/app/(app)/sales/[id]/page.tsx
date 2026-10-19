@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
-
+import { pageMetadata } from "@/lib/page-title";
 import { ReceiptView } from "@/features/commerce/receipt-view";
 
-export const metadata: Metadata = { title: "Receipt" };
+// First paint carries the list title; the record header sets "Name · List · Brand".
+export const metadata = pageMetadata("/sales");
 
 export default async function ReceiptPage({
   params,

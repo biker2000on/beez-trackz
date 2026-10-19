@@ -18,22 +18,20 @@ import {
   ReportHeader,
   SurvivalReport,
   YieldReport,
-  currentYear,
   useReportYear,
 } from "./reports-sections";
 import { useAutopsySummary } from "./hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function SurvivalReportView() {
-  // Winter survival is measured over the winter that *ends* in the season
-  // year, so the useful default is last year rather than the current one.
-  const [year, setYear] = useReportYear(currentYear() - 1);
+  // One season for the whole Insights area (`useReportYear`): the hub's
+  // default, carried in `?season=`.
+  const [year, setYear] = useReportYear();
   const autopsies = useAutopsySummary(year);
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Winter survival"
-        description="Colonies that entered and left winter, grouped by apiary, stand position and queen line."
+        description="Hives that entered and left winter, grouped by apiary, stand and queen line."
         year={year}
         onYearChange={setYear}
       />
@@ -46,11 +44,10 @@ export function SurvivalReportView() {
 }
 
 export function YieldReportView() {
-  const [year, setYear] = useReportYear(currentYear() - 1);
+  const [year, setYear] = useReportYear();
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Honey yield"
         description="Hive leaderboard for the season and total harvest weight year over year."
         year={year}
         onYearChange={setYear}
@@ -61,11 +58,10 @@ export function YieldReportView() {
 }
 
 export function EconomicsReportView() {
-  const [year, setYear] = useReportYear(currentYear() - 1);
+  const [year, setYear] = useReportYear();
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Apiary economics"
         description="Cost and margin per apiary. Revenue is invoiced order totals allocated by yield."
         year={year}
         onYearChange={setYear}
@@ -80,7 +76,6 @@ export function ProfitabilityView() {
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Profitability"
         description="Revenue (invoiced), expenses, break-even prices and margin by channel, lot and jar size."
         year={year}
         onYearChange={setYear}
@@ -95,7 +90,6 @@ export function ExpensesView() {
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Expenses"
         description="Everything spent this season, assignable to an apiary, hive or harvest lot."
         year={year}
         onYearChange={setYear}
@@ -111,7 +105,6 @@ export function BottlingView() {
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Bottle next"
         description="What to bottle next, projected from recent demand and bulk honey on hand."
       />
       <PlanningPanel />
@@ -123,7 +116,6 @@ export function CustomersView() {
   return (
     <div className="grid gap-5">
       <ReportHeader
-        title="Customers & wholesale"
         description="Customer list with reorder reminders, plus wholesale price lists."
       />
       <CustomersPanel />

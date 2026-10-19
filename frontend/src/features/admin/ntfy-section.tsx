@@ -92,7 +92,7 @@ export function NtfySection() {
   return (
     <div className="grid gap-4" data-config-editor="ntfy">
       <p className="text-sm text-muted-foreground">
-        Optional phone push via ntfy. Same events as the yard queue: mite check
+        Optional phone push via ntfy. Same events as the Visit queue: mite check
         due, feeder empty, treatment off-date, flow started. Unconfigured is a
         no-op — nothing is emailed.
       </p>

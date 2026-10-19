@@ -9,9 +9,12 @@ import { cn } from "@/lib/utils";
 import { Logo } from "@/components/logo";
 import {
   NAV_ITEMS,
+  SETUP_ITEM,
   isNavRouteActive,
   navRouteChildren,
   visibleNavItems,
+  visibleNavRoutes,
+  type NavItem,
   type NavRoute,
 } from "@/components/shell/nav-items";
 import { AccountLink } from "@/components/shell/account-link";
@@ -20,10 +23,24 @@ import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { CommandPaletteButton } from "@/components/shortcuts/provider";
 import { Separator } from "@/components/ui/separator";
 import { useAccessProfile } from "@/features/access/api";
+import { useApiary } from "@/features/apiaries/hooks";
 import { useHives } from "@/features/hives/hooks";
 
 const DEPTH_PADDING = ["pl-8", "pl-11", "pl-14"];
 
+/**
+ * Desktop rail: the five areas, only the active one expanded by default, and
+ * Setup beside the account link in the footer rather than as a sixth area.
+ * On a record the rail draws that record as one row under its list (the
+ * apiary's name, the hive's label); the record's tabs and actions live in
+ * the record header, never here. When a Setup page is open, Setup's pages
+ * expand under the footer link the way an area's do.
+ *
+ * Before the profile answers, the rail draws the same five rows it will draw
+ * afterwards (the areas are static; only admin-only ones might vanish), with
+ * the active area's child slots as placeholders, so the page does not jump
+ * when the real tree lands.
+ */
 export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -33,7 +50,7 @@ export function Sidebar() {
   const currentHiveId = pathname.match(/^\/yard\/hives\/([^/]+)/)?.[1];
   const hives = useHives({ includeArchived: true }, Boolean(currentHiveId));
   const isAdmin = profile.data?.isAdmin === true;
-  const items = visibleNavItems(NAV_ITEMS, isAdmin);
+  const items = profile.data ? visibleNavItems(NAV_ITEMS, isAdmin) : NAV_ITEMS;
   const [expansion, setExpansion] = React.useState<{
     path: string;
     map: Record<string, boolean>;
@@ -45,7 +62,12 @@ export function Sidebar() {
   const navRef = React.useRef<HTMLElement>(null);
 
   const currentApiaryId = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
+  const apiary = useApiary(currentApiaryId ?? "", Boolean(currentApiaryId));
   const currentHive = hives.data?.find((hive) => hive.id === currentHiveId);
+  const recordLabels = {
+    apiary: apiary.data?.name ?? null,
+    hive: currentHive?.positionLabel ?? null,
+  };
   const contextApiaryId = currentApiaryId ?? currentHive?.apiaryId;
   const canEditAny =
     isAdmin || profile.data?.memberships.some((entry) => entry.role === "editor") === true;
@@ -61,10 +83,10 @@ export function Sidebar() {
   React.useEffect(() => {
     const links = navRef.current?.querySelectorAll('[aria-current="page"]');
     links?.[links.length - 1]?.scrollIntoView({ block: "nearest" });
-  }, [pathname, currentHref, expanded, items, canEditContext, hives.data]);
+  }, [pathname, currentHref, expanded, items, canEditContext, hives.data, apiary.data]);
 
   function itemChildren(item: NavRoute) {
-    return navRouteChildren(item, pathname, isAdmin, canEditContext);
+    return navRouteChildren(item, pathname, isAdmin, canEditContext, recordLabels);
   }
 
   function toggle(href: string, defaultOpen: boolean) {
@@ -76,6 +98,11 @@ export function Sidebar() {
       };
     });
   }
+
+  const setupActive = isNavRouteActive(SETUP_ITEM, currentHref);
+  const setupChildren = setupActive
+    ? visibleNavRoutes(SETUP_ITEM.children ?? [], isAdmin, canEditAny)
+    : [];
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r bg-sidebar pt-[var(--safe-top)] text-sidebar-foreground lg:flex">
@@ -92,19 +119,24 @@ export function Sidebar() {
         ref={navRef}
         className="flex-1 overflow-y-auto px-3"
         aria-label="Main navigation"
+        aria-busy={profile.isPending || undefined}
       >
         <ul className="grid gap-1">
           {items.map((item) => {
-            const children = itemChildren(item);
             const active = isNavRouteActive(item, currentHref);
+            if (!profile.data) {
+              return (
+                <SidebarSkeletonArea key={item.href} item={item} active={active} />
+              );
+            }
+            const children = itemChildren(item);
             const Icon = item.icon;
-            const open = expanded[item.href] ?? true;
+            const open = expanded[item.href] ?? active;
             return (
               <li key={item.href}>
                 <div
                   className={cn(
                     "flex items-center rounded-md transition-colors",
-                    ["/insights", "/admin"].includes(item.href) && "mt-4 border-t pt-3",
                     active
                       ? "bg-primary/12 text-primary"
                       : "text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -157,10 +189,75 @@ export function Sidebar() {
       <div className="px-3 pb-4">
         <Separator className="mb-3" />
         <CommandPaletteButton />
+        {isAdmin ? (
+          <Link
+            href={SETUP_ITEM.href}
+            aria-current={setupActive ? "page" : undefined}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-md px-4 py-2 text-sm font-medium transition-colors",
+              setupActive
+                ? "text-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <SETUP_ITEM.icon className="size-4" />
+            {SETUP_ITEM.label}
+          </Link>
+        ) : null}
+        {isAdmin && setupChildren.length > 0 ? (
+          <nav aria-label="Setup pages" className="mb-2 px-1">
+            <ul className="grid gap-0.5 border-l border-border/70">
+              {setupChildren.map((route) => (
+                <SidebarRoute
+                  key={route.href}
+                  route={route}
+                  depth={0}
+                  currentHref={currentHref}
+                  expanded={expanded}
+                  onToggle={toggle}
+                />
+              ))}
+            </ul>
+          </nav>
+        ) : null}
         <AccountLink />
         <LogoutButton />
       </div>
     </aside>
+  );
+}
+
+/** The pre-profile placeholder for one area row: same height, no tree yet. */
+function SidebarSkeletonArea({
+  item,
+  active,
+}: {
+  item: NavItem;
+  active: boolean;
+}) {
+  const Icon = item.icon;
+  const slots = active ? (item.children?.filter((c) => !c.paletteOnly).length ?? 0) : 0;
+  return (
+    <li aria-hidden>
+      <div
+        className={cn(
+          "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium",
+          active ? "bg-primary/12 text-primary" : "text-muted-foreground",
+        )}
+      >
+        <Icon className="size-4 shrink-0" />
+        {item.label}
+      </div>
+      {slots > 0 && (
+        <ul className="mt-1 grid gap-0.5 border-l border-border/70">
+          {Array.from({ length: slots }).map((_, index) => (
+            <li key={index} className="py-1.5 pl-8 pr-2">
+              <span className="block h-4 w-24 animate-pulse rounded bg-muted" />
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 
@@ -179,7 +276,7 @@ function SidebarRoute({
 }) {
   const active = isNavRouteActive(route, currentHref);
   const children = route.children ?? [];
-  const open = expanded[route.href] ?? true;
+  const open = expanded[route.href] ?? active;
   const padding = DEPTH_PADDING[Math.min(depth, DEPTH_PADDING.length - 1)];
 
   return (

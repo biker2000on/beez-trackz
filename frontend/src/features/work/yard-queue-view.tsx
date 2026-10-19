@@ -2,62 +2,65 @@
 
 import * as React from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { useHives } from "@/features/hives/hooks";
 import { LaborControl } from "@/features/operations/labor-control";
 
 import { useWorkYard } from "./api";
-import { WorkSurface, type WorkSection } from "./work-surface";
+import { isFieldActionable, rollUp, rosterOf } from "./rollup";
 import type { WorkFilter } from "./types";
+import { WorkSurface, type WorkSection } from "./work-surface";
 
 /**
- * The Saturday walk: the same projection Today renders, grouped by yard.
+ * The Visit queue: Today's hive cards grouped by apiary for the walk, kept
+ * to what can be done standing at a hive.
  *
  * `/work/yard` and `/work/today` return the same items with the same ids,
  * commands and permissions; only the grouping differs, so an item resolved
  * here disappears from Today on the next read without either surface knowing
- * about the other.
- *
- * The `apiaryId: null` catch-all keeps hive-less recommendations visible —
- * they have no yard to be grouped under and were reachable nowhere else.
+ * about the other. The roll-up, the stale rule and the cards are shared.
  */
 export function YardQueueView({ filter = {} }: { filter?: WorkFilter }) {
   const yard = useWorkYard(filter);
+  const hives = useHives({ includeArchived: true });
+  const [showStale, setShowStale] = React.useState(false);
 
-  const sections: WorkSection[] = React.useMemo(() => {
+  const asOf = yard.data?.asOf ?? new Date().toISOString();
+  const roster = React.useMemo(() => rosterOf(hives.data), [hives.data]);
+  const { sections, staleCount } = React.useMemo(() => {
     const yards = yard.data?.yards ?? [];
-    return yards.map((entry) => ({
-      key: entry.apiaryId ?? "all-yards",
-      label: entry.apiaryName,
-      items: entry.items,
-      badge: (
-        <span className="flex items-center gap-1">
-          {entry.counts.urgent > 0 ? (
-            <Badge variant="destructive">{entry.counts.urgent} urgent</Badge>
-          ) : null}
-          {entry.counts.high > 0 ? (
-            <Badge variant="outline">{entry.counts.high} high</Badge>
-          ) : null}
-          {entry.counts.normal > 0 ? (
-            <Badge variant="outline">{entry.counts.normal} normal</Badge>
-          ) : null}
-        </span>
-      ),
-      empty: "Nothing queued in this yard.",
-    }));
-  }, [yard.data]);
+    let stale = 0;
+    const built: WorkSection[] = [];
+    for (const entry of yards) {
+      const result = rollUp(entry.items.filter(isFieldActionable), asOf, {
+        showStale,
+        roster,
+      });
+      stale += result.staleCount;
+      if (result.cards.length === 0 && entry.apiaryId === null) continue;
+      built.push({
+        key: entry.apiaryId ?? "all-yards",
+        label: entry.apiaryName,
+        cards: result.cards,
+        empty: "Nothing to do in this apiary.",
+      });
+    }
+    return { sections: built, staleCount: stale };
+  }, [yard.data, asOf, showStale, roster]);
 
   return (
     <WorkSurface
-      title="Yard queue"
-      description="Saturday work by yard: open recommendations, honey that is ready, feeders that need a look, and lockout end dates. Cached for offline walks."
+      description="Today's hives grouped by apiary for the walk. Cached for offline use."
       sections={sections}
       freshness={yard.data?.freshness}
       asOf={yard.data?.asOf}
-      isPending={yard.isPending}
+      isPending={yard.isPending || hives.isPending}
       isFetching={yard.isFetching}
       isError={yard.isError}
       onRefresh={() => void yard.refetch()}
-      emptyAll="Nothing queued. Open recommendations, harvest-ready supers, empty feeders and lockout end dates will land here."
+      emptyAll="Nothing to visit. Open recommendations, harvest-ready supers and empty feeders will land here."
+      staleCount={staleCount}
+      showStale={showStale}
+      onToggleStale={() => setShowStale((value) => !value)}
       aside={<LaborControl quietWhenOff />}
     />
   );

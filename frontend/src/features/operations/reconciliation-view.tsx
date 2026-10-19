@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowRight, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -164,7 +165,7 @@ function ReconciliationReport() {
                 ? "No API token is saved."
                 : "No Folio server URL is saved."}{" "}
               Nothing has been pushed, so there is nothing to reconcile yet.
-              Connect a Folio book in Admin and Integrations to start.
+              Connect a Folio book in Access &amp; integrations to start.
             </p>
             <div>
               <Button asChild variant="outline" size="sm">
@@ -219,8 +220,8 @@ function ReconciliationReport() {
               </span>
               {syncEnabled ? null : (
                 <span className="text-xs text-muted-foreground">
-                  Folio is connected but sync is disabled — the server refuses
-                  pushes until it is enabled in Admin and Integrations.
+                  Folio is connected but sync is off — nothing is pushed
+                  until it is turned on in Access &amp; integrations.
                 </span>
               )}
             </div>
@@ -359,7 +360,7 @@ function ReconciliationReport() {
             <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
               <p className="text-sm text-muted-foreground">
                 Credentials, the book and the account mapping are edited in
-                Admin and Integrations.
+                Access &amp; integrations.
               </p>
               <Button asChild variant="outline" size="sm">
                 <Link href="/admin#gnucash">
@@ -377,16 +378,7 @@ function ReconciliationReport() {
 export function ReconciliationView() {
   return (
     <div className="grid gap-6">
-      <div className="grid gap-1">
-        <h1 className="text-2xl font-bold tracking-tight">
-          Folio reconciliation
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          What the feed pushed, what failed, and what somebody changed in the
-          book behind us. Beez stays authoritative for what physically
-          happened.
-        </p>
-      </div>
+      <PageHeader subtitle="Check what the feed pushed to Folio, what failed, and what changed in the book behind us." />
       {/* The reads are admin-only, so they are mounted behind the gate rather
           than beside it. */}
       <AdminReportGate>

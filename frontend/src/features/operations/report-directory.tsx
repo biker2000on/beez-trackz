@@ -5,17 +5,17 @@ import { ArrowRight } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { REPORT_PAGES } from "./reports-nav";
-import { ReportHeader, useReportYear } from "./reports-sections";
+import { ReportHeader, seasonHref, useReportYear } from "./reports-sections";
 
 const GROUP_META = {
   outcomes: {
-    title: "Outcomes",
-    description: "Colony survival and honey yield across seasons.",
+    description:
+      "Two reports: Winter survival answers which hives made it through and why; Honey yield answers which hives and apiaries produced the most.",
     hrefs: ["/insights/survival", "/insights/yield"],
   },
   finance: {
-    title: "Finance",
-    description: "Costs, revenue, margins, and profitability.",
+    description:
+      "Apiary economics answers what each apiary costs and earns; Profitability answers whether the operation makes money and at what price; Expenses is where the costs are entered.",
     hrefs: [
       "/insights/economics",
       "/insights/profitability",
@@ -23,8 +23,8 @@ const GROUP_META = {
     ],
   },
   sales: {
-    title: "Sales & planning",
-    description: "Bottling priorities, customers, and wholesale follow-up.",
+    description:
+      "Bottle next answers what to bottle from what sold recently; Customers answers who is due a reorder and what they pay.",
     hrefs: ["/insights/bottling", "/sales/customers"],
   },
 } as const;
@@ -40,7 +40,6 @@ export function ReportDirectory({ group }: { group: ReportGroup }) {
   return (
     <div className="grid gap-6">
       <ReportHeader
-        title={meta.title}
         description={meta.description}
         year={year}
         onYearChange={setYear}
@@ -51,7 +50,7 @@ export function ReportDirectory({ group }: { group: ReportGroup }) {
             <Card className="h-full transition-colors hover:border-primary/50">
               <CardContent className="p-4">
                 <Link
-                  href={`${page.href}?year=${year}`}
+                  href={seasonHref(page.href, year)}
                   className="flex items-start justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span>

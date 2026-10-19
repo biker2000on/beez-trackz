@@ -1,5 +1,8 @@
 import { Suspense } from "react";
+
+import { Skeleton } from "@/components/ui/skeleton";
 import { ApiaryDetailPage } from "@/features/apiaries/detail-page";
+
 export default async function Page({
   params,
 }: {
@@ -7,7 +10,7 @@ export default async function Page({
 }) {
   const { id } = await params;
   return (
-    <Suspense>
+    <Suspense fallback={<Skeleton className="h-[430px] rounded-xl" />}>
       <ApiaryDetailPage apiaryId={id} section="overview" />
     </Suspense>
   );

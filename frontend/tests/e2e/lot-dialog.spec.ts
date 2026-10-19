@@ -182,11 +182,11 @@ async function openCreateDialog(page: Page) {
 }
 
 async function pickYard(page: Page, name: string) {
-  await page.getByRole("combobox", { name: "Yard" }).click();
+  await page.getByRole("combobox", { name: "Apiary" }).click();
   await page.getByRole("option", { name }).click();
 }
 
-test("yard and dates fill the season, claim and harvests from the yard's notes", async ({
+test("apiary and dates fill the season, claim and harvests from the apiary's notes", async ({
   page,
 }) => {
   const { prefillRequests } = await mockApp(page);

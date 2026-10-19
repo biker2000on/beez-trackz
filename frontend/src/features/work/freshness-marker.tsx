@@ -40,15 +40,16 @@ export function FreshnessMarker({
   const stale = freshness?.stale === true;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      {/* Connection stays a named state for tests and screen readers, but it
+          is only drawn when it is news: the shell banner says "offline" too. */}
       <span
         data-testid="work-connection"
         data-state={online ? "online" : "offline"}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium",
           online
-            ? "border-primary/30 bg-primary/5 text-foreground"
-            : "border-warning bg-warning text-black/80",
+            ? "sr-only"
+            : "inline-flex items-center gap-1.5 rounded-full border border-warning bg-warning px-2 py-0.5 font-medium text-black/80",
         )}
       >
         {online ? (
@@ -63,33 +64,34 @@ export function FreshnessMarker({
         data-testid="work-freshness"
         data-state={stale ? "stale" : "server"}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium",
+          "inline-flex items-center gap-1.5 font-medium",
           stale
-            ? "border-warning bg-warning text-black/80"
-            : "border-transparent bg-muted text-muted-foreground",
+            ? "rounded-full border border-warning bg-warning px-2 py-0.5 text-black/80"
+            : "text-muted-foreground",
         )}
       >
-        {stale ? (
-          <History className="size-3.5" aria-hidden />
-        ) : null}
+        {stale ? <History className="size-3.5" aria-hidden /> : null}
         {stale
-          ? `Stale — cached ${clock(freshness?.cachedAt ?? asOf)}`
-          : `Live — read ${clock(asOf)}`}
+          ? `Stale · cached ${clock(freshness?.cachedAt ?? asOf)}`
+          : `Updated ${clock(asOf)}`}
       </span>
 
       {onRefresh ? (
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={isFetching}
-          className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium text-primary underline-offset-4 hover:underline disabled:opacity-60"
-        >
-          <RefreshCw
-            className={cn("size-3.5", isFetching && "animate-spin")}
-            aria-hidden
-          />
-          {isFetching ? "Refreshing" : "Refresh"}
-        </button>
+        <>
+          <span aria-hidden className="text-muted-foreground">·</span>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={isFetching}
+            className="inline-flex items-center gap-1 font-medium text-primary underline-offset-4 hover:underline disabled:opacity-60"
+          >
+            <RefreshCw
+              className={cn("size-3.5", isFetching && "animate-spin")}
+              aria-hidden
+            />
+            {isFetching ? "Refreshing" : "Refresh"}
+          </button>
+        </>
       ) : null}
     </div>
   );

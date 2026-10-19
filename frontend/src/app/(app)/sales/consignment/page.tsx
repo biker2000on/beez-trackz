@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
 
 import { ConsignmentPage } from "@/features/commerce/consignment-page";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Consignment" };
+export const metadata = pageMetadata("/sales/consignment");
 
 export default function ConsignmentRoute() {
   return (

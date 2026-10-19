@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ArrowRight, Command, Keyboard, Search } from "lucide-react";
 
 import {
-  NAV_ITEMS,
+  allNavItems,
   contextualNavRoutes,
   flattenNavRoutes,
   visibleNavItems,
@@ -144,8 +144,10 @@ export function ShortcutsProvider({
   const isAdmin = access.data?.isAdmin === true;
   const canEditAny =
     isAdmin || access.data?.memberships.some((entry) => entry.role === "editor") === true;
+  // The five areas plus Setup: `g a` and Ctrl-K reach Setup even though it
+  // is a footer link rather than an area.
   const navigation = React.useMemo(
-    () => visibleNavItems(NAV_ITEMS, isAdmin),
+    () => visibleNavItems(allNavItems(), isAdmin),
     [isAdmin],
   );
 
@@ -284,10 +286,10 @@ export function ShortcutsProvider({
 
   const pageShortcuts = Array.from(entries.values());
   const staticCommands = React.useMemo(() => {
-    const routes = visibleNavRoutes(NAV_ITEMS, isAdmin, canEditAny);
+    const routes = visibleNavRoutes(allNavItems(), isAdmin, canEditAny);
     // `/me` is deliberately not in `NAV_ITEMS` — it is the per-user surface,
-    // not an eighth area (design 2026-09-03 §2.1) — so the palette names it
-    // itself. Without this the only way there is the account menu.
+    // not an area — so the palette names it itself. Without this the only
+    // way there is the account link.
     const me: PaletteCommand = {
       id: "route:/me",
       label: "My preferences",
@@ -379,7 +381,7 @@ export function ShortcutsProvider({
         const href = `/production/sessions/${session.id}`;
         commands.push({
           id: `session:${session.id}`,
-          label: `Production › ${session.apiaryName} extraction ${session.date}`,
+          label: `Stock › ${session.apiaryName} extraction ${session.date}`,
           description: href,
           hint: "Session",
           searchText: `${session.apiaryName} ${session.notes ?? ""} harvest extraction session`,
@@ -391,7 +393,7 @@ export function ShortcutsProvider({
         const href = `/honey/${lot.publicSlug}`;
         commands.push({
           id: `lot-story:${lot.id}`,
-          label: `Production › Lots › ${lot.lotCode} story`,
+          label: `Stock › Lots & labels › ${lot.lotCode} story`,
           description: href,
           hint: "Lot",
           searchText: `${lot.lotCode} ${lot.varietalName ?? ""} ${lot.season ?? ""} ${lot.apiaryRegion ?? ""} public story traceability`,

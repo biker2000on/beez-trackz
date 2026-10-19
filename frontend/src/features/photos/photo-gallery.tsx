@@ -370,7 +370,7 @@ function PhotoDetailDialog({
                   disabled={deletePhoto.isPending || reprocessPhoto.isPending}
                 >
                   <Trash2 className="size-4" />
-                  {deletePhoto.isPending ? "Deleting…" : "Delete"}
+                  {deletePhoto.isPending ? "Deleting…" : "Delete photo"}
                 </Button>
                 <Button
                   type="button"

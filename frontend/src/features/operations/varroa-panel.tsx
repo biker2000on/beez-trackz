@@ -189,7 +189,10 @@ export function VarroaPanel({
       </div>
     );
   }
-  const counts = report.data.counts;
+  // Arrays default to empty so one missing field cannot take the whole hive
+  // page down to the error boundary.
+  const counts = report.data.counts ?? [];
+  const treatments = report.data.treatments ?? [];
   const latest = report.data.latest ?? counts[counts.length - 1] ?? null;
   const latestDisplay = latest ? miteDisplay(latest) : null;
   const threshold = latest
@@ -313,13 +316,13 @@ export function VarroaPanel({
         </Card>
       ) : null}
 
-      {report.data.treatments.length > 0 ? (
+      {treatments.length > 0 ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Treatment efficacy</CardTitle>
           </CardHeader>
           <CardContent>
-            <TreatmentEffectGrid treatments={report.data.treatments} />
+            <TreatmentEffectGrid treatments={treatments} />
           </CardContent>
         </Card>
       ) : null}
@@ -430,7 +433,7 @@ export function VarroaPanel({
                 }}
                 disabled={remove.isPending}
               >
-                {remove.isPending ? "Deleting…" : "Delete"}
+                {remove.isPending ? "Deleting…" : "Delete mite count"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -572,7 +575,7 @@ function VarroaTrendChart({
               x={pad.left + plotW}
               y={yOf(thresholdPer100, "wash") - 4}
               textAnchor="end"
-              className="fill-destructive text-[9px]"
+              className="fill-destructive text-[11px]"
             >
               {thresholdPer100.toFixed(1)} / 100
             </text>
@@ -592,7 +595,7 @@ function VarroaTrendChart({
             <text
               x={pad.left}
               y={yOf(thresholdPerDay, "board") - 4}
-              className="fill-amber-700 text-[9px] dark:fill-amber-400"
+              className="fill-amber-700 text-[11px] dark:fill-amber-400"
             >
               {thresholdPerDay.toFixed(1)} / day
             </text>
@@ -673,7 +676,7 @@ function VarroaTrendChart({
         <text
           x={pad.left}
           y={height - 8}
-          className="fill-muted-foreground text-[9px]"
+          className="fill-muted-foreground text-[11px]"
         >
           {formatDate(new Date(minT).toISOString())}
         </text>
@@ -681,12 +684,12 @@ function VarroaTrendChart({
           x={pad.left + plotW}
           y={height - 8}
           textAnchor="end"
-          className="fill-muted-foreground text-[9px]"
+          className="fill-muted-foreground text-[11px]"
         >
           {formatDate(new Date(maxT).toISOString())}
         </text>
       </svg>
-      <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
         {present.map((series) => (
           <span key={series} className="inline-flex items-center gap-1.5">
             <span

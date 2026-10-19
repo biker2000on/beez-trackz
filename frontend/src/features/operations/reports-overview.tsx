@@ -12,6 +12,7 @@ import {
   ReportHeader,
   ReportHighlights,
   VarroaFleetSection,
+  seasonHref,
   useReportYear,
 } from "./reports-sections";
 
@@ -24,8 +25,7 @@ export function ReportsOverview() {
   return (
     <div className="grid gap-6">
       <ReportHeader
-        title="Insights"
-        description="One home for survival, yield and money: revenue, expenses, profitability and bottling plans."
+        description="See how the season went: survival, yield, money and what to bottle next."
         year={year}
         onYearChange={setYear}
       />
@@ -40,7 +40,7 @@ export function ReportsOverview() {
             <Card className="h-full transition-colors hover:border-primary/50">
               <CardContent className="p-4">
                 <Link
-                  href={`${section.href}?year=${year}`}
+                  href={seasonHref(section.href, year)}
                   className="flex items-start justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span>

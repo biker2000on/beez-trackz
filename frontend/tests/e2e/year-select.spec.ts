@@ -137,6 +137,7 @@ test("the Expenses year is a dropdown of the operator's years, newest first", as
   const { yearRequests } = await mockApp(page, {
     years: { min: 2019, max: THIS_YEAR, current: THIS_YEAR },
   });
+  // `?year=` is the legacy alias; the picker reads it and writes `?season=`.
   await page.goto("/sales/expenses?year=2024");
 
   // No number box: a combobox showing the URL's year.
@@ -147,7 +148,7 @@ test("the Expenses year is a dropdown of the operator's years, newest first", as
 
   await page.getByRole("option", { name: "2022", exact: true }).click();
   await expect(yearPicker(page)).toHaveText("2022");
-  await expect(page).toHaveURL(/[?&]year=2022\b/);
+  await expect(page).toHaveURL(/[?&]season=2022\b/);
   await expect
     .poll(() => yearRequests.some((r) => r.path.endsWith("/expenses") && r.year === "2022"))
     .toBe(true);
@@ -156,19 +157,20 @@ test("the Expenses year is a dropdown of the operator's years, newest first", as
   await expect(yearPicker(page)).toHaveText(String(THIS_YEAR));
 });
 
-test("a report keeps its last-season default and a year outside the span stays listed", async ({
+test("a report opens on the Insights season and a year outside the span stays listed", async ({
   page,
 }) => {
   const { yearRequests } = await mockApp(page, {
     years: { min: 2021, max: THIS_YEAR, current: THIS_YEAR },
   });
 
-  // Survival defaults to last season, as it did with the number box.
+  // One season default for the whole Insights area (Wave 7): the hub's,
+  // the current year, so the hub's numbers and the report agree.
   await page.goto("/insights/survival");
-  await expect(yearPicker(page)).toHaveText(String(THIS_YEAR - 1));
+  await expect(yearPicker(page)).toHaveText(String(THIS_YEAR));
 
   // A shared link from before the operator's data still shows its year.
-  await page.goto("/insights/survival?year=2012");
+  await page.goto("/insights/survival?season=2012");
   await expect(yearPicker(page)).toHaveText("2012");
   await expect
     .poll(() => yearRequests.some((r) => r.path.endsWith("/analytics/survival") && r.year === "2012"))

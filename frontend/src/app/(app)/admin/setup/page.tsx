@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
 
 import { OperationSetupView } from "@/features/admin/setup-view";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Operation setup" };
+export const metadata = pageMetadata("/admin/setup");
 
 export default function OperationSetupPage() {
   return <OperationSetupView />;

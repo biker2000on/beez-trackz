@@ -24,6 +24,7 @@ import { useUnits } from "@/lib/use-units";
 import { fahrenheitToCelsius, milesPerHourToKmh } from "@/lib/units";
 import { useDeleteInspection, type Inspection } from "./hooks";
 import { InspectionFormDialog } from "./inspection-form-dialog";
+import { NoteText } from "@/components/record/source-note";
 
 function Rating({ label, value }: { label: string; value: number | null }) {
   if (value == null) return null;
@@ -189,11 +190,10 @@ export function InspectionCard({
             })}
           </div>
         )}
-        {inspection.notes && (
-          <p className="whitespace-pre-wrap text-muted-foreground">
-            {inspection.notes}
-          </p>
-        )}
+        <NoteText
+          text={inspection.notes}
+          className="whitespace-pre-wrap text-muted-foreground"
+        />
         {(photos.data?.length ?? 0) > 0 && (
           <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-3">
             {photos.data?.map((photo) => (
@@ -236,7 +236,7 @@ export function InspectionCard({
               }}
               disabled={deleteInspection.isPending}
             >
-              {deleteInspection.isPending ? "Deleting…" : "Delete"}
+              {deleteInspection.isPending ? "Deleting…" : "Delete inspection"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,11 +1,16 @@
-import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { HiveDetailPage } from "@/features/hives/detail-page";
 
-export const metadata: Metadata = { title: "Hive" };
+const LEGACY_TABS = new Set([
+  "timeline",
+  "health",
+  "equipment",
+  "queen",
+  "photos",
+]);
 
 export default async function HivePage({
   params,
@@ -16,16 +21,19 @@ export default async function HivePage({
 }) {
   const { id } = await params;
   const query = await searchParams;
-  if (
-    query.tab === "equipment" ||
-    query.tab === "queen" ||
-    query.tab === "photos"
-  ) {
-    redirect(`/yard/hives/${id}/${query.tab}`);
+  // The tabs used to live in `?tab=`; every one is a route now. The rest of
+  // the query (a timeline filter, say) travels with the redirect.
+  const { tab, ...rest } = query;
+  if (typeof tab === "string" && LEGACY_TABS.has(tab)) {
+    const carried = new URLSearchParams();
+    for (const [key, value] of Object.entries(rest)) {
+      if (typeof value === "string") carried.set(key, value);
+    }
+    const suffix = carried.size > 0 ? `?${carried}` : "";
+    redirect(`/yard/hives/${id}/${tab}${suffix}`);
   }
-  // The detail page keeps its tab and timeline filter in search params.
   return (
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+    <Suspense fallback={<Skeleton className="h-64 w-full" />}>
       <HiveDetailPage hiveId={id} />
     </Suspense>
   );

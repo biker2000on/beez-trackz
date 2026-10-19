@@ -758,6 +758,20 @@ async function mockApp(page: Page, options: MockOptions = {}) {
   });
 }
 
+/**
+ * Today rolls items up into one card per hive; the per-item commands live
+ * behind each card's disclosure. Open every card so a command can be clicked.
+ */
+async function openWorkCards(page: Page) {
+  const toggles = page.getByTestId("work-card-toggle");
+  await expect(toggles.first()).toBeVisible();
+  for (const toggle of await toggles.all()) {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
+  }
+}
+
 /** The app shell rendered, which is how a page is distinguished from a 404. */
 async function expectAppShell(page: Page) {
   await expect(
@@ -779,25 +793,23 @@ test("§3.1 field day starts at /today on the phone and never leaves Today or Ya
   await expect(page.getByTestId("work-item")).toHaveCount(3);
   await expectCanonical(page, visited, "/today");
 
-  // The phone bar is the five role-filtered pins plus Pages (Atlas: Today,
-  // Apiaries, Production, Sales and Stock are directly reachable on mobile),
-  // and Apiaries (/yard) is pinned second for every role
-  // (nav-items.ts MOBILE_PRIORITY).
+  // The phone bar is four role-filtered pins plus More (Today, Apiaries,
+  // Stock and Sales are directly reachable on mobile), and Apiaries (/yard)
+  // is pinned second for every role (nav-items.ts MOBILE_PRIORITY).
   const bar = page.getByRole("navigation", { name: "Mobile navigation" });
-  await expect(bar.locator("li")).toHaveCount(6);
+  await expect(bar.locator("li")).toHaveCount(5);
   await expect(bar.getByRole("link")).toHaveText([
     "Today",
     "Apiaries",
-    "Production",
-    "Sales",
     "Stock",
+    "Sales",
   ]);
-  await expect(bar.getByRole("button", { name: "Pages" })).toBeVisible();
+  await expect(bar.getByRole("button", { name: "More" })).toBeVisible();
 
   // Step 2 — tap Apiaries, then the queue: the same projection grouped by apiary.
   await bar.getByRole("link", { name: "Apiaries" }).click();
   await expectCanonical(page, visited, "/yard");
-  await page.getByRole("link", { name: "Yard queue" }).first().click();
+  await page.getByRole("link", { name: "Visit queue" }).first().click();
   await expect(page.getByTestId("work-item")).toHaveCount(3);
   await expectCanonical(page, visited, "/yard/queue");
 
@@ -841,15 +853,16 @@ test("§3.2 production runs hive to finished stock without leaving /production",
   // Step 1 — the one starting point.
   await page.goto("/production");
   await expect(
-    page.getByRole("heading", { name: "Production", level: 1 }),
+    page.getByRole("heading", { name: "In progress", level: 1 }),
   ).toBeVisible();
   await expectCanonical(page, visited, "/production");
 
   // Steps 2–4 — the workbench is the Production landing page itself (Atlas:
   // /production/workbench redirects here), then the session it opens. This
-  // fixture has no product batches, and Atlas leaves that panel out when
-  // empty, so the four journey panels remain.
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
+  // fixture has no product batches and no trued-up session, and Atlas leaves
+  // those panels out when empty; bulk honey by lot carries the bottling
+  // commands, so the journey is three panels: extraction, lots, finished.
+  await expect(page.getByTestId("workbench-panel")).toHaveCount(3);
 
   await page.goto(`/production/sessions/${SESSION}`);
   await expectCanonical(page, visited, `/production/sessions/${SESSION}`);
@@ -877,10 +890,11 @@ test("§3.3 a sale and its settlement live under /sales, with margin read-only i
   const visited = trackNavigation(page);
   await mockApp(page);
 
-  // Step 1 — the one starting point.
+  // Step 1 — the one starting point. The h1 is the page's nav label
+  // (Sales › Orders); "Sales" is the area, named by the sidebar.
   await page.goto("/sales");
   await expect(
-    page.getByRole("heading", { name: "Sales", level: 1 }),
+    page.getByRole("heading", { name: "Orders", level: 1 }),
   ).toBeVisible();
   await expectCanonical(page, visited, "/sales");
 
@@ -937,14 +951,24 @@ test("§3.4 an equipment task starts at /equipment and the hive-side deploy is t
   // and no route segment carries it (design §2.3).
   await page.goto("/equipment");
   await expect(
-    page.getByRole("heading", { name: "Equipment stock", level: 1 }),
+    page.getByRole("heading", { name: "Equipment", level: 1 }),
   ).toBeVisible();
   await expectCanonical(page, visited, "/equipment");
-
-  // Step 7 — types and BOMs.
+  // Equipment is an Apiaries page now, one row in the rail.
   const nav = page.getByRole("navigation", { name: "Main navigation" });
-  await nav.getByRole("link", { name: "Types" }).click();
+  await expect(nav.getByRole("link", { name: "Equipment", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+
+  // Step 7 — types and BOMs live in Setup, not beside the stock.
+  await page.getByRole("link", { name: "Setup", exact: true }).click();
+  await expectCanonical(page, visited, "/admin/setup");
+  await page.getByRole("link", { name: "Equipment types", exact: true }).click();
   await expectCanonical(page, visited, "/equipment/types");
+  await expect(
+    page.getByRole("heading", { name: "Equipment types", level: 1 }),
+  ).toBeVisible();
   await expectAppShell(page);
 
   // Step 3 — the same deploy command is reachable hive-side (S7), under Yard.
@@ -965,13 +989,13 @@ test("§3.5 admin setup starts at /admin, and configuration has one owning surfa
   // Step 1 — the one starting point.
   await page.goto("/admin");
   await expect(
-    page.getByRole("heading", { name: "Admin and integrations", level: 1 }),
+    page.getByRole("heading", { name: "Access & integrations", level: 1 }),
   ).toBeVisible();
   await expectCanonical(page, visited, "/admin");
 
-  // Step 2 — Operation Setup, the operational catalogs and policies.
-  const nav = page.getByRole("navigation", { name: "Main navigation" });
-  await nav.getByRole("link", { name: "Operation setup" }).click();
+  // Step 2 — Operation Setup, the operational catalogs and policies, is the
+  // Setup footer link's destination.
+  await page.getByRole("link", { name: "Setup", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Operation setup", level: 1 }),
   ).toBeVisible();
@@ -1004,6 +1028,7 @@ for (const [formFactor, viewport] of [
     await mockApp(page);
     await page.goto("/today");
     await expect(page.getByTestId("work-item")).toHaveCount(3);
+    await openWorkCards(page);
 
     const connection = page.getByTestId("work-connection");
     await expect(connection).toHaveAttribute("data-state", "online");
@@ -1042,7 +1067,7 @@ for (const [formFactor, viewport] of [
     const live = page.getByTestId("work-freshness");
     await expect(live).toHaveAttribute("data-state", "server");
     const liveText = await live.textContent();
-    expect(liveText).toContain("Live");
+    expect(liveText).toContain("Updated");
 
     await page.unrouteAll({ behavior: "ignoreErrors" });
     await mockApp(page, { stale: true });
@@ -1076,6 +1101,7 @@ for (const [formFactor, viewport] of [
         attempted.push(new URL(route.request().url()).pathname),
     });
     await page.goto("/today");
+    await openWorkCards(page);
 
     const dismiss = page
       .getByTestId("work-command")
@@ -1156,6 +1182,7 @@ for (const [formFactor, viewport] of [
     await page.setViewportSize(viewport);
     await mockApp(page, { queueCommands: true });
     await page.goto("/today");
+    await openWorkCards(page);
 
     await page.getByTestId("work-command").filter({ hasText: "Refill" }).click();
 
@@ -1186,6 +1213,7 @@ for (const [formFactor, viewport] of [
         }),
     });
     await page.goto("/today");
+    await openWorkCards(page);
 
     await page
       .getByTestId("work-command")
@@ -1255,6 +1283,7 @@ for (const [formFactor, viewport] of [
       return route.fulfill({ json: [] });
     });
     await page.goto("/today");
+    await openWorkCards(page);
 
     await page.getByTestId("work-command").filter({ hasText: "Refill" }).click();
 

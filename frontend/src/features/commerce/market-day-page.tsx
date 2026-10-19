@@ -23,6 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { OfflineBanner } from "@/components/shell/offline-banner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -55,10 +56,13 @@ export function MarketDayPage() {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col overflow-y-auto overscroll-contain bg-background">
+      {/* The app shell's banner sits under this full-screen route, so it is
+          shown here too: a queued sale needs to be understood as queued. */}
+      <OfflineBanner />
       <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b bg-background/95 px-4 pb-3 pt-[calc(0.75rem+var(--safe-top))] backdrop-blur">
         <div className="flex min-w-0 items-center gap-2">
           <ShoppingBasket className="size-5 shrink-0 text-primary" />
-          <h1 className="truncate text-lg font-bold tracking-tight">
+          <h1 className="truncate text-xl font-bold tracking-tight">
             Market day
           </h1>
           {cartCount > 0 && (
@@ -73,7 +77,7 @@ export function MarketDayPage() {
         </Button>
       </header>
 
-      <div className="flex-1 px-4 py-5 pb-[calc(6rem+var(--safe-bottom))] md:px-8">
+      <div className="flex-1 px-4 py-5 md:px-8">
         <MarketDayTab onCartCountChange={onCartCountChange} />
       </div>
 

@@ -13,7 +13,7 @@ import {
 
 const reasonLabels: Record<string, string> = {
   missing_gps: "No EXIF location — smart-search match only",
-  multiple_apiaries: "Inside more than one yard's forage radius",
+  multiple_apiaries: "Inside more than one apiary's forage radius",
   flora_or_bees_needs_review: "Flora or bee match needs a human check",
   no_longer_matched: "Not found by the latest scan",
   rendition_enqueue_failed: "Thumbnail processing needs another attempt",

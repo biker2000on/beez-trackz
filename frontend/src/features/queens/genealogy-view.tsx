@@ -16,6 +16,7 @@ import { CheckSquare, Crown, Network, Plus } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -200,30 +201,29 @@ export function GenealogyView() {
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Queens</h1>
-          <p className="text-sm text-muted-foreground">
-            Family tree of your queens, colored by international marking year.
-          </p>
-        </div>
-        {canEdit ? <div className="flex gap-2">
-          <Button
-            variant={manageMode ? "secondary" : "outline"}
-            onClick={() => {
-              setManageMode((active) => !active);
-              setBulkSelected(new Set());
-            }}
-          >
-            {manageMode ? <Network /> : <CheckSquare />}
-            {manageMode ? "Tree view" : "Bulk manage"}
-          </Button>
-          <Button onClick={openCreate}>
-            <Plus />
-            Add queen
-          </Button>
-        </div> : null}
-      </div>
+      <PageHeader
+        subtitle="Follow each queen's line and marking year across your hives."
+        actions={
+          canEdit ? (
+            <>
+              <Button
+                variant={manageMode ? "secondary" : "outline"}
+                onClick={() => {
+                  setManageMode((active) => !active);
+                  setBulkSelected(new Set());
+                }}
+              >
+                {manageMode ? <Network /> : <CheckSquare />}
+                {manageMode ? "Tree view" : "Bulk select"}
+              </Button>
+              <Button onClick={openCreate}>
+                <Plus />
+                Add queen
+              </Button>
+            </>
+          ) : null
+        }
+      />
       <MarkingLegend />
       <QueenPerformancePanel />
 

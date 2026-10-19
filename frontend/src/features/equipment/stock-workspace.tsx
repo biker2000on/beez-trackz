@@ -19,8 +19,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { SectionNav } from "@/components/shell/section-nav";
-import { NAV_ITEMS } from "@/components/shell/nav-items";
+import { RecordHeader } from "@/components/record/record-header";
 import { useStoredFlag } from "@/lib/use-stored-flag";
 import { formatStockQuantity, parseStockQuantity } from "./stock-format";
 
@@ -62,8 +61,8 @@ interface StockRead {
   rows: StockRow[];
   history?: HistoryEntry[];
 }
+// Equipment is not a kind here: it has its own page at /equipment.
 const kinds: Record<string, string> = {
-  equipment: "equipment",
   bulk: "bulk_honey",
   packaging: "packaging",
   finished: "jar",
@@ -81,12 +80,11 @@ function sourceHref(entry: HistoryEntry) {
     return `/production/lots/${encodeURIComponent(entry.harvestLotId!)}/runs/${id}`;
   return null;
 }
-const names: Record<string, string> = {
-  equipment: "Equipment",
-  bulk: "Bulk honey",
-  packaging: "Packaging",
-  finished: "Finished goods",
-};
+function clock(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 const CONDITION_LABELS: Record<string, string> = {
   serviceable: "Ready",
   damaged: "Damaged",
@@ -243,14 +241,6 @@ const stockColumns = columnHelper.columns([
             {hold.until ? ` / Until ${hold.until}` : ""}
           </span>
         ))}
-        {row.holdsKnown === false && (
-          <span className="text-muted-foreground">
-            Action holds not checked. Review restrictions before use.
-          </span>
-        )}
-        {!row.originKnown && (
-          <span className="text-muted-foreground">Origin not recorded</span>
-        )}
       </div>
     ),
   }),
@@ -317,7 +307,7 @@ function historyColumns(unit: string | undefined) {
 }
 
 export function StockWorkspace({
-  category = "equipment",
+  category = "bulk",
   itemId,
 }: {
   category?: string;
@@ -419,50 +409,29 @@ export function StockWorkspace({
     data: history,
   });
 
+  const recordName = allRows[0]?.itemName;
+
   if (access.isPending) return <p>Loading access...</p>;
   if (!access.data?.isAdmin)
     return <p>Stock is available to operation administrators.</p>;
   return (
-    <div className="atlas-workspace">
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">
-            Stock / {itemId ? "Item record" : "Inventory"}
-          </p>
-          <h1>
-            {itemId
-              ? (allRows[0]?.itemName ?? "Stock item")
-              : names[category]}
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Physical stock, commitments, and what is available, in the same
-            location and unit.
-          </p>
-        </div>
-        <Button asChild variant="outline">
-          <Link
-            href={
-              actionCategory === "equipment"
-                ? "/equipment"
-                : actionCategory === "bulk"
-                  ? "/production/lots"
-                  : "/production/jars"
-            }
-          >
-            {actionCategory === "equipment"
-              ? "Counts & actions"
+    <div className={itemId ? "atlas-workspace" : "grid gap-4"}>
+      {itemId ? (
+        <RecordHeader
+          name={recordName ?? "Stock item"}
+          collectionHref={
+            actionCategory === "equipment"
+              ? "/equipment"
               : actionCategory === "bulk"
-                ? "Manage lots"
-                : "Bottling & counts"}
-          </Link>
-        </Button>
-      </header>
-      <SectionNav
-        label="Stock pages"
-        sections={NAV_ITEMS.find((i) => i.href === "/stock")!.children!}
-        rootHref="/stock"
-        pathname={pathname}
-      />
+                ? "/production/lots"
+                : "/stock"
+          }
+          context={[
+            allRows[0]?.kind?.replaceAll("_", " "),
+            allRows[0]?.unit && `counted in ${allRows[0].unit}`,
+          ]}
+        />
+      ) : null}
       {scoped && (
         <p className="text-xs text-muted-foreground">
           Showing one scope of this stock.{" "}
@@ -483,12 +452,12 @@ export function StockWorkspace({
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
+            {stock.data?.freshness.stale ? "Stale · cached" : "Updated"}
+            {stock.data?.asOf ? ` ${clock(stock.data.asOf)}` : ""}
             {stock.data?.freshness.stale
-              ? "Cached stock: connect and refresh before acting"
-              : "Server stock"}
-            {stock.data?.asOf
-              ? ` / ${new Date(stock.data.asOf).toLocaleString()}`
-              : ""}{" "}
+              ? " — connect and refresh before acting"
+              : ""}
+            {" · "}
             <button className="underline" onClick={() => stock.refetch()}>
               Refresh
             </button>

@@ -1,7 +1,10 @@
 "use client";
 import Link from "next/link";
+import { Badge } from "@/components/ui/badge";
+import { RecordHeader } from "@/components/record/record-header";
 import { useProductBatches } from "./hooks";
 import { formatDate, formatLbs, formatMoney } from "./format";
+import { NoteText } from "@/components/record/source-note";
 export function ProductBatchRecord({ id }: { id: string }) {
   const batches = useProductBatches();
   const batch = batches.data?.find((b) => b.id === id);
@@ -24,24 +27,31 @@ export function ProductBatchRecord({ id }: { id: string }) {
     );
   return (
     <div className="atlas-workspace">
-      <Link className="text-sm underline" href="/production/products">
-        All product batches
-      </Link>
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">Production / Batch record</p>
-          <h1>{batch.productName}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {batch.kind.replaceAll("_", " ")} / Started{" "}
-            {formatDate(batch.startedAt)} /{" "}
+      <RecordHeader
+        name={batch.productName}
+        collectionHref="/production/products"
+        status={
+          <Badge
+            variant={
+              batch.voidedAt
+                ? "destructive"
+                : batch.finishedAt
+                  ? "secondary"
+                  : "accent"
+            }
+          >
             {batch.voidedAt
               ? "Voided"
               : batch.finishedAt
                 ? "Finished"
                 : "In progress"}
-          </p>
-        </div>
-      </header>
+          </Badge>
+        }
+        context={[
+          batch.kind.replaceAll("_", " "),
+          `Started ${formatDate(batch.startedAt)}`,
+        ]}
+      />
       <section className="atlas-records">
         <div className="atlas-record">
           <h2 className="font-semibold">Inputs and source</h2>
@@ -54,15 +64,13 @@ export function ProductBatchRecord({ id }: { id: string }) {
               ? ` / ${batch.propolisAmount} ${batch.propolisUnit} propolis`
               : ""}
           </p>
-          {batch.harvestLotId ? (
+          {batch.harvestLotId && (
             <Link
               className="text-sm underline"
               href={`/production/lots/${batch.harvestLotId}`}
             >
               Source lot {batch.harvestLotCode}
             </Link>
-          ) : (
-            <p className="text-sm text-muted-foreground">Origin not recorded</p>
           )}
           {batch.vessel && <p className="text-sm">Vessel: {batch.vessel}</p>}
         </div>
@@ -73,9 +81,11 @@ export function ProductBatchRecord({ id }: { id: string }) {
             {formatMoney(batch.totalCost)} total cost /{" "}
             {formatMoney(batch.costPerUnit)} per unit
           </p>
-          {batch.notes && (
-            <p className="mt-3 whitespace-pre-wrap text-sm">{batch.notes}</p>
-          )}
+          <NoteText
+            text={batch.notes}
+            className="mt-3 whitespace-pre-wrap text-sm"
+            sourceClassName="mt-1"
+          />
           {batch.voidReason && (
             <p className="text-sm text-destructive">
               Void reason: {batch.voidReason}
@@ -83,7 +93,7 @@ export function ProductBatchRecord({ id }: { id: string }) {
           )}
         </div>
       </section>
-      <Link href="/stock/finished" className="underline">
+      <Link href="/stock?tab=finished" className="underline">
         Current finished stock
       </Link>
     </div>

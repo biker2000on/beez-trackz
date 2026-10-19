@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Harvests tab: harvest sessions (with new-session dialog) and individual
- * per-hive harvests (with new-harvest dialog including a live calculated
- * weight = before − after).
+ * Harvests page: harvest sessions and the per-hive harvests recorded outside
+ * one. One entry point, "Record harvest", opens a dialog that asks what is
+ * being recorded — an extraction day at an apiary (a session) or one hive on
+ * its own (with a live calculated weight = before − after).
  */
 
 import * as React from "react";
@@ -59,7 +60,11 @@ import {
   useHarvestSessions,
   useHiveOptions,
 } from "./hooks";
-import { sessionFinalized } from "./session-detail";
+import {
+  SESSION_STATUS_LABELS,
+  SessionStatusBadge,
+  sessionStatus,
+} from "./session-status";
 import type { HarvestRow, HarvestSessionRow } from "./types";
 
 const gridFeatures = dataGridFeatures;
@@ -91,7 +96,7 @@ function HarvestLoadError({
       <p className="text-sm text-muted-foreground">{message}</p>
       <div className="flex flex-wrap justify-center gap-2">
         <Button asChild variant="outline" size="sm">
-          <Link href="/production">Back to Honey</Link>
+          <Link href="/stock">Open Stock</Link>
         </Button>
         <Button type="button" size="sm" onClick={onRetry}>
           Retry
@@ -106,8 +111,7 @@ export function HarvestsTab() {
   const { formatHoney } = useUnits();
   const sessions = useHarvestSessions();
   const harvests = useHarvests();
-  const [sessionDialogOpen, setSessionDialogOpen] = React.useState(false);
-  const [harvestDialogOpen, setHarvestDialogOpen] = React.useState(false);
+  const [recordOpen, setRecordOpen] = React.useState(false);
 
   // Session entries live on their session's page; listing them here as well
   // double-counted every entry with no marker of where it belonged.
@@ -203,20 +207,13 @@ export function HarvestsTab() {
           meta: { cellClassName: "font-medium", filter: true, filterAllLabel: "All apiaries" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.apiaryName,
         }),
-        columnHelper.accessor((s) => (sessionFinalized(s.totalExtractedWeight) ? "Finalized" : "In progress"), {
+        columnHelper.accessor((s) => SESSION_STATUS_LABELS[sessionStatus(s)], {
           id: "status",
           header: "Status",
           meta: { card: "badge", filter: true, filterAllLabel: "Any status" } satisfies DataGridColumnMeta,
-          cell: ({ row }) => {
-            const finalized = sessionFinalized(
-              row.original.totalExtractedWeight,
-            );
-            return (
-              <Badge variant={finalized ? "secondary" : "accent"}>
-                {finalized ? "Finalized" : "In progress"}
-              </Badge>
-            );
-          },
+          cell: ({ row }) => (
+            <SessionStatusBadge status={sessionStatus(row.original)} />
+          ),
         }),
         columnHelper.accessor((s) => s.entryCount, {
           id: "hives",
@@ -269,19 +266,14 @@ export function HarvestsTab() {
 
   return (
     <div className="grid gap-6">
+      <div className="flex justify-end">
+        <Button type="button" onClick={() => setRecordOpen(true)}>
+          <Plus />
+          Record harvest
+        </Button>
+      </div>
       <section className="grid gap-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Harvest sessions</h3>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setSessionDialogOpen(true)}
-          >
-            <Plus />
-            New session
-          </Button>
-        </div>
+        <h2 className="text-sm font-semibold">Harvest sessions</h2>
         {sessions.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : sessions.isError ? (
@@ -295,7 +287,8 @@ export function HarvestsTab() {
           />
         ) : sessions.data.length === 0 ? (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">
-            No sessions yet. A session tracks one extraction day at an apiary.
+            No harvest sessions yet. Record harvest starts one for an
+            extraction day at an apiary.
           </p>
         ) : (
           <div className="rounded-lg border">
@@ -311,18 +304,7 @@ export function HarvestsTab() {
       </section>
 
       <section className="grid gap-2">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Individual harvests</h3>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setHarvestDialogOpen(true)}
-          >
-            <Plus />
-            New harvest
-          </Button>
-        </div>
+        <h2 className="text-sm font-semibold">Single-hive harvests</h2>
         {harvests.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : harvests.isError ? (
@@ -336,14 +318,14 @@ export function HarvestsTab() {
           />
         ) : standalone.length === 0 ? (
           <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">
-            No standalone harvests. Harvests recorded inside a session appear
-            on that session&apos;s page.
+            No single-hive harvests yet. Hives weighed during a session are
+            listed on that session&apos;s page.
           </p>
         ) : (
           <div className="rounded-lg border">
             <DataGrid
               table={harvestTable}
-              aria-label="Individual harvests"
+              aria-label="Single-hive harvests"
               listenOnWindow={false}
               searchable={standalone.length > 8}
             />
@@ -351,19 +333,81 @@ export function HarvestsTab() {
         )}
       </section>
 
-      <NewSessionDialog
-        open={sessionDialogOpen}
-        onOpenChange={setSessionDialogOpen}
-      />
-      <NewHarvestDialog
-        open={harvestDialogOpen}
-        onOpenChange={setHarvestDialogOpen}
-      />
+      <RecordHarvestDialog open={recordOpen} onOpenChange={setRecordOpen} />
     </div>
   );
 }
 
-// --- new session dialog ---
+// --- record harvest dialog ---
+
+type HarvestKind = "session" | "hive";
+
+const HARVEST_KINDS: readonly [HarvestKind, string][] = [
+  ["session", "Extraction day"],
+  ["hive", "One hive"],
+];
+
+/**
+ * The one way to record a harvest. An extraction day at an apiary becomes a
+ * session (per-hive weights are added on its page); a hive weighed on its
+ * own becomes a single-hive harvest.
+ */
+function RecordHarvestDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [kind, setKind] = React.useState<HarvestKind>("session");
+  // Closing resets the choice, so the dialog reopens on the common case.
+  const handleOpenChange = (next: boolean) => {
+    if (!next) setKind("session");
+    onOpenChange(next);
+  };
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Record harvest</DialogTitle>
+          <DialogDescription>
+            {kind === "session"
+              ? "One extraction day at one apiary. Add each hive's weight on the session page next."
+              : "One hive on its own: weigh its supers before and after, or the extracted honey directly."}
+          </DialogDescription>
+        </DialogHeader>
+        <div
+          role="group"
+          aria-label="What are you recording?"
+          className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-1"
+        >
+          {HARVEST_KINDS.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={kind === value}
+              onClick={() => setKind(value)}
+              className={
+                kind === value
+                  ? "rounded-md bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm"
+                  : "rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {kind === "session" ? (
+          <SessionForm open={open} onClose={() => handleOpenChange(false)} />
+        ) : (
+          <HiveHarvestForm open={open} onClose={() => handleOpenChange(false)} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- session form ---
 
 const sessionSchema = z.object({
   apiaryId: z.string().min(1, "Apiary is required"),
@@ -373,12 +417,13 @@ const sessionSchema = z.object({
 });
 type SessionValues = z.infer<typeof sessionSchema>;
 
-function NewSessionDialog({
+function SessionForm({
   open,
-  onOpenChange,
+  onClose,
 }: {
+  /** The dialog's open state; the form resets when it opens. */
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onClose: () => void;
 }) {
   const apiaries = useApiaryOptions();
   const mutation = useCreateSession();
@@ -404,7 +449,7 @@ function NewSessionDialog({
       {
         onSuccess: () => {
           if (resetAfter) form.reset({ apiaryId: "", date: todayISO(), notes: "", moisturePct: "" });
-          else onOpenChange(false);
+          else onClose();
         },
       },
     );
@@ -413,18 +458,10 @@ function NewSessionDialog({
 
   const { errors } = form.formState;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>New harvest session</DialogTitle>
-          <DialogDescription>
-            One extraction day at one apiary — add per-hive weights next.
-          </DialogDescription>
-        </DialogHeader>
         <ShortcutForm
           onSubmit={onSubmit}
           onSubmitAndReset={submitSession(true)}
-          onEscape={() => onOpenChange(false)}
+          onEscape={onClose}
           className="grid gap-4"
         >
           <div className="grid gap-1.5">
@@ -466,7 +503,8 @@ function NewSessionDialog({
               {...form.register("moisturePct")}
             />
             <p className="text-xs text-muted-foreground">
-              Harvest is refused above the instance threshold (default 18.6%).
+              Honey wetter than the moisture limit in Setup (18.6% unless
+              changed) cannot be harvested.
             </p>
           </div>
           <div className="grid gap-1.5">
@@ -479,24 +517,18 @@ function NewSessionDialog({
             />
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Creating…" : "Create session"}
+              {mutation.isPending ? "Starting…" : "Start session"}
             </Button>
           </DialogFooter>
         </ShortcutForm>
-      </DialogContent>
-    </Dialog>
   );
 }
 
-// --- new harvest dialog ---
+// --- single-hive harvest form ---
 
 const harvestSchema = z.object({
   hiveId: z.string().min(1, "Hive is required"),
@@ -517,12 +549,13 @@ const EMPTY_HARVEST: HarvestValues = {
   notes: "",
 };
 
-function NewHarvestDialog({
+function HiveHarvestForm({
   open,
-  onOpenChange,
+  onClose,
 }: {
+  /** The dialog's open state; the form resets when it opens. */
   open: boolean;
-  onOpenChange: (open: boolean) => void;
+  onClose: () => void;
 }) {
   const { formatHoney, units, honeySuffix } = useUnits();
   const hives = useHiveOptions();
@@ -555,7 +588,7 @@ function NewHarvestDialog({
       setMode("supers");
       form.reset({ ...EMPTY_HARVEST, date: todayISO() });
     } else {
-      onOpenChange(false);
+      onClose();
     }
   };
   const submitHarvest = (resetAfter: boolean) => form.handleSubmit((values) => {
@@ -613,19 +646,10 @@ function NewHarvestDialog({
 
   const { errors } = form.formState;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>New harvest</DialogTitle>
-          <DialogDescription>
-            One hive&apos;s harvest, outside a session — weigh the supers or
-            the extracted honey directly.
-          </DialogDescription>
-        </DialogHeader>
         <ShortcutForm
           onSubmit={onSubmit}
           onSubmitAndReset={submitHarvest(true)}
-          onEscape={() => onOpenChange(false)}
+          onEscape={onClose}
           className="grid gap-4"
         >
           <div className="grid gap-1.5">
@@ -752,11 +776,7 @@ function NewHarvestDialog({
             />
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
@@ -764,7 +784,5 @@ function NewHarvestDialog({
             </Button>
           </DialogFooter>
         </ShortcutForm>
-      </DialogContent>
-    </Dialog>
   );
 }

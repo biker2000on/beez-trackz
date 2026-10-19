@@ -1,10 +1,6 @@
-import type { Metadata } from "next";
-
 import { BulkRecordPage } from "@/features/apiaries/bulk-record-page";
 
-export const metadata: Metadata = { title: "Bulk record" };
-
-export default async function ApiaryBulkRoute({
+export default async function Page({
   params,
 }: {
   params: Promise<{ id: string }>;

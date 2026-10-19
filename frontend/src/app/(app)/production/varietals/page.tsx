@@ -1,8 +1,7 @@
-import type { Metadata } from "next";
-
 import { VarietalsView } from "@/features/honey/varietals-view";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Varietals & lot balances" };
+export const metadata = pageMetadata("/production/varietals");
 
 export default function VarietalsPage() {
   return (

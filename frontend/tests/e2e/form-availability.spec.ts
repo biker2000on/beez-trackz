@@ -404,6 +404,8 @@ test("a sale is lines of size and lot: empty sizes and lots hidden, a lone lot p
   expect(posted[0].path).toBe("/api/v1/sales");
   expect(posted[0].body).toMatchObject({
     orderStatus: "paid",
+    // The dialog defaults to cash; Market day is where a payment is chosen.
+    paymentMethod: "cash",
     lines: [{ kind: "jar", jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 2, unitPrice: 10 }],
   });
 });
@@ -473,17 +475,27 @@ test("market day lists one row per varietal × size × lot with stock and posts 
   await page.goto("/sales/market-day");
 
   // Clover pints have stock; Wildflower (0 left) and quarts (none) never show.
-  const row = page.getByTestId("market-row").filter({ hasText: "Clover · Pint" });
+  // Sizes read short on the stall ("Pt"); the accessible names keep the
+  // catalog's word.
+  const row = page.getByTestId("market-row").filter({ hasText: "Clover · Pt" });
   await expect(row).toContainText("2026-CLOVER-01 · 12 left");
   await expect(page.getByTestId("market-row")).toHaveCount(1);
   await expect(page.getByText(/Wildflower/)).toHaveCount(0);
-  await expect(page.getByText(/Quart/)).toHaveCount(0);
+  await expect(page.getByText(/Quart|Qt/)).toHaveCount(0);
 
   await row.getByRole("button", { name: /Add one Clover · Pint/ }).click();
   await row.getByRole("button", { name: "Add one more Clover · Pint" }).click();
   await expect(page.getByTestId("market-total")).toHaveText(/2 items · \$20\.00/);
 
-  await page.getByRole("button", { name: "Complete sale" }).click();
+  // Complete needs a payment, then confirms the sale back before posting.
+  const complete = page.getByRole("button", { name: "Complete sale" });
+  await expect(complete).toBeDisabled();
+  await page.getByRole("radio", { name: "Card" }).click();
+  await complete.click();
+  const sheet = page.getByRole("dialog", { name: "Complete this sale?" });
+  await expect(sheet).toContainText("2 × Clover · Pt");
+  await expect(sheet).toContainText("paid by Card");
+  await sheet.getByRole("button", { name: "Complete sale" }).click();
   await expect.poll(() => posted.length).toBe(1);
   expect(posted[0].body).toMatchObject({
     lines: [{ kind: "jar", jarSizeId: JAR_PINT, harvestLotId: LOT_CLOVER, quantity: 2, unitPrice: 10 }],

@@ -1,17 +1,8 @@
 "use client";
 
-import Link from "next/link";
-import {
-  ArrowRight,
-  Bell,
-  BookOpenCheck,
-  Bot,
-  Images,
-  KeyRound,
-  SlidersHorizontal,
-} from "lucide-react";
+import { Bell, BookOpenCheck, Bot, Images, KeyRound } from "lucide-react";
 
-import { Card, CardContent } from "@/components/ui/card";
+import { PageHeader } from "@/components/shell/page-header";
 import { CollaboratorsSection } from "@/features/access/access-section";
 import { AISection } from "@/features/settings/ai-section";
 import { SettingsSection } from "@/features/settings/settings-section";
@@ -25,43 +16,15 @@ import { NtfySection } from "./ntfy-section";
  * `/admin` — Admin and Integrations (design 2026-09-03 §6.3).
  *
  * Access, media, AI, notifications and the Folio feed: the things that need
- * a credential or govern who may do what. The operational catalogs are one
- * click away at `/admin/setup`; per-user display settings are on `/me` and
- * are not editable from here at all.
+ * a credential or govern who may do what. The operational catalogs are the
+ * sibling page `/admin/setup`, reached from the rail's Setup sub-tree and the
+ * phone disclosure; per-user display settings are on `/me` and are not
+ * editable from here at all.
  */
 export function AdminView() {
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">
-          Admin and integrations
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Collaborators and roles, photo storage, AI providers, phone push and
-          the Folio feed.
-        </p>
-      </div>
-
-      <Card>
-        <CardContent className="p-4">
-          <Link
-            href="/admin/setup"
-            className="flex items-start justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <span className="flex min-w-0 items-start gap-3">
-              <SlidersHorizontal className="mt-0.5 size-5 shrink-0 text-primary" />
-              <span className="min-w-0">
-                <span className="block font-medium">Operation setup</span>
-                <span className="mt-0.5 block text-sm text-muted-foreground">
-                  Jar sizes, treatment withdrawals, thresholds and the
-                  yard-visit labor flag.
-                </span>
-              </span>
-            </span>
-            <ArrowRight className="mt-1 size-4 shrink-0 text-muted-foreground" />
-          </Link>
-        </CardContent>
-      </Card>
+      <PageHeader subtitle="Manage who can do what, and connect photo storage, AI, phone push and the Folio feed." />
 
       <AdminGate>
         <div className="grid gap-4">

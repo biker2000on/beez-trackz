@@ -3,6 +3,7 @@
 import * as React from "react";
 import { CheckCircle2, CloudOff, Loader2, TriangleAlert, X } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { FreshnessMarker } from "@/features/work/freshness-marker";
@@ -141,7 +142,10 @@ export function WorkbenchPanel({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="flex items-baseline gap-2 text-sm font-semibold">
-          <span className="rounded-full border px-1.5 text-[10px] font-mono text-muted-foreground">
+          <span
+            className="rounded-full border px-1.5 text-xs font-mono text-muted-foreground"
+            aria-hidden
+          >
             {step}
           </span>
           {title}
@@ -203,7 +207,6 @@ export function WorkbenchRow({
  * loading would be a workbench assembled from more than one call.
  */
 export function WorkbenchShell({
-  title,
   description,
   freshness,
   asOf,
@@ -216,7 +219,6 @@ export function WorkbenchShell({
   aside,
   children,
 }: {
-  title: string;
   description: string;
   freshness: WorkFreshness | undefined;
   asOf: string | undefined;
@@ -231,18 +233,17 @@ export function WorkbenchShell({
 }) {
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-5">
-      <div className="grid gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+      <PageHeader
+        subtitle={description}
+        status={
           <FreshnessMarker
             freshness={freshness}
             asOf={asOf}
             isFetching={isFetching}
             onRefresh={onRefresh}
           />
-        </div>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
+        }
+      />
 
       {aside}
 

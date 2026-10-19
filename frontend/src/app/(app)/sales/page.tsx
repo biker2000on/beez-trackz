@@ -1,17 +1,16 @@
 import * as React from "react";
-import type { Metadata } from "next";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-
 import { HoneyQuickActions } from "@/features/honey/quick-actions";
-import Link from "next/link";
 import { SalesWorkbench } from "@/features/workbench/sales-workbench";
 import { SalesTab } from "@/features/honey/sales-tab";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Sales" };
+export const metadata = pageMetadata("/sales");
 
 /**
- * Sales orders.
+ * Sales › Orders.
  *
  * The record dialogs used to be mounted by `sales/layout.tsx`, which put six
  * eager option-list fetches on *every* `/sales/*` route including the
@@ -22,21 +21,13 @@ export const metadata: Metadata = { title: "Sales" };
 export default function SalesPage() {
   return (
     <div className="mx-auto grid w-full max-w-none gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="atlas-eyebrow">Sales / Orders & register</p><h1 className="text-2xl font-bold tracking-tight">Sales</h1>
-          <p className="text-sm text-muted-foreground">
-            Jars, hive products, colonies, and equipment on one receipt.
-            Totals are amounts invoiced; the paid column is what has actually
-            been collected.
-          </p>
-        </div>
-        <HoneyQuickActions variant="menu" />
-      </div>
-      <nav aria-label="Sales pages" className="flex flex-wrap gap-4 border-b pb-3 text-sm">{[["/sales/market-day","Market day"],["/sales/consignment","Consignment"],["/sales/customers","Customers & wholesale"],["/sales/expenses","Expenses"]].map(([href,label])=><Link key={href} href={href} className="inline-flex min-h-11 items-center underline">{label}</Link>)}</nav>
-      <SalesWorkbench embedded/>
+      <PageHeader
+        subtitle="Record what sold and what was given away, and collect what is still owed."
+        actions={<HoneyQuickActions variant="menu" />}
+      />
+      <SalesWorkbench embedded />
       <section>
-        <h2 className="mb-3 text-lg font-semibold">Orders & register</h2>
+        <h2 className="mb-3 text-lg font-semibold">Register</h2>
         {/* The register's All / Sales / Given away filter lives in the URL. */}
         <React.Suspense fallback={<Skeleton className="h-48 w-full" />}>
           <SalesTab />

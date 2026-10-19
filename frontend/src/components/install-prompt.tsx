@@ -38,10 +38,7 @@ const GUARD_POLL_MS = 1_000;
  * drifted: it named a redirect-only route that never rendered at its own
  * pathname, and omitted two calm pages that did.
  */
-const CALM_ROUTES = new Set([
-  ...navRootHrefs(),
-  "/today/recommendations",
-]);
+const CALM_ROUTES = new Set(navRootHrefs());
 
 /**
  * Anything that means "the user is mid-task right now". Checked against live

@@ -1,9 +1,12 @@
-import { Suspense } from "react";
-import { StockWorkspace } from "@/features/equipment/stock-workspace";
-export default function Page() {
-  return (
-    <Suspense>
-      <StockWorkspace category="bulk" />
-    </Suspense>
-  );
+import { redirect } from "next/navigation";
+
+import { preserveQuery } from "@/lib/redirect-query";
+
+/** Retired: bulk stock is a tab of Stock › On hand. */
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  redirect(preserveQuery("/stock", await searchParams, { tab: "bulk" }));
 }

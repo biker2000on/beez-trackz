@@ -1,13 +1,13 @@
-import type { Metadata } from "next";
-
+import { PageHeader } from "@/components/shell/page-header";
 import { LotsTab } from "@/features/commerce/lots-tab";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Lots & QR" };
+export const metadata = pageMetadata("/production/lots");
 
 export default function LotsPage() {
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-4">
-      <h1 className="text-2xl font-bold tracking-tight">Lots &amp; QR</h1>
+      <PageHeader subtitle="Give each harvest a traceable lot, then print its labels and QR codes." />
       <LotsTab />
     </div>
   );

@@ -15,6 +15,7 @@ import {
 import { Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -314,15 +315,7 @@ export function VarietalsView() {
 
   return (
     <div className="grid gap-6">
-      <header>
-        <h1 className="text-2xl font-bold tracking-tight">
-          Varietals &amp; lot balances
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Every bulk draw names the lot it came out of, so each lot carries its
-          own balance and the varietal is the rollup across them.
-        </p>
-      </header>
+      <PageHeader subtitle="Name the honey each lot is, and see what is left of every lot and varietal." />
 
       <Card className="gap-0 py-0">
         <CardHeader className="px-4 py-3">

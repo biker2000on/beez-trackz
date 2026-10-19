@@ -58,7 +58,6 @@ export function SalesWorkbench({ year, embedded = false }: { year?: number; embe
 
   return (
     <WorkbenchShell
-      title={embedded ? "Orders needing attention" : "Sales"}
       description="Today's takings, drafts with what they are short of, consignment stock still out, and settlements due — one read, with the source command beside each."
       freshness={data?.freshness}
       asOf={data?.asOf}
@@ -237,7 +236,7 @@ export function SalesWorkbench({ year, embedded = false }: { year?: number; embe
               <>
                 {item.label}
                 {item.lotCode ? (
-                  <span className="rounded-full border px-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <span className="rounded-full border px-1.5 text-xs uppercase tracking-wide text-muted-foreground">
                     {item.lotCode}
                   </span>
                 ) : null}

@@ -24,6 +24,7 @@ import { useUnits } from "@/lib/use-units";
 
 import type { HiveSplit } from "./hooks";
 import { formatDate } from "./lib";
+import { provenanceBody } from "@/lib/provenance";
 
 const feedingHelper = createColumnHelper<typeof dataGridFeatures, Feeding>();
 const splitHelper = createColumnHelper<typeof dataGridFeatures, HiveSplit>();
@@ -231,7 +232,7 @@ export function SplitsGrid({
         meta: { align: "right", cellClassName: "tabular-nums" } satisfies DataGridColumnMeta,
         cell: ({ getValue }) => getValue() ?? "—",
       }),
-      splitHelper.accessor((s) => s.notes ?? "", {
+      splitHelper.accessor((s) => provenanceBody(s.notes), {
         id: "notes",
         header: "Notes",
         meta: { cellClassName: "whitespace-normal text-muted-foreground" } satisfies DataGridColumnMeta,

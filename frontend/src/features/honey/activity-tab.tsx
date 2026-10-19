@@ -32,6 +32,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createColumnHelper, useTable } from "@tanstack/react-table";
 import type { SortingState, Updater } from "@tanstack/react-table";
 import {
+  ArrowLeftRight,
   ArrowRight,
   DollarSign,
   Gift,
@@ -82,6 +83,7 @@ import {
 } from "./activity-hooks";
 import { formatDate, formatMoney } from "./format";
 import { useDeleteTimelineEntries } from "./hooks";
+import { provenanceBody } from "@/lib/provenance";
 
 interface KindStyle {
   icon: LucideIcon;
@@ -134,13 +136,35 @@ const KIND_STYLES: Record<string, KindStyle> = {
     filterLabel: "Receipts",
     iconClass: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400",
   },
+  transfer: {
+    icon: ArrowLeftRight,
+    label: "Transfer",
+    filterLabel: "Transfers",
+    iconClass: "bg-teal-500/15 text-teal-700 dark:text-teal-400",
+  },
 };
 
-const FILTER_TYPES = Object.keys(KIND_STYLES);
+// The server's Type filter does not know "transfer" (it is a movement shape,
+// not a registered activity type), so transfers are drawn but not filterable.
+const FILTER_TYPES = Object.keys(KIND_STYLES).filter((type) => type !== "transfer");
 const FALLBACK_STYLE: KindStyle = KIND_STYLES.jar_adjustment;
 
 function kindStyle(type: string): KindStyle {
   return KIND_STYLES[type] ?? FALLBACK_STYLE;
+}
+
+/**
+ * What the row says. The server's sentence for a transfer is its raw
+ * movement shape ("transfer 0 × Quart": the jars left one shelf and arrived
+ * on another, so the net is zero and the count is not in the row), so it is
+ * rewritten from what the row does carry: the item, and from → to in the
+ * Location column.
+ */
+function entryText(entry: ActivityEntry): string {
+  if (entry.type !== "transfer") return entry.description;
+  const item = entry.item ? `${entry.item} jars` : "jars";
+  const to = entry.toLocation ? ` to ${entry.toLocation}` : "";
+  return `Moved ${item}${to}`;
 }
 
 /** The colored type badge — the ledger's signature, kept from the old list. */
@@ -522,7 +546,7 @@ export function ActivityTab() {
                     {entry.description}
                   </Link>
                 ) : (
-                  entry.description
+                  entryText(entry)
                 )}
               </span>
             </span>
@@ -640,7 +664,7 @@ export function ActivityTab() {
               <span className="text-muted-foreground">—</span>
             ),
         }),
-        columnHelper.accessor((entry) => entry.notes ?? "", {
+        columnHelper.accessor((entry) => provenanceBody(entry.notes), {
           id: "notes",
           header: "Notes",
           enableSorting: false,
@@ -651,7 +675,7 @@ export function ActivityTab() {
             cellClassName:
               "min-w-[7rem] max-w-[16rem] whitespace-normal text-xs text-muted-foreground",
           } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: entry } }) => entry.notes ?? null,
+          cell: ({ getValue }) => getValue() || null,
         }),
         columnHelper.display({
           id: "actions",
@@ -888,7 +912,7 @@ export function ActivityTab() {
             searchable={false}
             selection={selection}
             selectAllLabel="Select all loaded movement rows"
-            getRowLabel={(entry) => `Select ${entry.description}`}
+            getRowLabel={(entry) => `Select ${entryText(entry)}`}
             // Days only hold together while the ledger is in date order.
             getRowGroup={sort === "date" ? dayKey : undefined}
             groupWhileSorted
@@ -982,7 +1006,7 @@ export function ActivityTab() {
           </Button>
           <Button type="button" variant="ghost" size="sm" onClick={selection.clear}>
             Clear
-            <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+            <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">
               Esc
             </kbd>
           </Button>
@@ -1021,8 +1045,8 @@ export function ActivityTab() {
             <AlertDialogDescription>
               {confirmTarget?.kind === "single"
                 ? confirmTarget.entry.type === "sale"
-                  ? `"${confirmTarget.entry.description}" will be marked cancelled and its jars returned to inventory.`
-                  : `A reversing entry will be recorded to undo "${confirmTarget.entry.description}".`
+                  ? `"${entryText(confirmTarget.entry)}" will be marked cancelled and its jars returned to inventory.`
+                  : `A reversing entry will be recorded to undo "${entryText(confirmTarget.entry)}".`
                 : "Sales will be cancelled and movements undone with reversing entries."}{" "}
               {confirmTarget?.kind === "bulk" && confirmTarget.skipped > 0
                 ? `${confirmTarget.skipped} already reversed or cancelled ${confirmTarget.skipped === 1 ? "entry is" : "entries are"} skipped. `

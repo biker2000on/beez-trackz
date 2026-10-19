@@ -129,7 +129,7 @@ function AutoHint({ on }: { on: boolean }) {
   return (
     <span
       data-testid="auto-hint"
-      className="rounded-sm bg-muted px-1 text-[10px] font-normal uppercase tracking-wide text-muted-foreground"
+      className="rounded-sm bg-muted px-1 text-xs font-normal uppercase tracking-wide text-muted-foreground"
     >
       auto
     </span>
@@ -330,8 +330,8 @@ function LotFormDialog({
           if (controller.signal.aborted) return;
           toast.error(
             cause instanceof Error && cause.message
-              ? `Could not read the yard's notes: ${cause.message}`
-              : "Could not read the yard's notes",
+              ? `Could not read the apiary's notes: ${cause.message}`
+              : "Could not read the apiary's notes",
           );
         });
     }, 300);
@@ -617,11 +617,11 @@ function LotFormDialog({
           {/* Where and when: the three inputs everything below is read from. */}
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5">
-              <Label htmlFor="lot-yard">Yard</Label>
+              <Label htmlFor="lot-yard">Apiary</Label>
               <Select value={claimApiaryId || "none"} onValueChange={(value) => setClaimApiaryId(value === "none" ? "" : value)}>
-                <SelectTrigger id="lot-yard"><SelectValue placeholder="No yard claimed" /></SelectTrigger>
+                <SelectTrigger id="lot-yard"><SelectValue placeholder="No apiary claimed" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">No yard claimed</SelectItem>
+                  <SelectItem value="none">No apiary claimed</SelectItem>
                   {(apiaries.data ?? []).map((apiary) => (
                     <SelectItem key={apiary.id} value={apiary.id}>{apiary.name}</SelectItem>
                   ))}
@@ -634,7 +634,7 @@ function LotFormDialog({
             </div>
             <div className="grid gap-1.5"><Label htmlFor="lot-date">Extraction date</Label><Input id="lot-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
             <p className="text-xs text-muted-foreground sm:col-span-3">
-              Pick the yard and the pull date and the season, region, elevation,
+              Pick the apiary and the pull date and the season, region, elevation,
               bloom notes and harvests fill in from what is already logged there.
               Anything you type stays yours.
             </p>
@@ -715,8 +715,8 @@ function LotFormDialog({
             </legend>
             <p className="text-xs text-muted-foreground">
               The declared source shared by the lot, the label, and the public
-              Honey Story — e.g. &ldquo;Sourwood 2026, Yard B, 2100 ft&rdquo;.
-              The claim species is the varietal above; the yard is the one
+              Honey Story — e.g. &ldquo;Sourwood 2026, Ridge apiary, 2100 ft&rdquo;.
+              The claim species is the varietal above; the apiary is the one
               chosen at the top.
             </p>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -745,7 +745,7 @@ function LotFormDialog({
                   <p className="text-xs text-muted-foreground">
                     {prefillKey
                       ? "No harvests fall in this pull window."
-                      : "Pick a yard and pull date to suggest harvests, or show them all."}
+                      : "Pick an apiary and pull date to suggest harvests, or show them all."}
                   </p>
                 ) : null}
                 {groupedRows.map((group) => (
@@ -806,7 +806,7 @@ function LotFormDialog({
                 variant="outline"
                 size="sm"
                 disabled={!canDraft || drafting}
-                title={canDraft ? undefined : "Pick the yard and the pull date first"}
+                title={canDraft ? undefined : "Pick the apiary and the pull date first"}
                 onClick={() => void draftStory()}
               >
                 {drafting ? <Loader2 className="animate-spin" /> : <Sparkles />}

@@ -216,7 +216,7 @@ export function HiveProductsPage() {
           cell: ({ row: { original: row } }) =>
             row.hiveName
               ? `${row.hiveName}${row.apiaryName ? ` · ${row.apiaryName}` : ""}`
-              : row.apiaryName ?? "Yard",
+              : row.apiaryName ?? "Apiary",
         }),
         harvestColumnHelper.accessor((r) => (r.unit === "ounces" ? r.amount * GRAMS_PER_OUNCE : r.amount), {
           id: "amount",
@@ -362,7 +362,7 @@ export function HiveProductsPage() {
           <div>
             <h2 className="text-lg font-semibold">Catalog</h2>
             <p className="text-sm text-muted-foreground">
-              Finished SKUs sold on the same receipt as jars, nucs, and gear.
+              Finished SKUs sold on the same receipt as jars, nucs, and equipment.
             </p>
           </div>
           <AddProductDialog />
@@ -387,7 +387,7 @@ export function HiveProductsPage() {
           <div>
             <h2 className="text-lg font-semibold">Propolis harvests</h2>
             <p className="text-sm text-muted-foreground">
-              Scraped from a hive or yard. Never writes to the honey ledger.
+              Scraped from a hive or apiary. Never writes to the honey ledger.
             </p>
           </div>
           <AddPropolisDialog />
@@ -609,7 +609,7 @@ function AddPropolisDialog() {
           <DialogHeader>
             <DialogTitle>Record propolis harvest</DialogTitle>
             <DialogDescription>
-              Hive or yard, date, and weight. This does not change honey pounds.
+              Hive or apiary, date, and weight. This does not change honey pounds.
             </DialogDescription>
           </DialogHeader>
           <ShortcutForm
@@ -639,11 +639,11 @@ function AddPropolisDialog() {
                 </Select>
               </div>
               <div className="grid gap-1.5">
-                <Label>Yard</Label>
+                <Label>Apiary</Label>
                 <Select value={apiaryId} onValueChange={setApiaryId}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No yard-only harvest</SelectItem>
+                    <SelectItem value="none">No apiary-only harvest</SelectItem>
                     {(apiaries.data ?? []).map((apiary) => (
                       <SelectItem key={apiary.id} value={apiary.id}>{apiary.name}</SelectItem>
                     ))}

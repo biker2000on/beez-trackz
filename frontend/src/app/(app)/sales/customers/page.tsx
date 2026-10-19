@@ -1,11 +1,11 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { CustomersView } from "@/features/operations/report-views";
 import { AdminReportGate } from "@/features/operations/reports-nav";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Customers & wholesale" };
+export const metadata = pageMetadata("/sales/customers");
 
 /**
  * Customers and wholesale price lists (design 2026-09-03 S12). Also a CRUD

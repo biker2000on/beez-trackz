@@ -1,4 +1,4 @@
-import { request as playwrightRequest } from "@playwright/test";
+import { request as playwrightRequest, type FullConfig } from "@playwright/test";
 
 /**
  * Compile every route once, before any test runs.
@@ -64,8 +64,12 @@ const ROUTES = [
   "/sales/expenses",
   "/sales/expenses/categorize",
   "/sales/warm",
+  "/stock",
+  "/stock?tab=packaging",
+  "/stock?tab=finished",
   "/stock/equipment",
   "/stock/bulk",
+  "/stock/packaging",
   "/stock/finished",
   "/stock/items/warm",
   "/equipment",
@@ -89,9 +93,9 @@ const ROUTES = [
   "/manifest.webmanifest",
 ];
 
-export default async function globalSetup() {
+export default async function globalSetup(config: FullConfig) {
   const context = await playwrightRequest.newContext({
-    baseURL: "http://localhost:3010",
+    baseURL: config.projects[0]?.use.baseURL ?? "http://localhost:3010",
   });
   for (const route of ROUTES) {
     try {

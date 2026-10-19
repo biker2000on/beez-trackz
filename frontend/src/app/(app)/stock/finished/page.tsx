@@ -1,9 +1,12 @@
-import { Suspense } from "react";
-import { StockWorkspace } from "@/features/equipment/stock-workspace";
-export default function Page() {
-  return (
-    <Suspense>
-      <StockWorkspace category="finished" />
-    </Suspense>
-  );
+import { redirect } from "next/navigation";
+
+import { preserveQuery } from "@/lib/redirect-query";
+
+/** Retired: finished stock is a tab of Stock › On hand. */
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  redirect(preserveQuery("/stock", await searchParams, { tab: "finished" }));
 }

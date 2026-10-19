@@ -12,7 +12,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import Link from "next/link";
-import { ArrowLeft, Plus, Scale, X } from "lucide-react";
+import { Plus, Scale, X } from "lucide-react";
 
 import {
   AlertDialog,
@@ -25,6 +25,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { RecordHeader } from "@/components/record/record-header";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -66,11 +67,7 @@ import {
 } from "./hooks";
 import type { HarvestSessionEntry, SessionTrueUp } from "./types";
 
-/** A session with a recorded extracted weight is finalized: the true-up is
- * authoritative and new entries would change nothing. */
-export function sessionFinalized(totalExtractedWeight: number | null): boolean {
-  return totalExtractedWeight != null && totalExtractedWeight !== 0;
-}
+import { SessionStatusBadge, sessionStatus } from "./session-status";
 
 export function SessionDetail({ id }: { id: string }) {
   const { formatHoney } = useUnits();
@@ -100,36 +97,49 @@ export function SessionDetail({ id }: { id: string }) {
   if (session.isError) {
     return (
       <div className="mx-auto grid w-full max-w-5xl gap-4">
-        <BackLink />
         <p className="py-8 text-center text-sm text-muted-foreground">
-          Could not load this harvest session. It may have been deleted.
+          Could not load this harvest session. It may have been deleted.{" "}
+          <Link href="/production/harvests" className="underline">
+            Harvests
+          </Link>
         </p>
       </div>
     );
   }
 
   const data = session.data;
-  const finalized = Boolean(data.closedAt) || sessionFinalized(data.totalExtractedWeight);
+  const status = sessionStatus(data);
+  const finalized = status !== "taking_entries";
   const apiaryName =
     apiaries.data?.find((apiary) => apiary.id === data.apiaryId)?.name ?? null;
+  const canEdit = ["admin", "editor"].includes(
+    apiaryRole(access.data, data.apiaryId) ?? "",
+  );
 
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-6">
-      <div className="grid gap-1">
-        <BackLink />
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">
-            Harvest session · {formatDate(data.date)}
-          </h1>
-          <Badge variant={finalized ? "secondary" : "accent"}>
-            {finalized ? "Finalized" : "In progress"}
-          </Badge>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {apiaryName ?? "Apiary"}
-          {data.notes ? ` — ${data.notes}` : ""}
-        </p>
-      </div>
+      <RecordHeader
+        name={`Harvest ${formatDate(data.date)}`}
+        collectionHref="/production/harvests"
+        status={<SessionStatusBadge status={status} />}
+        context={[
+          apiaryName ?? "Apiary",
+          `${data.entries.length} hive ${data.entries.length === 1 ? "entry" : "entries"}`,
+          data.notes,
+        ]}
+        primary={
+          status === "trued_up" && canEdit ? (
+            <Button
+              type="button"
+              data-testid="session-close"
+              disabled={closeSession.isPending}
+              onClick={() => closeSession.mutate()}
+            >
+              Close session
+            </Button>
+          ) : undefined
+        }
+      />
 
       <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard
@@ -165,7 +175,33 @@ export function SessionDetail({ id }: { id: string }) {
         />
       </div>
 
-      <section className="atlas-records"><div className="atlas-record"><h2 className="font-semibold">Extraction status</h2>{data.closedAt ? <p className="text-sm">Extraction closed {formatDate(data.closedAt)}. This record remains in harvest history.</p> : <><p className="mb-3 text-sm text-muted-foreground">When all extraction work is complete, close this session to remove it from active work. Weights and stock stay as recorded.</p>{["admin","editor"].includes(apiaryRole(access.data,data.apiaryId)??"")&&<Button variant="outline" disabled={closeSession.isPending} onClick={()=>closeSession.mutate()}>Finish extraction</Button>}</>}{closeSession.isError&&<p role="alert" className="text-sm text-destructive">{closeSession.error.message}</p>}</div></section>
+      <section className="atlas-records">
+        <div className="atlas-record">
+          <h2 className="font-semibold">Session status</h2>
+          {data.closedAt ? (
+            <p className="text-sm">
+              Closed {formatDate(data.closedAt)}. The session stays in harvest
+              history; weights and stock stay as recorded.
+            </p>
+          ) : status === "trued_up" ? (
+            <p className="text-sm text-muted-foreground">
+              Trued up: the extracted weight is final and no more entries are
+              taken. Close session, above, moves it out of In progress; weights
+              and stock stay as recorded.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Taking entries. Record the extracted weight (true up) once the
+              honey is out, then close the session.
+            </p>
+          )}
+          {closeSession.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {closeSession.error.message}
+            </p>
+          )}
+        </div>
+      </section>
       <MoistureCard sessionId={id} moisturePct={data.moisturePct} />
 
       <Card>
@@ -199,7 +235,9 @@ export function SessionDetail({ id }: { id: string }) {
         {finalized ? (
           <Card>
             <CardHeader>
-              <CardTitle>Session finalized</CardTitle>
+              <CardTitle>
+                {status === "closed" ? "Session closed" : "Session trued up"}
+              </CardTitle>
               <CardDescription>
                 The trued-up extracted weight is authoritative, so new hive
                 entries would not change any total. Adjust the true-up to
@@ -320,18 +358,6 @@ function MoistureCard({
         </ShortcutForm>
       </CardContent>
     </Card>
-  );
-}
-
-function BackLink() {
-  return (
-    <Link
-      href="/production/harvests"
-      className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-    >
-      <ArrowLeft className="size-4" />
-      Harvests
-    </Link>
   );
 }
 

@@ -153,7 +153,7 @@ export function QueenPerformancePanel() {
           Queen performance
         </CardTitle>
         <CardDescription>
-          Overall score: brood 30%, temperament 25%, honey yield 30%, colony
+          Overall score: brood 30%, temperament 25%, honey yield 30%, winter
           survival 15%. More inspections make comparisons more useful.
         </CardDescription>
       </CardHeader>

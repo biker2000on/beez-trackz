@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { AccountLink } from "@/components/shell/account-link";
 import {
   NAV_ITEMS,
+  SETUP_ITEM,
   isNavRouteActive,
   navRouteChildren,
   overflowMobileItems,
@@ -26,6 +27,11 @@ import {
 import { useAccessProfile } from "@/features/access/api";
 import { useHives } from "@/features/hives/hooks";
 
+/**
+ * Phone bar: four pinned areas plus More (ui-coherence brief §3). More lists
+ * every area, Setup and the account link. Its label is "More" so it never
+ * shares a name with the page header's "Area · Page" disclosure.
+ */
 export function BottomNav() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -39,7 +45,7 @@ export function BottomNav() {
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
 
   const items = primaryMobileItems(isAdmin);
-  const allItems = visibleNavItems(NAV_ITEMS, isAdmin);
+  const allItems = visibleNavItems([...NAV_ITEMS, SETUP_ITEM], isAdmin);
   const overflow = overflowMobileItems(isAdmin);
 
   const currentApiaryId = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
@@ -56,9 +62,9 @@ export function BottomNav() {
         ) === true
       : canEditAny);
 
-  const overflowActive = overflow.some((item) =>
-    isNavRouteActive(item, currentHref),
-  );
+  const overflowActive =
+    overflow.some((item) => isNavRouteActive(item, currentHref)) ||
+    pathname === "/me";
 
   function toggle(href: string, defaultOpen: boolean) {
     setExpanded((current) => ({
@@ -75,7 +81,10 @@ export function BottomNav() {
         aria-label="Mobile navigation"
         className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur pb-safe pl-[var(--safe-left)] pr-[var(--safe-right)] lg:hidden"
       >
-        <ul className="grid" style={{gridTemplateColumns:`repeat(${items.length + 1}, minmax(0, 1fr))`}}>
+        <ul
+          className="grid"
+          style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0, 1fr))` }}
+        >
           {items.map((item) => {
             const active = isNavRouteActive(item, currentHref);
             const Icon = item.icon;
@@ -85,7 +94,7 @@ export function BottomNav() {
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "flex flex-col items-center gap-0.5 min-h-12 py-2 text-[10px] font-medium transition-colors",
+                    "flex min-h-12 flex-col items-center gap-0.5 py-2 text-[11px] font-medium leading-tight transition-colors",
                     active
                       ? "text-primary"
                       : "text-muted-foreground hover:text-foreground",
@@ -104,14 +113,14 @@ export function BottomNav() {
               aria-haspopup="dialog"
               aria-expanded={moreOpen}
               className={cn(
-                "flex w-full flex-col items-center gap-0.5 min-h-12 py-2 text-[10px] font-medium transition-colors",
+                "flex min-h-12 w-full flex-col items-center gap-0.5 py-2 text-[11px] font-medium leading-tight transition-colors",
                 overflowActive
                   ? "text-primary"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Menu className="size-5" />
-              Pages
+              More
             </button>
           </li>
         </ul>
@@ -120,9 +129,9 @@ export function BottomNav() {
       <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
         <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto lg:hidden">
           <SheetHeader>
-            <SheetTitle>Pages</SheetTitle>
+            <SheetTitle>More</SheetTitle>
             <SheetDescription>
-              Every workspace and record destination, in one place.
+              Every area, Setup and your account.
             </SheetDescription>
           </SheetHeader>
           <ul className="grid gap-2 pb-4">
@@ -132,9 +141,10 @@ export function BottomNav() {
                 pathname,
                 isAdmin,
                 canEditContext,
+                { hive: currentHive?.positionLabel ?? null },
               );
               const active = isNavRouteActive(item, currentHref);
-              const open = expanded[item.href] ?? true;
+              const open = expanded[item.href] ?? active;
               const Icon = item.icon;
               return (
                 <li key={item.href} className="rounded-lg border">
@@ -144,7 +154,7 @@ export function BottomNav() {
                       onClick={() => setMoreOpen(false)}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "flex min-w-0 flex-1 items-center gap-3 rounded-lg p-3 text-sm font-medium transition-colors",
+                        "flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-lg p-3 text-sm font-medium transition-colors",
                         active ? "text-primary" : "hover:bg-secondary",
                       )}
                     >
@@ -157,7 +167,7 @@ export function BottomNav() {
                         aria-label={`${open ? "Collapse" : "Expand"} ${item.label}`}
                         aria-expanded={open}
                         onClick={() => toggle(item.href, active)}
-                        className="mr-2 grid size-10 shrink-0 place-items-center rounded-md"
+                        className="mr-2 grid size-11 shrink-0 place-items-center rounded-md"
                       >
                         <ChevronDown
                           className={cn(
@@ -213,7 +223,7 @@ function MobileRoute({
 }) {
   const active = isNavRouteActive(route, currentHref);
   const children = route.children ?? [];
-  const open = expanded[route.href] ?? true;
+  const open = expanded[route.href] ?? active;
 
   return (
     <li>
@@ -238,7 +248,7 @@ function MobileRoute({
             aria-label={`${open ? "Collapse" : "Expand"} ${route.label}`}
             aria-expanded={open}
             onClick={() => onToggle(route.href, active)}
-            className="grid size-10 min-h-11 min-w-11 shrink-0 place-items-center rounded-md"
+            className="grid size-11 shrink-0 place-items-center rounded-md"
           >
             <ChevronDown
               className={cn(

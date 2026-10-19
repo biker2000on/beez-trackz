@@ -361,7 +361,7 @@ function HiveGpsCard({
             </p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">
-            A manual capture survives yard-map layout saves, even while the
+            A manual capture survives Map layout saves, even while the
             hive sits on a mapped stand, until you clear it. Without a manual
             capture, GPS is derived from the stand slot.
           </p>

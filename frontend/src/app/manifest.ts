@@ -59,7 +59,7 @@ export default function manifest(): MetadataRoute.Manifest {
       {
         name: "Apiaries",
         short_name: "Apiaries",
-        description: "Open your bee yards",
+        description: "Open your apiaries",
         url: "/yard/apiaries",
         icons: shortcutIcon,
       },
@@ -71,10 +71,10 @@ export default function manifest(): MetadataRoute.Manifest {
         icons: shortcutIcon,
       },
       {
-        name: "Production",
-        short_name: "Production",
-        description: "Open the production ledger",
-        url: "/production",
+        name: "Stock",
+        short_name: "Stock",
+        description: "Open stock on hand",
+        url: "/stock",
         icons: shortcutIcon,
       },
     ],

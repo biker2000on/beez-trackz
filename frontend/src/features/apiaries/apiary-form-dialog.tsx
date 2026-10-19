@@ -162,7 +162,7 @@ function ApiaryFormBody({
             <Label htmlFor="apiary-name">Name</Label>
             <Input
               id="apiary-name"
-              placeholder="e.g. Home Yard"
+              placeholder="e.g. Home apiary"
               autoFocus
               aria-invalid={form.formState.errors.name ? true : undefined}
               {...form.register("name")}

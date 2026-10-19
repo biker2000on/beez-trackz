@@ -13,6 +13,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowRight, Plus, Store, Warehouse } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatMoney } from "@/features/honey/format";
 import { ApiError } from "@/lib/api";
 
+import { useFinishedStock } from "./finished-stock";
 import { consignmentTerms, StockLocationDialog } from "./stock-location-form";
 import { useStockLocations, type StockLocation } from "./stock-locations-api";
 
@@ -28,6 +30,10 @@ export { consignmentTerms };
 
 export function ConsignmentPage() {
   const locations = useStockLocations();
+  // `onHandUnits` on a location counts every item kind standing there (bulk
+  // pounds and empty jars included); the home card wants what Market day can
+  // sell, which is the finished-goods read every other page uses.
+  const finished = useFinishedStock();
   const [addOpen, setAddOpen] = React.useState(false);
 
   if (locations.isPending) {
@@ -48,19 +54,15 @@ export function ConsignmentPage() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Consignment</h1>
-          <p className="text-sm text-muted-foreground">
-            Stock that sits somewhere other than home. Sending jars out is a
-            transfer, not a sale — nothing is earned until the shop reports.
-          </p>
-        </div>
-        <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
-          <Plus />
-          Add location
-        </Button>
-      </div>
+      <PageHeader
+        subtitle="Send jars to shops, then settle what they sold. Nothing is earned until the shop reports."
+        actions={
+          <Button type="button" onClick={() => setAddOpen(true)}>
+            <Plus />
+            Add location
+          </Button>
+        }
+      />
 
       {home && (
         <Card>
@@ -71,12 +73,26 @@ export function ConsignmentPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-            <span className="text-3xl font-bold tabular-nums">
-              {home.onHandUnits}
-            </span>
-            <span className="text-sm text-muted-foreground">
-              units available to sell at market day
-            </span>
+            {finished.isPending ? (
+              <Skeleton className="h-9 w-16" />
+            ) : finished.isError ? (
+              <span className="text-sm text-muted-foreground">
+                Finished stock could not be counted.
+              </span>
+            ) : (
+              <>
+                <span className="text-3xl font-bold tabular-nums" data-testid="consignment-home-units">
+                  {finished.data?.unitsAtHome ?? 0}
+                </span>
+                <span className="text-sm text-muted-foreground">
+                  {finished.data?.unitsAtHome === 1 ? "unit" : "units"} at home to sell at
+                  market day
+                  {(finished.data?.jarsAway ?? 0) > 0
+                    ? ` · ${finished.data?.jarsAway} jars at shops`
+                    : ""}
+                </span>
+              </>
+            )}
           </CardContent>
         </Card>
       )}

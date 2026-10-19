@@ -55,7 +55,7 @@ export function SetLocationDialog({
       await update.mutateAsync(payload);
       toast.success(
         draft.latitude != null
-          ? "Yard location saved — stands keep their GPS relative to the pin"
+          ? "Apiary location saved — stands keep their GPS relative to the pin"
           : "Location cleared — map and sun stay off until you set a pin",
       );
       onOpenChange(false);
@@ -70,10 +70,10 @@ export function SetLocationDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Set yard location</DialogTitle>
+          <DialogTitle>Set apiary location</DialogTitle>
           <DialogDescription>
-            The pin is the yard. Stands and hives store their own GPS around
-            it — moving the pin moves the whole yard. No pin means no map.
+            The pin is the apiary. Stands and hives store their own GPS around
+            it — moving the pin moves the whole apiary. No pin means no map.
           </DialogDescription>
         </DialogHeader>
         <ShortcutForm

@@ -4,14 +4,15 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, Printer } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RecordHeader } from "@/components/record/record-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate, formatMoney } from "@/features/honey/format";
 import type { HoneySale } from "@/features/honey/types";
 import { api } from "@/lib/api";
 
-import Link from "next/link";
 import { OrderActions } from "./order-actions";
 import { SaleDetailsDialog } from "./sale-details-dialog";
 import { SaleSerials } from "./sale-serials";
@@ -38,17 +39,36 @@ export function ReceiptView({ saleId }: { saleId: string }) {
   const { sale } = receipt.data;
   return (
     <div className="mx-auto grid max-w-2xl gap-4">
-      <header className="atlas-heading print:hidden"><div><p className="atlas-eyebrow">Sales / Order record</p><h1 className="text-2xl font-semibold">{sale.orderNumber ?? "Order"}</h1><Link href="/sales" className="text-sm underline">Orders & register</Link></div><div className="flex flex-wrap gap-2">
-        {sale.orderStatus !== "cancelled" && (
-          <Button variant="outline" onClick={() => setEditing(true)}>
-            <Pencil /> Edit details
+      <RecordHeader
+        className="print:hidden"
+        name={sale.orderNumber ?? "Order"}
+        collectionHref="/sales"
+        status={
+          sale.orderStatus ? (
+            <Badge variant={sale.orderStatus === "cancelled" ? "outline" : "secondary"}>
+              {sale.orderStatus.replaceAll("_", " ")}
+            </Badge>
+          ) : undefined
+        }
+        context={[
+          formatDate(sale.date),
+          sale.channel.replaceAll("_", " "),
+          sale.customerName,
+          formatMoney(sale.totalAmount),
+        ]}
+        primary={
+          sale.orderStatus !== "cancelled" ? (
+            <Button variant="outline" onClick={() => setEditing(true)}>
+              <Pencil /> Edit details
+            </Button>
+          ) : undefined
+        }
+        secondary={
+          <Button variant="outline" size="sm" onClick={() => window.print()}>
+            <Printer /> Print
           </Button>
-        )}
-        <Button variant="outline" onClick={() => window.print()}>
-          <Printer /> Print
-        </Button>
-      </div>
-      </header>
+        }
+      />
       <OrderActions sale={sale}/>
       <SaleDetailsDialog sale={sale} open={editing} onOpenChange={setEditing} />
       <Card className="print:border-0 print:shadow-none">
@@ -78,9 +98,9 @@ export function ReceiptView({ saleId }: { saleId: string }) {
             </div>
           )}
           <div className="grid gap-2">
-            {sale.lineItems.map((item) => (
+            {sale.lineItems.map((item, index) => (
               <div
-                key={`${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
+                key={`${index}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.equipmentStockId ?? item.productId}-${item.bottlingRunId ?? ""}`}
                 className="grid grid-cols-[1fr_auto_auto] gap-4 border-b py-2 text-sm"
               >
                 <span>

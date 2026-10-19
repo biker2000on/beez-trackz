@@ -15,7 +15,8 @@
   --popover: oklch(0.995 0.008 90);
   --popover-foreground: oklch(0.24 0.03 55);
   --primary: oklch(0.666 0.157 58.3); /* amber-600 #d97706 */
-  --primary-foreground: oklch(0.985 0.01 85);
+  /* Dark text on amber, as in the dark theme: white on amber-600 is 3.05:1. */
+  --primary-foreground: oklch(0.2 0.04 60);
   --secondary: oklch(0.94 0.03 85);
   --secondary-foreground: oklch(0.35 0.05 55);
   --muted: oklch(0.945 0.02 85);
@@ -23,7 +24,7 @@
   --accent: oklch(0.52 0.1 150); /* forest green */
   --accent-foreground: oklch(0.98 0.01 150);
   --accent-muted: oklch(0.94 0.04 150);
-  --destructive: oklch(0.577 0.215 27.3);
+  --destructive: oklch(0.55 0.21 27.3); /* 5.4:1 against its foreground */
   --destructive-foreground: oklch(0.985 0.01 27);
   --success: oklch(0.55 0.13 150);
   --warning: oklch(0.75 0.15 75);
@@ -58,7 +59,8 @@
   --accent-foreground: oklch(0.16 0.03 150);
   --accent-muted: oklch(0.3 0.04 150);
   --destructive: oklch(0.65 0.19 27);
-  --destructive-foreground: oklch(0.97 0.01 27);
+  /* Dark text on the bright red (5.8:1); near-white on it was 3.2:1. */
+  --destructive-foreground: oklch(0.12 0.02 27);
   --success: oklch(0.68 0.13 150);
   --warning: oklch(0.78 0.14 75);
   --border: oklch(0.31 0.02 65);

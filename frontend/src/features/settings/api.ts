@@ -159,9 +159,10 @@ export interface JarSizeUpdate {
   writeOffReason?: string;
 }
 
-export function useJarSizes() {
+export function useJarSizes(enabled = true) {
   return useQuery({
     queryKey: ["jar-sizes", "all"],
+    enabled,
     queryFn: () =>
       api.get<JarSize[]>("/jar-sizes", { params: { includeInactive: true } }),
   });

@@ -1,11 +1,11 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExpensesView } from "@/features/operations/report-views";
 import { AdminReportGate } from "@/features/operations/reports-nav";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Expenses" };
+export const metadata = pageMetadata("/sales/expenses");
 
 /**
  * Money out (design 2026-09-03 S11). It is a CRUD editor, not a report, so it
