@@ -58,7 +58,6 @@ export function SalesWorkbench({ year, embedded = false }: { year?: number; embe
 
   return (
     <WorkbenchShell
-      title={embedded ? "Orders needing attention" : "Sales"}
       description="Today's takings, drafts with what they are short of, consignment stock still out, and settlements due — one read, with the source command beside each."
       freshness={data?.freshness}
       asOf={data?.asOf}

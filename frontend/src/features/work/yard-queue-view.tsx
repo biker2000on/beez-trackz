@@ -48,8 +48,7 @@ export function YardQueueView({ filter = {} }: { filter?: WorkFilter }) {
 
   return (
     <WorkSurface
-      title="Yard queue"
-      description="Saturday work by yard: open recommendations, honey that is ready, feeders that need a look, and lockout end dates. Cached for offline walks."
+      description="The same items as Today, grouped by apiary for the walk. Cached for offline use."
       sections={sections}
       freshness={yard.data?.freshness}
       asOf={yard.data?.asOf}

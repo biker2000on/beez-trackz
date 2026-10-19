@@ -49,7 +49,6 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
 
   return (
     <WorkbenchShell
-      title="Production"
       description="Extract, bottle, and follow each lot into finished stock."
       freshness={data?.freshness}
       asOf={data?.asOf}
@@ -233,7 +232,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
             title={
               <>
                 <Link
-                  href="/stock/finished"
+                  href="/stock?tab=finished"
                   className="underline-offset-4 hover:underline"
                 >
                   {jar.label}

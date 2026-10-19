@@ -15,6 +15,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -79,22 +80,26 @@ export function ApiariesListPage() {
 
   return (
     <div className="grid gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold tracking-tight">Apiaries</h1>
-        {isAdmin ? <div className="flex gap-2">
-          <Button
-            variant={bulkMode ? "secondary" : "outline"}
-            onClick={toggleMode}
-          >
-            <CheckSquare />
-            {bulkMode ? "Done" : "Bulk select"}
-          </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            New apiary
-          </Button>
-        </div> : null}
-      </div>
+      <PageHeader
+        subtitle="Every apiary you keep, with its hives, map and conditions one tap away."
+        actions={
+          isAdmin ? (
+            <>
+              <Button
+                variant={bulkMode ? "secondary" : "outline"}
+                onClick={toggleMode}
+              >
+                <CheckSquare />
+                {bulkMode ? "Done" : "Bulk select"}
+              </Button>
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="size-4" />
+                New apiary
+              </Button>
+            </>
+          ) : null
+        }
+      />
 
       {apiaries.isPending ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

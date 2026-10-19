@@ -43,6 +43,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -933,29 +934,26 @@ export function FolioCategorize() {
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="grid gap-1">
-          <Link
-            href="/sales/expenses"
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="size-3.5" />
-            Expenses
-          </Link>
-          <h1 className="text-2xl font-bold tracking-tight">Categorize</h1>
-          <p className="text-sm text-muted-foreground">
-            Entries imported from Folio. Pick a category per row, or select
-            rows and set one for all of them. Categorizing changes Atlas only;
-            the Folio transaction stays where it is.
-          </p>
-        </div>
-        <Link
-          href={FINANCE_CATEGORIES_HREF}
-          className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-        >
-          Manage categories
-        </Link>
-      </div>
+      <PageHeader
+        subtitle="Give each entry imported from Folio a category, one row or many at a time. The Folio transaction stays as it is."
+        actions={
+          <>
+            <Link
+              href="/sales/expenses"
+              className="inline-flex min-h-9 items-center gap-1 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              <ArrowLeft className="size-3.5" />
+              Expenses
+            </Link>
+            <Link
+              href={FINANCE_CATEGORIES_HREF}
+              className="inline-flex min-h-9 items-center text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Manage categories
+            </Link>
+          </>
+        }
+      />
       {toolbar}
       <p className="text-xs text-muted-foreground">
         Click selects a row, Shift-click selects a range, Ctrl/⌘-click adds or

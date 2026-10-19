@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -207,22 +208,24 @@ export function HivesListPage() {
 
   return (
     <div className="grid gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold tracking-tight">Hives</h1>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={bulkMode ? "secondary" : "outline"}
-            onClick={toggleMode}
-          >
-            <CheckSquare className="size-4" />
-            {bulkMode ? "Done" : "Bulk select"}
-          </Button>
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" />
-            New hive
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        subtitle="Find a hive by apiary or status and open its record."
+        actions={
+          <>
+            <Button
+              variant={bulkMode ? "secondary" : "outline"}
+              onClick={toggleMode}
+            >
+              <CheckSquare className="size-4" />
+              {bulkMode ? "Done" : "Bulk select"}
+            </Button>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" />
+              New hive
+            </Button>
+          </>
+        }
+      />
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1.5">

@@ -464,7 +464,7 @@ export function InspectionFormDialog({
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>
-            {isEdit ? "Edit inspection" : "New inspection"}
+            {isEdit ? "Edit inspection" : "Log inspection"}
           </DialogTitle>
           <DialogDescription>
             {isEdit
@@ -917,7 +917,7 @@ export function InspectionFormDialog({
                 ? "Saving…"
                 : isEdit
                   ? "Save changes"
-                  : "Record inspection"}
+                  : "Log inspection"}
             </Button>
           </DialogFooter>
         </ShortcutForm>

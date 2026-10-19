@@ -13,6 +13,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowRight, Plus, Store, Warehouse } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,19 +49,15 @@ export function ConsignmentPage() {
 
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Consignment</h1>
-          <p className="text-sm text-muted-foreground">
-            Stock that sits somewhere other than home. Sending jars out is a
-            transfer, not a sale — nothing is earned until the shop reports.
-          </p>
-        </div>
-        <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
-          <Plus />
-          Add location
-        </Button>
-      </div>
+      <PageHeader
+        subtitle="Send jars to shops, then settle what they sold. Nothing is earned until the shop reports."
+        actions={
+          <Button type="button" onClick={() => setAddOpen(true)}>
+            <Plus />
+            Add location
+          </Button>
+        }
+      />
 
       {home && (
         <Card>

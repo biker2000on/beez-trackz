@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { CommandReceiptBar } from "./command-receipt-bar";
@@ -36,7 +37,6 @@ export interface WorkSection {
  * order: `sortRank`, then hive name, then id (`app/work/build.go` sortItems).
  */
 export function WorkSurface({
-  title,
   description,
   sections,
   freshness,
@@ -48,7 +48,6 @@ export function WorkSurface({
   emptyAll,
   aside,
 }: {
-  title: string;
   description: string;
   sections: WorkSection[];
   freshness: WorkFreshness | undefined;
@@ -85,18 +84,17 @@ export function WorkSurface({
 
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-5">
-      <div className="grid gap-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+      <PageHeader
+        subtitle={description}
+        status={
           <FreshnessMarker
             freshness={freshness}
             asOf={asOf}
             isFetching={isFetching}
             onRefresh={onRefresh}
           />
-        </div>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
+        }
+      />
 
       {aside}
 

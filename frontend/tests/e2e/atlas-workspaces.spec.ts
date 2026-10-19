@@ -28,16 +28,20 @@ for (const width of [320,390,768]) {
    if(path.includes("/stock"))return route.fulfill({json:{asOf:"2026-09-11T12:00:00Z",freshness:{origin:"server",stale:false},rows:[{itemId:"item-1",itemName:"Medium super",kind:"equipment",unit:"each",locationId:"home",locationName:"Home",lotId:null,lotCode:null,condition:"serviceable",hiveId:null,onHand:"12",reserved:"2",available:"10",countKnown:true,originKnown:false,holds:[],holdsKnown:true}],history:[]}});
    return route.fulfill({json:[]});
   });
-  await page.goto("/stock/equipment");
-  await expect(page.getByRole("heading",{name:"Equipment",exact:true})).toBeVisible();
+  await page.goto("/stock");
+  await expect(page.getByRole("heading",{name:"On hand",exact:true,level:1})).toBeVisible();
+  await expect(page.getByRole("navigation",{name:"Stock kinds"}).getByRole("link")).toHaveText(["Bulk honey","Packaging","Finished goods"]);
   await page.getByRole("link",{name:"Medium super",exact:true}).click();
   await expect(page).toHaveURL(/stock\/items\/item-1/);
   await expect(page.getByRole("heading",{name:"Movement history"})).toBeVisible();
-  await page.goBack();await expect(page).toHaveURL(/stock\/equipment/);
+  await page.goBack();await expect(page).toHaveURL(/\/stock$/);
   await page.goForward();await page.reload();await expect(page.getByRole("heading",{name:"Medium super",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBeTruthy();
-  await page.getByRole("button",{name:"Pages",exact:true}).click();
-  const sheet=page.getByRole("dialog");
-  for(const name of ["Equipment","Bulk honey","Packaging","Finished goods","Market day","Customers & wholesale","Harvest history","Lots & labels"]) await expect(sheet.getByRole("link",{name,exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"More",exact:true}).click();
+  const sheet=page.getByRole("dialog",{name:"More"});
+  // The active area (Stock) is expanded; the others are one tap away.
+  for(const name of ["On hand","Active batches","Harvests","Bottling","Lots & labels","Hive products","Movements","Sales","Insights","Setup"]) await expect(sheet.getByRole("link",{name,exact:true})).toBeVisible();
+  await sheet.getByRole("button",{name:"Expand Sales"}).click();
+  for(const name of ["Market day","Customers"]) await expect(sheet.getByRole("link",{name,exact:true})).toBeVisible();
  });
 }

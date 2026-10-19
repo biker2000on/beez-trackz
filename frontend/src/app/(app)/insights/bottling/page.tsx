@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
 
 import { BottlingView } from "@/features/operations/report-views";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Bottle next" };
+export const metadata = pageMetadata("/insights/bottling");
 
 export default function BottlingPage() {
   return <BottlingView />;

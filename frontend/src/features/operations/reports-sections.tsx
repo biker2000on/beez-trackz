@@ -19,6 +19,7 @@ import {
 } from "@tanstack/react-table";
 import { DollarSign, HeartPulse, Scale, TrendingUp } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -103,26 +104,23 @@ export function ReportYearPicker({
 }
 
 export function ReportHeader({
-  title,
   description,
   year,
   onYearChange,
 }: {
-  title: string;
   description: string;
   year?: number;
   onYearChange?: (year: number) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      {year != null && onYearChange != null && (
-        <ReportYearPicker year={year} onYearChange={onYearChange} />
-      )}
-    </div>
+    <PageHeader
+      subtitle={description}
+      actions={
+        year != null && onYearChange != null ? (
+          <ReportYearPicker year={year} onYearChange={onYearChange} />
+        ) : null
+      }
+    />
   );
 }
 

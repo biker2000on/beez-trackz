@@ -149,10 +149,10 @@ export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: 
   // Every one of these writes; a viewer gets none of them registered, so the
   // `?` dialog and the command palette stop offering actions that do nothing.
   const editable = { enabled: canEdit };
-  useShortcut("i", "New inspection", () => setInspectionOpen(true), editable);
+  useShortcut("i", "Log inspection", () => setInspectionOpen(true), editable);
   useShortcut(
     "r",
-    "Record inspection by voice",
+    "Voice inspection",
     () => router.push(`/yard/apiaries/${hive.data?.apiaryId}/visit?hive=${hiveId}`),
     editable,
   );
@@ -250,10 +250,10 @@ export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: 
 
       {canEdit ? (
         <div className="flex flex-wrap items-center gap-2">
-          <Button asChild><Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}><Mic className="size-4"/>Record inspection</Link></Button>
+          <Button asChild><Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}><Mic className="size-4"/>Voice inspection</Link></Button>
           <Button size="sm" variant="outline" onClick={() => setInspectionOpen(true)}>
             <ClipboardList className="size-4" />
-            New inspection
+            Log inspection
           </Button>
           <Button size="sm" variant="outline" onClick={() => setFeedOpen(true)}>
             <Droplets className="size-4" />
@@ -274,7 +274,7 @@ export function HiveDetailPage({ hiveId, section }: { hiveId: string; section?: 
               <DropdownMenuItem asChild>
                 <Link href={`/yard/apiaries/${data.apiaryId}/visit?hive=${data.id}`}>
                   <Mic className="size-4" />
-                  Record inspection by voice
+                  Voice inspection
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setSplitOpen(true)}>

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -60,16 +60,40 @@ test("safe-area handling lives only in globals.css (DESIGN.md)", () => {
   );
 });
 
-test("mobile route navigation uses named page links instead of a route select", () => {
-  const sectionNav = read(srcRoot, "components", "shell", "section-nav.tsx");
-  expect(sectionNav).toContain("<details");
-  expect(sectionNav).toContain("Pages");
-  expect(sectionNav).not.toContain("<Select");
+test("mobile route navigation uses named page links instead of a route select (DESIGN.md)", () => {
+  const design = read(repoRoot, "DESIGN.md");
+  expect(design).toContain("Today, Apiaries, Stock, Sales, and Insights are the five areas");
+  expect(design).toContain("Setup is not an area");
+
+  // One page header owns the phone disclosure; there is no in-page strip
+  // component left to duplicate the sidebar.
+  const pageHeader = read(srcRoot, "components", "shell", "page-header.tsx");
+  expect(pageHeader).toContain("<details");
+  expect(pageHeader).not.toContain("<Select");
+  expect(existsSync(join(srcRoot, "components", "shell", "section-nav.tsx"))).toBe(false);
+
+  // The bar's fifth slot is "More", never the disclosure's name.
+  const bottomNav = read(srcRoot, "components", "shell", "bottom-nav.tsx");
+  expect(bottomNav).toContain("<SheetTitle>More</SheetTitle>");
+  expect(bottomNav).not.toContain("Pages");
+
   for (const page of [join(srcRoot, "features", "apiaries", "detail-page.tsx"), join(srcRoot, "features", "hives", "detail-page.tsx")]) {
     const source = readFileSync(page, "utf8");
     expect(source).not.toContain("<TabsList");
     expect(source).toContain("<nav aria-label=");
   }
+});
+
+test("every area page title and h1 come from the route index, not a hand-written string", () => {
+  const appRoot = join(srcRoot, "app", "(app)");
+  const offenders = sourceFiles(appRoot).filter((file) => {
+    if (!file.endsWith("page.tsx")) return false;
+    // Record routes own their titles until the record-page wave.
+    if (file.includes("[id]") || file.includes("[runId]")) return false;
+    const source = readFileSync(file, "utf8");
+    return /export const metadata(: Metadata)? = \{/.test(source);
+  });
+  expect(offenders, "use pageMetadata(href) instead of a literal title").toEqual([]);
 });
 
 test("offline navigation serves cached pages before /offline (README.md)", () => {

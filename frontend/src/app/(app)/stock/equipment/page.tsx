@@ -1,9 +1,6 @@
-import { Suspense } from "react";
-import { StockWorkspace } from "@/features/equipment/stock-workspace";
+import { redirect } from "next/navigation";
+
+/** Retired: Equipment exists once, under Apiaries. */
 export default function Page() {
-  return (
-    <Suspense>
-      <StockWorkspace category="equipment" />
-    </Suspense>
-  );
+  redirect("/equipment");
 }

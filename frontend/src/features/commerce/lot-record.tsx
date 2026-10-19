@@ -62,7 +62,7 @@ export function LotRecord({ id }: { id: string }) {
           </p>
           {lot.bloomNotes && <p className="mt-2 text-sm">{lot.bloomNotes}</p>}
           <Link
-            href={`/stock/bulk?harvestLotId=${id}`}
+            href={`/stock?tab=bulk&harvestLotId=${id}`}
             className="mt-3 inline-flex text-sm underline"
           >
             Current stock by location
@@ -136,7 +136,7 @@ export function BottlingRunRecord({
       </section>
       <Link
         className="underline"
-        href={`/stock/finished?harvestLotId=${lotId}`}
+        href={`/stock?tab=finished&harvestLotId=${lotId}`}
       >
         Find finished stock
       </Link>

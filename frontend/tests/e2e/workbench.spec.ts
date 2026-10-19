@@ -573,7 +573,7 @@ test("a live workbench is not marked stale", async ({ page }) => {
 
   const freshness = page.getByTestId("work-freshness");
   await expect(freshness).toHaveAttribute("data-state", "server");
-  await expect(freshness).toContainText("Live");
+  await expect(freshness).toContainText("Updated");
 });
 
 test("a failed read is an error state, not an empty workbench", async ({

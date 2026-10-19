@@ -1,10 +1,10 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { YieldReportView } from "@/features/operations/report-views";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Honey yield" };
+export const metadata = pageMetadata("/insights/yield");
 
 export default function YieldReportPage() {
   return (

@@ -20,11 +20,9 @@ import type { WorkFilter } from "./types";
  */
 export function TodayView({
   filter = {},
-  title = "Today",
-  description = "Everything in front of you right now, with the observation behind each item. Highest first.",
+  description = "What to do now, with the observation behind each item. Highest first.",
 }: {
   filter?: WorkFilter;
-  title?: string;
   description?: string;
 }) {
   const today = useWorkToday(filter);
@@ -52,7 +50,6 @@ export function TodayView({
 
   return (
     <div className="atlas-workspace"><WorkSurface
-      title={title}
       description={description}
       sections={sections}
       freshness={today.data?.freshness}

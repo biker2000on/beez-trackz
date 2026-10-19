@@ -1,10 +1,10 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { TranscribeRouteView } from "@/features/transcription/transcribe-route";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Voice recording" };
+export const metadata = pageMetadata("/yard/transcribe");
 
 export default function TranscribeRoute() {
   return (

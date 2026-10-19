@@ -1,6 +1,5 @@
 import {
   ChartNoAxesCombined,
-  Droplets,
   MapPin,
   Package,
   Receipt,
@@ -19,11 +18,17 @@ export interface NavRoute {
   adminOnly?: boolean;
   requiresEdit?: boolean;
   /**
-   * A shortcut to a page another area owns (Production › Activity is
-   * Stock › Movements). It is listed for wayfinding but never marks its
-   * parent area active: only the owning area lights up on that page.
+   * A shortcut to a page another area owns. It is listed for wayfinding but
+   * never marks its parent area active: only the owning area lights up.
    */
   alias?: boolean;
+  /**
+   * In the route index (Ctrl-K, `<title>`, the h1) but not drawn as a nav
+   * row: the sidebar, the phone More sheet and the page disclosure skip it.
+   */
+  paletteOnly?: boolean;
+  /** Descendant paths another area owns, so this prefix must not claim them. */
+  excludes?: readonly string[];
   children?: readonly NavRoute[];
 }
 
@@ -36,61 +41,212 @@ export interface NavItem extends NavRoute {
 }
 
 /**
- * The canonical protected-route index. Desktop/mobile navigation and Ctrl-K
- * all consume this tree so a route cannot be added to one surface and remain
- * hidden from the others.
+ * The canonical protected-route index. The sidebar, the phone bar, the page
+ * header (h1, `<title>`, phone disclosure) and Ctrl-K all consume this tree,
+ * so a destination cannot be added to one surface and stay hidden from the
+ * others, and a concept cannot carry two names.
  *
- * Seven areas, one per first path segment (design 2026-09-03 §2.1). Area
- * ownership is therefore greppable: every authenticated route's first segment
- * names the area that owns it. `/me` is deliberately absent — it is the
- * per-user surface reached from the account menu, not an eighth area.
+ * Five areas (ui-coherence brief 2026-10-19 §3). URLs did not change; the
+ * tree groups by task, not by first path segment: Equipment sits under
+ * Apiaries, Production's pages are Stock's, the Visit queue is Today's.
+ * `/me` is deliberately absent — it is the per-user surface reached from the
+ * account link. Setup is not an area either; see `SETUP_ITEM`.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { label: "Today", shortLabel: "Today", href: "/today", icon: Sun, shortcutKey: "t", children: [
-    { label: "Recommendations", href: "/today/recommendations" },
-  ] },
-  { label: "Apiaries", shortLabel: "Apiaries", href: "/yard", icon: MapPin, shortcutKey: "y", keywords: ["yard field colonies"], children: [
-    { label: "Apiary roster", href: "/yard/apiaries" }, { label: "Hives", href: "/yard/hives" },
-    { label: "Visit queue", href: "/yard/queue" }, { label: "Queens", href: "/yard/queens" },
-    { label: "Voice recording", href: "/yard/transcribe", requiresEdit: true },
-  ] },
-  { label: "Production", shortLabel: "Production", href: "/production", icon: Droplets, shortcutKey: "p", adminOnly: true, children: [
-    { label: "Active batches", href: "/production", exact: true },
-    { label: "Harvest history", href: "/production/harvests" },
-    { label: "Bottling", href: "/production/jars" },
-    { label: "Lots & labels", href: "/production/lots" },
-    { label: "Hive products", href: "/production/products" },
-    { label: "Activity", href: "/stock/movements", alias: true, keywords: ["movements ledger"] },
-    { label: "Serial lookup", href: "/production/serials" },
-  ] },
-  { label: "Sales", shortLabel: "Sales", href: "/sales", icon: Receipt, shortcutKey: "c", adminOnly: true, children: [
-    { label: "Orders & register", href: "/sales", exact: true },
-    { label: "Market day", href: "/sales/market-day" },
-    { label: "Consignment", href: "/sales/consignment" },
-    { label: "Customers & wholesale", href: "/sales/customers" },
-    { label: "Expenses", href: "/sales/expenses", exact: true },
-    { label: "Categorize", href: "/sales/expenses/categorize", keywords: ["folio imported uncategorized income refunds bulk"] },
-  ] },
-  { label: "Stock", shortLabel: "Stock", href: "/stock", icon: Package, shortcutKey: "e", adminOnly: true, matches: ["/equipment"], keywords: ["inventory equipment gear"], children: [
-    { label: "Equipment", href: "/stock/equipment" },
-    { label: "Bulk honey", href: "/stock/bulk" },
-    { label: "Packaging", href: "/stock/packaging" },
-    { label: "Finished goods", href: "/stock/finished" },
-    { label: "Movements", href: "/stock/movements", keywords: ["activity ledger jarring sales give-aways adjustments"] },
-    { label: "Counts & equipment actions", href: "/equipment", exact: true },
-  ] },
-  { label: "Insights", shortLabel: "Insights", href: "/insights", icon: ChartNoAxesCombined, shortcutKey: "i", children: [
-    { label: "Outcomes", href: "/insights/outcomes" }, { label: "Winter survival", href: "/insights/survival" },
-    { label: "Honey yield", href: "/insights/yield" }, { label: "Finance", href: "/insights/finance", adminOnly: true },
-    { label: "Apiary economics", href: "/insights/economics", adminOnly: true }, { label: "Profitability", href: "/insights/profitability", adminOnly: true },
-    { label: "Sales & planning", href: "/insights/sales-planning", adminOnly: true }, { label: "Bottle next", href: "/insights/bottling", adminOnly: true },
-    { label: "Compliance packet", href: "/insights/compliance", adminOnly: true }, { label: "Folio reconciliation", href: "/insights/reconciliation", adminOnly: true, keywords: ["gnucash"] },
-  ] },
-  { label: "Setup", shortLabel: "Setup", href: "/admin", icon: Settings, shortcutKey: "a", adminOnly: true, children: [
-    { label: "Operation setup", href: "/admin/setup" }, { label: "Equipment types & BOMs", href: "/equipment/types" },
-    { label: "Varietals", href: "/production/varietals" },
-  ] },
+  {
+    label: "Today",
+    shortLabel: "Today",
+    href: "/today",
+    icon: Sun,
+    shortcutKey: "t",
+    keywords: ["dashboard recommendations work"],
+    children: [
+      {
+        label: "Visit queue",
+        href: "/yard/queue",
+        keywords: ["yard queue saturday work by apiary field"],
+      },
+    ],
+  },
+  {
+    label: "Apiaries",
+    shortLabel: "Apiaries",
+    href: "/yard",
+    icon: MapPin,
+    shortcutKey: "y",
+    keywords: ["yard field colonies"],
+    excludes: ["/yard/queue"],
+    children: [
+      { label: "Apiary list", href: "/yard/apiaries", keywords: ["roster yards"] },
+      { label: "Hives", href: "/yard/hives", keywords: ["colonies"] },
+      { label: "Queens", href: "/yard/queens", keywords: ["genealogy lineage"] },
+      {
+        label: "Equipment",
+        href: "/equipment",
+        exact: true,
+        keywords: ["gear counts deploy loss supers boxes frames"],
+      },
+      {
+        label: "Voice inspection",
+        href: "/yard/transcribe",
+        requiresEdit: true,
+        keywords: ["record transcribe visit walkthrough"],
+      },
+    ],
+  },
+  {
+    label: "Stock",
+    shortLabel: "Stock",
+    href: "/stock",
+    icon: Package,
+    shortcutKey: "s",
+    adminOnly: true,
+    matches: ["/production"],
+    excludes: ["/production/varietals"],
+    keywords: ["inventory honey production"],
+    children: [
+      {
+        label: "On hand",
+        href: "/stock",
+        exact: true,
+        keywords: ["bulk honey packaging finished goods jars inventory"],
+      },
+      {
+        label: "Active batches",
+        href: "/production",
+        exact: true,
+        keywords: ["production workbench extraction sessions"],
+      },
+      { label: "Harvests", href: "/production/harvests", keywords: ["harvest history extraction"] },
+      { label: "Bottling", href: "/production/jars", keywords: ["jars jarring runs"] },
+      { label: "Lots & labels", href: "/production/lots", keywords: ["qr traceability"] },
+      {
+        label: "Hive products",
+        href: "/production/products",
+        keywords: ["creamed hot mead propolis tincture batches"],
+      },
+      {
+        label: "Movements",
+        href: "/stock/movements",
+        keywords: ["activity ledger jarring sales give-aways adjustments"],
+      },
+      {
+        label: "Serial lookup",
+        href: "/production/serials",
+        paletteOnly: true,
+        keywords: ["jar serial trace"],
+      },
+    ],
+  },
+  {
+    label: "Sales",
+    shortLabel: "Sales",
+    href: "/sales",
+    icon: Receipt,
+    shortcutKey: "c",
+    adminOnly: true,
+    keywords: ["commerce orders"],
+    children: [
+      { label: "Orders", href: "/sales", exact: true, keywords: ["register receipts"] },
+      { label: "Market day", href: "/sales/market-day", keywords: ["pos register cart"] },
+      { label: "Consignment", href: "/sales/consignment", keywords: ["locations settlements"] },
+      { label: "Customers", href: "/sales/customers", keywords: ["wholesale price lists"] },
+      { label: "Expenses", href: "/sales/expenses", exact: true, keywords: ["money out"] },
+      {
+        label: "Categorize",
+        href: "/sales/expenses/categorize",
+        paletteOnly: true,
+        keywords: ["folio imported uncategorized income refunds bulk"],
+      },
+    ],
+  },
+  {
+    label: "Insights",
+    shortLabel: "Insights",
+    href: "/insights",
+    icon: ChartNoAxesCombined,
+    shortcutKey: "i",
+    keywords: ["reports analytics"],
+    children: [
+      {
+        label: "Outcomes",
+        href: "/insights/outcomes",
+        children: [
+          { label: "Winter survival", href: "/insights/survival", paletteOnly: true },
+          { label: "Honey yield", href: "/insights/yield", paletteOnly: true },
+        ],
+      },
+      {
+        label: "Finance",
+        href: "/insights/finance",
+        adminOnly: true,
+        children: [
+          { label: "Apiary economics", href: "/insights/economics", paletteOnly: true },
+          { label: "Profitability", href: "/insights/profitability", paletteOnly: true },
+        ],
+      },
+      {
+        label: "Sales & planning",
+        href: "/insights/sales-planning",
+        adminOnly: true,
+        children: [
+          { label: "Bottle next", href: "/insights/bottling", paletteOnly: true },
+        ],
+      },
+      { label: "Compliance packet", href: "/insights/compliance", adminOnly: true },
+      {
+        label: "Folio reconciliation",
+        href: "/insights/reconciliation",
+        adminOnly: true,
+        keywords: ["gnucash"],
+      },
+    ],
+  },
 ];
+
+/**
+ * Setup is not an area: it is the sidebar footer link and a row in the phone
+ * More sheet, and `g a` still reaches it. Its children are the catalogs the
+ * areas work from; they used to be scattered under Production and Equipment.
+ */
+export const SETUP_ITEM: NavItem = {
+  label: "Setup",
+  shortLabel: "Setup",
+  href: "/admin/setup",
+  icon: Settings,
+  shortcutKey: "a",
+  adminOnly: true,
+  keywords: ["admin settings configuration"],
+  children: [
+    {
+      label: "Operation setup",
+      href: "/admin/setup",
+      exact: true,
+      keywords: ["jar sizes treatments withdrawals thresholds categories policy"],
+    },
+    {
+      label: "Access & integrations",
+      href: "/admin",
+      exact: true,
+      keywords: ["collaborators roles storage ai providers push folio feed"],
+    },
+    {
+      label: "Equipment types",
+      href: "/equipment/types",
+      keywords: ["bom bill of materials catalog"],
+    },
+    {
+      label: "Varietals",
+      href: "/production/varietals",
+      keywords: ["honey varietals lot balances"],
+    },
+  ],
+};
+
+/** Every top-level destination Ctrl-K and the `g` chords know about. */
+export function allNavItems(): NavItem[] {
+  return [...NAV_ITEMS, SETUP_ITEM];
+}
 
 /** Context-only destinations that need a real apiary or hive id. */
 export function contextualNavRoutes(
@@ -104,7 +260,7 @@ export function contextualNavRoutes(
       { label: "Overview", href: `${base}/overview`, exact: true },
       { label: "Apiary observations", href: `${base}/inspections` },
       { label: "Record visit", href: `${base}/visit`, requiresEdit: true },
-      { label: "Layout", href: `${base}/layout`, exact: true },
+      { label: "Map", href: `${base}/layout`, exact: true, keywords: ["layout canvas"] },
       { label: "Flora", href: `${base}/flora`, keywords: ["blooms forage"] },
       { label: "Photos", href: `${base}/photos` },
       { label: "Print tags", href: `${base}/labels`, keywords: ["labels qr"] },
@@ -163,7 +319,10 @@ export function visibleNavRoutes<T extends NavRoute>(
     })) as T[];
 }
 
-/** Merge static and current-record children without duplicating a label. */
+/**
+ * Merge static and current-record children without duplicating a label.
+ * This is the drawn tree: palette-only routes are left out.
+ */
 export function navRouteChildren(
   route: NavRoute,
   pathname: string,
@@ -173,13 +332,19 @@ export function navRouteChildren(
   const contextual = contextualNavRoutes(route.href, pathname);
   const contextualLabels = new Set(contextual.map((child) => child.label));
   const staticChildren = (route.children ?? []).filter(
-    (child) => !contextualLabels.has(child.label),
+    (child) => !child.paletteOnly && !contextualLabels.has(child.label),
   );
   return visibleNavRoutes(
     [...staticChildren, ...contextual],
     isAdmin,
     canEdit,
-  ).map((child) => ({ ...child, children: child.href === route.href ? child.children : navRouteChildren(child, pathname, isAdmin, canEdit) }));
+  ).map((child) => ({
+    ...child,
+    children:
+      child.href === route.href
+        ? undefined
+        : navRouteChildren(child, pathname, isAdmin, canEdit),
+  }));
 }
 
 /** Backward-compatible name used by top-level navigation callers. */
@@ -189,6 +354,14 @@ export function visibleNavItems(items: NavItem[], isAdmin: boolean) {
 
 export function routePath(href: string) {
   return href.split("?")[0];
+}
+
+function excluded(route: NavRoute, pathname: string) {
+  return (
+    route.excludes?.some(
+      (path) => pathname === path || pathname.startsWith(`${path}/`),
+    ) ?? false
+  );
 }
 
 export function isNavRouteActive(route: NavRoute, currentHref: string): boolean {
@@ -204,13 +377,14 @@ export function isNavRouteActive(route: NavRoute, currentHref: string): boolean 
   if (route.exact) {
     if (pathname !== path) return false;
     const routeQuery = route.href.split("?")[1];
+    if (!routeQuery) return true;
     const currentParams = new URLSearchParams(currentQuery);
-    if (!routeQuery) return !currentParams.has("tab");
     const routeParams = new URLSearchParams(routeQuery);
     return Array.from(routeParams).every(
       ([key, value]) => currentParams.get(key) === value,
     );
   }
+  if (excluded(route, pathname)) return false;
   return (
     pathname === path ||
     pathname.startsWith(`${path}/`) ||
@@ -237,25 +411,74 @@ export function flattenNavRoutes(
   });
 }
 
+export interface ResolvedNavRoute {
+  area: NavItem;
+  route: IndexedNavRoute;
+}
+
+/**
+ * The index entry a pathname belongs to: the most specific route whose path
+ * (or `matches` prefix) covers it. This is what gives a page its h1, its
+ * `<title>` and its phone disclosure, so a label lives in exactly one place.
+ */
+export function resolveNavRoute(href: string): ResolvedNavRoute | undefined {
+  const [pathname] = href.split("?");
+  let best: ResolvedNavRoute | undefined;
+  let bestScore = -1;
+  for (const area of allNavItems()) {
+    for (const route of flattenNavRoutes([area])) {
+      if (route.alias) continue;
+      const path = routePath(route.href);
+      let matchedPath: string | undefined;
+      if (pathname === path) matchedPath = path;
+      else if (!route.exact && !excluded(route, pathname) && pathname.startsWith(`${path}/`)) {
+        matchedPath = path;
+      } else if (!excluded(route, pathname)) {
+        matchedPath = route.matches?.find(
+          (match) => pathname === match || pathname.startsWith(`${match}/`),
+        );
+      }
+      if (!matchedPath) continue;
+      const score =
+        matchedPath.length * 100 +
+        (pathname === path ? 50 : 0) +
+        route.breadcrumbs.length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { area, route };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * "Page · Area" for the document title (the root layout appends the brand).
+ * The area root alone is just the area ("Today", "Apiaries").
+ */
+export function navPageTitle(href: string): string | undefined {
+  const resolved = resolveNavRoute(href);
+  if (!resolved) return undefined;
+  const { area, route } = resolved;
+  if (route.breadcrumbs.length === 1 || route.label === area.label) {
+    return area.label;
+  }
+  return `${route.label} · ${area.label}`;
+}
+
 /**
  * Order the bottom bar fills its four fixed slots from; the fifth slot is
- * always More. More itself renders the complete folded route tree.
+ * always More. More itself renders the complete folded route tree plus Setup
+ * and the account link.
  *
  * One entry per area, so the phone bar can never be a different information
- * architecture from the desktop rail: an admin gets Today / Yard / Production
- * / Sales plus More, and a viewer or editor gets Today / Yard / Insights plus
- * More. Yard is pinned second for every role — it is where Saturday starts —
- * and no admin-only area can push it off the bar.
+ * architecture from the desktop rail: an admin gets Today / Apiaries / Stock
+ * / Sales plus More, and a viewer or editor gets Today / Apiaries / Insights
+ * plus More. Apiaries is pinned second for every role — it is where Saturday
+ * starts — and no admin-only area can push it off the bar.
  */
-const MOBILE_PRIORITY = [
-  "/today",
-  "/yard",
-  "/production",
-  "/sales",
-  "/stock",
-  "/insights",
-  "/admin",
-];
+const MOBILE_PRIORITY = ["/today", "/yard", "/stock", "/sales", "/insights"];
+const MOBILE_SLOTS = 4;
 
 export function primaryMobileItems(isAdmin: boolean): NavItem[] {
   const visible = visibleNavItems(NAV_ITEMS, isAdmin);
@@ -263,12 +486,12 @@ export function primaryMobileItems(isAdmin: boolean): NavItem[] {
     visible.find((item) => item.href === href),
   )
     .filter((item): item is NavItem => item != null)
-    .slice(0, 5);
+    .slice(0, MOBILE_SLOTS);
 }
 
 export function overflowMobileItems(isAdmin: boolean): NavItem[] {
   const pinned = new Set(primaryMobileItems(isAdmin).map((item) => item.href));
-  return visibleNavItems(NAV_ITEMS, isAdmin).filter(
+  return visibleNavItems(allNavItems(), isAdmin).filter(
     (item) => !pinned.has(item.href),
   );
 }

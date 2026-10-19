@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mic, Square, Keyboard, RefreshCw, Upload } from "lucide-react";
+import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -647,24 +648,19 @@ export function VisitWorkspace({
     return <p role="status">Loading this account’s visits…</p>;
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-5 pb-8">
-      <header className="grid gap-2">
-        <Link
-          className="text-sm text-muted-foreground underline"
-          href={apiaryId ? `/yard/apiaries/${apiaryId}` : "/yard/apiaries"}
-        >
-          Apiaries
-          {apiaryId
-            ? ` / ${ap.data?.find((row) => row.id === apiaryId)?.name ?? "Apiary"}`
-            : ""}
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Inspection visit
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Speak your observations, review what was heard, and continue through
-          the yard.
-        </p>
-      </header>
+      <PageHeader
+        subtitle="Speak your observations, review what was heard, and continue through the yard."
+        actions={
+          <Link
+            className="inline-flex min-h-9 items-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+            href={apiaryId ? `/yard/apiaries/${apiaryId}` : "/yard/apiaries"}
+          >
+            {apiaryId
+              ? (ap.data?.find((row) => row.id === apiaryId)?.name ?? "Apiary")
+              : "Apiary list"}
+          </Link>
+        }
+      />
       {!online && (
         <p role="status" className="rounded-lg border p-3 text-sm">
           Offline · recordings stay on this device until you reconnect.

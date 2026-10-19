@@ -113,7 +113,7 @@ export function HiveTranscribePage({ hiveId: id }: { hiveId: string }) {
       <RecorderSheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
-        title="Record inspection"
+        title="Voice inspection"
         description="Speak naturally about this hive. Recording auto-stops after 30 minutes."
         onUpload={handleUpload}
         uploading={flow.uploading}

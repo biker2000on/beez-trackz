@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
 
 import { ReconciliationView } from "@/features/operations/reconciliation-view";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Folio reconciliation" };
+export const metadata = pageMetadata("/insights/reconciliation");
 
 export default function ReconciliationPage() {
   return <ReconciliationView />;

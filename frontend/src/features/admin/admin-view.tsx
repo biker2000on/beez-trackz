@@ -11,6 +11,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { CollaboratorsSection } from "@/features/access/access-section";
 import { AISection } from "@/features/settings/ai-section";
@@ -32,15 +33,7 @@ import { NtfySection } from "./ntfy-section";
 export function AdminView() {
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">
-          Admin and integrations
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Collaborators and roles, photo storage, AI providers, phone push and
-          the Folio feed.
-        </p>
-      </div>
+      <PageHeader subtitle="Manage who can do what, and connect photo storage, AI, phone push and the Folio feed." />
 
       <Card>
         <CardContent className="p-4">

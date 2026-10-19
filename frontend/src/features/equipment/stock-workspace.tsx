@@ -19,8 +19,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { SectionNav } from "@/components/shell/section-nav";
-import { NAV_ITEMS } from "@/components/shell/nav-items";
+import { usePageTitle } from "@/components/shell/page-header";
 import { useStoredFlag } from "@/lib/use-stored-flag";
 import { formatStockQuantity, parseStockQuantity } from "./stock-format";
 
@@ -81,12 +80,11 @@ function sourceHref(entry: HistoryEntry) {
     return `/production/lots/${encodeURIComponent(entry.harvestLotId!)}/runs/${id}`;
   return null;
 }
-const names: Record<string, string> = {
-  equipment: "Equipment",
-  bulk: "Bulk honey",
-  packaging: "Packaging",
-  finished: "Finished goods",
-};
+function clock(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 const CONDITION_LABELS: Record<string, string> = {
   serviceable: "Ready",
   damaged: "Damaged",
@@ -419,50 +417,42 @@ export function StockWorkspace({
     data: history,
   });
 
+  const recordName = allRows[0]?.itemName;
+  usePageTitle(itemId ? `${recordName ?? "Stock item"} · Stock` : undefined);
+
   if (access.isPending) return <p>Loading access...</p>;
   if (!access.data?.isAdmin)
     return <p>Stock is available to operation administrators.</p>;
   return (
-    <div className="atlas-workspace">
-      <header className="atlas-heading">
-        <div>
-          <p className="atlas-eyebrow">
-            Stock / {itemId ? "Item record" : "Inventory"}
-          </p>
-          <h1>
-            {itemId
-              ? (allRows[0]?.itemName ?? "Stock item")
-              : names[category]}
-          </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Physical stock, commitments, and what is available, in the same
-            location and unit.
-          </p>
-        </div>
-        <Button asChild variant="outline">
-          <Link
-            href={
-              actionCategory === "equipment"
-                ? "/equipment"
+    <div className={itemId ? "atlas-workspace" : "grid gap-4"}>
+      {itemId ? (
+        <header className="atlas-heading">
+          <div>
+            <h1>{recordName ?? "Stock item"}</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Physical stock, commitments, and what is available, in the same
+              location and unit.
+            </p>
+          </div>
+          <Button asChild variant="outline">
+            <Link
+              href={
+                actionCategory === "equipment"
+                  ? "/equipment"
+                  : actionCategory === "bulk"
+                    ? "/production/lots"
+                    : "/production/jars"
+              }
+            >
+              {actionCategory === "equipment"
+                ? "Equipment"
                 : actionCategory === "bulk"
-                  ? "/production/lots"
-                  : "/production/jars"
-            }
-          >
-            {actionCategory === "equipment"
-              ? "Counts & actions"
-              : actionCategory === "bulk"
-                ? "Manage lots"
-                : "Bottling & counts"}
-          </Link>
-        </Button>
-      </header>
-      <SectionNav
-        label="Stock pages"
-        sections={NAV_ITEMS.find((i) => i.href === "/stock")!.children!}
-        rootHref="/stock"
-        pathname={pathname}
-      />
+                  ? "Manage lots"
+                  : "Bottling"}
+            </Link>
+          </Button>
+        </header>
+      ) : null}
       {scoped && (
         <p className="text-xs text-muted-foreground">
           Showing one scope of this stock.{" "}
@@ -483,12 +473,12 @@ export function StockWorkspace({
       ) : (
         <>
           <p className="text-xs text-muted-foreground">
+            {stock.data?.freshness.stale ? "Stale · cached" : "Updated"}
+            {stock.data?.asOf ? ` ${clock(stock.data.asOf)}` : ""}
             {stock.data?.freshness.stale
-              ? "Cached stock: connect and refresh before acting"
-              : "Server stock"}
-            {stock.data?.asOf
-              ? ` / ${new Date(stock.data.asOf).toLocaleString()}`
-              : ""}{" "}
+              ? " — connect and refresh before acting"
+              : ""}
+            {" · "}
             <button className="underline" onClick={() => stock.refetch()}>
               Refresh
             </button>

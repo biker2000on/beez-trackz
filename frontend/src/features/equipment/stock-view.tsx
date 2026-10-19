@@ -12,6 +12,7 @@ import {
   Wrench,
 } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,27 +64,21 @@ export function EquipmentStockView() {
 
   return (
     <div className="grid gap-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            Equipment stock
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            What you own, what is in the field, what is ready to deploy, and
-            what is out of service.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setTypeOpen(true)}>
-            <Wrench />
-            New type
-          </Button>
-          <Button onClick={() => setStockOpen(true)}>
-            <Plus />
-            Add stock
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        subtitle="Count what you own, deploy it to hives and record what was lost."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setTypeOpen(true)}>
+              <Wrench />
+              New type
+            </Button>
+            <Button onClick={() => setStockOpen(true)}>
+              <Plus />
+              Add stock
+            </Button>
+          </>
+        }
+      />
 
       {stock.isPending ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

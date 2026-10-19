@@ -1,11 +1,11 @@
-import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { FolioCategorize } from "@/features/commerce/folio-categorize";
 import { AdminReportGate } from "@/features/operations/reports-nav";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Categorize" };
+export const metadata = pageMetadata("/sales/expenses/categorize");
 
 /**
  * Bulk categorizing of the entries the Folio history import brought in,

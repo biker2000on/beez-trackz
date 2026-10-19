@@ -9,6 +9,7 @@ import { PasswordSection } from "@/features/settings/password-section";
 import { SettingsSection } from "@/features/settings/settings-section";
 
 import { MePreferencesForm } from "./preferences-form";
+import { PageHeader } from "@/components/shell/page-header";
 
 /**
  * `/me` — My Preferences (design 2026-09-03 §6.1).
@@ -23,13 +24,10 @@ export function MeView() {
 
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">My preferences</h1>
-        <p className="text-sm text-muted-foreground">
-          Your display settings, your sign-in, your access and tokens. Yours
-          only — changing them changes nothing for anyone else.
-        </p>
-      </div>
+      <PageHeader
+        title="My preferences"
+        subtitle="Your display settings, sign-in, access and tokens. Yours only — changing them changes nothing for anyone else."
+      />
       <SettingsSection
         title="Preferences"
         description="Theme, default apiary, and display formats."

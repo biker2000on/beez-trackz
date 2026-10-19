@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowRight, Milk, Package, ShieldAlert, SlidersHorizontal, Tags, Wheat } from "lucide-react";
 
+import { PageHeader } from "@/components/shell/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { JarSizesSection } from "@/features/settings/jar-sizes-section";
 import { SettingsSection } from "@/features/settings/settings-section";
@@ -16,14 +17,14 @@ import { OperationPolicyForm } from "./policy-form";
 const ELSEWHERE = [
   {
     href: "/production/varietals",
-    label: "Honey varietals",
-    description: "Named in Production, where lots are given one.",
+    label: "Varietals",
+    description: "Named in Stock, where lots are given one.",
     icon: Wheat,
   },
   {
     href: "/equipment/types",
-    label: "Equipment types and BOMs",
-    description: "Defined in Equipment, beside the stock they count.",
+    label: "Equipment types",
+    description: "The catalog Equipment counts against.",
     icon: Package,
   },
 ];
@@ -40,14 +41,7 @@ const ELSEWHERE = [
 export function OperationSetupView() {
   return (
     <div className="mx-auto grid w-full max-w-3xl gap-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Operation setup</h1>
-        <p className="text-sm text-muted-foreground">
-          Jar sizes, treatment withdrawals, expense and income categories and
-          the thresholds the yard queue works from. Integrations and access
-          live under Admin.
-        </p>
-      </div>
+      <PageHeader subtitle="Set the jar sizes, treatment withdrawals, categories and thresholds the operation runs on." />
       <AdminGate>
         <div className="grid gap-4">
           <SettingsSection

@@ -31,14 +31,56 @@ usable with one hand, and dense only where comparison helps a decision.
   Components use those tokens; nothing else calls `env(safe-area-inset-*)`.
 - Motion is brief, functional, and disabled when reduced motion is preferred.
 
+## Navigation and naming
+
+- Today, Apiaries, Stock, Sales, and Insights are the five areas, and
+  `components/shell/nav-items.ts` is the one route index they come from: the
+  sidebar, the phone bar, the page header (h1, `<title>`, phone disclosure)
+  and Ctrl-K all read it, so a destination has one name everywhere.
+- Setup is not an area. It is the sidebar footer link beside the account
+  link and a row in the phone More sheet (`SETUP_ITEM`), with Operation
+  setup, Access & integrations, Equipment types and Varietals as its pages.
+  `g a` still reaches it.
+- The sidebar expands only the active area; no area lists more than seven
+  pages. Before the profile answers it draws the same five rows as
+  placeholders, so the tree does not jump when it lands.
+- The phone bar has five slots: four areas plus More (admin: Today ·
+  Apiaries · Stock · Sales · More; viewer/editor: Today · Apiaries ·
+  Insights · More). More lists every area, Setup and the account link. Bar
+  labels are at least 11px.
+- Glossary, one word per concept: Apiaries (never Yard as a label, never
+  roster); Hive (not colony, except in reports); Stock and Movements (not
+  Production, Honey, Inventory, Activity); Bottling (not Jars); Lots &
+  labels (not Lots & QR); Equipment (not gear, equipment stock, counts &
+  equipment actions); Setup, Operation setup, Access & integrations (not
+  Admin); Insights (not Reports); Map (not Layout); Record visit (apiary
+  voice), Voice inspection (hive voice), Log inspection (typed form); Visit
+  queue (not Yard queue); Market day (not POS; "register" is only the Orders
+  page's inline name); freshness reads "Updated 9:47 AM · Refresh" (never
+  "Live — read", "Server stock"). No eyebrows or kickers above a heading.
+
+## Page templates
+
+- AreaPage (every non-record route): `PageHeader` reads the route index. The
+  h1 is the nav label, the optional subtitle is one sentence about the task,
+  the actions slot holds one primary and at most two secondary controls, and
+  the optional status line carries freshness or offline state. There is no
+  in-page section strip on desktop — the sidebar shows siblings — and on
+  phones the header carries one disclosure labelled "Area · Page" listing
+  them. Server pages export `metadata` from `pageMetadata(href)`; client
+  titles come from `usePageTitle`; both produce "Page · Area · Brand".
+- RecordPage (`/yard/apiaries/[id]/*`, `/yard/hives/[id]/*`, lots, sessions,
+  sales, consignment locations, stock items): the route layout owns the
+  record header, action bar, tab strip and `<title>` ("Name · Area · Brand");
+  sub-pages render only their body.
+- Retired routes keep a redirect; URLs never change under a rename.
+
 ## Layout and responsive behavior
 
 - Desktop uses a persistent sidebar and compact comparison tables.
-- Today, Apiaries, Production, Sales, and Stock are the five primary groups.
-  Mobile exposes all five directly, with a sixth Pages control for named
-  destinations and Insights/Setup. Use safe-area padding and sticky actions.
+- Use safe-area padding and sticky actions on phones.
 - Apiary, hive, lot, bottling run, product batch, and stock records have full
-  URLs. Section navigation uses named links, including in the mobile Pages
+  URLs. Section navigation uses named links, including in the mobile More
   sheet. Do not nest record tabs or hide navigation in select inputs.
 - Map/list views and same-data filters may change presentation in place.
   Preserve the actual apiary canvas, keyboard controls, and layout editing.
@@ -60,9 +102,10 @@ usable with one hand, and dense only where comparison helps a decision.
   Freeze upload identity after an attempt; retry with the same identity. Queued
   writes are pending until a server receipt confirms them. Preserve original
   audio, transcript versions, and observation times during correction/recovery.
-- Honey: quick ledger actions use memorable keys and all multi-line movements
-  are committed once.
-- Inventory: show on hand, reserved, and available for the exact item, unit,
+- Stock: quick ledger actions use memorable keys and all multi-line movements
+  are committed once. On hand shows bulk honey, packaging and finished goods
+  as tabs of one page; Equipment exists once, under Apiaries.
+- Stock on hand: show on hand, reserved, and available for the exact item, unit,
   location, lot, condition, and hive tuple. Holds and unknown counts remain
   explicit. The ledger is the only quantity authority.
 - Payment and fulfillment are independent facts. Extraction completion is an

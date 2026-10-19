@@ -145,6 +145,49 @@ test("the old honey pages are public story slugs, not app pages", async ({
   expect(wrong).toEqual([]);
 });
 
+/**
+ * Destinations the five-area tree retired (ui-coherence brief §3, §8) keep a
+ * redirect: nothing here may answer 404, and each must land on the page that
+ * replaced it. These are `redirect()` calls inside pages under the client
+ * app layout, so Next streams them as an RSC redirect behind a 200 rather
+ * than a 307 — the browser is the only honest judge, hence `page.goto`.
+ */
+const REDIRECTED: Array<[from: string, to: string]> = [
+  ["/today/recommendations", "/today?view=all"],
+  ["/stock/bulk", "/stock?tab=bulk"],
+  ["/stock/packaging", "/stock?tab=packaging"],
+  ["/stock/finished", "/stock?tab=finished"],
+  ["/stock/finished?harvestLotId=hl-1", "/stock?harvestLotId=hl-1&tab=finished"],
+  ["/stock/equipment", "/equipment"],
+  ["/production/activity?type=jarring", "/stock/movements?type=jarring"],
+  ["/production/overview", "/production"],
+  ["/production/workbench", "/production"],
+  ["/sales/workbench", "/sales"],
+];
+
+test("every retired destination redirects to the page that replaced it", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/auth/status")) {
+      return route.fulfill({ json: { authenticated: true, setupComplete: true } });
+    }
+    if (path.endsWith("/access/me")) {
+      return route.fulfill({
+        json: { id: "u", displayName: "Test", isAdmin: true, memberships: [] },
+      });
+    }
+    return route.fulfill({ json: [] });
+  });
+  for (const [from, to] of REDIRECTED) {
+    await page.goto(from);
+    await expect(page, `${from} should land on ${to}`).toHaveURL(
+      `http://localhost:3010${to}`,
+    );
+  }
+});
+
 /** The one external URL contract. */
 test("the public honey story is still reachable", async ({ request }) => {
   const html = await (await request.get("/honey/summer-clover-2026")).text();

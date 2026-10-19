@@ -175,41 +175,78 @@ test("detail pages expose named record destinations and preserve URL state", asy
   await expect(page).toHaveURL("/yard/hives/h1/queen");
 });
 
-test("Production keeps the same workflow groups on hidden detail routes", async ({
+// The Stock area (ui-coherence brief §3) owns the old Production pages. On
+// desktop the sidebar lists the siblings and the page has no strip of its
+// own; on a phone the page header carries one "Area · Page" disclosure, the
+// same seven rows on every Stock page, including the palette-only ones.
+const STOCK_PAGES = [
+  "On hand",
+  "Active batches",
+  "Harvests",
+  "Bottling",
+  "Lots & labels",
+  "Hive products",
+  "Movements",
+];
+
+test("Stock pages share one phone disclosure and no desktop strip", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/production");
-  const nav = page.getByRole("navigation", { name: "Production pages" });
-  await expect(nav.getByRole("link")).toHaveText([
-    "Active batches", "Harvest history", "Bottling", "Lots & labels", "Hive products", "Activity", "Serial lookup",
-  ]);
+  await expect(
+    page.getByRole("heading", { name: "Active batches", level: 1 }),
+  ).toHaveCount(1);
+  await expect(page).toHaveTitle(/^Active batches · Stock · /);
+  await expect(page.getByRole("navigation", { name: "Stock pages" })).toHaveCount(0);
+  const sidebar = page.getByRole("navigation", { name: "Main navigation" });
+  await expect(sidebar.getByRole("link", { name: "Active batches" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  // Only the active area is expanded by default.
+  await expect(sidebar.getByRole("link", { name: "Market day" })).toHaveCount(0);
 
-  await page.goto("/production/serials");
-  await expect(nav.getByRole("link")).toHaveText([
-    "Active batches", "Harvest history", "Bottling", "Lots & labels", "Hive products", "Activity", "Serial lookup",
-  ]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ["/production", "/production/serials"]) {
+    await page.goto(path);
+    const disclosure = page.getByRole("navigation", { name: "Stock pages" });
+    await page.getByText(/^Stock · /).click();
+    await expect(disclosure.getByRole("link")).toHaveText(STOCK_PAGES);
+  }
 });
 
-test("insights navigation fits tablet width and the insights home has no duplicate strip", async ({
+test("insights pages have no section strip at any width, and the phone disclosure fits", async ({
   page,
 }) => {
-  await page.goto("/insights");
-  await expect(
-    page.getByRole("navigation", { name: "Insights sections" }),
-  ).toHaveCount(0);
-
   for (const width of [768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 768 });
     await page.goto("/insights/finance");
-    const links = page
-      .getByRole("navigation", { name: "Insights sections" })
-      .getByRole("link");
-    await expect(links).toHaveCount(3);
-    for (const link of await links.all()) {
-      const box = await link.boundingBox();
-      expect(box).not.toBeNull();
-      expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(width);
-    }
+    await expect(
+      page.getByRole("navigation", { name: "Insights sections" }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Finance");
+    await expect(page).toHaveTitle(/^Finance · Insights · /);
+  }
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/insights/finance");
+  await page.getByText("Insights · Finance").click();
+  const links = page
+    .getByRole("navigation", { name: "Insights pages" })
+    .getByRole("link");
+  await expect(links).toHaveText([
+    "Insights",
+    "Outcomes",
+    "Finance",
+    "Sales & planning",
+    "Compliance packet",
+    "Folio reconciliation",
+  ]);
+  for (const link of await links.all()) {
+    const box = await link.boundingBox();
+    expect(box).not.toBeNull();
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(375);
   }
 });
 
@@ -236,17 +273,38 @@ test("phone-width pages never scroll the document sideways", async ({
   }
 });
 
-// Today is the phone bar's first slot and Yard its second, for every role
-// (design 2026-09-03 §2.2): Saturday work starts in the yard, so no
-// admin-only area may push it off the bar.
-test("Today and Yard remain pinned in the mobile bottom bar", async ({
+// Today is the phone bar's first slot and Apiaries its second, for every
+// role: Saturday work starts in the yard, so no admin-only area may push it
+// off the bar. The bar has five slots — four areas plus More — and More is
+// where Setup lives on a phone (ui-coherence brief §3).
+test("Today and Apiaries remain pinned in a five-slot mobile bottom bar", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/stock/movements");
   const mainNav = page.getByRole("navigation", { name: "Mobile navigation" });
-  await expect(mainNav.getByRole("link", { name: "Today" })).toBeVisible();
-  await expect(mainNav.getByRole("link", { name: "Apiaries" })).toBeVisible();
+  await expect(mainNav.locator("li")).toHaveCount(5);
+  await expect(mainNav.getByRole("link")).toHaveText([
+    "Today",
+    "Apiaries",
+    "Stock",
+    "Sales",
+  ]);
+  await expect(mainNav.getByRole("link", { name: "Stock" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  // Every bar label is at least 11px: a gloved thumb in sunlight reads it.
+  for (const label of await mainNav.locator("a, button").all()) {
+    const size = await label.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(size).toBeGreaterThanOrEqual(11);
+  }
+
+  await mainNav.getByRole("button", { name: "More" }).click();
+  const sheet = page.getByRole("dialog", { name: "More" });
+  await expect(sheet.getByRole("link", { name: "Insights", exact: true })).toBeVisible();
+  await expect(sheet.getByRole("link", { name: "Setup", exact: true })).toBeVisible();
+  await expect(sheet.getByRole("link", { name: "My preferences" })).toBeVisible();
 });
 
 test("command palette follows keyboard selection without horizontal overflow", async ({

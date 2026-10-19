@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
 
 import { TypesView } from "@/features/equipment/types-view";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Equipment types & BOMs" };
+export const metadata = pageMetadata("/equipment/types");
 
 export default function EquipmentTypesPage() {
   return <TypesView />;

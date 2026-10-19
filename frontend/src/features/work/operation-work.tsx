@@ -48,7 +48,7 @@ export function OperationWork() {
         id: s.jarSizeId,
         title: s.label,
         reason: `${s.available} available / below target ${s.parLevel}`,
-        href: "/stock/finished",
+        href: "/stock?tab=finished",
         group: "Stock",
       })),
   ];

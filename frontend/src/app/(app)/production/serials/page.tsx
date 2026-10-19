@@ -1,8 +1,8 @@
-import type { Metadata } from "next";
-
+import { PageHeader } from "@/components/shell/page-header";
 import { SerialLookup } from "@/features/commerce/serial-lookup";
+import { pageMetadata } from "@/lib/page-title";
 
-export const metadata: Metadata = { title: "Serial lookup" };
+export const metadata = pageMetadata("/production/serials");
 
 /**
  * `?serial=` makes a lookup shareable and lets other surfaces (a sale's linked
@@ -16,13 +16,7 @@ export default async function SerialLookupPage({
   const { serial } = await searchParams;
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-4">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Serial lookup</h1>
-        <p className="text-sm text-muted-foreground">
-          Trace one jar back to its bottling run, harvest lot, and the order it
-          left on.
-        </p>
-      </div>
+      <PageHeader subtitle="Trace one jar back to its bottling run, harvest lot and the order it left on." />
       <SerialLookup initialSerial={serial ?? ""} />
     </div>
   );

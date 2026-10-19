@@ -83,7 +83,7 @@ export function ProductBatchRecord({ id }: { id: string }) {
           )}
         </div>
       </section>
-      <Link href="/stock/finished" className="underline">
+      <Link href="/stock?tab=finished" className="underline">
         Current finished stock
       </Link>
     </div>

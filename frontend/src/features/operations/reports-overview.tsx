@@ -24,8 +24,7 @@ export function ReportsOverview() {
   return (
     <div className="grid gap-6">
       <ReportHeader
-        title="Insights"
-        description="One home for survival, yield and money: revenue, expenses, profitability and bottling plans."
+        description="See how the season went: survival, yield, money and what to bottle next."
         year={year}
         onYearChange={setYear}
       />
