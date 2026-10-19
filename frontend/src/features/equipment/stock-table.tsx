@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import {
   DataGrid,
   DataGridCellAction,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -87,6 +88,14 @@ const rightAligned: DataGridColumnMeta = {
   align: "right",
   cellClassName: "tabular-nums",
 };
+
+/** What the count cells read from `table.options.meta`. */
+interface StockMeta {
+  countMode: boolean;
+  drafts: Record<string, string>;
+  setDrafts: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  lineErrors: Record<string, string>;
+}
 
 export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
   const physicalCount = usePhysicalCount();
@@ -187,7 +196,9 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
           meta: {
             cellClassName: "font-medium",
           } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: row } }) => (
+          cell: ({ row: { original: row }, table }) => {
+            const { lineErrors } = gridMeta<StockMeta>(table);
+            return (
             <>
               {row.typeName}
               {row.frameCondition && (
@@ -218,7 +229,8 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
                 <p className="text-xs text-destructive">{lineErrors[row.id]}</p>
               )}
             </>
-          ),
+            );
+          },
         }),
         columnHelper.accessor((r) => r.totalOwned, {
           id: "onHand",
@@ -236,7 +248,9 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
           id: "available",
           header: countMode ? "Counted" : "Available",
           meta: rightAligned,
-          cell: ({ row: { original: row } }) => {
+          cell: ({ row: { original: row }, table }) => {
+            const { countMode, drafts, setDrafts, lineErrors } =
+              gridMeta<StockMeta>(table);
             if (!countMode) {
               return (
                 <span
@@ -400,14 +414,18 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
           ),
         }),
       ]),
-    [countMode, drafts, lineErrors],
+    // `countMode` only renames the header; the drafts, errors and the mode
+    // itself reach the cells through `meta` so typing never rebuilds a column.
+    [countMode],
   );
 
+  const stockMeta: StockMeta = { countMode, drafts, setDrafts, lineErrors };
   const table = useTable({
     features: gridFeatures,
     columns,
     data: sortedRows,
     getRowId: (row) => row.id,
+    meta: stockMeta,
   });
 
   const errorMessage =

@@ -145,6 +145,12 @@ usable with one hand, and dense only where comparison helps a decision.
   Preserve the actual apiary canvas, keyboard controls, and layout editing.
 - Tables that must preserve column comparison scroll horizontally rather than
   crushing content.
+- DataGrid (`components/ui/data-grid.tsx`): column defs must not depend on
+  per-keystroke state (drafts, selection, pending flags). TanStack mounts a
+  function `cell` as a component, so rebuilding the columns on every change
+  remounts the cell and drops focus from any input in it. Keep the columns
+  memo static and pass the mutable state via `useTable({ meta })`; cells read
+  it with `gridMeta<MyMeta>(table)`.
 - Empty, loading, error, and offline states always include a useful next step.
 
 ## Core workflows

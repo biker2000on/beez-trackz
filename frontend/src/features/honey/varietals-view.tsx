@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   DataGrid,
   DataGridCellAction,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -59,6 +60,14 @@ const rightAligned: DataGridColumnMeta = {
 interface VarietalDraft {
   name?: string;
   notes?: string;
+}
+
+/** What the editable varietal cells read from `table.options.meta`. */
+interface VarietalMeta {
+  drafts: Record<string, VarietalDraft>;
+  pendingId: string | null;
+  saveVarietal: (varietal: HoneyVarietal, name: string, notes: string) => Promise<void>;
+  setDraft: (id: string, patch: VarietalDraft) => void;
 }
 
 // --- page ---
@@ -139,36 +148,45 @@ export function VarietalsView() {
     [balances.data],
   );
 
+  // Drafts and the in-flight row reach the cells through table meta so the
+  // column defs stay stable while typing (see data-grid.tsx).
+  const varietalMeta: VarietalMeta = { drafts, pendingId, saveVarietal, setDraft };
   const varietalColumns = React.useMemo(
     () =>
       varietalColumnHelper.columns([
         varietalColumnHelper.accessor((r) => r.name, {
           id: "name",
           header: "Varietal",
-          cell: ({ row: { original: varietal } }) => (
-            <DataGridCellAction>
-              <Input
-                aria-label={`Name for ${varietal.name}`}
-                className="w-48"
-                value={drafts[varietal.id]?.name ?? varietal.name}
-                onChange={(e) => setDraft(varietal.id, { name: e.target.value })}
-              />
-            </DataGridCellAction>
-          ),
+          cell: ({ row: { original: varietal }, table }) => {
+            const { drafts, setDraft } = gridMeta<VarietalMeta>(table);
+            return (
+              <DataGridCellAction>
+                <Input
+                  aria-label={`Name for ${varietal.name}`}
+                  className="w-48"
+                  value={drafts[varietal.id]?.name ?? varietal.name}
+                  onChange={(e) => setDraft(varietal.id, { name: e.target.value })}
+                />
+              </DataGridCellAction>
+            );
+          },
         }),
         varietalColumnHelper.display({
           id: "notes",
           header: "Notes",
-          cell: ({ row: { original: varietal } }) => (
-            <DataGridCellAction>
-              <Input
-                aria-label={`Notes for ${varietal.name}`}
-                placeholder="Optional"
-                value={drafts[varietal.id]?.notes ?? varietal.notes ?? ""}
-                onChange={(e) => setDraft(varietal.id, { notes: e.target.value })}
-              />
-            </DataGridCellAction>
-          ),
+          cell: ({ row: { original: varietal }, table }) => {
+            const { drafts, setDraft } = gridMeta<VarietalMeta>(table);
+            return (
+              <DataGridCellAction>
+                <Input
+                  aria-label={`Notes for ${varietal.name}`}
+                  placeholder="Optional"
+                  value={drafts[varietal.id]?.notes ?? varietal.notes ?? ""}
+                  onChange={(e) => setDraft(varietal.id, { notes: e.target.value })}
+                />
+              </DataGridCellAction>
+            );
+          },
         }),
         varietalColumnHelper.accessor((r) => r.lotCount, {
           id: "lotCount",
@@ -207,7 +225,8 @@ export function VarietalsView() {
             headClassName: "w-12",
             cellClassName: "p-1 text-right",
           } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: varietal } }) => {
+          cell: ({ row: { original: varietal }, table }) => {
+            const { drafts, pendingId, saveVarietal } = gridMeta<VarietalMeta>(table);
             const name = drafts[varietal.id]?.name ?? varietal.name;
             const notes = drafts[varietal.id]?.notes ?? varietal.notes ?? "";
             const dirty =
@@ -229,7 +248,7 @@ export function VarietalsView() {
           },
         }),
       ]),
-    [drafts, formatHoney, pendingId, saveVarietal, setDraft],
+    [formatHoney],
   );
 
   const lotColumns = React.useMemo(
@@ -301,6 +320,7 @@ export function VarietalsView() {
     columns: varietalColumns,
     data: varietalRows,
     getRowId: (row) => row.id,
+    meta: varietalMeta,
   });
 
   const lotTable = useTable({

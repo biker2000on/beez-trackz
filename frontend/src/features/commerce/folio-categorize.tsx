@@ -49,6 +49,7 @@ import { Button } from "@/components/ui/button";
 import {
   DataGrid,
   DataGridCellAction,
+  gridMeta,
   dataGridFeatures,
   type DataGridColumnMeta,
 } from "@/components/ui/data-grid";
@@ -291,6 +292,17 @@ function useCategorizeParams(onChange: () => void) {
 
 const columnHelper = createColumnHelper<typeof dataGridFeatures, FolioImportItem>();
 
+/** What the editable cells read from `table.options.meta`. */
+interface CategorizeMeta {
+  busy: boolean;
+  expenseCategories: string[];
+  incomeCategories: string[];
+  labelFor: (direction: FolioImportItem["direction"], key: string) => string;
+  resolveRow: (item: FolioImportItem, accept: boolean) => void;
+  setRowCategory: (item: FolioImportItem, category: string) => void;
+  setLinking: (item: FolioImportItem | null) => void;
+}
+
 const selectClassName =
   "h-8 min-w-0 max-w-full rounded-md border border-input bg-background px-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -525,7 +537,9 @@ export function FolioCategorize() {
         id: "category",
         header: "Category",
         meta: { cellClassName: "min-w-[12rem]" } satisfies DataGridColumnMeta,
-        cell: ({ row: { original: item } }) => {
+        cell: ({ row: { original: item }, table }) => {
+          const { busy, expenseCategories, incomeCategories, labelFor, setRowCategory } =
+            gridMeta<CategorizeMeta>(table);
           const offered =
             item.direction === "expense" ? expenseCategories : incomeCategories;
           // An entry filed under a category since archived still shows it.
@@ -567,7 +581,8 @@ export function FolioCategorize() {
         id: "sale",
         header: "Sale",
         meta: { cellClassName: "whitespace-normal" } satisfies DataGridColumnMeta,
-        cell: ({ row: { original: item } }) => {
+        cell: ({ row: { original: item }, table }) => {
+          const { busy, setLinking } = gridMeta<CategorizeMeta>(table);
           if (linkable(item)) {
             return (
               <DataGridCellAction>
@@ -616,7 +631,8 @@ export function FolioCategorize() {
         id: "status",
         header: "Status",
         meta: { cellClassName: "min-w-[15rem] whitespace-normal" } satisfies DataGridColumnMeta,
-        cell: ({ row: { original: item } }) => {
+        cell: ({ row: { original: item }, table }) => {
+          const { busy, resolveRow } = gridMeta<CategorizeMeta>(table);
           const status = statusOf(item);
           return (
             <span className="grid justify-items-start gap-1">
@@ -687,13 +703,27 @@ export function FolioCategorize() {
       }),
     ]);
     return [...base, ...book];
-  }, [busy, expenseCategories, incomeCategories, labelFor, multipleBooks, resolveRow, setRowCategory]);
+    // `labelFor` is read by the category accessor, so it stays a dep; the
+    // busy flag, the categories and the row callbacks reach the cells through
+    // `meta` so a mutation never rebuilds a column and remounts the focused
+    // select or button (see data-grid.tsx).
+  }, [labelFor, multipleBooks]);
 
+  const categorizeMeta: CategorizeMeta = {
+    busy,
+    expenseCategories,
+    incomeCategories,
+    labelFor,
+    resolveRow,
+    setRowCategory,
+    setLinking,
+  };
   const table = useTable({
     features: dataGridFeatures,
     columns,
     data: rows,
     getRowId: (item) => item.id,
+    meta: categorizeMeta,
     enableMultiSort: false,
     enableSortingRemoval: false,
     state: { sorting },

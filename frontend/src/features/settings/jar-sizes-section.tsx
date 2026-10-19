@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   DataGrid,
   DataGridCellAction,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -80,6 +81,19 @@ function jarDraftValues(jar: JarSize, draft: JarDraft | undefined): JarDraftValu
 
 const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, JarSize>();
+
+type PackagingType = NonNullable<ReturnType<typeof useEquipmentTypes>["data"]>[number];
+
+/** What the editable jar cells read from `table.options.meta`. */
+interface JarMeta {
+  drafts: Record<string, JarDraft>;
+  pendingId: string | null;
+  packagingTypes: PackagingType[];
+  saveJar: (jar: JarSize, values: JarDraftValues) => Promise<void>;
+  setDraft: (id: string, patch: JarDraft) => void;
+  setPackaging: (jar: JarSize, packagingTypeId: string | null) => Promise<void>;
+  toggleActive: (jar: JarSize, checked: boolean) => Promise<void>;
+}
 
 export function JarSizesSection() {
   const jarSizes = useJarSizes();
@@ -215,7 +229,9 @@ export function JarSizesSection() {
         columnHelper.display({
           id: "label",
           header: "Label",
-          cell: ({ row: { original: jar } }) => (
+          cell: ({ row: { original: jar }, table }) => {
+            const { drafts, setDraft } = gridMeta<JarMeta>(table);
+            return (
             <DataGridCellAction
               className={cn(!jar.isActive && "opacity-60")}
             >
@@ -226,12 +242,15 @@ export function JarSizesSection() {
                 onChange={(e) => setDraft(jar.id, { label: e.target.value })}
               />
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "honeyOz",
           header: "Honey (oz)",
-          cell: ({ row: { original: jar } }) => (
+          cell: ({ row: { original: jar }, table }) => {
+            const { drafts, setDraft } = gridMeta<JarMeta>(table);
+            return (
             <DataGridCellAction
               className={cn(!jar.isActive && "opacity-60")}
             >
@@ -246,12 +265,15 @@ export function JarSizesSection() {
                 onChange={(e) => setDraft(jar.id, { honeyOz: e.target.value })}
               />
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "price",
           header: "Default price ($)",
-          cell: ({ row: { original: jar } }) => (
+          cell: ({ row: { original: jar }, table }) => {
+            const { drafts, setDraft } = gridMeta<JarMeta>(table);
+            return (
             <DataGridCellAction
               className={cn(!jar.isActive && "opacity-60")}
             >
@@ -266,12 +288,15 @@ export function JarSizesSection() {
                 onChange={(e) => setDraft(jar.id, { price: e.target.value })}
               />
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "lowStockThreshold",
           header: "Low-stock alert",
-          cell: ({ row: { original: jar } }) => (
+          cell: ({ row: { original: jar }, table }) => {
+            const { drafts, setDraft } = gridMeta<JarMeta>(table);
+            return (
             <DataGridCellAction
               className={cn(!jar.isActive && "opacity-60")}
             >
@@ -288,12 +313,15 @@ export function JarSizesSection() {
                 }
               />
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "packaging",
           header: "Empty containers",
-          cell: ({ row: { original: jar } }) => (
+          cell: ({ row: { original: jar }, table }) => {
+            const { pendingId, packagingTypes, setPackaging } = gridMeta<JarMeta>(table);
+            return (
             <DataGridCellAction
               className={cn(!jar.isActive && "opacity-60")}
             >
@@ -320,7 +348,8 @@ export function JarSizesSection() {
                 </SelectContent>
               </Select>
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "active",
@@ -329,7 +358,9 @@ export function JarSizesSection() {
             headClassName: "text-center",
             cellClassName: "text-center",
           } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: jar } }) => (
+          cell: ({ row: { original: jar }, table }) => {
+            const { pendingId, toggleActive } = gridMeta<JarMeta>(table);
+            return (
             <DataGridCellAction
               className={cn(
                 "flex justify-center",
@@ -345,7 +376,8 @@ export function JarSizesSection() {
                 }
               />
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
         columnHelper.display({
           id: "save",
@@ -354,7 +386,8 @@ export function JarSizesSection() {
             headClassName: "w-12",
             cellClassName: "p-1 text-right",
           } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: jar } }) => {
+          cell: ({ row: { original: jar }, table }) => {
+            const { drafts, pendingId, saveJar } = gridMeta<JarMeta>(table);
             const values = jarDraftValues(jar, drafts[jar.id]);
             const dirty =
               values.label.trim() !== jar.label ||
@@ -382,14 +415,26 @@ export function JarSizesSection() {
           },
         }),
       ]),
-    [drafts, packagingTypes, pendingId, saveJar, setDraft, setPackaging, toggleActive],
+    [],
   );
 
+  // Drafts, the in-flight row and the catalog reach the cells through table
+  // meta so the column defs stay stable while typing (see data-grid.tsx).
+  const jarMeta: JarMeta = {
+    drafts,
+    pendingId,
+    packagingTypes,
+    saveJar,
+    setDraft,
+    setPackaging,
+    toggleActive,
+  };
   const table = useTable({
     features: gridFeatures,
     columns,
     data: jars,
     getRowId: (row) => row.id,
+    meta: jarMeta,
   });
 
   async function handleAdd() {

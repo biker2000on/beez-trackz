@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import {
   DataGrid,
   DataGridCellAction,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -112,6 +113,12 @@ export function SaleSerials({ saleId }: { saleId: string }) {
 type SaleSerial = NonNullable<ReturnType<typeof useSaleSerials>["data"]>[number];
 const serialHelper = createColumnHelper<typeof dataGridFeatures, SaleSerial>();
 
+/** What the unlink cell reads from `table.options.meta`. */
+interface SerialMeta {
+  unlinking: boolean;
+  onUnlink: (serial: string) => void;
+}
+
 function SerialGrid({
   serials,
   unlinking,
@@ -152,7 +159,9 @@ function SerialGrid({
           id: "actions",
           header: "",
           meta: { align: "right" } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: item } }) => (
+          cell: ({ row: { original: item }, table }) => {
+            const { unlinking, onUnlink } = gridMeta<SerialMeta>(table);
+            return (
             <DataGridCellAction>
               <Button
                 size="sm"
@@ -164,16 +173,21 @@ function SerialGrid({
                 <X />
               </Button>
             </DataGridCellAction>
-          ),
+            );
+          },
         }),
       ]),
-    [unlinking, onUnlink],
+    [],
   );
+  // The pending flag and the (inline) callback reach the cell through `meta`
+  // so a click never rebuilds a column and unmounts the focused button.
+  const serialMeta: SerialMeta = { unlinking, onUnlink };
   const table = useTable({
     features: dataGridFeatures,
     columns,
     data: serials,
     getRowId: (item) => item.serialNumber,
+    meta: serialMeta,
   });
   return (
     <div className="rounded-md border">

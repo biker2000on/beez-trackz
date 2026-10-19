@@ -11,6 +11,7 @@ import { createColumnHelper, useTable } from "@tanstack/react-table";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DataGrid,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -19,6 +20,11 @@ import { QUEEN_STATUS_LABELS, type Queen } from "./api";
 import { markingColorForDate } from "./marking";
 
 const helper = createColumnHelper<typeof dataGridFeatures, Queen>();
+
+/** What the select cells read from `table.options.meta`. */
+interface QueenGridMeta {
+  selected: Set<string>;
+}
 
 export function QueenManageGrid({
   queens,
@@ -36,9 +42,9 @@ export function QueenManageGrid({
           id: "select",
           header: () => <span className="sr-only">Selected</span>,
           meta: { headClassName: "w-10", card: "badge" } satisfies DataGridColumnMeta,
-          cell: ({ row }) => (
+          cell: ({ row, table }) => (
             <Checkbox
-              checked={selected.has(row.original.id)}
+              checked={gridMeta<QueenGridMeta>(table).selected.has(row.original.id)}
               aria-hidden
               tabIndex={-1}
               className="pointer-events-none"
@@ -93,11 +99,15 @@ export function QueenManageGrid({
           meta: { filter: true, filterAllLabel: "Any status" } satisfies DataGridColumnMeta,
         }),
       ]),
-    [selected],
+    [],
   );
+  // The selection reaches the cells through `meta` so toggling a row never
+  // rebuilds a column (see data-grid.tsx).
+  const gridState: QueenGridMeta = { selected };
   const table = useTable({
     features: dataGridFeatures,
     columns,
+    meta: gridState,
     data: queens,
     getRowId: (q) => q.id,
   });
