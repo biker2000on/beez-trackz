@@ -42,6 +42,17 @@
  * cells (e.g. physical-count drafts) and row action menus keep their native
  * behavior. Cells that must swallow a click (menus, inline inputs) can call
  * `event.stopPropagation()` — the grid only listens at the row level.
+ *
+ * Column defs must not depend on per-keystroke state. TanStack renders a
+ * function `cell` as a React component, so a column model rebuilt from draft
+ * rows, a selection set or a pending flag gives every cell a new component
+ * identity: React remounts the cell, an input inside it loses focus (and a
+ * dialog's focus trap then pulls focus back to the dialog). Keep the columns
+ * memo's deps to static things (formatters, catalogs, stable callbacks) and
+ * pass the mutable state through `useTable({ meta })`; cells read it from
+ * their context with `gridMeta<MyMeta>(table)`, which is fresh every render.
+ * Never build component functions inside a column builder; a cell that needs
+ * hooks is a module-level component fed by props.
  */
 
 import * as React from "react";
@@ -118,6 +129,18 @@ export interface DataGridColumnMeta<TData = unknown> {
    * detail row (and as ordinary fields on cards).
    */
   priority?: "primary" | "secondary";
+}
+
+/**
+ * The per-render state a grid passed through `useTable({ meta })`, read from
+ * a cell's `table`. `useTable` re-applies its options on every render, so this
+ * is always the latest value even though the column defs never change (see
+ * the header: column defs must not depend on per-keystroke state).
+ */
+export function gridMeta<TMeta extends object>(table: {
+  options: { meta?: object };
+}): TMeta {
+  return table.options.meta as TMeta;
 }
 
 /**

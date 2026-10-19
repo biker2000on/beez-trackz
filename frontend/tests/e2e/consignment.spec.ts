@@ -84,6 +84,28 @@ function locationDetail() {
       shelfRow(JAR_QT, "Quart", 18, 8, { harvestLotId: LOT_SOURWOOD, ...SOURWOOD }),
     ],
     unsettled: [],
+    prices: [
+      {
+        jarSizeId: JAR_QT,
+        productId: null,
+        label: "Quart",
+        kind: "jar",
+        listPrice: 18,
+        priceListPrice: null,
+        wholesalePrice: null,
+        shelfPrice: null,
+      },
+      {
+        jarSizeId: JAR_PT,
+        productId: null,
+        label: "Pint",
+        kind: "jar",
+        listPrice: 10,
+        priceListPrice: null,
+        wholesalePrice: null,
+        shelfPrice: null,
+      },
+    ],
     movements: [
       {
         id: "mv-1",
@@ -385,4 +407,51 @@ test("their report is one row per lot, refuses an over-count by varietal, and po
       { jarSizeId: JAR_QT, harvestLotId: LOT_WILDFLOWER, quantitySold: 0, quantityReturned: 2 },
     ],
   });
+});
+
+// Regression: the report grid's column definitions used to be rebuilt from the
+// draft rows on every keystroke, and TanStack mounts a function `cell` as a
+// component, so each character remounted the input, dropped focus and let the
+// dialog's focus trap pull focus back to the dialog. Typing character by
+// character (not `fill`, which sets the value in one event) is what proves it.
+test("typing in the report and prices grids keeps focus in the input", async ({
+  page,
+}) => {
+  const posted: Posted[] = [];
+  await mockApp(page, posted);
+  await page.goto(`/sales/consignment/${LOCATION}`);
+
+  await page.getByRole("button", { name: "Record their report" }).click();
+  const report = page.getByRole("dialog", { name: /Record Corner market/ });
+  await expect(report).toBeVisible();
+
+  const sold = report.getByRole("textbox", {
+    name: "Quart · Sourwood · 2026-SOURWOOD-01 sold",
+  });
+  await sold.click();
+  await sold.pressSequentially("12");
+  await expect(sold).toBeFocused();
+  await expect(sold).toHaveValue("12");
+
+  const count = report.getByRole("textbox", {
+    name: "Pint · Sourwood · 2026-SOURWOOD-01 counted on shelf",
+  });
+  await count.click();
+  await count.pressSequentially("34");
+  await expect(count).toBeFocused();
+  await expect(count).toHaveValue("34");
+  // The earlier draft survived the second row's typing.
+  await expect(sold).toHaveValue("12");
+
+  await report.getByRole("button", { name: "Cancel" }).click();
+  await expect(report).toBeHidden();
+
+  await page.getByRole("button", { name: "Edit prices" }).click();
+  const prices = page.getByRole("dialog", { name: "Prices at Corner market" });
+  await expect(prices).toBeVisible();
+  const wholesale = prices.getByRole("textbox", { name: "Quart your price to them" });
+  await wholesale.click();
+  await wholesale.pressSequentially("15");
+  await expect(wholesale).toBeFocused();
+  await expect(wholesale).toHaveValue("15");
 });

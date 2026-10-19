@@ -33,6 +33,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DataGrid,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -52,6 +53,11 @@ type ViewMode = "card" | "table";
 
 const gridFeatures = dataGridFeatures;
 const columnHelper = createColumnHelper<typeof gridFeatures, Hive>();
+
+/** What the select cells read from `table.options.meta`. */
+interface HiveListMeta {
+  selected: Set<string>;
+}
 
 export function HivesListPage() {
   const router = useRouter();
@@ -143,9 +149,9 @@ export function HivesListPage() {
                 id: "select",
                 header: () => <span className="sr-only">Selected</span>,
                 meta: { headClassName: "w-10", card: "badge" } satisfies DataGridColumnMeta,
-                cell: ({ row }) => (
+                cell: ({ row, table }) => (
                   <Checkbox
-                    checked={selected.has(row.original.id)}
+                    checked={gridMeta<HiveListMeta>(table).selected.has(row.original.id)}
                     aria-hidden
                     tabIndex={-1}
                     className="pointer-events-none"
@@ -196,14 +202,19 @@ export function HivesListPage() {
           cell: ({ row }) => formatDate(row.original.installedDate),
         }),
       ]),
-    [bulkMode, selected],
+    // `bulkMode` adds or removes the select column; the selection itself
+    // reaches the cells through `meta` so toggling a row never rebuilds a
+    // column (and never remounts the row's link).
+    [bulkMode],
   );
 
+  const listMeta: HiveListMeta = { selected };
   const table = useTable({
     features: gridFeatures,
     columns,
     data: list,
     getRowId: (hive) => hive.id,
+    meta: listMeta,
   });
 
   return (

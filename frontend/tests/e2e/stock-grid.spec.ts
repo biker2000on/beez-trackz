@@ -91,6 +91,37 @@ const JAR_ROWS = [
   }),
 ];
 
+function equipmentRow(overrides: Row): Row {
+  return {
+    id: "eq-1",
+    typeId: "type-1",
+    typeName: "Deep hive body",
+    typeCategory: "box",
+    totalOwned: 10,
+    storageLocation: null,
+    notes: null,
+    frameCondition: null,
+    framesPerBox: null,
+    deployed: 4,
+    available: 6,
+    damaged: 0,
+    retired: 0,
+    needed: 0,
+    shortfall: 0,
+    unitCostCents: null,
+    firstDeployedYear: null,
+    combAgeYears: null,
+    pullRecommended: false,
+    updatedAt: "2026-10-01T12:00:00Z",
+    ...overrides,
+  };
+}
+
+const EQUIPMENT_ROWS = [
+  equipmentRow({}),
+  equipmentRow({ id: "eq-2", typeId: "type-2", typeName: "Inner cover", totalOwned: 3, deployed: 1, available: 2 }),
+];
+
 async function mockStock(page: Page) {
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -102,6 +133,9 @@ async function mockStock(page: Page) {
       return route.fulfill({
         json: { id: "u", displayName: "Test", isAdmin: true, memberships: [] },
       });
+    }
+    if (path.endsWith("/equipment/stock")) {
+      return route.fulfill({ json: EQUIPMENT_ROWS });
     }
     if (path.endsWith("/stock")) {
       const kind = url.searchParams.get("kind");
@@ -225,4 +259,19 @@ test("on a phone the stock grid becomes cards with search and a Sort by select",
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBeTruthy();
+});
+
+// Regression: the equipment grid's columns were rebuilt from the count drafts
+// on every keystroke, and TanStack mounts a function `cell` as a component, so
+// each character remounted the count input and dropped focus.
+test("a physical count input keeps focus while typing", async ({ page }) => {
+  await page.goto("/equipment");
+  await page.getByRole("button", { name: "Physical count" }).click();
+  const counted = page.getByRole("textbox", { name: "Deep hive body counted in storage" });
+  await expect(counted).toHaveValue("6");
+  await counted.click();
+  await counted.fill("");
+  await counted.pressSequentially("12");
+  await expect(counted).toBeFocused();
+  await expect(counted).toHaveValue("12");
 });

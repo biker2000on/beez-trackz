@@ -74,6 +74,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   DataGrid,
   DataGridCellAction,
+  gridMeta,
   type DataGridColumnMeta,
   dataGridFeatures,
 } from "@/components/ui/data-grid";
@@ -634,6 +635,12 @@ interface PriceEntry {
   shelf: string;
 }
 
+/** What the price-editing cells read from `table.options.meta`. */
+interface PriceMeta {
+  entries: Record<string, PriceEntry>;
+  setEntries: React.Dispatch<React.SetStateAction<Record<string, PriceEntry>>>;
+}
+
 function moneyText(value: number | null): string {
   return value != null ? value.toFixed(2) : "";
 }
@@ -702,41 +709,47 @@ function EditPricesDialog({
   ).length;
   const error = save.error instanceof Error ? save.error.message : null;
 
+  // The draft entries travel through table meta so the column defs stay
+  // stable while typing (see data-grid.tsx: a rebuilt column remounts its
+  // cell and the input loses focus).
+  const priceMeta: PriceMeta = { entries, setEntries };
   const columns = React.useMemo(() => {
-    function priceCell(
+    function priceInput(
+      {
+        row: { original: row },
+        table,
+      }: {
+        row: { original: StockLocationPrice };
+        table: { options: { meta?: object } };
+      },
       field: keyof PriceEntry,
       label: (row: StockLocationPrice) => string,
       placeholder: (row: StockLocationPrice) => string,
     ) {
-      return function PriceCell({
-        row: { original: row },
-      }: {
-        row: { original: StockLocationPrice };
-      }) {
-        const key = skuKey(row);
-        const entry = entries[key] ?? { wholesale: "", shelf: "" };
-        return (
-          <DataGridCellAction>
-            <Input
-              aria-label={label(row)}
-              type="number"
-              min="0"
-              step="0.01"
-              value={entry[field]}
-              placeholder={placeholder(row)}
-              onChange={(event) =>
-                setEntries((current) => ({
-                  ...current,
-                  [key]: {
-                    ...(current[key] ?? { wholesale: "", shelf: "" }),
-                    [field]: event.target.value,
-                  },
-                }))
-              }
-            />
-          </DataGridCellAction>
-        );
-      };
+      const { entries, setEntries } = gridMeta<PriceMeta>(table);
+      const key = skuKey(row);
+      const entry = entries[key] ?? { wholesale: "", shelf: "" };
+      return (
+        <DataGridCellAction>
+          <Input
+            aria-label={label(row)}
+            type="number"
+            min="0"
+            step="0.01"
+            value={entry[field]}
+            placeholder={placeholder(row)}
+            onChange={(event) =>
+              setEntries((current) => ({
+                ...current,
+                [key]: {
+                  ...(current[key] ?? { wholesale: "", shelf: "" }),
+                  [field]: event.target.value,
+                },
+              }))
+            }
+          />
+        </DataGridCellAction>
+      );
     }
     return priceHelper.columns([
       priceHelper.display({
@@ -749,29 +762,34 @@ function EditPricesDialog({
         id: "wholesale",
         header: "Your price to them ($)",
         meta: { headClassName: "w-32" } satisfies DataGridColumnMeta,
-        cell: priceCell(
-          "wholesale",
-          (row) => `${row.label} your price to them`,
-          (row) => wholesaleFallback(row).value.toFixed(2),
-        ),
+        cell: (ctx) =>
+          priceInput(
+            ctx,
+            "wholesale",
+            (row) => `${row.label} your price to them`,
+            (row) => wholesaleFallback(row).value.toFixed(2),
+          ),
       }),
       priceHelper.display({
         id: "shelf",
         header: "Their shelf price ($)",
         meta: { headClassName: "w-32" } satisfies DataGridColumnMeta,
-        cell: priceCell(
-          "shelf",
-          (row) => `${row.label} their shelf price`,
-          (row) => row.listPrice.toFixed(2),
-        ),
+        cell: (ctx) =>
+          priceInput(
+            ctx,
+            "shelf",
+            (row) => `${row.label} their shelf price`,
+            (row) => row.listPrice.toFixed(2),
+          ),
       }),
     ]);
-  }, [entries]);
+  }, []);
   const table = useTable({
     features: gridFeatures,
     columns,
     data,
     getRowId: (row) => skuKey(row),
+    meta: priceMeta,
   });
 
   function submit() {
@@ -1105,6 +1123,14 @@ interface ReportRow {
   count: string;
 }
 
+/** What the report cells read from `table.options.meta`. */
+interface ReportMeta {
+  rows: Record<string, ReportRow>;
+  setRows: React.Dispatch<React.SetStateAction<Record<string, ReportRow>>>;
+  location: StockLocation;
+  commissionRate: number;
+}
+
 const emptyReportRow: ReportRow = { sold: "", returned: "", price: "", count: "" };
 
 /** First and last day of the month a date falls in, as YYYY-MM-DD. */
@@ -1213,40 +1239,47 @@ function RecordReportDialog({
   const error = settle.error instanceof Error ? settle.error.message : null;
   const valid = lines.length > 0 && !overCount && !overpaid;
 
+  // The draft rows and the pricing inputs travel through table meta so the
+  // column defs stay stable while typing (see data-grid.tsx: a rebuilt column
+  // remounts its cell and the input loses focus, and the dialog's focus trap
+  // then pulls focus away from the grid).
+  const reportMeta: ReportMeta = { rows, setRows, location, commissionRate };
   const reportColumns = React.useMemo(() => {
-    function numberCell(
+    function numberInput(
+      {
+        row: { original: row },
+        table,
+      }: {
+        row: { original: StockShelfRow };
+        table: { options: { meta?: object } };
+      },
       field: keyof ReportRow,
       label: (row: StockShelfRow) => string,
       extra: (row: StockShelfRow) => React.ComponentProps<typeof Input>,
     ) {
-      return function ReportCell({
-        row: { original: row },
-      }: {
-        row: { original: StockShelfRow };
-      }) {
-        const key = lotKey(row);
-        const entry = rows[key] ?? emptyReportRow;
-        return (
-          <DataGridCellAction>
-            <Input
-              aria-label={label(row)}
-              type="number"
-              min="0"
-              value={entry[field]}
-              onChange={(event) =>
-                setRows((current) => ({
-                  ...current,
-                  [key]: {
-                    ...(current[key] ?? emptyReportRow),
-                    [field]: event.target.value,
-                  },
-                }))
-              }
-              {...extra(row)}
-            />
-          </DataGridCellAction>
-        );
-      };
+      const { rows, setRows } = gridMeta<ReportMeta>(table);
+      const key = lotKey(row);
+      const entry = rows[key] ?? emptyReportRow;
+      return (
+        <DataGridCellAction>
+          <Input
+            aria-label={label(row)}
+            type="number"
+            min="0"
+            value={entry[field]}
+            onChange={(event) =>
+              setRows((current) => ({
+                ...current,
+                [key]: {
+                  ...(current[key] ?? emptyReportRow),
+                  [field]: event.target.value,
+                },
+              }))
+            }
+            {...extra(row)}
+          />
+        </DataGridCellAction>
+      );
     }
     return shelfHelper.columns([
       shelfHelper.display({
@@ -1276,34 +1309,40 @@ function RecordReportDialog({
         id: "sold",
         header: "Sold",
         meta: { headClassName: "w-20" } satisfies DataGridColumnMeta,
-        cell: numberCell(
-          "sold",
-          (row) => `${shelfRowName(row)} sold`,
-          (row) => ({ max: row.onHand, placeholder: "0" }),
-        ),
+        cell: (ctx) =>
+          numberInput(
+            ctx,
+            "sold",
+            (row) => `${shelfRowName(row)} sold`,
+            (row) => ({ max: row.onHand, placeholder: "0" }),
+          ),
       }),
       shelfHelper.display({
         id: "returned",
         header: "Back",
         meta: { headClassName: "w-20" } satisfies DataGridColumnMeta,
-        cell: numberCell(
-          "returned",
-          (row) => `${shelfRowName(row)} returned`,
-          (row) => ({ max: row.onHand, placeholder: "0" }),
-        ),
+        cell: (ctx) =>
+          numberInput(
+            ctx,
+            "returned",
+            (row) => `${shelfRowName(row)} returned`,
+            (row) => ({ max: row.onHand, placeholder: "0" }),
+          ),
       }),
       shelfHelper.display({
         id: "price",
         header: "Their price",
         meta: { headClassName: "w-24" } satisfies DataGridColumnMeta,
-        cell: numberCell(
-          "price",
-          (row) => `${shelfRowName(row)} shelf price`,
-          (row) => ({
-            step: "0.01",
-            placeholder: row.unitPrice != null ? row.unitPrice.toFixed(2) : "0.00",
-          }),
-        ),
+        cell: (ctx) =>
+          numberInput(
+            ctx,
+            "price",
+            (row) => `${shelfRowName(row)} shelf price`,
+            (row) => ({
+              step: "0.01",
+              placeholder: row.unitPrice != null ? row.unitPrice.toFixed(2) : "0.00",
+            }),
+          ),
       }),
       ...(wholesale
         ? [
@@ -1325,7 +1364,8 @@ function RecordReportDialog({
           align: "right",
           cellClassName: "font-medium tabular-nums",
         } satisfies DataGridColumnMeta,
-        cell: ({ row: { original: row } }) => {
+        cell: ({ row: { original: row }, table }) => {
+          const { rows, location, commissionRate } = gridMeta<ReportMeta>(table);
           const entry = rows[lotKey(row)] ?? emptyReportRow;
           const sold = Math.max(0, Math.trunc(Number(entry.sold) || 0));
           if (sold === 0) return <span className="text-muted-foreground">—</span>;
@@ -1339,19 +1379,22 @@ function RecordReportDialog({
         id: "count",
         header: "Their count",
         meta: { headClassName: "w-24" } satisfies DataGridColumnMeta,
-        cell: numberCell(
-          "count",
-          (row) => `${shelfRowName(row)} counted on shelf`,
-          () => ({ placeholder: "—" }),
-        ),
+        cell: (ctx) =>
+          numberInput(
+            ctx,
+            "count",
+            (row) => `${shelfRowName(row)} counted on shelf`,
+            () => ({ placeholder: "—" }),
+          ),
       }),
     ]);
-  }, [rows, wholesale, location, commissionRate]);
+  }, [wholesale]);
   const reportTable = useTable({
     features: gridFeatures,
     columns: reportColumns,
     data: reportData,
     getRowId: (row) => lotKey(row),
+    meta: reportMeta,
   });
 
   function submit() {

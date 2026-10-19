@@ -74,6 +74,31 @@ const GNUCASH_SETTINGS = {
   hasImportCursor: false,
 };
 
+const JAR_SIZES = [
+  {
+    id: "jar-16",
+    label: "16 oz",
+    honeyOz: 16,
+    defaultPrice: 12,
+    sortOrder: 1,
+    isActive: true,
+    lowStockThreshold: 24,
+    packagingTypeId: null,
+    packagingTypeName: null,
+  },
+  {
+    id: "jar-9",
+    label: "9 oz",
+    honeyOz: 9,
+    defaultPrice: 8,
+    sortOrder: 2,
+    isActive: true,
+    lowStockThreshold: 24,
+    packagingTypeId: null,
+    packagingTypeName: null,
+  },
+];
+
 function policyBody() {
   return {
     laborTrackingEnabled: false,
@@ -178,6 +203,9 @@ async function mockApp(page: Page, options: MockOptions = {}) {
           counts: { minio: 0, immich: 0 },
         },
       });
+    }
+    if (path.endsWith("/jar-sizes")) {
+      return route.fulfill({ json: JAR_SIZES });
     }
     if (path.endsWith("/ops/units")) {
       return route.fulfill({ json: { units: "us", temperatureUnit: null } });
@@ -344,6 +372,30 @@ test("a workspace links to its catalog instead of editing it", async ({
   // The anchor opens that section rather than landing on closed cards.
   await page.goto("/admin/setup#jar-sizes");
   await expect(page.locator('[data-config-editor="jar-sizes"]')).toBeVisible();
+});
+
+// Regression: the jar-size grid's columns were rebuilt from the row drafts on
+// every keystroke, and TanStack mounts a function `cell` as a component, so
+// each character remounted the input and dropped focus.
+test("a jar size's inputs keep focus while typing", async ({ page }) => {
+  await mockApp(page);
+  await page.goto("/admin/setup#jar-sizes");
+  const editor = page.locator('[data-config-editor="jar-sizes"]');
+  await expect(editor).toBeVisible();
+
+  const ounces = editor.getByRole("textbox", { name: "Honey ounces for 16 oz" });
+  await expect(ounces).toHaveValue("16");
+  await ounces.click();
+  await ounces.fill("");
+  await ounces.pressSequentially("12");
+  await expect(ounces).toBeFocused();
+  await expect(ounces).toHaveValue("12");
+
+  const label = editor.getByRole("textbox", { name: "Label for 9 oz" });
+  await label.click();
+  await label.pressSequentially("ab");
+  await expect(label).toBeFocused();
+  await expect(label).toHaveValue("9 ozab");
 });
 
 test("/settings is gone, and it does not redirect", async ({ request }) => {
