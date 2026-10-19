@@ -394,11 +394,11 @@ export function ConsignmentLocationPage({ locationId }: { locationId: string }) 
         />
         <Stat label="Unsettled" value={formatMoney(owed)} />
         <Stat
-          label="Reports"
+          label="Settlements"
           value={String(data.settlements.filter((row) => !row.voidedAt).length)}
         />
         <Stat
-          label="Last report"
+          label="Last settled"
           value={
             data.settlements.find((row) => !row.voidedAt)?.periodEnd
               ? formatDate(data.settlements.find((row) => !row.voidedAt)!.periodEnd)
@@ -1650,10 +1650,10 @@ function SettlementHistory({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Reports</CardTitle>
+        <CardTitle className="text-base">Settlements</CardTitle>
       </CardHeader>
       <CardContent className="overflow-x-auto">
-        <DataGrid table={table} aria-label="Reports" listenOnWindow={false} />
+        <DataGrid table={table} aria-label="Settlements" listenOnWindow={false} />
       </CardContent>
     </Card>
   );

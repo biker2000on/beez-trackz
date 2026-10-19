@@ -44,6 +44,7 @@ import {
   type Queen,
 } from "./hooks";
 import { formatDate, parseApiDate, queenYearColor, todayInput } from "./lib";
+import { NoteText } from "@/components/record/source-note";
 
 const QUEEN_ORIGINS = [
   ["purchased", "Purchased"],
@@ -105,7 +106,7 @@ function QueenCard({ queen, current }: { queen: Queen; current?: boolean }) {
           {queen.introducedDate &&
             ` · introduced ${formatDate(queen.introducedDate)}`}
         </p>
-        {queen.notes && <p className="whitespace-pre-wrap">{queen.notes}</p>}
+        <NoteText text={queen.notes} className="whitespace-pre-wrap" />
       </CardContent>
     </Card>
   );

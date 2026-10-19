@@ -123,7 +123,7 @@ export function ApiariesListPage() {
           <CardContent className="grid place-items-center gap-3 py-10 text-center">
             <MapPin className="size-8 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No apiaries yet. Create your first yard to start tracking hives.
+              No apiaries yet. Add your first apiary to start tracking hives.
             </p>
             {isAdmin ? <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" />

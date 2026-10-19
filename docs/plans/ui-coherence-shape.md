@@ -42,8 +42,15 @@ integrations (`/admin`), Equipment types (`/equipment/types`), Varietals
 (`/production/varietals`) as its tabs/children. `g a` still reaches it.
 
 Equipment: one page at `/equipment` under Apiaries with the ledger columns
-(On hand / Deployed / Available) and row actions (count, deploy, record
-loss). `/stock/equipment` redirects there. Types & BOMs live only in Setup.
+(On hand / Deployed / Available, plus Needed / Damaged / Retired) and row
+actions (count, deploy, record loss). `/stock/equipment` redirects there.
+Types & BOMs live only in Setup. *Wave 3 (2026-10-19):* every column is
+`GET /equipment/stock`, which the server sums from `inventory_balances`
+(on hand, deployed, damaged, retired) and `inventory_available` at the home
+location (available); the summary cards, the "Below target" card and the
+Owned / Available columns on `/equipment/types` are gone, so the quantities
+are drawn in exactly one table. The stock workspace no longer has an
+equipment kind.
 
 Phone bar (five slots): admin = Today · Apiaries · Stock · Sales · More;
 viewer/editor = Today · Apiaries · Insights · More. More lists every area,
@@ -101,10 +108,33 @@ titles.
   evidence is older than one season (180 days) are hidden by default behind
   "Show stale (n)". Groups: Urgent, This week, Later. Keyboard hints stay in
   the `?` dialog, not inline.
+  *Wave 3 (2026-10-19), as built (`features/work/rollup.ts`):* cards are
+  keyed by `context.hiveId` in the server's order; the bucket is the
+  server's priority renamed (urgent → Urgent, high → This week,
+  normal/low → Later) using the highest priority on the card. The summary
+  line is each item's title plus the age it states ("Inspect this hive ·
+  86 d"). The primary is Log inspection (opens the inspection form in
+  place) when the top item's title says inspect, else Open hive. Per-item
+  commands (Dismiss, Snooze, Refill …) are behind the card's "n items"
+  disclosure; arrow-focusing an item opens its card. Stale is read from the
+  largest "N days" in the item's own text because the projection's
+  `observedAt` is the date the rule ran, not the observation (a 724-day
+  feeder is dated 2026-08-11); `observedAt` is only the fallback when the
+  item states no age, and an item with neither is never stale. On the QA
+  copy this hides 48 of 94 items and leaves 16 of 30 hives. Command letters
+  are registered with the shortcuts provider so the `?` dialog lists them.
 - Visit queue: same roll-up grouped by apiary, filtered to field-actionable
-  items.
+  items (*as built:* an item on a hive that is not a lockout notice; the
+  hive-less catch-all section is dropped when empty).
 - Active batches (`/production`): show each total once; "Finished stock" is a
-  link to Stock on-hand, not a repeat of the numbers.
+  link to Stock on-hand, not a repeat of the numbers. *As built:* the
+  "Available for bottling" panel (the same lots at the same balance) is
+  merged into Bulk honey by lot, which carries its commands; Finished stock
+  is one row — total jars available, sizes below target as "9 oz (4 of
+  target 24 jars)", link to `/stock?tab=finished` — and sizes with nothing
+  on hand are not listed; "Extraction in progress" holds only sessions not
+  yet trued up, and trued-up (finalized) sessions wait in their own
+  "Trued up, not yet closed" panel.
 - Equipment: one page (see §3); `/equipment/types` only in Setup.
 - Provenance strings (`[Obsidian import: …]`, "Created by the curated
   Obsidian history import.") fold into a "Source" disclosure/tooltip; hold

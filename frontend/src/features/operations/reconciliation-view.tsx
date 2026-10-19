@@ -165,7 +165,7 @@ function ReconciliationReport() {
                 ? "No API token is saved."
                 : "No Folio server URL is saved."}{" "}
               Nothing has been pushed, so there is nothing to reconcile yet.
-              Connect a Folio book in Admin and Integrations to start.
+              Connect a Folio book in Access &amp; integrations to start.
             </p>
             <div>
               <Button asChild variant="outline" size="sm">
@@ -220,8 +220,8 @@ function ReconciliationReport() {
               </span>
               {syncEnabled ? null : (
                 <span className="text-xs text-muted-foreground">
-                  Folio is connected but sync is disabled — the server refuses
-                  pushes until it is enabled in Admin and Integrations.
+                  Folio is connected but sync is off — nothing is pushed
+                  until it is turned on in Access &amp; integrations.
                 </span>
               )}
             </div>
@@ -360,7 +360,7 @@ function ReconciliationReport() {
             <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
               <p className="text-sm text-muted-foreground">
                 Credentials, the book and the account mapping are edited in
-                Admin and Integrations.
+                Access &amp; integrations.
               </p>
               <Button asChild variant="outline" size="sm">
                 <Link href="/admin#gnucash">

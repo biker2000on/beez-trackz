@@ -2,74 +2,78 @@
 
 import * as React from "react";
 
-import { OperationWork } from "./operation-work";
-import { Badge } from "@/components/ui/badge";
-
 import { useWorkToday } from "./api";
+import { OperationWork } from "./operation-work";
+import { bucketCards, rollUp } from "./rollup";
+import { todayItems, type WorkFilter } from "./types";
 import { WorkSurface, type WorkSection } from "./work-surface";
-import type { WorkFilter } from "./types";
 
 /**
- * Today: the field slice at its default filter.
+ * Today: one card per hive, Urgent / This week / Later.
  *
- * The two groups and their counts arrive from the server (`work.Today`,
- * `app/work/response.go`). Splitting "needs attention" from "today's field
- * actions" in the client — which is what `useFieldWork` did — meant the
- * dashboard could disagree with the yard queue about the same hive on the
- * same morning. There is no split here to disagree with.
+ * The items, their priorities and their commands arrive from the server
+ * (`work.Today`); the client only rolls them up by hive, renames the
+ * priorities into three buckets and hides stale evidence (`rollup.ts`).
+ * `?view=all` is the old Recommendations page: the same read, widened to
+ * snoozed and dismissed items, with stale items shown.
  */
 export function TodayView({
   filter = {},
-  description = "What to do now, with the observation behind each item. Highest first.",
+  description = "What each hive needs, highest first. Open the hive or log the inspection; dismiss and snooze are inside each card.",
+  all = false,
 }: {
   filter?: WorkFilter;
   description?: string;
+  all?: boolean;
 }) {
   const today = useWorkToday(filter);
+  const [showStale, setShowStale] = React.useState(all);
 
-  const sections: WorkSection[] = React.useMemo(() => {
-    const groups = today.data?.groups ?? [];
-    return groups.map((group) => ({
-      key: group.key,
-      label: group.label,
-      items: group.items,
-      badge:
-        group.items.length > 0 ? (
-          <Badge variant={group.key === "attention" ? "destructive" : "outline"}>
-            {group.items.length}
-          </Badge>
-        ) : null,
-      empty:
-        group.key === "attention"
-          ? "Nothing needs attention."
-          : "Nothing else is due today.",
-    }));
-  }, [today.data]);
+  const asOf = today.data?.asOf ?? new Date().toISOString();
+  const { cards, staleCount } = React.useMemo(
+    () => rollUp(todayItems(today.data), asOf, { showStale }),
+    [today.data, asOf, showStale],
+  );
+  const sections: WorkSection[] = React.useMemo(
+    () => bucketCards(cards),
+    [cards],
+  );
 
   const counts = today.data?.counts;
 
   return (
-    <div className="atlas-workspace"><WorkSurface
-      description={description}
-      sections={sections}
-      freshness={today.data?.freshness}
-      asOf={today.data?.asOf}
-      isPending={today.isPending}
-      isFetching={today.isFetching}
-      isError={today.isError}
-      onRefresh={() => void today.refetch()}
-      emptyAll="Nothing is queued. Open recommendations, feeders that need a look, lockout end dates and harvest-ready hives land here."
-      aside={
-        counts && counts.snoozed > 0 ? (
-          <p
-            data-testid="work-snoozed-count"
-            className="text-xs text-muted-foreground"
-          >
-{counts.snoozed} of the items below {counts.snoozed === 1 ? "is" : "are"}{" "}
-            snoozed — they are shown because this filter asked for them.
-          </p>
-        ) : null
-      }
-    /><OperationWork/></div>
+    <div className="atlas-workspace">
+      <WorkSurface
+        description={description}
+        sections={sections}
+        freshness={today.data?.freshness}
+        asOf={today.data?.asOf}
+        isPending={today.isPending}
+        isFetching={today.isFetching}
+        isError={today.isError}
+        onRefresh={() => void today.refetch()}
+        emptyAll={
+          staleCount > 0
+            ? "Nothing current. Everything open on your hives is older than a season — show stale items to see it."
+            : "Nothing is queued. Open recommendations, feeders that need a look, lockout end dates and harvest-ready hives land here."
+        }
+        staleCount={staleCount}
+        showStale={showStale}
+        onToggleStale={() => setShowStale((value) => !value)}
+        aside={
+          counts && counts.snoozed > 0 ? (
+            <p
+              data-testid="work-snoozed-count"
+              className="text-sm text-muted-foreground"
+            >
+              {counts.snoozed} of the items below{" "}
+              {counts.snoozed === 1 ? "is" : "are"} snoozed — shown because
+              this view asked for them.
+            </p>
+          ) : null
+        }
+      />
+      <OperationWork />
+    </div>
   );
 }

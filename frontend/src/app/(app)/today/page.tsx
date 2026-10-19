@@ -17,7 +17,8 @@ export default async function TodayPage({
   if (view === "all") {
     return (
       <TodayView
-        description="Every recommendation and what has already been triaged. Same items, same commands as Today — only the filter differs."
+        all
+        description="Every recommendation, including what was dismissed or snoozed and what is stale. Same cards and commands as Today — only the filter differs."
         filter={{
           sourceType: ["recommendation"],
           status: ["open", "snoozed", "dismissed"],

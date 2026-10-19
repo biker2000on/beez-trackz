@@ -58,6 +58,28 @@ usable with one hand, and dense only where comparison helps a decision.
   queue (not Yard queue); Market day (not POS; "register" is only the Orders
   page's inline name); freshness reads "Updated 9:47 AM · Refresh" (never
   "Live — read", "Server stock"). No eyebrows or kickers above a heading.
+- Glossary, continued (Wave 2 clarify): Record harvest (the one entry point
+  on Harvests; it starts a harvest session for an extraction day or saves a
+  single-hive harvest — never "New session" / "New harvest" side by side);
+  Settlements (what a consignment shop reports; not "Reports" inside Sales);
+  "consignment, the shop reports its sales" (not "settles by report"); Stock
+  value (not Inventory value); Open Stock (not Back to Honey); Open hive and
+  Log inspection on the Map canvas (not View Hive / New Inspection); Source
+  (the disclosure that import provenance folds into); Access & integrations
+  in prose too (never "Admin and Integrations"); "bill of materials" is
+  spelled out once before "BOM" on any page that uses it.
+- Copy rules the glossary implies: a subtitle says what you do on the page
+  in one sentence, never what the data model is. A button names its outcome
+  ("Start session", "Delete inspection", "Delete photo"), never the gesture
+  ("Submit", "OK", "Delete"). An empty state says which kind it is — first
+  use, no results, or filtered — and offers the next action. An error says
+  what failed and how to recover. Import provenance (`[Obsidian import: …]`,
+  "Created by the curated Obsidian history import.") never appears in body
+  text: `splitProvenance` (`lib/provenance.ts`) strips it and `NoteText` /
+  `SourceNote` (`components/record/source-note.tsx`) show it behind a quiet
+  "Source" disclosure. Hold, origin and restriction boilerplate renders
+  nothing when there is nothing to do, and a plain sentence with an action
+  when there is.
 
 ## Page templates
 
@@ -99,8 +121,37 @@ usable with one hand, and dense only where comparison helps a decision.
 
 ## Core workflows
 
-- Dashboard: prioritize actionable colony, feeding, harvest, and inventory
-  signals; avoid decorative charts.
+- Today: one card per hive, not one card per item. The server's flat work
+  list (`/work/today`) is rolled up in `features/work/rollup.ts`: items with
+  the same hive share a card, the card takes the highest priority among them
+  and that priority names its bucket (urgent → Urgent, high → This week,
+  normal/low → Later). The card reads one summary line ("Inspect this hive ·
+  324 d · Check the feeder · 724 d") and offers one primary action (Log
+  inspection when the top item asks for one, otherwise Open hive); Dismiss,
+  Snooze and the other per-item commands sit behind the card's disclosure.
+  A generated item whose evidence is older than a season (180 days, read
+  from the item's own "N days") is hidden behind "Show stale (n)".
+  Recommendations carry the sparkle icon with an accessible name, never a
+  "REC" pill, and keyboard letters are listed in the `?` dialog, not inline.
+  `/today?view=all` is the same roll-up with dismissed, snoozed and stale
+  items shown; the Visit queue is the same roll-up grouped by apiary and
+  limited to what can be done at a hive.
+- Equipment: one page, `/equipment`, fed only by `GET /equipment/stock`,
+  which the server sums from the inventory ledger (on hand, deployed,
+  damaged and retired from `inventory_balances`; available from
+  `inventory_available` at the home location). The table draws those
+  columns once; the header restates its totals and nothing else repeats
+  them. Row actions are Deploy to hive, Record damage, Retire, Adjust and
+  Physical count; what is on hives and the loss report are sections below.
+  `/equipment/types` (Setup) lists definitions, bills of materials and unit
+  cost only — no quantity columns.
+- Active batches (`/production`): each total appears once. "Extraction in
+  progress" lists only sessions still taking entries; a trued-up session is
+  finalized and waits under "Trued up, not yet closed". Bulk honey by lot
+  carries the bottling command (there is no second "available for bottling"
+  list of the same lots), and Finished stock is one total plus a link to
+  Stock › On hand, naming only the sizes below their target ("9 oz (4 of
+  target 24 jars)" — never "par").
 - Apiary: layout canvas, flora, local forecast/bloom intelligence, bulk
   records, photos, and printable hive tags share one detail workflow.
 - Visits: voice is primary for both apiary observations and hive inspections.

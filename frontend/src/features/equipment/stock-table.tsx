@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Equipment stock grouped by category, showing owned / deployed / available /
- * needed / damaged / retired per type. Rendered as a DataGrid: arrow keys (or
+ * Equipment grouped by category: on hand / deployed / available / needed /
+ * damaged / retired per type, every column summed by the server from the
+ * inventory ledger (`GET /equipment/stock`). Rendered as a DataGrid: arrow keys (or
  * j/k) move the focused row, Enter opens the row's edit dialog, and clicking
  * a row does the same.
  *
@@ -220,14 +221,14 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
           ),
         }),
         columnHelper.accessor((r) => r.totalOwned, {
-          id: "owned",
-          header: "Owned",
-          meta: rightAligned,
+          id: "onHand",
+          header: "On hand",
+          meta: { ...rightAligned, headerTitle: "Everything owned, whatever its condition or location" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.totalOwned,
         }),
         columnHelper.accessor((r) => r.deployed, {
           id: "deployed",
-          header: "In field",
+          header: "Deployed",
           meta: rightAligned,
           cell: ({ row }) => row.original.deployed,
         }),
@@ -358,7 +359,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
                     onSelect={() => setActive({ stock: row, dialog: "damage" })}
                   >
                     <Wrench className="size-4" />
-                    Mark damaged
+                    Record damage
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     disabled={row.damaged < 1}
@@ -419,7 +420,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
   return (
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">Stock</h2>
+        <h2 className="text-sm font-semibold">By type</h2>
         <Button
           type="button"
           variant={countMode ? "secondary" : "ghost"}
@@ -428,9 +429,6 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
         >
           <ClipboardCheck />
           {countMode ? "Cancel count" : "Physical count"}
-          <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
-            c
-          </kbd>
         </Button>
       </div>
 
@@ -485,7 +483,7 @@ export function StockTable({ rows }: { rows: EquipmentStockRow[] }) {
 
       {rows.length === 0 ? (
         <p className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
-          No equipment stock yet. Add stock to start tracking what you own.
+          No equipment yet. Add stock to start tracking what you own.
         </p>
       ) : (
         <div className="rounded-lg border">

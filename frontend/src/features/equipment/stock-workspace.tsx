@@ -61,8 +61,8 @@ interface StockRead {
   rows: StockRow[];
   history?: HistoryEntry[];
 }
+// Equipment is not a kind here: it has its own page at /equipment.
 const kinds: Record<string, string> = {
-  equipment: "equipment",
   bulk: "bulk_honey",
   packaging: "packaging",
   finished: "jar",
@@ -241,14 +241,6 @@ const stockColumns = columnHelper.columns([
             {hold.until ? ` / Until ${hold.until}` : ""}
           </span>
         ))}
-        {row.holdsKnown === false && (
-          <span className="text-muted-foreground">
-            Action holds not checked. Review restrictions before use.
-          </span>
-        )}
-        {!row.originKnown && (
-          <span className="text-muted-foreground">Origin not recorded</span>
-        )}
       </div>
     ),
   }),
@@ -315,7 +307,7 @@ function historyColumns(unit: string | undefined) {
 }
 
 export function StockWorkspace({
-  category = "equipment",
+  category = "bulk",
   itemId,
 }: {
   category?: string;

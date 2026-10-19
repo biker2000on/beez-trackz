@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { RecordHeader } from "@/components/record/record-header";
 import { formatDate, formatLbs } from "@/features/honey/format";
+import { NoteText } from "@/components/record/source-note";
 export function LotRecord({ id }: { id: string }) {
   const lots = useHarvestLots();
   const [bottle, setBottle] = useState(false);
@@ -70,12 +71,12 @@ export function LotRecord({ id }: { id: string }) {
             {formatLbs(lot.honeyWeightLbs)} extracted / {lot.linkedHarvestCount}{" "}
             linked harvests
           </p>
-          <p className="text-sm text-muted-foreground">
-            {lot.sourceApiaries.length
-              ? lot.sourceApiaries.join(", ")
-              : "Origin not recorded"}
-          </p>
-          {lot.bloomNotes && <p className="mt-2 text-sm">{lot.bloomNotes}</p>}
+          {lot.sourceApiaries.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              From {lot.sourceApiaries.join(", ")}
+            </p>
+          )}
+          <NoteText text={lot.bloomNotes} className="mt-2 text-sm" />
           <Link
             href={`/stock?tab=bulk&harvestLotId=${id}`}
             className="mt-3 inline-flex text-sm underline"
@@ -138,7 +139,7 @@ export function BottlingRunRecord({
             consumed
           </p>
           <p>{run.serialCount} traceable serials</p>
-          <p>{run.notes}</p>
+          <NoteText text={run.notes} />
         </div>
       </section>
       <Link

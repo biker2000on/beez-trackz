@@ -14,6 +14,7 @@ import {
   dataGridFeatures,
 } from "@/components/ui/data-grid";
 import { useUnits } from "@/lib/use-units";
+import { provenanceBody } from "@/lib/provenance";
 
 import type { HarvestSessionEntry } from "./types";
 
@@ -62,7 +63,7 @@ export function SessionEntriesGrid({
           meta: { align: "right", cellClassName: "font-medium tabular-nums" } satisfies DataGridColumnMeta,
           cell: ({ getValue }) => formatHoney(getValue()),
         }),
-        helper.accessor((e) => e.notes ?? "", {
+        helper.accessor((e) => provenanceBody(e.notes), {
           id: "notes",
           header: "Notes",
           meta: {

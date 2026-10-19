@@ -82,6 +82,7 @@ import {
 } from "./activity-hooks";
 import { formatDate, formatMoney } from "./format";
 import { useDeleteTimelineEntries } from "./hooks";
+import { provenanceBody } from "@/lib/provenance";
 
 interface KindStyle {
   icon: LucideIcon;
@@ -640,7 +641,7 @@ export function ActivityTab() {
               <span className="text-muted-foreground">—</span>
             ),
         }),
-        columnHelper.accessor((entry) => entry.notes ?? "", {
+        columnHelper.accessor((entry) => provenanceBody(entry.notes), {
           id: "notes",
           header: "Notes",
           enableSorting: false,
@@ -651,7 +652,7 @@ export function ActivityTab() {
             cellClassName:
               "min-w-[7rem] max-w-[16rem] whitespace-normal text-xs text-muted-foreground",
           } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: entry } }) => entry.notes ?? null,
+          cell: ({ getValue }) => getValue() || null,
         }),
         columnHelper.display({
           id: "actions",

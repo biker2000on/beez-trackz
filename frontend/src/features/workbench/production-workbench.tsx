@@ -9,7 +9,12 @@ import { formatDate } from "@/features/honey/format";
 
 import { useProductionWorkbench } from "./api";
 import { exact, lbs, signedLbs } from "./quantity";
-import { lockoutExplanations, type Quantity } from "./types";
+import {
+  lockoutExplanations,
+  type OpenSession,
+  type Quantity,
+  type WorkCommand,
+} from "./types";
 import { useWorkbenchCommands } from "./use-workbench-commands";
 import { WorkbenchCommands, WorkbenchExplanations } from "./workbench-command";
 import {
@@ -21,9 +26,12 @@ import {
 /**
  * The production workbench — journey §3.2 on one screen.
  *
- * Harvest, extraction, lot, bottling and finished stock are five panels of
- * one `GET /api/v1/production/workbench` (§4.8), in the order the operator
- * walks them. Every pound and every jar on this page was read from
+ * Extraction, bulk honey by lot (with its bottling commands), finished stock
+ * and product batches are the panels of one `GET /api/v1/production/workbench`
+ * (§4.8), in the order the operator walks them. Each total is drawn once:
+ * the lot rows carry both the lot's balance and the bottling command that
+ * used to be a second list of the same lots, and finished stock is a link to
+ * Stock › On hand rather than a repeat of its per-size numbers. Every pound and every jar on this page was read from
  * `inventory_available` / `inventory_balances` server-side; nothing is summed
  * here, and nothing is fetched per widget — the dashboard's habit of
  * assembling a screen out of four reads that can disagree about the same lot
@@ -42,9 +50,27 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
   const data = workbench.data;
 
   const openSessions = data?.openSessions ?? [];
-  const bulkOnHand = data?.bulkOnHand ?? [];
+  // A trued-up session is finalized (routes_harvest_sessions.go: its
+  // extracted weight is authoritative and entries are refused); it stays in
+  // `openSessions` until it is closed, but it is not "in progress".
+  const inProgress = openSessions.filter((session) => !isFinalized(session));
+  const finalized = openSessions.filter(isFinalized);
   const awaiting = data?.lotsAwaitingBottling ?? [];
-  const jarStock = data?.jarStock ?? [];
+  // Bulk honey by lot and "available for bottling" were two lists of the same
+  // lots with the same balance. One list; the bottling commands ride on it.
+  const bulkOnHand = (data?.bulkOnHand ?? []).map((lot) => {
+    const extra = awaiting.find((entry) => entry.lotId === lot.lotId)?.commands ?? [];
+    const own = lot.commands ?? [];
+    const merged = [...own, ...extra.filter((c) => !own.some((o) => o.id === c.id))];
+    return { ...lot, commands: merged };
+  });
+  const jarStock = (data?.jarStock ?? []).filter(
+    (jar) => jar.onHand > 0 || jar.reserved > 0 || jar.available > 0,
+  );
+  const jarsAvailable = jarStock.reduce((total, jar) => total + jar.available, 0);
+  const belowTarget = jarStock.filter(
+    (jar) => jar.parLevel !== null && jar.available < jar.parLevel,
+  );
   const batches = data?.productBatches ?? [];
 
   return (
@@ -75,65 +101,49 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
         step={1}
         panelKey="open-sessions"
         title="Extraction in progress"
-        description="Open sessions with harvest entries and a clear next step."
-        count={openSessions.length}
-        empty="No session is open. Start one from a harvest-ready hive on Today, or with the command above."
+        description="Sessions still taking harvest entries."
+        count={inProgress.length}
+        empty={
+          finalized.length > 0
+            ? "No session is taking entries. The trued-up sessions below are waiting to be closed."
+            : "No session is open. Start one from a harvest-ready hive on Today, or with the command above."
+        }
       >
-        {openSessions.map((session) => (
-          <WorkbenchRow
+        {inProgress.map((session) => (
+          <SessionRow
             key={session.id}
-            rowKey={session.id}
-            kind="session"
-            title={
-              <>
-                <Link
-                  href={`/production/sessions/${session.id}`}
-                  className="underline-offset-4 hover:underline"
-                >
-                  {session.apiaryName ?? "Extraction session"}
-                </Link>
-                <span className="text-xs font-normal text-muted-foreground">
-                  {formatDate(session.date)}
-                </span>
-              </>
-            }
-            facts={
-              <p
-                className="text-xs text-muted-foreground"
-                data-testid="workbench-session-facts"
-                data-total-lbs={exact(session.calculatedTotalLbs)}
-              >
-                {session.entryCount}{" "}
-                {session.entryCount === 1 ? "entry" : "entries"}
-                {" · "}
-                {lbs(session.calculatedTotalLbs)} calculated
-                {session.trueUpDifferenceLbs !== null &&
-                session.trueUpDifferenceLbs !== undefined ? (
-                  <>
-                    {" · trued up "}
-                    {signedLbs(session.trueUpDifferenceLbs)}
-                  </>
-                ) : (
-                  " · not trued up yet"
-                )}
-              </p>
-            }
-          >
-            <WorkbenchCommands
-              commands={session.commands}
-              where={session.apiaryName ?? "this session"}
+            session={session}
+            onRun={commands.execute}
+            busy={commands.busy}
+          />
+        ))}
+      </WorkbenchPanel>
+
+      {finalized.length > 0 ? (
+        <WorkbenchPanel
+          step={1}
+          panelKey="finalized-sessions"
+          title="Trued up, not yet closed"
+          description="Extracted weight is final; close each session to finish it."
+          count={finalized.length}
+          empty=""
+        >
+          {finalized.map((session) => (
+            <SessionRow
+              key={session.id}
+              session={session}
               onRun={commands.execute}
               busy={commands.busy}
             />
-          </WorkbenchRow>
-        ))}
-      </WorkbenchPanel>
+          ))}
+        </WorkbenchPanel>
+      ) : null}
 
       <WorkbenchPanel
         step={2}
         panelKey="bulk-on-hand"
         title="Bulk honey by lot"
-        description="Available honey, grouped by its source lot."
+        description="What each lot still holds, and whether it can be bottled."
         count={bulkOnHand.length}
         empty="No bulk honey on hand."
       >
@@ -151,7 +161,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
                   {lot.lotCode}
                 </Link>
                 {lot.varietal ? (
-                  <span className="rounded-full border px-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <span className="rounded-full border px-1.5 text-xs text-muted-foreground">
                     {lot.varietal}
                   </span>
                 ) : null}
@@ -185,85 +195,69 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
 
       <WorkbenchPanel
         step={3}
-        panelKey="awaiting-bottling"
-        title="Available for bottling"
-        description="Bulk stock you may choose to bottle. This is available material, not unfinished work."
-        count={awaiting.length}
-        empty="No bulk stock available for bottling."
-      >
-        {awaiting.map((lot) => (
-          <WorkbenchRow
-            key={lot.lotId}
-            rowKey={lot.lotId}
-            kind="awaiting-bottling"
-            title={lot.lotCode}
-            facts={
-              <p
-                className="text-xs text-muted-foreground"
-                data-available-lbs={exact(lot.availableLbs)}
-              >
-                {lbs(lot.availableLbs)} available to bottle
-              </p>
-            }
-          >
-            <WorkbenchCommands
-              commands={lot.commands}
-              where={lot.lotCode}
-              onRun={commands.execute}
-              busy={commands.busy}
-            />
-          </WorkbenchRow>
-        ))}
-      </WorkbenchPanel>
-
-      <WorkbenchPanel
-        step={4}
         panelKey="jar-stock"
         title="Finished stock"
-        description="The same numbers Market Day sells from."
+        description="Counted on Stock › On hand; the same numbers Market day sells from."
         count={jarStock.length}
-        empty="No jar stock recorded."
+        empty="No jars on hand. Bottle a lot above to start finished stock."
       >
-        {jarStock.map((jar) => (
-          <WorkbenchRow
-            key={jar.jarSizeId}
-            rowKey={jar.jarSizeId}
-            kind="jar-stock"
-            title={
-              <>
-                <Link
-                  href="/stock?tab=finished"
-                  className="underline-offset-4 hover:underline"
-                >
-                  {jar.label}
-                </Link>
-                {jar.parLevel !== null && jar.available < jar.parLevel ? (
-                  <Badge variant="outline" data-testid="workbench-below-par">
-                    Below par
-                  </Badge>
-                ) : null}
-              </>
-            }
-            facts={
-              <p className="text-xs text-muted-foreground">
-                {jar.available} available · {jar.onHand} on hand ·{" "}
-                {jar.reserved} reserved
-                {jar.parLevel !== null ? ` · par ${jar.parLevel}` : ""}
+        <WorkbenchRow
+          rowKey="jar-stock-summary"
+          kind="jar-stock"
+          title={
+            <Link
+              href="/stock?tab=finished"
+              className="underline-offset-4 hover:underline"
+            >
+              {jarsAvailable} {jarsAvailable === 1 ? "jar" : "jars"} available
+              in {jarStock.length} {jarStock.length === 1 ? "size" : "sizes"}
+            </Link>
+          }
+          facts={
+            belowTarget.length > 0 ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="workbench-below-par"
+              >
+                Below target:{" "}
+                {belowTarget
+                  .map(
+                    (jar) =>
+                      `${jar.label} (${jar.available} of target ${jar.parLevel} jars)`,
+                  )
+                  .join(", ")}
               </p>
-            }
-          >
-            <WorkbenchCommands
-              commands={jar.commands}
-              where={jar.label}
-              onRun={commands.execute}
-              busy={commands.busy}
-            />
-          </WorkbenchRow>
-        ))}
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Every size is at or above its target.
+              </p>
+            )
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild size="sm" variant="outline">
+              <Link href="/stock?tab=finished">
+                Finished stock on hand
+                <ArrowRight />
+              </Link>
+            </Button>
+            {jarStock.map((jar) =>
+              jar.commands?.length ? (
+                <WorkbenchCommands
+                  key={jar.jarSizeId}
+                  commands={jar.commands}
+                  where={jar.label}
+                  onRun={commands.execute}
+                  busy={commands.busy}
+                />
+              ) : null,
+            )}
+          </div>
+        </WorkbenchRow>
       </WorkbenchPanel>
 
       {batches.length > 0 && <WorkbenchPanel
-        step={5}
+        step={4}
         panelKey="product-batches"
         title="Product batches"
         description="Creamed honey and other made products."
@@ -293,6 +287,77 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
       </WorkbenchPanel>
       }
     </WorkbenchShell>
+  );
+}
+
+/** One open session: who, when, how much, and its commands. */
+function SessionRow({
+  session,
+  onRun,
+  busy,
+}: {
+  session: OpenSession;
+  onRun: (command: WorkCommand, where: string | null) => void;
+  busy: boolean;
+}) {
+  return (
+          <WorkbenchRow
+                        rowKey={session.id}
+            kind="session"
+            title={
+              <>
+                <Link
+                  href={`/production/sessions/${session.id}`}
+                  className="underline-offset-4 hover:underline"
+                >
+                  {session.apiaryName ?? "Extraction session"}
+                </Link>
+                <span className="text-xs font-normal text-muted-foreground">
+                  {formatDate(session.date)}
+                </span>
+                {isFinalized(session) ? (
+                  <Badge variant="outline" data-testid="workbench-session-finalized">
+                    Trued up · close to finish
+                  </Badge>
+                ) : null}
+              </>
+            }
+            facts={
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="workbench-session-facts"
+                data-total-lbs={exact(session.calculatedTotalLbs)}
+              >
+                {session.entryCount}{" "}
+                {session.entryCount === 1 ? "entry" : "entries"}
+                {" · "}
+                {lbs(session.calculatedTotalLbs)} calculated
+                {isFinalized(session) ? (
+                  <>
+                    {" · trued up "}
+                    {signedLbs(session.trueUpDifferenceLbs as Quantity)}
+                  </>
+                ) : (
+                  " · in progress, not trued up"
+                )}
+              </p>
+            }
+          >
+            <WorkbenchCommands
+              commands={session.commands}
+              where={session.apiaryName ?? "this session"}
+              onRun={onRun}
+              busy={busy}
+            />
+          </WorkbenchRow>
+  );
+}
+
+/** Trued up: the server treats the extracted weight as final (§3.2 step 4). */
+function isFinalized(session: OpenSession): boolean {
+  return (
+    session.trueUpDifferenceLbs !== null &&
+    session.trueUpDifferenceLbs !== undefined
   );
 }
 

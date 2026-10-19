@@ -430,7 +430,7 @@ export function VarroaPanel({
                 }}
                 disabled={remove.isPending}
               >
-                {remove.isPending ? "Deleting…" : "Delete"}
+                {remove.isPending ? "Deleting…" : "Delete mite count"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

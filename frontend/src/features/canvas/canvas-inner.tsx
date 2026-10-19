@@ -984,7 +984,7 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
               openHive(hive.id);
             }}
           >
-            View Hive
+            Open hive
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -992,7 +992,7 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
               openHive(hive.id);
             }}
           >
-            New Inspection
+            Log inspection
           </MenuItem>
           <MenuItem
             onClick={() => {

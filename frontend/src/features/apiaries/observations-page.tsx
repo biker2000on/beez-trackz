@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import { Button } from "@/components/ui/button";
+import { NoteText } from "@/components/record/source-note";
 export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
   const access = useAccessProfile();
   const editable = ["admin", "editor"].includes(
@@ -26,7 +27,7 @@ export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
     <div className="atlas-workspace">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-prose text-sm text-muted-foreground">
-          Yard conditions and visit notes, kept separate from hive inspections.
+          Apiary conditions and visit notes, kept separate from hive inspections.
         </p>
         {editable && (
           <Button asChild variant="outline" size="sm">
@@ -51,9 +52,11 @@ export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
                 <h2 className="font-semibold">
                   {new Date(record.observedAt).toLocaleString()}
                 </h2>
-                <p className="mt-2 whitespace-pre-wrap text-sm">
-                  {record.notes}
-                </p>
+                <NoteText
+                  text={record.notes}
+                  className="mt-2 whitespace-pre-wrap text-sm"
+                  sourceClassName="mt-1"
+                />
                 <p className="mt-3 text-xs text-muted-foreground">
                   Saved {new Date(record.createdAt).toLocaleString()}
                   {record.sourceMediaFileId
@@ -64,7 +67,8 @@ export function ApiaryObservations({ apiaryId }: { apiaryId: string }) {
             ))
           ) : (
             <p className="atlas-record text-sm text-muted-foreground">
-              No apiary observations yet.
+              No visits recorded yet. Record visit saves conditions and notes
+              for the whole apiary.
             </p>
           )}
         </div>

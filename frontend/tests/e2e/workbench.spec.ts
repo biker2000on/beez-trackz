@@ -343,9 +343,9 @@ test("the production workbench is assembled from exactly one call", async ({
   const reads: string[] = [];
   await mockApp(page, { reads });
   await page.goto("/production/workbench");
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(5);
+  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
 
-  // Not "one call per widget, five widgets": one read model, five panels.
+  // Not "one call per widget, four widgets": one read model, four panels.
   expect(dataReads(reads)).toEqual(["/api/v1/production/workbench"]);
 });
 
@@ -373,8 +373,10 @@ test("production follows the journey in order, hive to finished stock", async ({
   await mockApp(page);
   await page.goto("/production/workbench");
 
-  // §3.2: harvest → extraction → lot → bottling → finished stock, one screen.
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(5);
+  // §3.2: extraction → lot (with its bottling command) → finished stock →
+  // product batches, one screen. "Available for bottling" was the same lots
+  // at the same balance a second time; its commands ride on the lot rows.
+  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
   const keys = await page
     .getByTestId("workbench-panel")
     .evaluateAll((nodes) =>
@@ -383,16 +385,96 @@ test("production follows the journey in order, hive to finished stock", async ({
   expect(keys).toEqual([
     "open-sessions",
     "bulk-on-hand",
-    "awaiting-bottling",
     "jar-stock",
     "product-batches",
   ]);
 
-  // Ledger quantities are rendered, and the exact server scale is kept.
-  await expect(
-    page.locator('[data-available-lbs="42.250"]').first(),
-  ).toBeVisible();
+  // Ledger quantities are rendered once, at the exact server scale.
+  await expect(page.locator('[data-available-lbs="42.250"]')).toHaveCount(1);
+
+  // A session that is not trued up is in progress.
+  const sessions = page.locator('[data-panel-key="open-sessions"]');
+  await expect(sessions).toContainText("Extraction in progress");
+  await expect(sessions.getByTestId("workbench-row")).toHaveCount(1);
+  await expect(page.getByTestId("workbench-session-finalized")).toHaveCount(0);
+
+  // Finished stock is a link to Stock › On hand, not a repeat of the per-size
+  // numbers; the only number drawn is the total, and the shortfall is named
+  // as a target, not a "par".
+  const finished = page.locator('[data-panel-key="jar-stock"]');
+  await expect(finished.getByTestId("workbench-row")).toHaveCount(1);
+  await expect(finished).toContainText("32 jars available in 2 sizes");
+  await expect(finished.getByRole("link", { name: "Finished stock on hand" })).toHaveAttribute(
+    "href",
+    "/stock?tab=finished",
+  );
   await expect(page.getByTestId("workbench-below-par")).toHaveCount(1);
+  await expect(page.getByTestId("workbench-below-par")).toContainText(
+    "9 oz (4 of target 24 jars)",
+  );
+  await expect(finished).not.toContainText("34 on hand");
+  await expect(finished).not.toContainText(/\bpar\b/);
+});
+
+test("a trued-up session is finalized, not in progress", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/auth/status")) {
+      return route.fulfill({
+        json: {
+          authenticated: true,
+          setupComplete: true,
+          oidcEnabled: false,
+          passwordLogin: true,
+          displayName: "Workbench test",
+          isAdmin: true,
+        },
+      });
+    }
+    if (path.endsWith("/access/me")) {
+      return route.fulfill({
+        json: {
+          id: "user-1",
+          displayName: "Workbench test",
+          email: null,
+          isAdmin: true,
+          memberships: [],
+        },
+      });
+    }
+    if (path.endsWith("/production/workbench")) {
+      const body = productionBody();
+      // Trued up: the server treats the extracted weight as final and
+      // refuses further entries, but the session is not closed yet.
+      body.openSessions[0].trueUpDifferenceLbs = 2.5 as unknown as null;
+      // And a size with nothing on hand and no lot behind it: not drawn.
+      body.jarStock.push({
+        jarSizeId: "2-oz",
+        label: "2 oz",
+        onHand: 0,
+        reserved: 0,
+        available: 0,
+        parLevel: 6,
+      });
+      return route.fulfill({ json: body });
+    }
+    return route.fulfill({ json: [] });
+  });
+  await page.goto("/production/workbench");
+
+  const inProgress = page.locator('[data-panel-key="open-sessions"]');
+  await expect(inProgress.getByTestId("workbench-row")).toHaveCount(0);
+  await expect(inProgress.getByTestId("workbench-panel-empty")).toContainText(
+    "waiting to be closed",
+  );
+  const finalized = page.locator('[data-panel-key="finalized-sessions"]');
+  await expect(finalized).toContainText("Trued up, not yet closed");
+  await expect(finalized.getByTestId("workbench-session-finalized")).toHaveCount(1);
+
+  const finished = page.locator('[data-panel-key="jar-stock"]');
+  await expect(finished).toContainText("in 2 sizes");
+  await expect(finished).not.toContainText("2 oz");
 });
 
 test("a locked-out lot explains itself before its command refuses", async ({
@@ -492,7 +574,7 @@ test("start extraction is online-only and says so while offline", async ({
 }) => {
   await mockApp(page);
   await page.goto("/production/workbench");
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(5);
+  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
 
   await context.setOffline(true);
   await page.evaluate(() => window.dispatchEvent(new Event("offline")));

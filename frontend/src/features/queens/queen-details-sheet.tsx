@@ -36,6 +36,7 @@ import {
 } from "./api";
 import { markingColorForDate } from "./marking";
 import { MarkingDot } from "./queen-node";
+import { NoteText } from "@/components/record/source-note";
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -169,7 +170,7 @@ export function QueenDetailsSheet({
                   <Separator />
                   <div className="grid gap-1.5">
                     <span className="text-sm text-muted-foreground">Notes</span>
-                    <p className="whitespace-pre-wrap text-sm">{queen.notes}</p>
+                    <NoteText text={queen.notes} className="whitespace-pre-wrap text-sm" />
                   </div>
                 </>
               )}

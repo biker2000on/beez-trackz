@@ -166,5 +166,25 @@ export function useActionCenter({
     }
   }, [focusedId]);
 
-  return { focusedId, focusIndex, setFocusedIndex };
+  /**
+   * Run the focused row's command for `key`, under the same guards the key
+   * listener applies. The shortcuts provider calls this for the letters it
+   * lists in the `?` dialog, so the help and the behaviour cannot disagree.
+   */
+  const runKey = React.useCallback(
+    (key: string) => {
+      if (busy || items.length === 0) return;
+      const live =
+        focusRef.current < 0 ? -1 : Math.min(focusRef.current, items.length - 1);
+      const focused = live >= 0 ? items[live] : undefined;
+      if (!focused) return;
+      const command = commandForKey(focused, key);
+      if (!command) return;
+      if (!isArmedRow(focused.id, null)) return;
+      onRun(focused, command);
+    },
+    [busy, items, onRun],
+  );
+
+  return { focusedId, focusIndex, setFocusedIndex, runKey };
 }

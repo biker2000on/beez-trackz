@@ -386,7 +386,7 @@ export function MarketDayTab({
             {saleQueued && (
               <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-600" />
-                <span>Sale accepted offline — will sync when you reconnect. Inventory is not updated yet.</span>
+                <span>Sale saved offline — it syncs when you reconnect. Stock is not updated yet.</span>
               </div>
             )}
             {(locations.length > 1 || awayUnits > 0) && (
@@ -410,7 +410,9 @@ export function MarketDayTab({
                         disabled={location.isConsignment}
                       >
                         {location.name}
-                        {location.isConsignment ? " · settles by report" : ""}
+                        {location.isConsignment
+                          ? " · consignment, the shop reports its sales"
+                          : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>

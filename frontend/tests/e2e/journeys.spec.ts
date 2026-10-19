@@ -758,6 +758,20 @@ async function mockApp(page: Page, options: MockOptions = {}) {
   });
 }
 
+/**
+ * Today rolls items up into one card per hive; the per-item commands live
+ * behind each card's disclosure. Open every card so a command can be clicked.
+ */
+async function openWorkCards(page: Page) {
+  const toggles = page.getByTestId("work-card-toggle");
+  await expect(toggles.first()).toBeVisible();
+  for (const toggle of await toggles.all()) {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
+  }
+}
+
 /** The app shell rendered, which is how a page is distinguished from a 404. */
 async function expectAppShell(page: Page) {
   await expect(
@@ -845,9 +859,10 @@ test("§3.2 production runs hive to finished stock without leaving /production",
 
   // Steps 2–4 — the workbench is the Production landing page itself (Atlas:
   // /production/workbench redirects here), then the session it opens. This
-  // fixture has no product batches, and Atlas leaves that panel out when
-  // empty, so the four journey panels remain.
-  await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
+  // fixture has no product batches and no trued-up session, and Atlas leaves
+  // those panels out when empty; bulk honey by lot carries the bottling
+  // commands, so the journey is three panels: extraction, lots, finished.
+  await expect(page.getByTestId("workbench-panel")).toHaveCount(3);
 
   await page.goto(`/production/sessions/${SESSION}`);
   await expectCanonical(page, visited, `/production/sessions/${SESSION}`);
@@ -1012,6 +1027,7 @@ for (const [formFactor, viewport] of [
     await mockApp(page);
     await page.goto("/today");
     await expect(page.getByTestId("work-item")).toHaveCount(3);
+    await openWorkCards(page);
 
     const connection = page.getByTestId("work-connection");
     await expect(connection).toHaveAttribute("data-state", "online");
@@ -1084,6 +1100,7 @@ for (const [formFactor, viewport] of [
         attempted.push(new URL(route.request().url()).pathname),
     });
     await page.goto("/today");
+    await openWorkCards(page);
 
     const dismiss = page
       .getByTestId("work-command")
@@ -1164,6 +1181,7 @@ for (const [formFactor, viewport] of [
     await page.setViewportSize(viewport);
     await mockApp(page, { queueCommands: true });
     await page.goto("/today");
+    await openWorkCards(page);
 
     await page.getByTestId("work-command").filter({ hasText: "Refill" }).click();
 
@@ -1194,6 +1212,7 @@ for (const [formFactor, viewport] of [
         }),
     });
     await page.goto("/today");
+    await openWorkCards(page);
 
     await page
       .getByTestId("work-command")
@@ -1263,6 +1282,7 @@ for (const [formFactor, viewport] of [
       return route.fulfill({ json: [] });
     });
     await page.goto("/today");
+    await openWorkCards(page);
 
     await page.getByTestId("work-command").filter({ hasText: "Refill" }).click();
 

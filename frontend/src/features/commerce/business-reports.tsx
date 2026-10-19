@@ -372,7 +372,7 @@ export function ProfitabilityPanel({ year }: { year: number }) {
         <Metric label="Revenue (invoiced)" value={formatMoney(data.revenue)} detail="Order totals, unpaid orders included" />
         <Metric label="Expenses" value={formatMoney(data.expenses)} detail={(data.expenseRefunds ?? 0) > 0 ? `Net of ${formatMoney(data.expenseRefunds ?? 0)} in refunds` : undefined} />
         <Metric label="Gross margin" value={formatMoney(data.grossMargin)} detail={`${data.marginPercent.toFixed(0)}%`} />
-        <Metric label="Inventory value" value={formatMoney(data.inventoryValue)} />
+        <Metric label="Stock value" value={formatMoney(data.inventoryValue)} />
         {(data.otherIncome ?? 0) !== 0 || (data.uncategorizedIncome ?? 0) !== 0 || (data.unlinkedIncome ?? 0) > 0 ? (
           <>
             {/* Its own line: never part of gross margin. */}

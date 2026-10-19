@@ -41,6 +41,7 @@ import { FeedingsGrid, SplitsGrid } from "./hive-record-grids";
 import { HiveOverviewTab } from "./overview-tab";
 import { useHive, useHiveLocationHistory, useHiveSplits } from "./hooks";
 import { formatDate } from "./lib";
+import { NoteText } from "@/components/record/source-note";
 
 export const HIVE_TABS = ["overview", "timeline", "health"] as const;
 export type HiveTab = (typeof HIVE_TABS)[number];
@@ -172,7 +173,7 @@ export function HiveDetailPage({
       {section === "overview" && data.notes && (
         <div className="rounded-xl border bg-card p-4 text-sm">
           <h2 className="mb-1 text-sm font-semibold">Notes</h2>
-          <p className="whitespace-pre-wrap">{data.notes}</p>
+          <NoteText text={data.notes} className="whitespace-pre-wrap" sourceClassName="mt-2" />
         </div>
       )}
 

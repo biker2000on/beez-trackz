@@ -4,9 +4,11 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * The WorkItem field slice (design 2026-09-03 §4, wave 2).
  *
  * There is no component test runner in this repo, so the behaviours the wave
- * plan asks for as component tests are pinned here instead: the action-center
- * keyboard order, the armed-row guard, the stale-cache marker, and a
- * forbidden command rendered as a disabled control that states its reason.
+ * plan asks for as component tests are pinned here instead: the hive roll-up
+ * (one card per hive, Urgent / This week / Later, stale items hidden), the
+ * action-center keyboard order, the armed-row guard, the stale-cache marker,
+ * and a forbidden command rendered as a disabled control that states its
+ * reason.
  *
  * Every assertion drives the real page against a mocked `/work/*` response,
  * so a change to the projection contract fails here rather than in the yard.
@@ -20,6 +22,8 @@ const HIVE_B = "33333333-3333-3333-3333-333333333333";
 const FEEDING = "44444444-4444-4444-4444-444444444444";
 const REC = "55555555-5555-5555-5555-555555555555";
 const SESSION = "66666666-6666-6666-6666-666666666666";
+const HIVE_C = "77777777-7777-7777-7777-777777777777";
+const STALE_REC = "88888888-8888-8888-8888-888888888888";
 
 const AS_OF = "2026-09-03T12:00:00Z";
 
@@ -199,8 +203,10 @@ function items(recOverrides: CommandOverrides = {}) {
   ];
 }
 
-function todayBody(recOverrides: CommandOverrides = {}) {
-  const all = items(recOverrides);
+function todayBody(recOverrides: CommandOverrides = {}, withStale = false) {
+  const all = withStale
+    ? [...items(recOverrides), staleItem()]
+    : items(recOverrides);
   const attention = all.filter((item) => item.sortRank <= 2);
   const today = all.filter((item) => item.sortRank > 2);
   return {
@@ -235,9 +241,69 @@ function yardBody() {
   };
 }
 
+/**
+ * A generated item whose evidence is older than a season: the feeder was
+ * placed 724 days ago. Today hides it behind "Show stale" by default.
+ */
+function staleItem() {
+  return {
+    id: `wi:recommendation:${STALE_REC}`,
+    sourceType: "recommendation",
+    sourceId: STALE_REC,
+    context: {
+      apiaryId: APIARY,
+      apiaryName: "North Ridge",
+      hiveId: HIVE_C,
+      hiveName: "C2",
+      locationId: null,
+    },
+    title: "Check the feeder",
+    evidence: [
+      {
+        text: "Feeder on hive C2 (dry sugar) placed 724 days ago. Check if empty or needs refill.",
+        sourceType: "recommendation",
+        sourceId: STALE_REC,
+        observedAt: "2026-08-11T20:00:00Z",
+      },
+    ],
+    priority: "high",
+    status: "open",
+    dueAt: null,
+    supersedes: [],
+    asOf: AS_OF,
+    freshness: serverFreshness(),
+    commands: [
+      command(
+        "recommendation.dismiss",
+        "Dismiss",
+        "POST",
+        `/api/v1/recommendations/${STALE_REC}/dismiss`,
+        "d",
+      ),
+    ],
+    sortRank: 3,
+  };
+}
+
+/**
+ * Today rolls items up into one card per hive; the per-item commands live
+ * behind each card's disclosure. Open every card so a command can be clicked.
+ */
+async function openCards(page: Page) {
+  const toggles = page.getByTestId("work-card-toggle");
+  await expect(toggles.first()).toBeVisible();
+  for (const toggle of await toggles.all()) {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
+  }
+}
+
 interface MockOptions {
   /** Serve the work responses with the service worker's stale marker. */
   stale?: boolean;
+  /** Add the 724-day feeder item to the Today response. */
+  withStaleItem?: boolean;
   /** Overrides applied to the recommendation's commands. */
   recOverrides?: CommandOverrides;
   /** Called for every non-work mutation the page issues. */
@@ -284,9 +350,11 @@ async function mockApp(page: Page, options: MockOptions = {}) {
         });
       }
       const status = url.searchParams.get("status") ?? "";
-      // The triage filter (status widened to snoozed/dismissed) is a
-      // different read; keep it empty so no undo is offered by default.
-      const body = status.includes("dismissed")
+      // The undo's triage read (status narrowed to snoozed/dismissed, no
+      // open) is a different read; keep it empty so no undo is offered by
+      // default. `?view=all` widens to open,snoozed,dismissed and gets the
+      // full body.
+      const body = status.includes("dismissed") && !status.includes("open")
         ? {
             asOf: AS_OF,
             freshness: serverFreshness(),
@@ -297,7 +365,7 @@ async function mockApp(page: Page, options: MockOptions = {}) {
             ],
           }
         : path.endsWith("/work/today")
-          ? todayBody(options.recOverrides)
+          ? todayBody(options.recOverrides, options.withStaleItem)
           : yardBody();
       return route.fulfill({
         json: body,
@@ -322,36 +390,109 @@ async function mockApp(page: Page, options: MockOptions = {}) {
   });
 }
 
-test("Today renders the two server groups in the server's order", async ({
+test("Today is one card per hive, bucketed Urgent / This week / Later", async ({
   page,
 }) => {
   await mockApp(page);
   await page.goto("/today");
 
+  // Three items on two hives: A3 (urgent feeder + harvest) and B1 (high rec).
+  const cards = page.getByTestId("work-card");
+  await expect(cards).toHaveCount(2);
+  await expect(page.getByTestId("work-item")).toHaveCount(3);
+
+  // The buckets are the server's priorities renamed; empty buckets are not drawn.
   const sections = page.getByTestId("work-section");
   await expect(sections).toHaveCount(2);
-  await expect(sections.nth(0)).toContainText("Needs attention");
-  await expect(sections.nth(1)).toContainText("Today's field actions");
+  await expect(sections.nth(0)).toContainText("Urgent");
+  await expect(sections.nth(1)).toContainText("This week");
 
-  // The client does not re-derive the split; it renders what the server sent.
-  await expect(page.getByTestId("work-item")).toHaveCount(3);
+  // A3's card rolls its two items into one line and one primary action.
+  const a3 = cards.filter({ hasText: "A3" });
+  await expect(a3).toHaveAttribute("data-priority", "urgent");
+  await expect(a3.getByTestId("work-card-summary")).toHaveText(
+    "Verify and close · 94 d  ·  Pull honey",
+  );
+  await expect(a3).toContainText("North Ridge");
+  await expect(a3.getByTestId("work-card-primary")).toHaveText(/Open hive/);
+  await expect(a3.getByTestId("work-card-primary")).toHaveAttribute(
+    "href",
+    `/yard/hives/${HIVE_A}`,
+  );
+
+  // An inspection recommendation on top makes Log inspection the primary.
+  const b1 = cards.filter({ hasText: "B1" });
+  await expect(b1.getByTestId("work-card-primary")).toHaveText(/Log inspection/);
+
+  // Items keep the server's order within the render order of the cards.
   await expect(page.getByTestId("work-item-title")).toHaveText([
     "Verify and close",
-    "Inspect this hive",
     "Pull honey",
+    "Inspect this hive",
   ]);
+
+  // No "REC" pill, no inline keyboard hints; the sparkle has a name instead.
+  await expect(page.getByText("REC", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/^Keyboard:/)).toHaveCount(0);
+  await expect(
+    b1.getByRole("img", { name: "Has recommendations" }),
+  ).toBeVisible();
+
+  // Dismiss / Snooze live behind the card's disclosure, not as inline chips.
+  await expect(
+    page.getByTestId("work-command").filter({ hasText: "Dismiss" }),
+  ).toBeHidden();
+  await b1.getByTestId("work-card-toggle").click();
+  await expect(
+    page.getByTestId("work-command").filter({ hasText: "Dismiss" }),
+  ).toBeVisible();
+});
+
+test("stale evidence is hidden behind Show stale and counted", async ({
+  page,
+}) => {
+  await mockApp(page, { withStaleItem: true });
+  await page.goto("/today");
+
+  // Four items, but the 724-day feeder on C2 is hidden with its card.
+  await expect(page.getByTestId("work-card")).toHaveCount(2);
+  await expect(page.getByTestId("work-item")).toHaveCount(3);
+  const toggle = page.getByTestId("work-stale-toggle");
+  await expect(toggle).toHaveText("Show stale (1)");
+
+  await toggle.click();
+  await expect(page.getByTestId("work-card")).toHaveCount(3);
+  await expect(page.getByTestId("work-item")).toHaveCount(4);
+  await expect(
+    page.getByTestId("work-card").filter({ hasText: "C2" }).getByTestId("work-card-summary"),
+  ).toHaveText("Check the feeder · 724 d");
+  await expect(toggle).toHaveText("Hide stale");
+});
+
+test("?view=all is the same roll-up, with stale and triaged items shown", async ({
+  page,
+}) => {
+  await mockApp(page, { withStaleItem: true });
+  await page.goto("/today?view=all");
+
+  await expect(page.getByTestId("work-card")).toHaveCount(3);
+  await expect(page.getByTestId("work-stale-toggle")).toHaveText("Hide stale");
 });
 
 test("the yard queue is the same items grouped by apiary", async ({ page }) => {
   await mockApp(page);
   await page.goto("/yard/queue");
 
-  await expect(page.getByTestId("work-section")).toHaveCount(2);
+  // One section per apiary with something to visit; the hive-less catch-all
+  // is empty here and so is not drawn.
+  await expect(page.getByTestId("work-section")).toHaveCount(1);
+  await expect(page.getByTestId("work-section")).toContainText("North Ridge");
+  await expect(page.getByTestId("work-card")).toHaveCount(2);
   await expect(page.getByTestId("work-item")).toHaveCount(3);
   await expect(page.getByTestId("work-item-title")).toHaveText([
     "Verify and close",
-    "Inspect this hive",
     "Pull honey",
+    "Inspect this hive",
   ]);
 });
 
@@ -370,15 +511,24 @@ test("arrow keys walk the rendered order and the armed-row guard holds", async (
   await page.waitForTimeout(250);
   expect(commands).toEqual([]);
 
-  // ArrowDown lands on the first item in the server's order.
+  // ArrowDown lands on the first item in the render order: A3's feeder.
+  // Focusing an item opens its card, so the row is visible.
   await page.keyboard.press("ArrowDown");
   await expect(
     page.getByTestId("work-item").nth(0),
   ).toHaveAttribute("data-source-type", "feeding");
   await expect(page.getByTestId("work-item").nth(0)).toBeFocused();
 
+  // Then A3's harvest item, then B1's recommendation.
   await page.keyboard.press("ArrowDown");
   await expect(page.getByTestId("work-item").nth(1)).toBeFocused();
+  // `d` on the harvest item is nobody's command: nothing fires.
+  await page.keyboard.press("d");
+  await page.waitForTimeout(250);
+  expect(commands).toEqual([]);
+
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByTestId("work-item").nth(2)).toBeFocused();
 
   // The focused row's own key runs the focused row's own command — the
   // recommendation's `d`, not the feeder's.
@@ -393,6 +543,7 @@ test("arrow keys walk the rendered order and the armed-row guard holds", async (
     "done",
   );
 
+  await page.keyboard.press("ArrowUp");
   await page.keyboard.press("ArrowUp");
   await expect(page.getByTestId("work-item").nth(0)).toBeFocused();
   await page.keyboard.press("r");
@@ -420,6 +571,7 @@ test("a command runs its own source path, with a command-bound mutation id", asy
     },
   });
   await page.goto("/today");
+  await openCards(page);
 
   await page
     .getByTestId("work-command")
@@ -469,6 +621,7 @@ test("a forbidden command is disabled and states its reason", async ({
     onCommand: (route) => commands.push(new URL(route.request().url()).pathname),
   });
   await page.goto("/today");
+  await openCards(page);
 
   const dismiss = page
     .getByTestId("work-command")
@@ -481,7 +634,9 @@ test("a forbidden command is disabled and states its reason", async ({
     page.getByTestId("work-command-reason").filter({ hasText: "Dismiss" }),
   ).toContainText("editor access on North Ridge is required");
 
-  // And the keyboard must refuse it too, not just the button.
+  // And the keyboard must refuse it too, not just the button. The
+  // recommendation is the third item in the render order (A3's two first).
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("d");
@@ -499,6 +654,7 @@ test("an online-only command is disabled while offline, with its reason", async 
   await mockApp(page);
   await page.goto("/today");
   await expect(page.getByTestId("work-item")).toHaveCount(3);
+  await openCards(page);
 
   await context.setOffline(true);
   // The page listens for the browser's own offline event.
@@ -571,6 +727,7 @@ test("a queued mutation is neither a success nor a failure", async ({
     return route.fulfill({ json: [] });
   });
   await page.goto("/today");
+  await openCards(page);
 
   await page.getByTestId("work-command").filter({ hasText: "Refill" }).click();
 

@@ -645,7 +645,7 @@ export function MyAccessSection() {
         ) : memberships.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             No apiaries are shared with you yet. An administrator adds them
-            under Admin and Integrations.
+            in Access &amp; integrations.
           </p>
         ) : (
           <ul className="divide-y rounded-lg border text-sm">

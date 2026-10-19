@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Apiary overview: the default landing view for a yard. Summarizes hive
+ * Apiary overview: the default landing view for an apiary. Summarizes hive
  * status, feeder state, and active blooms as cards, then shows current
  * conditions and the week's forecast (which is itself summary content).
- * Deeper work lives in the Layout peer view and dedicated drill-down routes.
+ * Deeper work lives in the Map tab and dedicated drill-down routes.
  */
 
 import Link from "next/link";
@@ -118,12 +118,12 @@ export function OverviewTab({
             value={feeding ? String(feeding.activeFeeders) : "—"}
             sub={
               feeding?.needsAttention
-                ? "Needs attention — see the dashboard"
+                ? "Feeding needed — open the Visit queue"
                 : feeding && feeding.activeFeeders > 0
-                  ? "Open feeders in this yard"
+                  ? "Open feeders in this apiary"
                   : "No open feeders"
             }
-            href="/today"
+            href={feeding?.needsAttention ? "/yard/queue" : "/today"}
             attention={feeding?.needsAttention}
           />
         )}
@@ -142,7 +142,7 @@ export function OverviewTab({
           icon={Camera}
           label="Photos"
           value="Gallery"
-          sub="View and add yard photos"
+          sub="View and add apiary photos"
           href={`/yard/apiaries/${apiaryId}/photos`}
         />
       </div>

@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils";
 
 import { formatDate, formatMoney } from "./format";
 import { useDeleteSale, useReverseGiveAway, useSalesRegister } from "./hooks";
+import { provenanceBody } from "@/lib/provenance";
 import type {
   HoneySale,
   RegisterGiveAway,
@@ -172,7 +173,7 @@ export function SalesTab() {
               const giveAway = entry.giveAway;
               const notes =
                 giveAway.notes && giveAway.notes !== giveAway.recipient
-                  ? giveAway.notes
+                  ? provenanceBody(giveAway.notes)
                   : null;
               return (
                 <Dim entry={entry}>
@@ -229,9 +230,9 @@ export function SalesTab() {
                     ))}
                   </ul>
                 )}
-                {sale.notes && (
+                {provenanceBody(sale.notes) && (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {sale.notes}
+                    {provenanceBody(sale.notes)}
                   </p>
                 )}
               </Dim>
@@ -510,7 +511,7 @@ export function SalesTab() {
         </p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href="/production">Back to Honey</Link>
+            <Link href="/stock">Open Stock</Link>
           </Button>
           <Button type="button" size="sm" onClick={() => void register.refetch()}>
             Retry

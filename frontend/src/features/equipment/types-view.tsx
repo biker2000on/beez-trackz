@@ -216,18 +216,6 @@ export function TypesView() {
                   .join(" + "),
         }),
         columnHelper.display({
-          id: "owned",
-          header: "Owned",
-          meta: rightAligned,
-          cell: ({ row }) => row.original.stock?.totalOwned ?? 0,
-        }),
-        columnHelper.display({
-          id: "available",
-          header: "Available",
-          meta: rightAligned,
-          cell: ({ row }) => row.original.stock?.available ?? 0,
-        }),
-        columnHelper.display({
           id: "unitCost",
           header: "Unit cost",
           meta: rightAligned,

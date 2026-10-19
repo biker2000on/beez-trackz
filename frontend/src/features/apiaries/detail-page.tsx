@@ -7,6 +7,7 @@ import { apiaryRole, useAccessProfile } from "@/features/access/api";
 
 import { OverviewTab } from "./overview-tab";
 import { useApiary } from "./hooks";
+import { NoteText } from "@/components/record/source-note";
 
 export const APIARY_TABS = ["overview", "layout"] as const;
 export type ApiaryTab = (typeof APIARY_TABS)[number];
@@ -39,9 +40,10 @@ export function ApiaryDetailPage({
   if (section === "overview") {
     return (
       <section className="grid gap-5">
-        {detail.notes && (
-          <p className="max-w-prose text-sm text-muted-foreground">{detail.notes}</p>
-        )}
+        <NoteText
+          text={detail.notes}
+          className="max-w-prose text-sm text-muted-foreground"
+        />
         <OverviewTab
           apiaryId={apiaryId}
           hives={hives.data ?? []}

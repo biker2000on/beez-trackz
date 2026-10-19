@@ -9,11 +9,13 @@ import { ReportHeader, useReportYear } from "./reports-sections";
 
 const GROUP_META = {
   outcomes: {
-    description: "Colony survival and honey yield across seasons.",
+    description:
+      "Two reports: Winter survival answers which hives made it through and why; Honey yield answers which hives and apiaries produced the most.",
     hrefs: ["/insights/survival", "/insights/yield"],
   },
   finance: {
-    description: "Costs, revenue, margins, and profitability.",
+    description:
+      "Apiary economics answers what each apiary costs and earns; Profitability answers whether the operation makes money and at what price; Expenses is where the costs are entered.",
     hrefs: [
       "/insights/economics",
       "/insights/profitability",
@@ -21,7 +23,8 @@ const GROUP_META = {
     ],
   },
   sales: {
-    description: "Bottling priorities, customers, and wholesale follow-up.",
+    description:
+      "Bottle next answers what to bottle from what sold recently; Customers answers who is due a reorder and what they pay.",
     hrefs: ["/insights/bottling", "/sales/customers"],
   },
 } as const;

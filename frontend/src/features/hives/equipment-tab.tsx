@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DeployDialog } from "@/features/equipment/stock-dialogs";
 import { useHiveDeployments, useRemoveDeployment } from "./hooks";
 import { formatDate } from "./lib";
+import { provenanceBody } from "@/lib/provenance";
 
 export function EquipmentTab({
   hiveId,
@@ -75,7 +76,8 @@ export function EquipmentTab({
                       {deployment.outstanding != null &&
                         deployment.outstanding < deployment.quantity &&
                         ` · ${deployment.quantity - deployment.outstanding} of ${deployment.quantity} returned`}
-                      {deployment.notes && ` · ${deployment.notes}`}
+                      {provenanceBody(deployment.notes) &&
+                        ` · ${provenanceBody(deployment.notes)}`}
                     </p>
                   </div>
                   {canManage ? <Button
