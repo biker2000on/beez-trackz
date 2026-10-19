@@ -652,11 +652,11 @@ export function VisitWorkspace({
         // Under /yard/apiaries/[id]/visit the record layout owns the header.
         <p className="max-w-prose text-sm text-muted-foreground">
           Speak your observations, review what was heard, and continue through
-          the yard.
+          the apiary.
         </p>
       ) : (
         <PageHeader
-          subtitle="Speak your observations, review what was heard, and continue through the yard."
+          subtitle="Speak your observations, review what was heard, and continue through the apiary."
           actions={
             <Link
               className="inline-flex min-h-9 items-center text-sm text-muted-foreground underline-offset-4 hover:underline"
@@ -750,7 +750,7 @@ export function VisitWorkspace({
         </div>
         <p className="text-sm text-muted-foreground">
           {mode === "apiary"
-            ? "Weather, forage, access and yard-wide notes. This creates one apiary observation."
+            ? "Weather, forage, access and apiary-wide notes. This creates one apiary observation."
             : mode === "batch"
               ? "Say each hive name before its observations. You will confirm each hive separately."
               : `Inspecting ${selectedHive?.positionLabel ?? "hive"}. Say what you see and any feeding or equipment changes.`}

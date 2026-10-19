@@ -89,8 +89,8 @@ function FlowRow({ row }: { row: FlowCalendarRow }) {
         {reference?.days ? ` (${reference.days} days)` : ""}
         {` · ${row.yearsObserved} ${row.yearsObserved === 1 ? "season" : "seasons"} recorded`}
         {row.atThisYard > 0
-          ? ` · ${row.atThisYard} at this yard`
-          : " · none at this yard yet"}
+          ? ` · ${row.atThisYard} at this apiary`
+          : " · none at this apiary yet"}
       </p>
       {row.current ? (
         <p className="text-xs text-muted-foreground">
@@ -128,7 +128,7 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
             </CardTitle>
             <CardDescription>
               Species by elevation band, against last year&apos;s first and
-              last seen. Will this yard make sourwood this year?
+              last seen. Will this apiary make sourwood this year?
             </CardDescription>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -147,7 +147,7 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
               variant={scope === "yard" ? "default" : "outline"}
               onClick={() => setScope("yard")}
             >
-              This yard
+              This apiary
             </Button>
           </div>
         </div>
@@ -156,8 +156,8 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
             {calendar.data.elevationBandLabel}
             {elevation ? ` · ${elevation}` : ""}
             {calendar.data.scope === "band"
-              ? " · every yard you can see at this height"
-              : " · this yard's own rows only"}
+              ? " · every apiary you can see at this height"
+              : " · this apiary's own rows only"}
           </p>
         ) : null}
       </CardHeader>
@@ -166,13 +166,13 @@ export function FlowCalendarCard({ apiaryId }: { apiaryId: string }) {
           <Skeleton className="h-32 w-full" />
         ) : calendar.isError ? (
           <p className="text-sm text-muted-foreground">
-            Could not build the flow calendar for this yard.
+            Could not build the flow calendar for this apiary.
           </p>
         ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {banded
               ? "No bloom seasons recorded at this elevation band yet. Record blooms over a season and the calendar builds itself."
-              : "Set an elevation on this yard's pin, then record blooms — the band is what lets one yard borrow another's history."}
+              : "Set an elevation on this apiary's pin, then record blooms — the band is what lets one apiary borrow another's history."}
           </p>
         ) : (
           <ul className="divide-y">

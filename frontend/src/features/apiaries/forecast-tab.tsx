@@ -175,7 +175,7 @@ export function ForecastTab({ apiaryId }: { apiaryId: string }) {
             </CardTitle>
             <CardDescription>
               The past week at this pin, from the same Open-Meteo snapshot —
-              no extra provider. Read it next to the yard&apos;s elevation.
+              no extra provider. Read it next to the apiary&apos;s elevation.
             </CardDescription>
           </CardHeader>
           <CardContent>

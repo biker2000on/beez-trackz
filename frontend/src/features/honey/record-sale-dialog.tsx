@@ -358,7 +358,7 @@ export function RecordSaleDialog({
     for (const colony of colonies) {
       const price = parseNum(colony.unitPrice);
       if (price === null || price < 0) {
-        return "Every colony needs a price — enter 0 for a gift.";
+        return "Every hive needs a price — enter 0 for a gift.";
       }
       saleLines.push({ kind: "colony", hiveId: colony.hiveId, quantity: 1, unitPrice: price });
       const offer = offers[colony.hiveId];
@@ -413,7 +413,7 @@ export function RecordSaleDialog({
       return "Paid sales need a price on every line. Use the gift channel to give items away.";
     }
     if (saleLines.length === 0) {
-      return "Add at least one jar, hive product, colony, or equipment line.";
+      return "Add at least one jar, hive product, hive, or equipment line.";
     }
     return saleLines;
   }
@@ -434,7 +434,7 @@ export function RecordSaleDialog({
     if (values.stockLocationId !== "home" && saleLines.some(
       (line) => line.kind === "colony" || line.kind === "equipment",
     )) {
-      setLineError("Colony and equipment sales come off home, not a stock location.");
+      setLineError("Hive and equipment sales come off home, not a stock location.");
       setConfirming(false);
       return;
     }
@@ -680,7 +680,7 @@ export function RecordSaleDialog({
           <Disclosure
             open={showExtras}
             onToggle={() => setShowExtras((value) => !value)}
-            title="Add colonies, equipment or other products"
+            title="Add hives, equipment or other products"
             summary={extrasCount > 0 ? `${extrasCount} added` : undefined}
           >
             <ColonyEquipmentFields
@@ -875,7 +875,7 @@ function ColonyEquipmentFields({
   return (
     <div className="grid gap-3">
       <div className="grid gap-1.5">
-        <Label>Colonies</Label>
+        <Label>Hives</Label>
         <Select
           value={pickingHive}
           onValueChange={(value) => {
@@ -923,7 +923,7 @@ function ColonyEquipmentFields({
               </Button>
             </div>
             <div className="grid gap-1.5">
-              <Label>Colony price</Label>
+              <Label>Hive price</Label>
               <Input
                 type="number"
                 min="0"

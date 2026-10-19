@@ -17,8 +17,10 @@ import {
   cardSummary,
   evidenceAgeDays,
   isFieldActionable,
+  isRetired,
   isStale,
   rollUp,
+  rosterOf,
 } from "../../src/features/work/rollup.ts";
 
 const AS_OF = "2026-09-03T12:00:00Z";
@@ -152,4 +154,39 @@ test("the Visit queue keeps what can be done at a hive", () => {
     isFieldActionable(item({ context: { apiaryId: null, apiaryName: null, hiveId: null, hiveName: null, locationId: null } })),
     false,
   );
+});
+
+test("items on sold, dead, combined or archived hives are dropped; unknown hives are kept", () => {
+  // The QA copy: A1 and C2 are sold (not archived), "B2 (N1)" is a dead,
+  // archived nuc, B4 is active. A hive the roster does not list is kept.
+  const roster = rosterOf([
+    { id: "sold", status: "sold", isArchived: false },
+    { id: "nuc", status: "dead", isArchived: true },
+    { id: "combined", status: "combined", isArchived: true },
+    { id: "active", status: "active", isArchived: false },
+  ]);
+  const ctx = (hiveId, hiveName) => ({ apiaryId: "ap", apiaryName: "Lenoir Apiary", hiveId, hiveName, locationId: null });
+  const items = [
+    item({ id: "a", context: ctx("sold", "A1") }),
+    item({ id: "b", context: ctx("nuc", "B2 (N1)") }),
+    item({ id: "c", context: ctx("combined", "A3") }),
+    item({ id: "d", context: ctx("active", "B4") }),
+    item({ id: "e", context: ctx("unlisted", "E1") }),
+    item({ id: "f", context: ctx(null, null), title: "Order supers" }),
+  ];
+  assert.equal(isRetired(items[0], roster), true);
+  assert.equal(isRetired(items[1], roster), true);
+  assert.equal(isRetired(items[3], roster), false);
+  assert.equal(isRetired(items[4], roster), false);
+  assert.equal(isRetired(items[5], roster), false);
+  // No roster yet: nothing is judged.
+  assert.equal(isRetired(items[0], undefined), false);
+
+  const { cards, retiredCount } = rollUp(items, AS_OF, { showStale: false, roster });
+  assert.equal(retiredCount, 3);
+  assert.deepEqual(cards.map((card) => card.hiveName ?? card.items[0].title), ["B4", "E1", "Order supers"]);
+
+  const unfiltered = rollUp(items, AS_OF, { showStale: false });
+  assert.equal(unfiltered.retiredCount, 0);
+  assert.equal(unfiltered.cards.length, 6);
 });

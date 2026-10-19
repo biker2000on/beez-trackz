@@ -114,7 +114,7 @@ export function OperationPolicyForm() {
   return (
     <div className="grid gap-4 sm:grid-cols-2" data-config-editor="thresholds">
       <div className="grid gap-2 sm:col-span-2" id="labor">
-        <Label htmlFor="policy-labor">Yard-visit labor minutes</Label>
+        <Label htmlFor="policy-labor">Visit labor minutes</Label>
         <label className="flex items-start gap-3 text-sm">
           <input
             id="policy-labor"
@@ -126,7 +126,7 @@ export function OperationPolicyForm() {
             }
           />
           <span>
-            Show the start/stop timer on the yard queue. Off by default — this
+            Show the start/stop timer on the Visit queue. Off by default — this
             is optional, not a scorecard.
           </span>
         </label>

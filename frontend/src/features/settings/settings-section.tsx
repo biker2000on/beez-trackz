@@ -49,32 +49,37 @@ export function SettingsSection({
   const [toggled, setToggled] = React.useState<boolean | null>(null);
   const open = toggled ?? (targeted || defaultOpen);
   const contentId = React.useId();
+  const descriptionId = React.useId();
 
   return (
     <Card id={anchor}>
-      <button
-        type="button"
-        className="flex w-full items-center gap-3 rounded-t-xl p-5 text-left transition-colors hover:bg-muted/40"
-        aria-expanded={open}
-        aria-controls={contentId}
-        onClick={() => setToggled(!open)}
-      >
-        <Icon className="size-5 shrink-0 text-primary" />
-        <span className="min-w-0 flex-1">
-          <span className="block font-semibold leading-none tracking-tight">
-            {title}
-          </span>
-          <span className="mt-1.5 block text-sm text-muted-foreground">
-            {description}
-          </span>
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-4 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180",
-          )}
-        />
-      </button>
+      {/* The section title is the page's h2 (the page's h1 is the header);
+          the description sits beside it, not inside it, so the heading's
+          name is the title alone. The title row toggles the section. */}
+      <div className="grid gap-1.5 p-5 pb-4">
+        <h2 className="m-0 text-base font-semibold leading-none tracking-tight">
+          <button
+            type="button"
+            className="-m-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-muted/40"
+            aria-expanded={open}
+            aria-controls={contentId}
+            aria-describedby={descriptionId}
+            onClick={() => setToggled(!open)}
+          >
+            <Icon className="size-5 shrink-0 text-primary" />
+            <span className="min-w-0 flex-1">{title}</span>
+            <ChevronDown
+              className={cn(
+                "size-4 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-180",
+              )}
+            />
+          </button>
+        </h2>
+        <p id={descriptionId} className="pl-8 text-sm text-muted-foreground">
+          {description}
+        </p>
+      </div>
       <CardContent id={contentId} className={cn("pt-1", !open && "hidden")}>
         {children}
       </CardContent>

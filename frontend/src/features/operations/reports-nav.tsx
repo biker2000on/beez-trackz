@@ -23,7 +23,7 @@ import { useAccessProfile } from "@/features/access/api";
 
 export const REPORT_PAGES = [
   { href: "/insights", label: "Overview", description: "Headline numbers for the season." },
-  { href: "/insights/survival", label: "Winter survival", description: "Colonies through winter, by apiary, stand and queen line." },
+  { href: "/insights/survival", label: "Winter survival", description: "Hives through winter, by apiary, stand and queen line." },
   { href: "/insights/yield", label: "Honey yield", description: "Hive leaderboard and year-over-year harvest weight." },
   { href: "/insights/economics", label: "Apiary economics", description: "Cost and margin per apiary, allocated by yield.", adminOnly: true },
   { href: "/insights/profitability", label: "Profitability", description: "Revenue, expenses, break-even prices and margins.", adminOnly: true },

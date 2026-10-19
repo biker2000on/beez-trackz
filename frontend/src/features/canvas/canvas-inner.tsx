@@ -1589,11 +1589,11 @@ export function CanvasInner({ apiary, hives, initialLayout, onHiveSelect }: Canv
                 text={
                   !hasLocation
                     ? editMode
-                      ? "Use “Add Stand” to lay out your first hive stand — Set location to put the yard on a map"
+                      ? "Use “Add Stand” to lay out your first hive stand — Set location to put the apiary on a map"
                       : "No stands yet — switch to Edit mode, or Set location for the map"
                     : editMode
                       ? "Use “Add Stand” to drop a stand at the map center"
-                      : "No stands yet — switch to Edit mode to lay out the yard"
+                      : "No stands yet — switch to Edit mode to lay out the apiary"
                 }
                 fontSize={14}
                 fill="#a1a1aa"

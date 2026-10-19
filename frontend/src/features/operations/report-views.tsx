@@ -18,21 +18,20 @@ import {
   ReportHeader,
   SurvivalReport,
   YieldReport,
-  currentYear,
   useReportYear,
 } from "./reports-sections";
 import { useAutopsySummary } from "./hooks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function SurvivalReportView() {
-  // Winter survival is measured over the winter that *ends* in the season
-  // year, so the useful default is last year rather than the current one.
-  const [year, setYear] = useReportYear(currentYear() - 1);
+  // One season for the whole Insights area (`useReportYear`): the hub's
+  // default, carried in `?season=`.
+  const [year, setYear] = useReportYear();
   const autopsies = useAutopsySummary(year);
   return (
     <div className="grid gap-5">
       <ReportHeader
-        description="Colonies that entered and left winter, grouped by apiary, stand position and queen line."
+        description="Hives that entered and left winter, grouped by apiary, stand and queen line."
         year={year}
         onYearChange={setYear}
       />
@@ -45,7 +44,7 @@ export function SurvivalReportView() {
 }
 
 export function YieldReportView() {
-  const [year, setYear] = useReportYear(currentYear() - 1);
+  const [year, setYear] = useReportYear();
   return (
     <div className="grid gap-5">
       <ReportHeader
@@ -59,7 +58,7 @@ export function YieldReportView() {
 }
 
 export function EconomicsReportView() {
-  const [year, setYear] = useReportYear(currentYear() - 1);
+  const [year, setYear] = useReportYear();
   return (
     <div className="grid gap-5">
       <ReportHeader

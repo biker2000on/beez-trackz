@@ -308,8 +308,8 @@ export function FloraTab({
                 inputMode="decimal"
                 placeholder={
                   apiary.data?.elevationM != null
-                    ? `Blank uses the yard pin: ${apiary.data.elevationM} m`
-                    : "Blank uses the yard pin"
+                    ? `Blank uses the apiary pin: ${apiary.data.elevationM} m`
+                    : "Blank uses the apiary pin"
                 }
                 {...form.register("elevationM")}
               />
@@ -317,7 +317,7 @@ export function FloraTab({
                 The band is a filter on bloom, not a species model. Fill this
                 in when you saw it up the ridge rather than at the stand.
                 {apiary.data?.elevationM == null
-                  ? " This yard has no pin elevation yet, so blank records no band."
+                  ? " This apiary has no pin elevation yet, so blank records no band."
                   : ""}
               </p>
             </div>

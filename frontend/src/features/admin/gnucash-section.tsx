@@ -200,7 +200,7 @@ export function GnuCashSection() {
         Push sales and expenses into a Folio book, as balanced
         double-entry transactions, and import the book&apos;s history as
         expenses and other income to categorize here. Beez stays
-        authoritative for physical quantities — jars, colonies, and
+        authoritative for physical quantities — jars, hives, and
         equipment: nothing read back from Folio ever creates a sale or moves
         stock, and a pushed entry edited in the book shows up as a conflict
         on the reconciliation report for you to resolve.

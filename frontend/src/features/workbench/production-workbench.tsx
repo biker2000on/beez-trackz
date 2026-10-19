@@ -7,7 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useFinishedStock } from "@/features/commerce/finished-stock";
 import { formatDate } from "@/features/honey/format";
-import { SessionStatusBadge, sessionStatus } from "@/features/honey/session-status";
+import {
+  SessionStatusBadge,
+  closeSessionCommand,
+  sessionStatus,
+} from "@/features/honey/session-status";
 
 import { useProductionWorkbench } from "./api";
 import { exact, lbs, signedLbs } from "./quantity";
@@ -356,6 +360,22 @@ function SessionRow({
               </p>
             }
           >
+            {isFinalized(session) ? (
+              <Button
+                type="button"
+                size="sm"
+                data-testid="workbench-session-close"
+                disabled={busy}
+                onClick={() =>
+                  onRun(
+                    closeSessionCommand(session.id),
+                    session.apiaryName ?? "this session",
+                  )
+                }
+              >
+                Close session
+              </Button>
+            ) : null}
             <WorkbenchCommands
               commands={session.commands}
               where={session.apiaryName ?? "this session"}

@@ -19,7 +19,7 @@ export function BulkRecordPage({ apiaryId }: { apiaryId: string }) {
     <div className="grid w-full max-w-4xl gap-5">
       <p className="max-w-prose text-sm text-muted-foreground">
         Record the same inspection or feeding across several hives in
-        {apiary.data ? ` ${apiary.data.name}` : " this yard"} at once.
+        {apiary.data ? ` ${apiary.data.name}` : " this apiary"} at once.
       </p>
       {apiary.isPending ? (
         <Skeleton className="h-64" />

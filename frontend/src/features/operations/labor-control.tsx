@@ -80,7 +80,7 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
         >
           Enable them in Operation Setup
         </Link>{" "}
-        if you want start/stop on a yard visit.
+        if you want start/stop on an apiary visit.
       </p>
     );
   }
@@ -93,9 +93,9 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
       {session?.open ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
           <div>
-            <p className="font-medium">Yard visit running</p>
+            <p className="font-medium">Visit running</p>
             <p className="text-sm text-muted-foreground">
-              {session.apiaryName ?? "All yards"} ·{" "}
+              {session.apiaryName ?? "All apiaries"} ·{" "}
               {formatElapsed(session.startedAt, now)}
             </p>
           </div>
@@ -129,13 +129,13 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
       ) : (
         <div className="flex flex-wrap items-end gap-3">
           <div className="grid min-w-48 flex-1 gap-2">
-            <span className="text-sm font-medium">Yard</span>
+            <span className="text-sm font-medium">Apiary</span>
             <Select value={apiaryId} onValueChange={setApiaryId}>
               <SelectTrigger aria-label="Labor apiary">
-                <SelectValue placeholder="All yards" />
+                <SelectValue placeholder="All apiaries" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NONE}>All yards</SelectItem>
+                <SelectItem value={NONE}>All apiaries</SelectItem>
                 {(apiaries.data ?? []).map((apiary) => (
                   <SelectItem key={apiary.id} value={apiary.id}>
                     {apiary.name}
@@ -151,7 +151,7 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
               start.mutate(
                 { apiaryId: apiaryId === NONE ? null : apiaryId },
                 {
-                  onSuccess: () => toast.success("Yard visit started"),
+                  onSuccess: () => toast.success("Visit started"),
                   onError: (error) => {
                     if (error instanceof OfflineQueuedError) {
                       toast.message("Start saved offline — syncs on reconnect");
@@ -180,7 +180,7 @@ export function LaborControl({ quietWhenOff = false }: { quietWhenOff?: boolean 
               className="flex justify-between gap-3 text-muted-foreground"
             >
               <span>
-                {item.apiaryName ?? "All yards"} ·{" "}
+                {item.apiaryName ?? "All apiaries"} ·{" "}
                 {new Date(item.startedAt).toLocaleString()}
               </span>
               <span className="font-medium text-foreground">

@@ -2,9 +2,11 @@
 
 import * as React from "react";
 
+import { useHives } from "@/features/hives/hooks";
+
 import { useWorkToday } from "./api";
 import { OperationWork } from "./operation-work";
-import { bucketCards, rollUp } from "./rollup";
+import { bucketCards, rollUp, rosterOf } from "./rollup";
 import { todayItems, type WorkFilter } from "./types";
 import { WorkSurface, type WorkSection } from "./work-surface";
 
@@ -16,6 +18,10 @@ import { WorkSurface, type WorkSection } from "./work-surface";
  * priorities into three buckets and hides stale evidence (`rollup.ts`).
  * `?view=all` is the old Recommendations page: the same read, widened to
  * snoozed and dismissed items, with stale items shown.
+ *
+ * The hive roster (`GET /hives?includeArchived=true`) rides beside the work
+ * read so items on sold, dead, combined or archived hives — which the
+ * server's recommendation read still returns — never become cards.
  */
 export function TodayView({
   filter = {},
@@ -27,12 +33,14 @@ export function TodayView({
   all?: boolean;
 }) {
   const today = useWorkToday(filter);
+  const hives = useHives({ includeArchived: true });
   const [showStale, setShowStale] = React.useState(all);
 
   const asOf = today.data?.asOf ?? new Date().toISOString();
+  const roster = React.useMemo(() => rosterOf(hives.data), [hives.data]);
   const { cards, staleCount } = React.useMemo(
-    () => rollUp(todayItems(today.data), asOf, { showStale }),
-    [today.data, asOf, showStale],
+    () => rollUp(todayItems(today.data), asOf, { showStale, roster }),
+    [today.data, asOf, showStale, roster],
   );
   const sections: WorkSection[] = React.useMemo(
     () => bucketCards(cards),
@@ -48,7 +56,7 @@ export function TodayView({
         sections={sections}
         freshness={today.data?.freshness}
         asOf={today.data?.asOf}
-        isPending={today.isPending}
+        isPending={today.isPending || hives.isPending}
         isFetching={today.isFetching}
         isError={today.isError}
         onRefresh={() => void today.refetch()}

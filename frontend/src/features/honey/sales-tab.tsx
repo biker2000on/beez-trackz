@@ -90,6 +90,29 @@ function Dim({
   );
 }
 
+/** What a sale line is, in the glossary's words; jars need no word. */
+const LINE_KIND_LABELS: Record<string, string> = {
+  colony: "hive",
+  equipment: "equipment",
+  product: "hive product",
+};
+
+/**
+ * One order line as text: "C2 · Lenoir Apiary (hive)", "3 × 16 oz". The
+ * quantity leads only when it says something — a hive is always one — and
+ * the kind sits in parentheses with real spaces around it, so the line reads
+ * the same in a screen reader and a copied cell as on the page.
+ */
+export function orderLineText(item: {
+  quantity: number;
+  label: string;
+  kind?: string | null;
+}): string {
+  const kind = item.kind && item.kind !== "jar" ? LINE_KIND_LABELS[item.kind] ?? item.kind : null;
+  const lead = kind === "hive" && item.quantity === 1 ? "" : `${item.quantity} × `;
+  return `${lead}${item.label}${kind ? ` (${kind})` : ""}`;
+}
+
 function giveAwayLabel(giveAway: RegisterGiveAway): string {
   return giveAway.purpose === "own_use" ? "Own use" : "Given away";
 }
@@ -213,14 +236,9 @@ export function SalesTab() {
                         key={`${index}-${item.kind}-${item.jarSizeId ?? item.hiveId ?? item.itemId ?? item.productId}`}
                         className="text-sm"
                       >
-                        {item.quantity} × {item.label}
-                        {item.kind && item.kind !== "jar" && (
-                          <span className="ml-1 text-xs capitalize text-muted-foreground">
-                            ({item.kind})
-                          </span>
-                        )}
+                        {orderLineText(item)}
                         <span className="ml-1 text-xs text-muted-foreground">
-                          @ {formatMoney(item.unitPrice)}
+                          {" "}@ {formatMoney(item.unitPrice)}
                         </span>
                         {item.lotCode && (
                           <span className="block text-xs text-muted-foreground">
@@ -602,7 +620,7 @@ export function SalesTab() {
             <AlertDialogTitle>Cancel this sale?</AlertDialogTitle>
             <AlertDialogDescription>
               {confirmSale
-                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled. Jars, colonies, feeders, and equipment this sale moved are restored. The record is kept for the ledger.`
+                ? `The ${formatMoney(confirmSale.totalAmount)} sale from ${formatDate(confirmSale.date)} will be marked cancelled. Jars, hives, feeders, and equipment this sale moved are restored. The record is kept for the ledger.`
                 : ""}{" "}
               A cancelled sale cannot be reopened.
             </AlertDialogDescription>

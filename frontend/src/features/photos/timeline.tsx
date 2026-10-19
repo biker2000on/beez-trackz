@@ -74,7 +74,7 @@ export function ApiaryPhotoTimeline({
     return (
       <Card>
         <CardContent className="flex items-center justify-between gap-3 pt-5">
-          <p className="text-sm text-muted-foreground">Could not load the yard timeline.</p>
+          <p className="text-sm text-muted-foreground">Could not load the apiary timeline.</p>
           <Button variant="outline" size="sm" onClick={() => void timeline.refetch()}>
             Retry
           </Button>
@@ -90,10 +90,10 @@ export function ApiaryPhotoTimeline({
           <div className="grid gap-1.5">
             <CardTitle className="flex items-center gap-2">
               <CalendarRange className="size-5" />
-              Yard evidence timeline
+              Evidence timeline
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Immich flower, bloom, bee, and hive matches near this yard, ordered by when they were taken.
+              Immich flower, bloom, bee, and hive matches near this apiary, ordered by when they were taken.
             </p>
           </div>
           {canEdit ? (
@@ -163,7 +163,7 @@ export function ApiaryPhotoTimeline({
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={photo.thumbnailUrl ?? photo.mediumUrl ?? ""}
-                        alt={photo.caption ?? "Yard timeline photo"}
+                        alt={photo.caption ?? "Timeline photo"}
                         className="size-full object-cover"
                         loading="lazy"
                       />

@@ -5,7 +5,7 @@ import { ArrowRight } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { REPORT_PAGES } from "./reports-nav";
-import { ReportHeader, useReportYear } from "./reports-sections";
+import { ReportHeader, seasonHref, useReportYear } from "./reports-sections";
 
 const GROUP_META = {
   outcomes: {
@@ -50,7 +50,7 @@ export function ReportDirectory({ group }: { group: ReportGroup }) {
             <Card className="h-full transition-colors hover:border-primary/50">
               <CardContent className="p-4">
                 <Link
-                  href={`${page.href}?year=${year}`}
+                  href={seasonHref(page.href, year)}
                   className="flex items-start justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span>

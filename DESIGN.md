@@ -74,6 +74,25 @@ usable with one hand, and dense only where comparison helps a decision.
   (the disclosure that import provenance folds into); Access & integrations
   in prose too (never "Admin and Integrations"); "bill of materials" is
   spelled out once before "BOM" on any page that uses it.
+- Wave 7 (2026-10-19) rules: Today, `?view=all` and the Visit queue roll
+  up only hives the roster (`GET /hives?includeArchived=true`) says are
+  active and unarchived — a sold, dead or combined hive is read-only
+  everywhere else, so its items are dropped in `features/work/rollup.ts`
+  (`isRetired`), never drawn; a nuc placement ("B2 (N1)") is a hive of its
+  own and appears under its own label only while it is active. A harvest
+  session reads Taking entries → Trued up → Closed, and only `closedAt`
+  makes it Closed: the Close session primary (`closeSessionCommand`) sits
+  on every trued-up row of In progress and in the session record's header.
+  The Insights season is one `?season=` param with one default (the current
+  year) shared by the hub, its sub-hubs and every report; `?year=` is read
+  as a legacy alias. Winter survival rows name stands ("Stand B") and queen
+  lines ("A4 · emergency cell queen, 2026"), with "Stand unrecorded" and
+  "Queen line unknown" for what does not resolve
+  (`features/operations/survival-labels.ts`). An order line reads
+  "C2 · Lenoir Apiary (hive) @ $225.00" (`orderLineText`): the kind in
+  parentheses with spaces, no "1 ×" on a hive. "Apiary" replaces "yard" in
+  every label and control; "hive" replaces "colony" everywhere but the
+  `colony` sale-line kind in the API.
 - Copy rules the glossary implies: a subtitle says what you do on the page
   in one sentence, never what the data model is. A button names its outcome
   ("Start session", "Delete inspection", "Delete photo"), never the gesture

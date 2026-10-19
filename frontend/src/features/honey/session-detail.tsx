@@ -112,6 +112,9 @@ export function SessionDetail({ id }: { id: string }) {
   const finalized = status !== "taking_entries";
   const apiaryName =
     apiaries.data?.find((apiary) => apiary.id === data.apiaryId)?.name ?? null;
+  const canEdit = ["admin", "editor"].includes(
+    apiaryRole(access.data, data.apiaryId) ?? "",
+  );
 
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-6">
@@ -124,6 +127,18 @@ export function SessionDetail({ id }: { id: string }) {
           `${data.entries.length} hive ${data.entries.length === 1 ? "entry" : "entries"}`,
           data.notes,
         ]}
+        primary={
+          status === "trued_up" && canEdit ? (
+            <Button
+              type="button"
+              data-testid="session-close"
+              disabled={closeSession.isPending}
+              onClick={() => closeSession.mutate()}
+            >
+              Close session
+            </Button>
+          ) : undefined
+        }
       />
 
       <div className="grid gap-3 sm:grid-cols-3">
@@ -160,7 +175,33 @@ export function SessionDetail({ id }: { id: string }) {
         />
       </div>
 
-      <section className="atlas-records"><div className="atlas-record"><h2 className="font-semibold">Extraction status</h2>{data.closedAt ? <p className="text-sm">Extraction closed {formatDate(data.closedAt)}. This record remains in harvest history.</p> : <><p className="mb-3 text-sm text-muted-foreground">When all extraction work is complete, close this session to remove it from active work. Weights and stock stay as recorded.</p>{["admin","editor"].includes(apiaryRole(access.data,data.apiaryId)??"")&&<Button variant="outline" disabled={closeSession.isPending} onClick={()=>closeSession.mutate()}>Finish extraction</Button>}</>}{closeSession.isError&&<p role="alert" className="text-sm text-destructive">{closeSession.error.message}</p>}</div></section>
+      <section className="atlas-records">
+        <div className="atlas-record">
+          <h2 className="font-semibold">Session status</h2>
+          {data.closedAt ? (
+            <p className="text-sm">
+              Closed {formatDate(data.closedAt)}. The session stays in harvest
+              history; weights and stock stay as recorded.
+            </p>
+          ) : status === "trued_up" ? (
+            <p className="text-sm text-muted-foreground">
+              Trued up: the extracted weight is final and no more entries are
+              taken. Close session, above, moves it out of In progress; weights
+              and stock stay as recorded.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Taking entries. Record the extracted weight (true up) once the
+              honey is out, then close the session.
+            </p>
+          )}
+          {closeSession.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {closeSession.error.message}
+            </p>
+          )}
+        </div>
+      </section>
       <MoistureCard sessionId={id} moisturePct={data.moisturePct} />
 
       <Card>

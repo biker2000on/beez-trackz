@@ -59,7 +59,7 @@ export default function manifest(): MetadataRoute.Manifest {
       {
         name: "Apiaries",
         short_name: "Apiaries",
-        description: "Open your bee yards",
+        description: "Open your apiaries",
         url: "/yard/apiaries",
         icons: shortcutIcon,
       },

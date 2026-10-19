@@ -22,6 +22,16 @@
  *    an inspection, otherwise Open hive.
  *  - **Field-actionable** — what the Visit queue keeps: an item on a hive
  *    that is not a lockout notice.
+ *  - **Retired** — an item on a hive the roster says is no longer active
+ *    (sold, dead, combined, or archived). The server's recommendation read
+ *    joins `ai_recommendations` to `hives` without the status filter its
+ *    other readers apply (routes_work.go `workVisibleHives`), so a sold A1 or
+ *    a dead "B2 (N1)" nuc still arrives with an "Inspect this hive" item.
+ *    Those hives are read-only everywhere else, so their items are dropped
+ *    here and counted in `retiredCount`. A hive the roster does not know is
+ *    kept: absence is not evidence. Nuc placements ("B2 (N1)") are hives of
+ *    their own with no parent id in the model, so when one is active it is
+ *    its own card under its own label rather than folded into B2.
  */
 
 import type { WorkItem, WorkPriority } from "./types";
@@ -103,6 +113,36 @@ export function isFieldActionable(item: WorkItem): boolean {
   return item.context.hiveId !== null && item.sourceType !== "lockout";
 }
 
+/** What the roll-up needs to know about a hive: is it still worked. */
+export interface HiveIdentity {
+  status: string;
+  isArchived: boolean;
+}
+
+/** Hive id → identity, from `GET /hives?includeArchived=true`. */
+export type HiveRoster = ReadonlyMap<string, HiveIdentity>;
+
+export function rosterOf(
+  hives: readonly ({ id: string } & HiveIdentity)[] | undefined,
+): HiveRoster {
+  const roster = new Map<string, HiveIdentity>();
+  for (const hive of hives ?? []) {
+    roster.set(hive.id, { status: hive.status, isArchived: hive.isArchived });
+  }
+  return roster;
+}
+
+/**
+ * Retired: the item's hive is on the roster and is archived or not active.
+ * An item with no hive, or on a hive the roster does not list, is kept.
+ */
+export function isRetired(item: WorkItem, roster: HiveRoster | undefined): boolean {
+  if (!roster || !item.context.hiveId) return false;
+  const hive = roster.get(item.context.hiveId);
+  if (!hive) return false;
+  return hive.isArchived || hive.status !== "active";
+}
+
 export type PrimaryAction = "open-hive" | "log-inspection";
 
 export interface HiveCard {
@@ -130,17 +170,23 @@ function primaryFor(top: WorkItem | undefined): PrimaryAction | null {
 }
 
 /**
- * Roll a flat list into hive cards. Cards whose every item is hidden are
- * dropped; `staleCount` says how many items that hid.
+ * Roll a flat list into hive cards. Items on retired hives are dropped first
+ * (`retiredCount`); cards whose every item is hidden are dropped;
+ * `staleCount` says how many items that hid.
  */
 export function rollUp(
   items: WorkItem[],
   asOf: string,
-  options: { showStale: boolean },
-): { cards: HiveCard[]; staleCount: number } {
+  options: { showStale: boolean; roster?: HiveRoster },
+): { cards: HiveCard[]; staleCount: number; retiredCount: number } {
   const byKey = new Map<string, { visible: WorkItem[]; hidden: WorkItem[] }>();
   let staleCount = 0;
+  let retiredCount = 0;
   for (const item of items) {
+    if (isRetired(item, options.roster)) {
+      retiredCount += 1;
+      continue;
+    }
     const key = cardKey(item);
     const bucket = byKey.get(key) ?? { visible: [], hidden: [] };
     if (!byKey.has(key)) byKey.set(key, bucket);
@@ -171,7 +217,7 @@ export function rollUp(
       primary: primaryFor(top),
     });
   }
-  return { cards, staleCount };
+  return { cards, staleCount, retiredCount };
 }
 
 export interface BucketSection {

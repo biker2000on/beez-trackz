@@ -2,10 +2,11 @@
 
 import * as React from "react";
 
+import { useHives } from "@/features/hives/hooks";
 import { LaborControl } from "@/features/operations/labor-control";
 
 import { useWorkYard } from "./api";
-import { isFieldActionable, rollUp } from "./rollup";
+import { isFieldActionable, rollUp, rosterOf } from "./rollup";
 import type { WorkFilter } from "./types";
 import { WorkSurface, type WorkSection } from "./work-surface";
 
@@ -20,9 +21,11 @@ import { WorkSurface, type WorkSection } from "./work-surface";
  */
 export function YardQueueView({ filter = {} }: { filter?: WorkFilter }) {
   const yard = useWorkYard(filter);
+  const hives = useHives({ includeArchived: true });
   const [showStale, setShowStale] = React.useState(false);
 
   const asOf = yard.data?.asOf ?? new Date().toISOString();
+  const roster = React.useMemo(() => rosterOf(hives.data), [hives.data]);
   const { sections, staleCount } = React.useMemo(() => {
     const yards = yard.data?.yards ?? [];
     let stale = 0;
@@ -30,6 +33,7 @@ export function YardQueueView({ filter = {} }: { filter?: WorkFilter }) {
     for (const entry of yards) {
       const result = rollUp(entry.items.filter(isFieldActionable), asOf, {
         showStale,
+        roster,
       });
       stale += result.staleCount;
       if (result.cards.length === 0 && entry.apiaryId === null) continue;
@@ -41,7 +45,7 @@ export function YardQueueView({ filter = {} }: { filter?: WorkFilter }) {
       });
     }
     return { sections: built, staleCount: stale };
-  }, [yard.data, asOf, showStale]);
+  }, [yard.data, asOf, showStale, roster]);
 
   return (
     <WorkSurface
@@ -49,7 +53,7 @@ export function YardQueueView({ filter = {} }: { filter?: WorkFilter }) {
       sections={sections}
       freshness={yard.data?.freshness}
       asOf={yard.data?.asOf}
-      isPending={yard.isPending}
+      isPending={yard.isPending || hives.isPending}
       isFetching={yard.isFetching}
       isError={yard.isError}
       onRefresh={() => void yard.refetch()}

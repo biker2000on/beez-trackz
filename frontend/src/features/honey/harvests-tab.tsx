@@ -273,7 +273,7 @@ export function HarvestsTab() {
         </Button>
       </div>
       <section className="grid gap-2">
-        <h3 className="text-sm font-semibold">Harvest sessions</h3>
+        <h2 className="text-sm font-semibold">Harvest sessions</h2>
         {sessions.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : sessions.isError ? (
@@ -304,7 +304,7 @@ export function HarvestsTab() {
       </section>
 
       <section className="grid gap-2">
-        <h3 className="text-sm font-semibold">Single-hive harvests</h3>
+        <h2 className="text-sm font-semibold">Single-hive harvests</h2>
         {harvests.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : harvests.isError ? (

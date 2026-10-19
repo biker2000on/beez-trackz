@@ -55,8 +55,8 @@ export function OperationSetupView() {
             <FinanceCategoriesSection />
           </SettingsSection>
           <SettingsSection
-            title="Thresholds and yard-visit labor"
-            description="Varroa and moisture action levels, and whether the yard queue offers a start/stop timer."
+            title="Thresholds and visit labor"
+            description="Varroa and moisture action levels, and whether the Visit queue offers a start/stop timer."
             icon={SlidersHorizontal}
             anchor="thresholds"
             defaultOpen={false}

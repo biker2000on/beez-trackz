@@ -608,8 +608,8 @@ export function LocationPicker({
         </div>
         <p className="text-xs text-muted-foreground">
           The circle drawn around the pin, so the tile layer shows the tree
-          line, crop, and water this yard actually works. It is also the
-          radius the yard photo timeline searches around the pin.
+          line, crop, and water this apiary actually works. It is also the
+          radius the apiary photo timeline searches around the pin.
         </p>
       </div>
       ) : null}

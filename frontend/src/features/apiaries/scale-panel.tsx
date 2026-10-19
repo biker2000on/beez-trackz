@@ -217,7 +217,7 @@ function AddScaleForm({ apiaryId }: { apiaryId: string }) {
         <Label htmlFor="scale-name">Scale name</Label>
         <Input
           id="scale-name"
-          placeholder="e.g. Home Yard scale"
+          placeholder="e.g. Home apiary scale"
           value={name}
           onChange={(event) => setName(event.target.value)}
         />
@@ -284,12 +284,12 @@ export function ScalePanel({
           <div className="min-w-0">
             <CardTitle className="flex items-center gap-2 text-base">
               <Scale className="size-4 text-primary" />
-              Yard scale
+              Apiary scale
             </CardTitle>
             <CardDescription>
               Daily weight overlaid on the bloom windows and inspections that
               explain it. CSV import from your scale&apos;s app — one scale per
-              yard is enough.
+              apiary is enough.
             </CardDescription>
           </div>
           {hasScales ? (
@@ -314,7 +314,7 @@ export function ScalePanel({
           <Skeleton className="h-24 w-full" />
         ) : scales.isError ? (
           <p className="text-sm text-muted-foreground">
-            Could not load the scales for this yard.
+            Could not load the scales for this apiary.
           </p>
         ) : (
           <>
@@ -336,7 +336,7 @@ export function ScalePanel({
               ) : null
             ) : (
               <p className="text-sm text-muted-foreground">
-                No scale on this yard yet.
+                No scale on this apiary yet.
                 {canEdit
                   ? " Add one below, then import a Broodminder or HiveTracks CSV export."
                   : ""}
