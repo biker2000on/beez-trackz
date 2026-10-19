@@ -20,6 +20,7 @@ import {
   MapPin,
   Mic,
   Pencil,
+  RotateCcw,
   Skull,
   Split,
 } from "lucide-react";
@@ -60,9 +61,37 @@ import { InspectionFormDialog } from "@/features/inspections/inspection-form-dia
 import { PhotoUpload } from "@/features/photos/photo-upload";
 import { HiveStatusBadge } from "./hive-card";
 import { HiveFormDialog } from "./hive-form-dialog";
-import { useArchiveHive, useHive, useUnarchiveHive } from "./hooks";
+import {
+  useArchiveHive,
+  useHive,
+  useUnarchiveHive,
+  useUpdateHive,
+  type Hive,
+} from "./hooks";
 import { DeadoutAutopsyDialog } from "./deadout-autopsy-dialog";
-import { formatDate } from "./lib";
+import { formatDate, HIVE_STATUS_LABELS, type HiveStatus } from "./lib";
+
+/**
+ * A sold, dead, combined or archived hive is history: nothing is inspected
+ * or fed any more, so the field actions leave the bar and the one thing left
+ * to do — bring it back — is the primary.
+ */
+function hiveReadOnly(hive: Hive): boolean {
+  return hive.isArchived || hive.status !== "active";
+}
+
+/** "Dead Apr 24, 2026 · records are read-only" — the header's one-line notice. */
+function readOnlyNotice(hive: Hive): string {
+  const word =
+    hive.isArchived && hive.status === "active"
+      ? "Archived"
+      : (HIVE_STATUS_LABELS[hive.status as HiveStatus] ?? hive.status);
+  const date =
+    hive.status === "dead" && hive.deadoutDate
+      ? ` ${formatDate(hive.deadoutDate)}`
+      : "";
+  return `${word}${date} · records are read-only`;
+}
 import { SplitDialog } from "./split-dialog";
 
 export function HiveRecordLayout({
@@ -94,10 +123,13 @@ export function HiveRecordLayout({
 
   const archiveHive = useArchiveHive();
   const unarchiveHive = useUnarchiveHive();
+  const updateHive = useUpdateHive(hiveId);
+  const readOnly = hive.data != null && hiveReadOnly(hive.data);
 
   // Every one of these writes; a viewer gets none of them registered, so the
   // `?` dialog and the command palette stop offering actions that do nothing.
-  const editable = { enabled: canEdit };
+  // A read-only hive (sold, dead, archived) keeps only Edit.
+  const editable = { enabled: canEdit && !readOnly };
   useShortcut("i", "Log inspection", () => setInspectionOpen(true), editable);
   useShortcut(
     "r",
@@ -105,11 +137,11 @@ export function HiveRecordLayout({
     () => {
       if (voice) router.push(voice.href);
     },
-    { enabled: canEdit && voice != null },
+    { enabled: canEdit && !readOnly && voice != null },
   );
   useShortcut("f", "Record feeding", () => setFeedOpen(true), editable);
   useShortcut("p", "Add photo", () => setPhotoOpen(true), editable);
-  useShortcut("e", "Edit hive", () => setEditOpen(true), editable);
+  useShortcut("e", "Edit hive", () => setEditOpen(true), { enabled: canEdit });
   // `t`, not `x` (globally select-all, DESIGN.md) and not `s` (Record sale on
   // Honey, and the tail of `g s` for Settings).
   useShortcut("t", "Split hive", () => setSplitOpen(true), editable);
@@ -148,6 +180,26 @@ export function HiveRecordLayout({
     }
   }
 
+  // `PUT /hives/{id}` replaces the whole record, so the payload carries every
+  // field the form would send, with only the status changed.
+  async function reactivate() {
+    if (data.isArchived) await unarchiveHive.mutateAsync(data.id);
+    if (data.status !== "active") {
+      await updateHive.mutateAsync({
+        apiaryId: data.apiaryId,
+        positionLabel: data.positionLabel,
+        standId: data.standId,
+        slotRow: data.slotRow,
+        slotCol: data.slotCol,
+        placement: data.placement,
+        status: "active",
+        installedDate: data.installedDate,
+        notes: data.notes,
+      });
+    }
+  }
+  const reactivating = unarchiveHive.isPending || updateHive.isPending;
+
   return (
     <div className="grid grid-cols-1 gap-6">
       <RecordHeader
@@ -182,7 +234,17 @@ export function HiveRecordLayout({
           ),
         ]}
         primary={
-          canEdit && voice ? (
+          !canEdit ? undefined : readOnly ? (
+            <Button
+              disabled={reactivating}
+              onClick={() =>
+                void run(reactivate, `${data.positionLabel} is active again`)
+              }
+            >
+              <RotateCcw className="size-4" />
+              {reactivating ? "Reactivating…" : "Reactivate"}
+            </Button>
+          ) : voice ? (
             <Button asChild>
               <Link href={voice.href}>
                 <Mic className="size-4" />
@@ -192,7 +254,7 @@ export function HiveRecordLayout({
           ) : undefined
         }
         secondary={
-          canEdit ? (
+          canEdit && !readOnly ? (
             <>
               <Button size="sm" variant="outline" onClick={() => setInspectionOpen(true)}>
                 <ClipboardList className="size-4" />
@@ -208,14 +270,18 @@ export function HiveRecordLayout({
         more={
           canEdit ? (
             <>
-              <DropdownMenuItem onSelect={() => setPhotoOpen(true)}>
-                <Camera className="size-4" />
-                Add photo
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setSplitOpen(true)}>
-                <Split className="size-4" />
-                Split hive
-              </DropdownMenuItem>
+              {!readOnly ? (
+                <>
+                  <DropdownMenuItem onSelect={() => setPhotoOpen(true)}>
+                    <Camera className="size-4" />
+                    Add photo
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setSplitOpen(true)}>
+                    <Split className="size-4" />
+                    Split hive
+                  </DropdownMenuItem>
+                </>
+              ) : null}
               <DropdownMenuItem onSelect={() => setEditOpen(true)}>
                 <Pencil className="size-4" />
                 Edit hive
@@ -253,6 +319,25 @@ export function HiveRecordLayout({
           ) : undefined
         }
       >
+        {readOnly && (
+          <p
+            className="mt-2 text-sm text-muted-foreground"
+            data-testid="hive-read-only"
+          >
+            {readOnlyNotice(data)}
+            {data.saleId ? (
+              <>
+                {" · "}
+                <Link
+                  href={`/sales/${data.saleId}`}
+                  className="font-medium text-foreground underline-offset-4 hover:underline"
+                >
+                  Open order
+                </Link>
+              </>
+            ) : null}
+          </p>
+        )}
         {data.lockout?.locked && (
           <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
             {data.lockout.message}

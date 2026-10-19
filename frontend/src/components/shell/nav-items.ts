@@ -357,32 +357,69 @@ export function visibleNavRoutes<T extends NavRoute>(
     })) as T[];
 }
 
+/** The names the rail draws the open records with (null while loading). */
+export interface RecordLabels {
+  apiary?: string | null;
+  hive?: string | null;
+}
+
 /**
- * Merge static and current-record children without duplicating a label.
- * This is the drawn tree: palette-only routes are left out.
+ * The one row a rail draws for the record it is on: "Lenoir Apiary" under
+ * Apiary list, "D1" under Hives. Its tabs and actions belong to the record
+ * header (`contextualNavRoutes`), never to the rail — drawn beside the tab
+ * strip they were the same fourteen links twice.
+ */
+export function currentRecordRoute(
+  parentHref: string,
+  pathname: string,
+  labels: RecordLabels = {},
+): NavRoute | undefined {
+  const apiary = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
+  if (parentHref === "/yard/apiaries" && apiary) {
+    return {
+      label: labels.apiary ?? "Current apiary",
+      href: `/yard/apiaries/${apiary}`,
+      keywords: ["record"],
+    };
+  }
+  const hive = pathname.match(/^\/yard\/hives\/([^/]+)/)?.[1];
+  if (parentHref === "/yard/hives" && hive) {
+    return {
+      label: labels.hive ?? "Current hive",
+      href: `/yard/hives/${hive}`,
+      keywords: ["record"],
+    };
+  }
+  return undefined;
+}
+
+/**
+ * The drawn tree under an area: its static children minus the palette-only
+ * ones, and under a list page the one record that is open. A record's tab
+ * and action routes (`contextualNavRoutes`) stay in Ctrl-K and the record
+ * header; they are never rail rows.
  */
 export function navRouteChildren(
   route: NavRoute,
   pathname: string,
   isAdmin: boolean,
   canEdit: boolean,
+  labels: RecordLabels = {},
 ): NavRoute[] {
-  const contextual = contextualNavRoutes(route.href, pathname);
-  const contextualLabels = new Set(contextual.map((child) => child.label));
   const staticChildren = (route.children ?? []).filter(
-    (child) => !child.paletteOnly && !contextualLabels.has(child.label),
+    (child) => !child.paletteOnly,
   );
-  return visibleNavRoutes(
-    [...staticChildren, ...contextual],
-    isAdmin,
-    canEdit,
-  ).map((child) => ({
-    ...child,
-    children:
-      child.href === route.href
-        ? undefined
-        : navRouteChildren(child, pathname, isAdmin, canEdit),
-  }));
+  return visibleNavRoutes(staticChildren, isAdmin, canEdit).map((child) => {
+    const record = currentRecordRoute(child.href, pathname, labels);
+    return {
+      ...child,
+      children: record
+        ? [record]
+        : child.href === route.href
+          ? undefined
+          : navRouteChildren(child, pathname, isAdmin, canEdit, labels),
+    };
+  });
 }
 
 /** Backward-compatible name used by top-level navigation callers. */

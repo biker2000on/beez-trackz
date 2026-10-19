@@ -64,10 +64,10 @@ import type { SaleLineKind } from "@/features/honey/types";
 import { OfflineQueuedError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
-  useLowStock,
   useReconciliation,
   type Reconciliation,
 } from "./api";
+import { useFinishedStock } from "./finished-stock";
 import { compareNullable, shelfSkus } from "./lot-lines";
 import { shortSizeName } from "./size-names";
 import {
@@ -179,7 +179,8 @@ export function MarketDayTab({
   const inventory = useJarInventory();
   const catalog = useProductCatalog(true);
   const sale = useRecordSale();
-  const lowStock = useLowStock();
+  // Below-target sizes come from the same read Today and In progress use.
+  const finished = useFinishedStock();
   const [date, setDate] = React.useState(todayISO());
   const reconciliation = useReconciliation(date);
   const [cart, setCart] = React.useState<Record<string, number>>({});
@@ -329,7 +330,9 @@ export function MarketDayTab({
   const sizesWithLots = new Set(
     skus.filter((sku) => sku.jarSizeId && sku.lots.length > 0).map((sku) => sku.jarSizeId),
   );
-  const lowRows = (lowStock.data ?? []).filter((row) => sizesWithLots.has(row.jarSizeId));
+  const lowRows = (finished.data?.belowTarget ?? []).filter((row) =>
+    sizesWithLots.has(row.jarSizeId),
+  );
 
   const priceOf = (row: MarketRow) => {
     const text = prices[row.key];
@@ -478,7 +481,7 @@ export function MarketDayTab({
             <span className="font-medium">Low stock:</span>
             {lowRows.map((row) => (
               <Badge key={row.jarSizeId} variant="outline">
-                {shortSizeName(row.label)} {row.onHand}/{row.threshold}
+                {shortSizeName(row.label)} {row.atHome}/{row.target}
               </Badge>
             ))}
           </div>

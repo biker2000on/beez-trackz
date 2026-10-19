@@ -2,6 +2,11 @@
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccessProfile } from "@/features/access/api";
+import { useFinishedStock } from "@/features/commerce/finished-stock";
+import {
+  SESSION_STATUS_LABELS,
+  sessionStatus,
+} from "@/features/honey/session-status";
 import {
   useProductionWorkbench,
   useSalesWorkbench,
@@ -11,18 +16,25 @@ import {
  * The operation-wide work below the hive cards on Today: open extractions,
  * pending orders, due settlements and jar sizes below target. Each row names
  * the area it belongs to with that area's nav label, never a word of its own.
+ *
+ * A session's status word and a size's "below target" come from the same
+ * places In progress reads them (`sessionStatus`, `useFinishedStock`), so
+ * Today can never disagree with the page it links to.
  */
 export function OperationWork() {
   const access = useAccessProfile();
   const admin = access.data?.isAdmin === true;
   const production = useProductionWorkbench(undefined, admin);
   const sales = useSalesWorkbench(undefined, admin);
+  const finished = useFinishedStock(admin);
   if (!admin) return null;
   const rows = [
     ...(production.data?.openSessions ?? []).map((s) => ({
       id: s.id,
       title: s.apiaryName ?? "Extraction session",
-      reason: `${s.entryCount} harvest entries / extraction remains open`,
+      reason: `${s.entryCount} harvest ${s.entryCount === 1 ? "entry" : "entries"} · ${
+        SESSION_STATUS_LABELS[sessionStatus(s)]
+      }`,
       href: `/production/sessions/${s.id}`,
       group: "Harvests",
     })),
@@ -49,18 +61,17 @@ export function OperationWork() {
         href: `/sales/consignment/${s.locationId}`,
         group: "Consignment",
       })),
-    ...(production.data?.jarStock ?? [])
-      .filter((s) => s.parLevel !== null && s.available < s.parLevel)
-      .map((s) => ({
-        id: s.jarSizeId,
-        title: s.label,
-        reason: `${s.available} available / below target ${s.parLevel}`,
-        href: "/stock?tab=finished",
-        group: "On hand",
-      })),
+    ...(finished.data?.belowTarget ?? []).map((s) => ({
+      id: s.jarSizeId,
+      title: s.label,
+      reason: `${s.atHome} ${s.atHome === 1 ? "jar" : "jars"} at home · below target ${s.target}`,
+      href: "/stock?tab=finished",
+      group: "On hand",
+    })),
   ];
   const loading =
-    rows.length === 0 && (production.isPending || sales.isPending);
+    rows.length === 0 &&
+    (production.isPending || sales.isPending || finished.isPending);
   return (
     <section className="mt-5" aria-label="Operation work">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -77,7 +88,7 @@ export function OperationWork() {
           </Link>
         </div>
       </div>
-      {production.isError || sales.isError ? (
+      {production.isError || sales.isError || finished.isError ? (
         <p role="alert" className="mb-3 text-sm">
           Some operation work could not load.{" "}
           <button
@@ -85,6 +96,7 @@ export function OperationWork() {
             onClick={() => {
               void production.refetch();
               void sales.refetch();
+              finished.refetch();
             }}
           >
             Retry

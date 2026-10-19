@@ -862,7 +862,9 @@ export function DataGrid<
           {toolbar}
           {(canSearch || filterOptions.length > 0) && (
             <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
-              {narrowed ? `${rowCount} of ${totalCount}` : `${totalCount} rows`}
+              {narrowed
+                ? `${rowCount} of ${totalCount}`
+                : `${totalCount} ${totalCount === 1 ? "row" : "rows"}`}
             </span>
           )}
         </div>

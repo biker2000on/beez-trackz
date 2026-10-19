@@ -5,7 +5,9 @@ import { ArrowRight, TriangleAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useFinishedStock } from "@/features/commerce/finished-stock";
 import { formatDate } from "@/features/honey/format";
+import { SessionStatusBadge, sessionStatus } from "@/features/honey/session-status";
 
 import { useProductionWorkbench } from "./api";
 import { exact, lbs, signedLbs } from "./quantity";
@@ -31,11 +33,17 @@ import {
  * (§4.8), in the order the operator walks them. Each total is drawn once:
  * the lot rows carry both the lot's balance and the bottling command that
  * used to be a second list of the same lots, and finished stock is a link to
- * Stock › On hand rather than a repeat of its per-size numbers. Every pound and every jar on this page was read from
- * `inventory_available` / `inventory_balances` server-side; nothing is summed
- * here, and nothing is fetched per widget — the dashboard's habit of
- * assembling a screen out of four reads that can disagree about the same lot
- * is what this replaces.
+ * Stock › On hand rather than a repeat of its per-size numbers. Every pound
+ * on this page was read from `inventory_available` / `inventory_balances`
+ * server-side; nothing is summed here, and nothing is fetched per widget —
+ * the dashboard's habit of assembling a screen out of four reads that can
+ * disagree about the same lot is what this replaces.
+ *
+ * One exception, deliberately (Wave 6): the workbench's `jarStock` sums
+ * every location, shops included, which is not what the operator can sell.
+ * The Finished stock panel reads `useFinishedStock` — the ledger's home split
+ * plus the Setup targets — the same read Today, Market day and Consignment
+ * use, so the four pages show one number and one below-target list.
  *
  * Mutations are the source commands the read model named (start a session,
  * add entries, true up, create the lot, bottle), each already answered for
@@ -64,13 +72,13 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
     const merged = [...own, ...extra.filter((c) => !own.some((o) => o.id === c.id))];
     return { ...lot, commands: merged };
   });
-  const jarStock = (data?.jarStock ?? []).filter(
-    (jar) => jar.onHand > 0 || jar.reserved > 0 || jar.available > 0,
-  );
-  const jarsAvailable = jarStock.reduce((total, jar) => total + jar.available, 0);
-  const belowTarget = jarStock.filter(
-    (jar) => jar.parLevel !== null && jar.available < jar.parLevel,
-  );
+  // Per-size commands ride on the workbench; the counts come from the ledger.
+  const jarCommands = data?.jarStock ?? [];
+  const finished = useFinishedStock();
+  const stockedSizes = finished.data?.stockedAtHome ?? [];
+  const jarsAtHome = finished.data?.jarsAtHome ?? 0;
+  const jarsAway = finished.data?.jarsAway ?? 0;
+  const belowTarget = finished.data?.belowTarget ?? [];
   const batches = data?.productBatches ?? [];
 
   return (
@@ -197,9 +205,15 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
         step={3}
         panelKey="jar-stock"
         title="Finished stock"
-        description="Counted on Stock › On hand; the same numbers Market day sells from."
-        count={jarStock.length}
-        empty="No jars on hand. Bottle a lot above to start finished stock."
+        description="Jars at home, counted on Stock › On hand; the same numbers Market day sells from."
+        count={finished.isPending || finished.isError ? 0 : stockedSizes.length}
+        empty={
+          finished.isPending
+            ? "Counting finished stock…"
+            : finished.isError
+              ? "Finished stock could not be counted. Refresh to try again."
+              : "No jars at home. Bottle a lot above to start finished stock."
+        }
       >
         <WorkbenchRow
           rowKey="jar-stock-summary"
@@ -209,8 +223,9 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
               href="/stock?tab=finished"
               className="underline-offset-4 hover:underline"
             >
-              {jarsAvailable} {jarsAvailable === 1 ? "jar" : "jars"} available
-              in {jarStock.length} {jarStock.length === 1 ? "size" : "sizes"}
+              {jarsAtHome} {jarsAtHome === 1 ? "jar" : "jars"} at home in{" "}
+              {stockedSizes.length} {stockedSizes.length === 1 ? "size" : "sizes"}
+              {jarsAway > 0 ? ` · ${jarsAway} at shops` : ""}
             </Link>
           }
           facts={
@@ -221,10 +236,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
               >
                 Below target:{" "}
                 {belowTarget
-                  .map(
-                    (jar) =>
-                      `${jar.label} (${jar.available} of target ${jar.parLevel} jars)`,
-                  )
+                  .map((jar) => `${jar.label} (${jar.atHome} of target ${jar.target} jars)`)
                   .join(", ")}
               </p>
             ) : (
@@ -241,7 +253,7 @@ export function ProductionWorkbench({ year }: { year?: number } = {}) {
                 <ArrowRight />
               </Link>
             </Button>
-            {jarStock.map((jar) =>
+            {jarCommands.map((jar) =>
               jar.commands?.length ? (
                 <WorkbenchCommands
                   key={jar.jarSizeId}
@@ -315,11 +327,12 @@ function SessionRow({
                 <span className="text-xs font-normal text-muted-foreground">
                   {formatDate(session.date)}
                 </span>
-                {isFinalized(session) ? (
-                  <Badge variant="outline" data-testid="workbench-session-finalized">
-                    Trued up · close to finish
-                  </Badge>
-                ) : null}
+                <SessionStatusBadge
+                  status={sessionStatus(session)}
+                  data-testid={
+                    isFinalized(session) ? "workbench-session-finalized" : undefined
+                  }
+                />
               </>
             }
             facts={
@@ -338,7 +351,7 @@ function SessionRow({
                     {signedLbs(session.trueUpDifferenceLbs as Quantity)}
                   </>
                 ) : (
-                  " · in progress, not trued up"
+                  " · not trued up yet"
                 )}
               </p>
             }

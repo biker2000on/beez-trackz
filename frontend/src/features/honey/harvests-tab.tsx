@@ -60,7 +60,11 @@ import {
   useHarvestSessions,
   useHiveOptions,
 } from "./hooks";
-import { sessionFinalized } from "./session-detail";
+import {
+  SESSION_STATUS_LABELS,
+  SessionStatusBadge,
+  sessionStatus,
+} from "./session-status";
 import type { HarvestRow, HarvestSessionRow } from "./types";
 
 const gridFeatures = dataGridFeatures;
@@ -203,20 +207,13 @@ export function HarvestsTab() {
           meta: { cellClassName: "font-medium", filter: true, filterAllLabel: "All apiaries" } satisfies DataGridColumnMeta,
           cell: ({ row }) => row.original.apiaryName,
         }),
-        columnHelper.accessor((s) => (sessionFinalized(s.totalExtractedWeight) ? "Finalized" : "In progress"), {
+        columnHelper.accessor((s) => SESSION_STATUS_LABELS[sessionStatus(s)], {
           id: "status",
           header: "Status",
           meta: { card: "badge", filter: true, filterAllLabel: "Any status" } satisfies DataGridColumnMeta,
-          cell: ({ row }) => {
-            const finalized = sessionFinalized(
-              row.original.totalExtractedWeight,
-            );
-            return (
-              <Badge variant={finalized ? "secondary" : "accent"}>
-                {finalized ? "Finalized" : "In progress"}
-              </Badge>
-            );
-          },
+          cell: ({ row }) => (
+            <SessionStatusBadge status={sessionStatus(row.original)} />
+          ),
         }),
         columnHelper.accessor((s) => s.entryCount, {
           id: "hives",

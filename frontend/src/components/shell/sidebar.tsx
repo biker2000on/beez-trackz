@@ -13,6 +13,7 @@ import {
   isNavRouteActive,
   navRouteChildren,
   visibleNavItems,
+  visibleNavRoutes,
   type NavItem,
   type NavRoute,
 } from "@/components/shell/nav-items";
@@ -22,6 +23,7 @@ import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { CommandPaletteButton } from "@/components/shortcuts/provider";
 import { Separator } from "@/components/ui/separator";
 import { useAccessProfile } from "@/features/access/api";
+import { useApiary } from "@/features/apiaries/hooks";
 import { useHives } from "@/features/hives/hooks";
 
 const DEPTH_PADDING = ["pl-8", "pl-11", "pl-14"];
@@ -29,6 +31,10 @@ const DEPTH_PADDING = ["pl-8", "pl-11", "pl-14"];
 /**
  * Desktop rail: the five areas, only the active one expanded by default, and
  * Setup beside the account link in the footer rather than as a sixth area.
+ * On a record the rail draws that record as one row under its list (the
+ * apiary's name, the hive's label); the record's tabs and actions live in
+ * the record header, never here. When a Setup page is open, Setup's pages
+ * expand under the footer link the way an area's do.
  *
  * Before the profile answers, the rail draws the same five rows it will draw
  * afterwards (the areas are static; only admin-only ones might vanish), with
@@ -56,7 +62,12 @@ export function Sidebar() {
   const navRef = React.useRef<HTMLElement>(null);
 
   const currentApiaryId = pathname.match(/^\/yard\/apiaries\/([^/]+)/)?.[1];
+  const apiary = useApiary(currentApiaryId ?? "", Boolean(currentApiaryId));
   const currentHive = hives.data?.find((hive) => hive.id === currentHiveId);
+  const recordLabels = {
+    apiary: apiary.data?.name ?? null,
+    hive: currentHive?.positionLabel ?? null,
+  };
   const contextApiaryId = currentApiaryId ?? currentHive?.apiaryId;
   const canEditAny =
     isAdmin || profile.data?.memberships.some((entry) => entry.role === "editor") === true;
@@ -72,10 +83,10 @@ export function Sidebar() {
   React.useEffect(() => {
     const links = navRef.current?.querySelectorAll('[aria-current="page"]');
     links?.[links.length - 1]?.scrollIntoView({ block: "nearest" });
-  }, [pathname, currentHref, expanded, items, canEditContext, hives.data]);
+  }, [pathname, currentHref, expanded, items, canEditContext, hives.data, apiary.data]);
 
   function itemChildren(item: NavRoute) {
-    return navRouteChildren(item, pathname, isAdmin, canEditContext);
+    return navRouteChildren(item, pathname, isAdmin, canEditContext, recordLabels);
   }
 
   function toggle(href: string, defaultOpen: boolean) {
@@ -89,6 +100,9 @@ export function Sidebar() {
   }
 
   const setupActive = isNavRouteActive(SETUP_ITEM, currentHref);
+  const setupChildren = setupActive
+    ? visibleNavRoutes(SETUP_ITEM.children ?? [], isAdmin, canEditAny)
+    : [];
 
   return (
     <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r bg-sidebar pt-[var(--safe-top)] text-sidebar-foreground lg:flex">
@@ -189,6 +203,22 @@ export function Sidebar() {
             <SETUP_ITEM.icon className="size-4" />
             {SETUP_ITEM.label}
           </Link>
+        ) : null}
+        {isAdmin && setupChildren.length > 0 ? (
+          <nav aria-label="Setup pages" className="mb-2 px-1">
+            <ul className="grid gap-0.5 border-l border-border/70">
+              {setupChildren.map((route) => (
+                <SidebarRoute
+                  key={route.href}
+                  route={route}
+                  depth={0}
+                  currentHref={currentHref}
+                  expanded={expanded}
+                  onToggle={toggle}
+                />
+              ))}
+            </ul>
+          </nav>
         ) : null}
         <AccountLink />
         <LogoutButton />

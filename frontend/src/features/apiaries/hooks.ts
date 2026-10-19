@@ -216,9 +216,10 @@ export function useApiaries(enabled = true) {
   });
 }
 
-export function useApiary(id: string) {
+export function useApiary(id: string, enabled = true) {
   return useQuery({
     queryKey: ["apiaries", "detail", id],
+    enabled,
     queryFn: () => api.get<Apiary>(`/apiaries/${id}`),
   });
 }

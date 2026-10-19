@@ -141,6 +141,7 @@ export function BottomNav() {
                 pathname,
                 isAdmin,
                 canEditContext,
+                { hive: currentHive?.positionLabel ?? null },
               );
               const active = isNavRouteActive(item, currentHref);
               const open = expanded[item.href] ?? active;

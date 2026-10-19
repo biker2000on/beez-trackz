@@ -67,11 +67,7 @@ import {
 } from "./hooks";
 import type { HarvestSessionEntry, SessionTrueUp } from "./types";
 
-/** A session with a recorded extracted weight is finalized: the true-up is
- * authoritative and new entries would change nothing. */
-export function sessionFinalized(totalExtractedWeight: number | null): boolean {
-  return totalExtractedWeight != null && totalExtractedWeight !== 0;
-}
+import { SessionStatusBadge, sessionStatus } from "./session-status";
 
 export function SessionDetail({ id }: { id: string }) {
   const { formatHoney } = useUnits();
@@ -112,7 +108,8 @@ export function SessionDetail({ id }: { id: string }) {
   }
 
   const data = session.data;
-  const finalized = Boolean(data.closedAt) || sessionFinalized(data.totalExtractedWeight);
+  const status = sessionStatus(data);
+  const finalized = status !== "taking_entries";
   const apiaryName =
     apiaries.data?.find((apiary) => apiary.id === data.apiaryId)?.name ?? null;
 
@@ -121,11 +118,7 @@ export function SessionDetail({ id }: { id: string }) {
       <RecordHeader
         name={`Harvest ${formatDate(data.date)}`}
         collectionHref="/production/harvests"
-        status={
-          <Badge variant={finalized ? "secondary" : "accent"}>
-            {finalized ? "Finalized" : "In progress"}
-          </Badge>
-        }
+        status={<SessionStatusBadge status={status} />}
         context={[
           apiaryName ?? "Apiary",
           `${data.entries.length} hive ${data.entries.length === 1 ? "entry" : "entries"}`,
@@ -201,7 +194,9 @@ export function SessionDetail({ id }: { id: string }) {
         {finalized ? (
           <Card>
             <CardHeader>
-              <CardTitle>Session finalized</CardTitle>
+              <CardTitle>
+                {status === "closed" ? "Session closed" : "Session trued up"}
+              </CardTitle>
               <CardDescription>
                 The trued-up extracted weight is authoritative, so new hive
                 entries would not change any total. Adjust the true-up to

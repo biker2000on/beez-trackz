@@ -162,7 +162,9 @@ test("production workbench says nothing about bulk when harvests cover the jars"
 }) => {
   await mockApp(page, { bulkOnHandLbs: 12, totalHarvestedLbs: 40 });
   await page.goto("/production");
-  await expect(page.getByRole("heading", { name: "In progress" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "In progress", level: 1 }),
+  ).toBeVisible();
   await expect(page.getByTestId("workbench-panel").first()).toBeVisible();
   await expect(page.getByTestId("workbench-bulk-short")).toHaveCount(0);
 });

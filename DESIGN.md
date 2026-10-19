@@ -42,7 +42,12 @@ usable with one hand, and dense only where comparison helps a decision.
   setup, Access & integrations, Equipment types and Varietals as its pages.
   `g a` still reaches it.
 - The sidebar expands only the active area; no area lists more than seven
-  pages. Before the profile answers it draws the same five rows as
+  pages. On a record the rail draws that record as one row under its list
+  (the apiary's name under Apiary list, the hive's label under Hives); a
+  record's tabs and actions belong to the record header and Ctrl-K, never to
+  the rail. When a Setup page is open, Setup's four pages expand under the
+  footer link the way an area's children do, and the Setup pages carry no
+  cross-link cards to each other. Before the profile answers it draws the same five rows as
   placeholders, so the tree does not jump when it lands.
 - The phone bar has five slots: four areas plus More (admin: Today ·
   Apiaries · Stock · Sales · More; viewer/editor: Today · Apiaries ·
@@ -150,12 +155,33 @@ usable with one hand, and dense only where comparison helps a decision.
   `/equipment/types` (Setup) lists definitions, bills of materials and unit
   cost only — no quantity columns.
 - In progress (`/production`, "Active batches" until Wave 5): each total appears once. "Extraction in
-  progress" lists only sessions still taking entries; a trued-up session is
-  finalized and waits under "Trued up, not yet closed". Bulk honey by lot
+  progress" lists only sessions still taking entries; a trued-up session
+  waits under "Trued up, not yet closed". Bulk honey by lot
   carries the bottling command (there is no second "available for bottling"
   list of the same lots), and Finished stock is one total plus a link to
   Stock › On hand, naming only the sizes below their target ("9 oz (4 of
   target 24 jars)" — never "par").
+- Finished stock has one count (Wave 6): `useFinishedStock`
+  (`features/commerce/finished-stock.ts`) reads the ledger's per-location
+  split (`GET /stock-locations/inventory`, the read Market day sells from)
+  and the Setup jar-size targets (`GET /jar-sizes`), and Today, In progress,
+  Market day and Consignment all draw from it: jars at home, jars at shops,
+  and the active sizes below target. No page sums "available" for itself;
+  the workbench's every-location `jarStock` and a location's every-kind
+  `onHandUnits` are not drawn as "available". A page that counts a
+  different fact says which ("· 52 at shops").
+- An extraction session has one status (Wave 6): `sessionStatus` in
+  `features/honey/session-status.tsx` derives Taking entries → Trued up ·
+  close to finish → Closed from `closedAt`, `totalExtractedWeight` and the
+  workbench's `trueUpDifferenceLbs`, and `SessionStatusBadge` renders it on
+  Today, In progress, Harvests and the session record. "Finalized" and
+  "extraction remains open" are not words the UI uses.
+- A sold, dead, combined or archived hive is read-only (Wave 6): its record
+  header says so in one line ("Dead Apr 24, 2026 · records are read-only",
+  with Open order when a sale is linked), the field actions (Voice
+  inspection, Log inspection, Feed, Split) leave the bar, and the primary is
+  Reactivate (status back to active, unarchived) with Edit behind More. The
+  tabs stay readable.
 - Apiary: layout canvas, flora, local forecast/bloom intelligence, bulk
   records, photos, and printable hive tags share one detail workflow.
 - Visits: voice is primary for both apiary observations and hive inspections.

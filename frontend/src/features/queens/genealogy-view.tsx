@@ -214,7 +214,7 @@ export function GenealogyView() {
                 }}
               >
                 {manageMode ? <Network /> : <CheckSquare />}
-                {manageMode ? "Tree view" : "Bulk manage"}
+                {manageMode ? "Tree view" : "Bulk select"}
               </Button>
               <Button onClick={openCreate}>
                 <Plus />

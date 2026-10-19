@@ -321,6 +321,34 @@ async function mockApp(page: Page, options: MockOptions = {}) {
       });
     }
 
+    // Finished stock (Wave 6): the ledger's home split and the Setup targets,
+    // the same two reads Today, Market day and Consignment count from. 16 oz
+    // has 28 at home and 6 at a shop; 9 oz has 4 at home against a target of
+    // 24; 2 oz is an inactive size with nothing anywhere and is never drawn.
+    if (path.endsWith("/stock-locations/inventory")) {
+      return route.fulfill({
+        json: {
+          locations: [
+            { id: "home", name: "Home", slug: "home", isHome: true, isConsignment: false },
+            { id: "shop", name: "Corner market", slug: "corner-market", isHome: false, isConsignment: true },
+          ],
+          items: [
+            { jarSizeId: JAR_16, productId: null, label: "16 oz", kind: "jar", unitPrice: 12, total: 34, byLocation: { home: 28, shop: 6 }, lots: [] },
+            { jarSizeId: "9-oz", productId: null, label: "9 oz", kind: "jar", unitPrice: 8, total: 4, byLocation: { home: 4 }, lots: [] },
+          ],
+        },
+      });
+    }
+    if (path.endsWith("/jar-sizes")) {
+      return route.fulfill({
+        json: [
+          { id: JAR_16, label: "16 oz", honeyOz: 16, defaultPrice: 12, sortOrder: 1, isActive: true, lowStockThreshold: 24, packagingTypeId: null, packagingTypeName: null },
+          { id: "9-oz", label: "9 oz", honeyOz: 9, defaultPrice: 8, sortOrder: 2, isActive: true, lowStockThreshold: 24, packagingTypeId: null, packagingTypeName: null },
+          { id: "2-oz", label: "2 oz", honeyOz: 2, defaultPrice: 4, sortOrder: 3, isActive: false, lowStockThreshold: 6, packagingTypeId: null, packagingTypeName: null },
+        ],
+      });
+    }
+
     if (request.method() !== "GET") {
       options.onCommand?.(route);
       return route.fulfill({ json: { ok: true } });
@@ -330,6 +358,16 @@ async function mockApp(page: Page, options: MockOptions = {}) {
   });
 }
 
+/**
+ * The finished-stock reads (Wave 6). The workbench's own `jarStock` sums
+ * every location, which is not what the operator can sell, so the Finished
+ * stock panel counts from the ledger's home split and the Setup targets —
+ * the same two reads every other page counts from. They are the one
+ * exception to the single-call rule, and they are listed here so the test
+ * below still fails the moment a third read creeps in.
+ */
+const FINISHED_STOCK_READS = ["/api/v1/jar-sizes", "/api/v1/stock-locations/inventory"];
+
 /** The reads that are neither the shell's nor the navigation chrome's. */
 function dataReads(reads: string[]): string[] {
   return reads.filter(
@@ -337,16 +375,22 @@ function dataReads(reads: string[]): string[] {
   );
 }
 
-test("the production workbench is assembled from exactly one call", async ({
+test("the production workbench is assembled from one call plus the finished-stock reads", async ({
   page,
 }) => {
   const reads: string[] = [];
   await mockApp(page, { reads });
   await page.goto("/production/workbench");
   await expect(page.getByTestId("workbench-panel")).toHaveCount(4);
+  await expect(page.locator('[data-panel-key="jar-stock"]')).toContainText("jars at home");
 
   // Not "one call per widget, four widgets": one read model, four panels.
-  expect(dataReads(reads)).toEqual(["/api/v1/production/workbench"]);
+  expect(
+    dataReads(reads).filter((path) => !FINISHED_STOCK_READS.includes(path)),
+  ).toEqual(["/api/v1/production/workbench"]);
+  expect([...new Set(dataReads(reads))].sort()).toEqual(
+    ["/api/v1/production/workbench", ...FINISHED_STOCK_READS].sort(),
+  );
 });
 
 test("the sales workbench is assembled from exactly one call", async ({
@@ -399,11 +443,13 @@ test("production follows the journey in order, hive to finished stock", async ({
   await expect(page.getByTestId("workbench-session-finalized")).toHaveCount(0);
 
   // Finished stock is a link to Stock › On hand, not a repeat of the per-size
-  // numbers; the only number drawn is the total, and the shortfall is named
-  // as a target, not a "par".
+  // numbers; the only numbers drawn are what is at home (and away), and the
+  // shortfall is named as a target, not a "par". The count is the ledger's
+  // home split (28 + 4), not the workbench's every-location `jarStock`.
   const finished = page.locator('[data-panel-key="jar-stock"]');
   await expect(finished.getByTestId("workbench-row")).toHaveCount(1);
-  await expect(finished).toContainText("32 jars available in 2 sizes");
+  await expect(finished).toContainText("32 jars at home in 2 sizes · 6 at shops");
+  await expect(finished).not.toContainText("38 jars");
   await expect(finished.getByRole("link", { name: "Finished stock on hand" })).toHaveAttribute(
     "href",
     "/stock?tab=finished",
@@ -448,16 +494,29 @@ test("a trued-up session is finalized, not in progress", async ({ page }) => {
       // Trued up: the server treats the extracted weight as final and
       // refuses further entries, but the session is not closed yet.
       body.openSessions[0].trueUpDifferenceLbs = 2.5 as unknown as null;
-      // And a size with nothing on hand and no lot behind it: not drawn.
-      body.jarStock.push({
-        jarSizeId: "2-oz",
-        label: "2 oz",
-        onHand: 0,
-        reserved: 0,
-        available: 0,
-        parLevel: 6,
-      });
       return route.fulfill({ json: body });
+    }
+    // The finished-stock reads: an inactive size with nothing anywhere (2 oz)
+    // is not drawn and is never below target.
+    if (path.endsWith("/stock-locations/inventory")) {
+      return route.fulfill({
+        json: {
+          locations: [{ id: "home", name: "Home", slug: "home", isHome: true, isConsignment: false }],
+          items: [
+            { jarSizeId: JAR_16, productId: null, label: "16 oz", kind: "jar", unitPrice: 12, total: 28, byLocation: { home: 28 }, lots: [] },
+            { jarSizeId: "9-oz", productId: null, label: "9 oz", kind: "jar", unitPrice: 8, total: 4, byLocation: { home: 4 }, lots: [] },
+          ],
+        },
+      });
+    }
+    if (path.endsWith("/jar-sizes")) {
+      return route.fulfill({
+        json: [
+          { id: JAR_16, label: "16 oz", honeyOz: 16, defaultPrice: 12, sortOrder: 1, isActive: true, lowStockThreshold: 24, packagingTypeId: null, packagingTypeName: null },
+          { id: "9-oz", label: "9 oz", honeyOz: 9, defaultPrice: 8, sortOrder: 2, isActive: true, lowStockThreshold: 24, packagingTypeId: null, packagingTypeName: null },
+          { id: "2-oz", label: "2 oz", honeyOz: 2, defaultPrice: 4, sortOrder: 3, isActive: false, lowStockThreshold: 6, packagingTypeId: null, packagingTypeName: null },
+        ],
+      });
     }
     return route.fulfill({ json: [] });
   });

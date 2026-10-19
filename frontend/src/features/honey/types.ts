@@ -40,7 +40,10 @@ export type TimelineKind =
   | "bulk_use"
   | "loss"
   | "give_away"
-  | "jar_adjustment";
+  | "jar_adjustment"
+  | "receipt"
+  /** A location-to-location move: the ledger's raw kind, not a registered activity type. */
+  | "transfer";
 
 export interface TimelineEntry {
   id: string;
