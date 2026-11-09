@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -40,7 +41,10 @@ func TestForecastWarmthShift(t *testing.T) {
 
 func TestWeatherAlertsIncludeFeederWarning(t *testing.T) {
 	var forecast weatherForecast
-	forecast.Daily.Time = []string{"2026-11-01"}
+	// weatherAlerts skips days before today, so a fixed date rots into a
+	// failure once it passes. Use tomorrow in the forecast's own zone.
+	tomorrow := time.Now().In(weatherLocation(forecast)).AddDate(0, 0, 1)
+	forecast.Daily.Time = []string{tomorrow.Format("2006-01-02")}
 	forecast.Daily.TemperatureMin = []float64{29}
 	forecast.Daily.WindSpeedMax = []float64{10}
 	alerts := weatherAlerts(forecast, feedingStatus{})
