@@ -3,13 +3,39 @@
 import { cn } from "@/lib/utils";
 import { useBrand } from "@/components/brand-provider";
 
+/*
+ * Comb Bee geometry: a bee assembled from honeycomb cells on one flat-top hex
+ * grid with an even gap between neighbours — four wing cells, then a body
+ * column of head, thorax, honey band, and tail. Corners are softened by a
+ * same-colour round-join stroke. Frozen from `node scripts/brand-icons.mjs
+ * print`; the same script renders the PNG icon set in /public/icons,
+ * /public/apple-touch-icon.png and app/favicon.ico from these points.
+ */
+const COMB_WINGS = [
+  "18.45,9.57 15.3,15.04 8.99,15.04 5.83,9.57 8.99,4.11 15.3,4.11",
+  "42.17,9.57 39.01,15.04 32.7,15.04 29.55,9.57 32.7,4.11 39.01,4.11",
+  "17.92,22.35 15.83,25.97 11.64,25.97 9.55,22.35 11.64,18.72 15.83,18.72",
+  "38.45,22.35 36.36,25.97 32.17,25.97 30.08,22.35 32.17,18.72 36.36,18.72",
+];
+const COMB_BODY = [
+  "27.48,5.18 25.74,8.19 22.26,8.19 20.52,5.18 22.26,2.16 25.74,2.16",
+  "30.31,16.42 27.16,21.88 20.84,21.88 17.69,16.42 20.84,10.95 27.16,10.95",
+  "28.33,42.09 26.17,45.84 21.83,45.84 19.67,42.09 21.83,38.34 26.17,38.34",
+];
+const COMB_BAND =
+  "30.31,30.11 27.16,35.58 20.84,35.58 17.69,30.11 20.84,24.64 27.16,24.64";
+
+// Pale honey for the wings: the primary lifted toward white, so it stays a
+// lighter tint of the action color in both light and dark mode.
+const WING_FILL = "color-mix(in oklch, var(--color-primary) 60%, white)";
+
 /**
- * The built-in Apiary Atlas mark: honeycomb hexagon with a bee-stripe core.
+ * The built-in Apiary Atlas mark: the Comb Bee.
  *
  * This is the fallback whenever a deployment supplies only a name. It is drawn
- * from theme tokens (`--color-primary`, `--color-background`,
- * `--color-foreground`) rather than fixed hex values, so it keeps its contrast
- * in both light and dark mode. Brand colors never reach it.
+ * from theme tokens (`--color-primary`, `--color-foreground`) rather than
+ * fixed hex values, so it keeps its contrast in both light and dark mode.
+ * Brand colors never reach it.
  */
 export function FallbackMark({
   className,
@@ -29,18 +55,23 @@ export function FallbackMark({
       // both an assistive-tech and a test-visibility hazard.
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true as const })}
     >
-      <path
-        d="M24 3 L42 13.5 V34.5 L24 45 L6 34.5 V13.5 Z"
-        fill="var(--color-primary)"
-      />
-      <path
-        d="M24 10 L36 17 V31 L24 38 L12 31 V17 Z"
-        fill="var(--color-background)"
-        fillOpacity="0.92"
-      />
-      <ellipse cx="24" cy="24" rx="7.5" ry="9.5" fill="var(--color-primary)" />
-      <rect x="16.5" y="19.5" width="15" height="2.8" rx="1.4" fill="var(--color-foreground)" opacity="0.75" />
-      <rect x="16.8" y="25.2" width="14.4" height="2.8" rx="1.4" fill="var(--color-foreground)" opacity="0.75" />
+      <g strokeWidth="1.53" strokeLinejoin="round">
+        <g style={{ fill: WING_FILL, stroke: WING_FILL }}>
+          {COMB_WINGS.map((points) => (
+            <polygon key={points} points={points} />
+          ))}
+        </g>
+        <g fill="var(--color-foreground)" stroke="var(--color-foreground)">
+          {COMB_BODY.map((points) => (
+            <polygon key={points} points={points} />
+          ))}
+        </g>
+        <polygon
+          points={COMB_BAND}
+          fill="var(--color-primary)"
+          stroke="var(--color-primary)"
+        />
+      </g>
     </svg>
   );
 }
