@@ -17,7 +17,6 @@ import { Droplets } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 import { useSearchParamState } from "@/lib/url-state";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import { Button } from "@/components/ui/button";
@@ -37,10 +36,11 @@ import { HivePhotoStrip } from "@/features/photos/hive-strip";
 import { HiveTimeline } from "@/features/operations/hive-timeline";
 import type { HiveTimelineEntry } from "@/features/operations/hooks";
 import { VarroaPanel } from "@/features/operations/varroa-panel";
+import { FilterChips } from "./filter-chips";
 import { FeedingsGrid, SplitsGrid } from "./hive-record-grids";
 import { HiveOverviewTab } from "./overview-tab";
 import { useHive, useHiveLocationHistory, useHiveSplits } from "./hooks";
-import { formatDate } from "./lib";
+import { formatDate, hiveReadOnly } from "./lib";
 import { NoteText } from "@/components/record/source-note";
 
 export const HIVE_TABS = ["overview", "timeline", "health"] as const;
@@ -49,7 +49,8 @@ export type HiveTab = (typeof HIVE_TABS)[number];
 /**
  * Timeline filter chips. `types` filters the merged timeline; the four chips
  * that replaced whole tabs render the richer list instead so their per-row
- * actions (edit an inspection, mark a feeder empty) survive.
+ * actions (edit an inspection, mark a feeder empty) survive. The first four
+ * are drawn; the rest sit behind "More" (`FilterChips`).
  */
 const TIMELINE_FILTERS: {
   value: string;
@@ -58,9 +59,9 @@ const TIMELINE_FILTERS: {
 }[] = [
   { value: "all", label: "All" },
   { value: "inspections", label: "Inspections" },
-  { value: "feedings", label: "Feedings" },
   { value: "treatments", label: "Treatments", types: ["treatment"] },
   { value: "mites", label: "Mite counts", types: ["mite_count"] },
+  { value: "feedings", label: "Feedings" },
   { value: "queen", label: "Queen events", types: ["queen_event"] },
   { value: "harvests", label: "Harvests", types: ["harvest"] },
   { value: "splits", label: "Splits" },
@@ -84,8 +85,11 @@ export function HiveDetailPage({
   const router = useRouter();
   const hive = useHive(hiveId);
   const access = useAccessProfile();
+  // A sold, dead, combined or archived hive is read-only (DESIGN.md, Wave
+  // 6): its rows lose Edit, Delete and every other write, whatever the role.
   const canEdit =
     hive.data != null &&
+    !hiveReadOnly(hive.data) &&
     ["admin", "editor"].includes(
       apiaryRole(access.data, hive.data.apiaryId) ?? "",
     );
@@ -110,35 +114,12 @@ export function HiveDetailPage({
       )}
       {section === "timeline" && (
         <section className="flex min-w-0 flex-col gap-4">
-          <div className="relative min-w-0">
-            <div
-              className="-my-1 flex snap-x gap-1.5 overflow-x-auto py-1 md:flex-wrap"
-              role="group"
-              aria-label="Filter the timeline"
-            >
-              {TIMELINE_FILTERS.map((entry) => (
-                <button
-                  key={entry.value}
-                  type="button"
-                  aria-pressed={entry.value === activeFilter.value}
-                  onClick={() => setFilter(entry.value)}
-                  className={cn(
-                    "shrink-0 snap-start rounded-full border px-3 py-1 text-sm font-medium transition-colors",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    entry.value === activeFilter.value
-                      ? "border-primary bg-primary/12 text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {entry.label}
-                </button>
-              ))}
-            </div>
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-background to-transparent md:hidden"
-            />
-          </div>
+          <FilterChips
+            label="Filter the timeline"
+            options={TIMELINE_FILTERS}
+            active={[activeFilter.value]}
+            onSelect={setFilter}
+          />
           {activeFilter.value === "inspections" ? (
             <InspectionsList hiveId={data.id} canEdit={canEdit} />
           ) : activeFilter.value === "feedings" ? (

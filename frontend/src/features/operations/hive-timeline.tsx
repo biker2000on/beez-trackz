@@ -6,15 +6,19 @@ import {
   Droplets,
   FlaskConical,
   MapPin,
+  RefreshCw,
   Scissors,
   Sprout,
   Stethoscope,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { eventTitle } from "@/features/apiaries/activity-types";
 import { formatDate } from "@/features/hives/lib";
+import { cn } from "@/lib/utils";
 import { useHiveTimeline, type HiveTimelineEntry } from "./hooks";
 import { NoteText } from "@/components/record/source-note";
 
@@ -40,7 +44,31 @@ export function HiveTimeline({
   const timeline = useHiveTimeline(hiveId);
   if (timeline.isPending) return <Skeleton className="h-64 w-full" />;
   if (timeline.isError) {
-    return <p className="text-sm text-muted-foreground">Could not load hive history.</p>;
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed p-4"
+      >
+        <p className="text-sm text-muted-foreground">
+          Could not load this hive’s history. Check your connection and retry.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void timeline.refetch()}
+          disabled={timeline.isFetching}
+        >
+          <RefreshCw
+            className={cn(
+              "size-4",
+              timeline.isFetching && "animate-spin motion-reduce:animate-none",
+            )}
+            aria-hidden
+          />
+          {timeline.isFetching ? "Retrying…" : "Retry"}
+        </Button>
+      </div>
+    );
   }
   const entries =
     types == null
@@ -66,7 +94,8 @@ export function HiveTimeline({
             </span>
             <Card>
               <CardHeader className="flex-row items-start justify-between gap-3 space-y-0 pb-2">
-                <CardTitle className="text-sm">{entry.title}</CardTitle>
+                {/* Queen events read as words ("Supersedure"), not "Queen superseded". */}
+                <CardTitle className="text-sm">{eventTitle(entry)}</CardTitle>
                 <Badge variant="outline">{formatDate(entry.date)}</Badge>
               </CardHeader>
               <CardContent className="grid gap-3">
@@ -82,7 +111,7 @@ export function HiveTimeline({
                       <img
                         key={photo.id}
                         src={photo.url}
-                        alt={photo.caption ?? `${entry.title} photo`}
+                        alt={photo.caption ?? `${eventTitle(entry)} photo`}
                         className="aspect-[4/3] w-full rounded-md border object-cover"
                         loading="lazy"
                       />

@@ -20,6 +20,7 @@ import {
   MapPin,
   Mic,
   Pencil,
+  Plus,
   RotateCcw,
   Skull,
   Split,
@@ -27,6 +28,7 @@ import {
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { hiveDisplayLabel, isActiveHive } from "@/lib/hive-label";
 import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import {
   AlertDialog,
@@ -60,28 +62,31 @@ import { FeedingDialog } from "@/features/feedings/feeding-dialog";
 import { InspectionFormDialog } from "@/features/inspections/inspection-form-dialog";
 import { PhotoUpload } from "@/features/photos/photo-upload";
 import { HiveStatusBadge } from "./hive-card";
-import { HiveFormDialog } from "./hive-form-dialog";
+import { HiveFormDialog, type HivePrefill } from "./hive-form-dialog";
 import {
   useArchiveHive,
   useHive,
+  useHives,
   useUnarchiveHive,
   useUpdateHive,
   type Hive,
 } from "./hooks";
 import { DeadoutAutopsyDialog } from "./deadout-autopsy-dialog";
-import { formatDate, HIVE_STATUS_LABELS, type HiveStatus } from "./lib";
+import {
+  formatDate,
+  hiveReadOnly,
+  HIVE_STATUS_LABELS,
+  todayInput,
+  type HiveStatus,
+} from "./lib";
 
-/**
- * A sold, dead, combined or archived hive is history: nothing is inspected
- * or fed any more, so the field actions leave the bar and the one thing left
- * to do — bring it back — is the primary.
- */
-function hiveReadOnly(hive: Hive): boolean {
-  return hive.isArchived || hive.status !== "active";
-}
+// A sold, dead, combined or archived hive is history (`hiveReadOnly`):
+// nothing is inspected or fed any more, so the field actions leave the bar
+// and the one thing left to do — bring it back — is the primary, behind a
+// confirmation that offers the likelier intent: a new hive at the label.
 
-/** "Dead Apr 24, 2026 · records are read-only" — the header's one-line notice. */
-function readOnlyNotice(hive: Hive): string {
+/** "Dead Apr 24, 2026" — what the hive is now, with its date when known. */
+function statusLine(hive: Hive): string {
   const word =
     hive.isArchived && hive.status === "active"
       ? "Archived"
@@ -90,7 +95,12 @@ function readOnlyNotice(hive: Hive): string {
     hive.status === "dead" && hive.deadoutDate
       ? ` ${formatDate(hive.deadoutDate)}`
       : "";
-  return `${word}${date} · records are read-only`;
+  return `${word}${date}`;
+}
+
+/** "Dead Apr 24, 2026 · records are read-only" — the header's one-line notice. */
+function readOnlyNotice(hive: Hive): string {
+  return `${statusLine(hive)} · records are read-only`;
 }
 import { SplitDialog } from "./split-dialog";
 
@@ -120,11 +130,41 @@ export function HiveRecordLayout({
   const [splitOpen, setSplitOpen] = React.useState(false);
   const [archiveOpen, setArchiveOpen] = React.useState(false);
   const [deadoutOpen, setDeadoutOpen] = React.useState(false);
+  const [reactivateOpen, setReactivateOpen] = React.useState(false);
+  const [successorOpen, setSuccessorOpen] = React.useState(false);
 
   const archiveHive = useArchiveHive();
   const unarchiveHive = useUnarchiveHive();
   const updateHive = useUpdateHive(hiveId);
   const readOnly = hive.data != null && hiveReadOnly(hive.data);
+  // The apiary's hives at this label: is another one already the active
+  // hive there? (Reactivating would then make two active "A4"s.)
+  const siblings = useHives(
+    { apiaryId: hive.data?.apiaryId, includeArchived: true },
+    readOnly && canEdit,
+  );
+  const activeTwin =
+    hive.data == null
+      ? undefined
+      : siblings.data?.find(
+          (other) =>
+            other.id !== hive.data!.id &&
+            other.positionLabel === hive.data!.positionLabel &&
+            isActiveHive(other),
+        );
+  // Memoized: the form resets whenever its prefill changes identity.
+  const successorPrefill = React.useMemo<HivePrefill | undefined>(
+    () =>
+      hive.data
+        ? {
+            apiaryId: hive.data.apiaryId,
+            positionLabel: hive.data.positionLabel,
+            placement: hive.data.placement,
+            installedDate: todayInput(),
+          }
+        : undefined,
+    [hive.data],
+  );
 
   // Every one of these writes; a viewer gets none of them registered, so the
   // `?` dialog and the command palette stop offering actions that do nothing.
@@ -237,9 +277,7 @@ export function HiveRecordLayout({
           !canEdit ? undefined : readOnly ? (
             <Button
               disabled={reactivating}
-              onClick={() =>
-                void run(reactivate, `${data.positionLabel} is active again`)
-              }
+              onClick={() => setReactivateOpen(true)}
             >
               <RotateCcw className="size-4" />
               {reactivating ? "Reactivating…" : "Reactivate"}
@@ -375,6 +413,67 @@ export function HiveRecordLayout({
           />
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={reactivateOpen} onOpenChange={setReactivateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reactivate {data.positionLabel}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {statusLine(data)}. Reactivating makes this record the live hive
+              at {data.positionLabel} again, so new inspections and feedings
+              land on it. If a new colony now lives in that spot, start a new
+              hive instead and keep this one as history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {activeTwin ? (
+            <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
+              {hiveDisplayLabel(activeTwin, siblings.data ?? [])} is already the
+              active hive at this spot. Reactivating would give the apiary two
+              active {data.positionLabel} hives.
+            </p>
+          ) : null}
+          <AlertDialogFooter className="gap-2 sm:gap-2">
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            {activeTwin ? (
+              <Button asChild variant="outline">
+                <Link href={`/yard/hives/${activeTwin.id}`}>
+                  Open {hiveDisplayLabel(activeTwin, siblings.data ?? [])}
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setReactivateOpen(false);
+                  setSuccessorOpen(true);
+                }}
+              >
+                <Plus className="size-4" />
+                Start a new hive at {data.positionLabel}
+              </Button>
+            )}
+            <AlertDialogAction
+              disabled={reactivating}
+              onClick={(event) => {
+                event.preventDefault();
+                void run(async () => {
+                  await reactivate();
+                  setReactivateOpen(false);
+                }, `${data.positionLabel} is active again`);
+              }}
+            >
+              {reactivating ? "Reactivating…" : `Reactivate ${data.positionLabel}`}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <HiveFormDialog
+        open={successorOpen}
+        onOpenChange={setSuccessorOpen}
+        prefill={successorPrefill}
+        onCreated={(created) => router.push(`/yard/hives/${created.id}`)}
+      />
 
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>
         <AlertDialogContent>

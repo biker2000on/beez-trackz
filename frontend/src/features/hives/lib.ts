@@ -22,6 +22,14 @@ export const HIVE_STATUS_BADGE: Record<HiveStatus, string> = {
   combined: "border-transparent bg-primary/15 text-primary",
 };
 
+/**
+ * A sold, dead, combined or archived hive is history: nothing is inspected,
+ * fed or edited any more, so its record and its rows are read-only.
+ */
+export function hiveReadOnly(hive: { status: string; isArchived: boolean }): boolean {
+  return hive.isArchived || hive.status !== "active";
+}
+
 export const PLACEMENTS = ["full", "top", "bottom", "left", "right"] as const;
 
 export const PLACEMENT_LABELS: Record<(typeof PLACEMENTS)[number], string> = {
