@@ -72,6 +72,9 @@ export interface ParsedInspection {
   storesHoney?: number | null;
   storesPollen?: number | null;
   temperament?: number | null;
+  framesOfBees?: number | null;
+  framesOfBrood?: number | null;
+  framesOfStores?: number | null;
   pests?: Pest[] | null;
   treatments?: Treatment[] | null;
   feedings?: Feeding[] | null;
@@ -194,6 +197,9 @@ export interface HiveSummary {
   positionLabel: string;
   status: string;
   isArchived: boolean;
+  /** Used to tell apart hives that share a reused label. */
+  installedDate: string | null;
+  deadoutDate: string | null;
 }
 
 /** Subset of the apiary list response used by this feature. */
@@ -348,8 +354,12 @@ export function listApiaryInspections(apiaryId: string): Promise<ApiaryInspectio
   return api.get("/apiary-inspections", { params: { apiaryId } });
 }
 
+/**
+ * Every hive, retired ones included: pickers offer only active hives, but the
+ * retired ones are needed to label a reused position ("A4 · since May 2026").
+ */
 export function listHives(): Promise<HiveSummary[]> {
-  return api.get<HiveSummary[]>("/hives");
+  return api.get<HiveSummary[]>("/hives", { params: { includeArchived: "true" } });
 }
 
 export function getHive(id: string): Promise<HiveSummary> {
