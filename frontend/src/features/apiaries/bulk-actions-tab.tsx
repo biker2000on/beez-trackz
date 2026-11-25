@@ -292,7 +292,7 @@ export function BulkActionsTab({ apiaryId }: { apiaryId: string }) {
             <label
               key={option.value}
               className={cn(
-                "flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-sm font-medium transition-colors",
+                "relative flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-sm font-medium transition-colors",
                 "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background",
                 kind === option.value
                   ? "border-primary bg-primary text-primary-foreground"
@@ -302,7 +302,7 @@ export function BulkActionsTab({ apiaryId }: { apiaryId: string }) {
               <input
                 type="radio"
                 name="bulk-kind"
-                className="sr-only"
+                className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
                 value={option.value}
                 checked={kind === option.value}
                 onChange={() => setKind(option.value)}

@@ -35,9 +35,9 @@ test("Bulk treatment series saves one record per hive per date and ends one-shot
   await page.getByRole("button", { name: "Choose all 2" }).click();
   await page.getByRole("radio", { name: "Treatment" }).check();
   await page.getByLabel("Product").fill("Oxalic acid");
-  await page.getByLabel("Date 1").fill("2026-11-01");
+  await page.getByLabel("Date 1", { exact: true }).fill("2026-11-01");
   await page.getByRole("button", { name: "Add the next date" }).click();
-  await expect(page.getByLabel("Date 2")).toHaveValue("2026-11-06");
+  await expect(page.getByLabel("Date 2", { exact: true })).toHaveValue("2026-11-06");
   await expect(page.getByRole("checkbox", { name: /ends the same day/ })).toBeChecked();
   await page.getByRole("button", { name: "Save 4 treatment records" }).click();
   await expect.poll(() => posts.length).toBe(4);

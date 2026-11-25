@@ -357,7 +357,7 @@ function Segmented<T extends string>({
           <label
             key={option.value}
             className={cn(
-              "flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-center text-sm font-medium transition-colors",
+              "relative flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-center text-sm font-medium transition-colors",
               "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background",
               "has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50",
               value === option.value
@@ -367,7 +367,7 @@ function Segmented<T extends string>({
           >
             <input
               type="radio"
-              className="sr-only"
+              className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
               name={name}
               value={option.value}
               checked={value === option.value}
