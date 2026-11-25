@@ -204,6 +204,13 @@ func (s *Server) honeyCreateHarvest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	if msg, err := refuseHarvestBeforeInstall(r.Context(), s.pool, hiveID, date); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	if msg, err := refuseHiveHarvest(r.Context(), s.pool, hiveID, date); err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
