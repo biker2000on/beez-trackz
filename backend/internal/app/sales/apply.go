@@ -291,6 +291,28 @@ func (s *Service) colonyGear(
 }
 
 func (s *Service) markHiveSold(ctx context.Context, uow *app.UnitOfWork, hiveID, saleID uuid.UUID) error {
+	// A reused label must not hand a successor colony its predecessor's sale:
+	// refuse a hive installed after the sale date (see colonySaleDateRefusal).
+	var (
+		label     string
+		installed *time.Time
+		saleDate  time.Time
+	)
+	err := uow.QueryRow(ctx, `
+		SELECT h.position_label, h.installed_date, s.date
+		FROM hives h CROSS JOIN sales s
+		WHERE h.id=$1 AND s.id=$2`, hiveID, saleID).Scan(&label, &installed, &saleDate)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// No such hive or sale: the update below reports it.
+	case err != nil:
+		return app.Wrap(app.KindInternal, "mark hive sold", err)
+	default:
+		if refusal := colonySaleDateRefusal(label, installed, saleDate); refusal != nil {
+			return refusal
+		}
+	}
+
 	tag, err := uow.Exec(ctx, `
 		UPDATE hives SET status='sold', sale_id=$2
 		WHERE id=$1 AND status NOT IN ('sold','dead','combined')`, hiveID, saleID)
