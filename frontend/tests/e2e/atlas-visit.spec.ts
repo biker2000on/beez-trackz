@@ -15,21 +15,21 @@ async function mockVisit(page:Page, queued=false) {
 test("Manual hive inspection preserves unknown queen through reload and saves at 320px",async({page})=>{
  await page.setViewportSize({width:320,height:844});const submitted=await mockVisit(page);
  await page.goto("/yard/apiaries/a1/visit?hive=h1");await page.getByRole("button",{name:"Type instead"}).click();
- await page.getByLabel("Notes",{exact:true}).fill("Brood looks good");
- await expect(page.getByLabel("Queen observation",{exact:true})).toContainText("Not mentioned / not checked");
+ await page.getByLabel("Note",{exact:true}).fill("Brood looks good");
+ await expect(page.getByRole("radio",{name:"Not checked"})).toBeChecked();
  await page.reload();await page.getByRole("button",{name:"Open draft",exact:true}).click();
- await expect(page.getByLabel("Notes",{exact:true})).toHaveValue("Brood looks good");
+ await expect(page.getByLabel("Note",{exact:true})).toHaveValue("Brood looks good");
  await page.getByRole("button",{name:"Confirm inspection",exact:true}).click();
  await expect(page.getByRole("heading",{name:"Saved to Hive 1"})).toBeVisible();
  expect(submitted).toHaveLength(1);expect((submitted[0].inspection as {queenSeen:unknown}).queenSeen).toBeNull();
  expect(submitted[0].hiveId).toBe("h1");expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
 });
 test("Queued manual observation is not a saved server receipt",async({page})=>{
- await mockVisit(page,true);await page.goto("/yard/apiaries/a1/visit");await page.getByRole("button",{name:"Type instead"}).click();
+ await mockVisit(page,true);await page.goto("/yard/apiaries/a1/visit?scope=apiary");await page.getByRole("button",{name:"Type instead"}).click();
  await page.getByLabel("Apiary notes").fill("Water source is dry");await page.getByRole("button",{name:"Confirm inspection",exact:true}).click();
- await expect(page.getByText("Queued on this device. Waiting for a server receipt.")).toBeVisible();
+ await expect(page.getByText("Saved on this device. It uploads when you're back online.").first()).toBeVisible();
  await expect(page.getByRole("heading",{name:/Saved to/})).toHaveCount(0);
- await page.reload();await page.getByRole("button",{name:"Open draft",exact:true}).click();await expect(page.getByRole("button",{name:"Check / retry confirmation"})).toBeVisible();
+ await page.reload();await page.getByRole("button",{name:"Open draft",exact:true}).click();await expect(page.getByRole("button",{name:"Check again"})).toBeVisible();
 });
 test("Uploaded walkthrough keeps failed hive pending while preserving saved hive receipt",async({page})=>{
  await mockVisit(page);let attempts=0;
@@ -37,10 +37,11 @@ test("Uploaded walkthrough keeps failed hive pending while preserving saved hive
  await page.goto("/yard/apiaries/a1/visit?scope=batch");
  await page.evaluate(async()=>{await new Promise<void>((resolve,reject)=>{const open=indexedDB.open("atlas-voice-captures",1);open.onupgradeneeded=()=>open.result.createObjectStore("captures",{keyPath:["userId","captureId"]});open.onerror=()=>reject(open.error);open.onsuccess=()=>{const tx=open.result.transaction("captures","readwrite");tx.objectStore("captures").put({userId:"user-visit",captureId:"capture-batch",ownerType:"apiary",ownerId:"a1",mode:"batch",observedAt:"2026-09-11T10:00:00Z",updatedAt:"2026-09-11T10:00:00Z",timeZone:"America/New_York",state:"review",mediaFileId:"media-1",versionId:"version-1",drafts:[{itemKey:"hive-1",scope:"hive",hiveId:"h1",fields:{queenSeen:null,notes:"First hive"}},{itemKey:"hive-2",scope:"hive",hiveId:"h2",fields:{queenSeen:true,notes:"Second hive"}}]});tx.oncomplete=()=>{open.result.close();resolve();};};});});
  await page.reload();await page.getByRole("button",{name:"Open draft",exact:true}).click();
- await page.getByRole("button",{name:"Confirm inspection",exact:true}).first().click();await expect(page.getByRole("heading",{name:"Saved to Hive 1"})).toBeVisible();
- await page.getByRole("button",{name:"Confirm inspection",exact:true}).click();await expect(page.getByRole("alert").filter({hasText:"Equipment stock is unavailable"})).toBeVisible();
- await expect(page.getByRole("heading",{name:"Saved to Hive 1"})).toBeVisible();await expect(page.getByRole("heading",{name:"Saved to Hive 2"})).toHaveCount(0);
- await page.reload();await page.getByRole("button",{name:"Open draft",exact:true}).click();await expect(page.getByRole("heading",{name:"Saved to Hive 1"})).toBeVisible();expect(attempts).toBe(2);
+ await page.getByRole("button",{name:"Confirm 2 matched"}).click();await expect(page.getByText("1 of 2 saved")).toBeVisible();
+ await expect(page.getByRole("listitem",{name:/^Hive 1, Saved/})).toBeVisible();await expect(page.getByRole("listitem",{name:/^Hive 2, Not saved/})).toBeVisible();
+ await page.getByRole("button",{name:/Second hive/}).click();await expect(page.getByRole("alert").filter({hasText:"Equipment stock is unavailable"})).toBeVisible();
+ await page.reload();await page.getByRole("button",{name:"Open draft",exact:true}).click();await expect(page.getByRole("listitem",{name:/^Hive 1, Saved/})).toBeVisible();
+ await expect(page.getByRole("listitem",{name:/^Hive 2, Saved/})).toHaveCount(0);expect(attempts).toBe(2);
 });
 
 test("Stopping microphone persists audio before upload and carries capture context into confirmation",async({page})=>{
@@ -56,7 +57,7 @@ test("Stopping microphone persists audio before upload and carries capture conte
  });
  await page.route("**/api/v1/transcriptions/uploaded-audio?*",route=>route.fulfill({json:{id:"uploaded-audio",status:"complete",currentVersionId:"version-audio",transcriptionText:"The water is dry",parsed:{inspections:[{itemKey:"apiary-item",scope:"apiary",notes:"The water is dry"}]}}}));
  await page.route("**/api/v1/transcriptions/uploaded-audio/confirm",route=>{confirmed=true;return route.fulfill({json:{success:true,outcomes:[{itemKey:"apiary-item",status:"saved",apiaryInspectionIds:["a-inspection"]}]}});});
- await page.goto("/yard/apiaries/a1/visit");await page.getByRole("button",{name:"Record apiary",exact:true}).click();await page.getByRole("button",{name:"Stop & review"}).click();
+ await page.goto("/yard/apiaries/a1/visit?scope=apiary");await page.getByRole("button",{name:"Record apiary",exact:true}).click();await page.getByRole("button",{name:"Stop & review"}).click();
  await expect(page.getByLabel("Apiary notes")).toHaveValue("The water is dry");expect(audioDurable).toBe(true);
  for(const field of ["captureId","observedAt","timeZone","mode","ownerId"])expect(uploadBody).toContain(`name="${field}"`);
  expect(uploadBody).toContain("apiary");expect(uploadBody).toContain("a1");expect(confirmed).toBe(false);
@@ -96,7 +97,7 @@ for (const mode of ["single", "apiary", "batch"] as const) {
   await page.route("**/api/v1/transcriptions",route=>{uploads++;body=route.request().postDataBuffer()?.toString()??"";return route.fulfill({json:{mediaFileId:"android-upload"}});});
   await page.route("**/api/v1/transcriptions/android-upload?*",route=>route.fulfill({json:{id:"android-upload",status:"complete",currentVersionId:"v1",parsed:{inspections:[{itemKey:"file-item",scope:mode==="apiary"?"apiary":"hive",matchedHiveId:mode==="apiary"?null:"h1",notes:"Recorder file observation",queenSeen:null}]}}}));
   await page.route("**/api/v1/transcriptions/android-upload/confirm",route=>route.fulfill({json:{success:true,outcomes:[{itemKey:"file-item",status:"saved"}]}}));
-  await page.goto(`/yard/apiaries/a1/visit${mode==="single"?"?hive=h1":mode==="batch"?"?scope=batch":""}`);
+  await page.goto(`/yard/apiaries/a1/visit${mode==="single"?"?hive=h1":`?scope=${mode}`}`);
   const picker=page.waitForEvent("filechooser");await page.getByRole("button",{name:"Upload recording",exact:true}).click();
   await (await picker).setFiles({name:"Orchard inspection.m4a",mimeType:"",buffer:Buffer.from("android-m4a-fixture")});
   await expect(page.getByText("Orchard inspection.m4a",{exact:true})).toBeVisible();
@@ -106,11 +107,13 @@ for (const mode of ["single", "apiary", "batch"] as const) {
   // Reconnection must not submit the file before the operator has checked its time.
   await page.evaluate(()=>window.dispatchEvent(new Event("online")));expect(uploads).toBe(0);
   await page.getByRole("button",{name:"Upload & review",exact:true}).click();
-  await expect(page.getByRole("textbox",{name:mode==="apiary"?"Apiary notes":"Notes",exact:true})).toHaveValue("Recorder file observation");
+  if(mode==="batch")await expect(page.getByRole("listitem",{name:/^Hive 1, Matched\. Recorder file observation/})).toBeVisible();
+  else await expect(page.getByRole("textbox",{name:mode==="apiary"?"Apiary notes":"Note",exact:true})).toHaveValue("Recorder file observation");
   expect(uploads).toBe(1);expect(body).toContain('filename="Orchard inspection.m4a"');expect(body).toContain("Content-Type: audio/mp4");expect(body).toContain("2026-09-10T");
   expect(body).toMatch(new RegExp(`name="mode"\\r\\n\\r\\n${mode}\\r\\n`));expect(body).toContain(mode==="single"?"h1":"a1");
   await expect(page.getByRole("link",{name:"Download original recording"})).toHaveAttribute("download","Orchard inspection.m4a");
-  await page.getByRole("button",{name:"Confirm inspection",exact:true}).click();await expect(page.getByRole("heading",{name:mode==="apiary"?"Saved to apiary history":"Saved to Hive 1"})).toBeVisible();
+  if(mode==="batch"){await page.getByRole("button",{name:"Confirm 1 matched"}).click();await expect(page.getByRole("heading",{name:"Visit recorded"})).toBeVisible();}
+  else{await page.getByRole("button",{name:"Confirm inspection",exact:true}).click();await expect(page.getByRole("heading",{name:mode==="apiary"?"Saved to apiary history":"Saved to Hive 1"})).toBeVisible();}
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
  });
 }
@@ -139,5 +142,26 @@ test("Server outcomes reconcile a pending receipt using the saved target",async(
  await page.route("**/api/v1/transcriptions/reconcile-media?*",route=>route.fulfill({json:{id:"reconcile-media",status:"complete",outcomes:[{itemKey:"pending-item",status:"saved",scope:"hive",hiveId:"h2",inspectionIds:["server-inspection"],operationIds:[]}]}}));
  await page.route("**/api/v1/transcriptions/reconcile-media/confirm",route=>{confirms++;return route.fulfill({json:{success:false}});});
  await page.goto("/yard/apiaries/a1/visit");await seedCapture(page,{...recoveryCapture,mode:"batch",mediaFileId:"reconcile-media",drafts:[{itemKey:"pending-item",scope:"hive",hiveId:"h1",fields:{notes:"Original target unresolved",queenSeen:null},pending:{itemKey:"pending-item",hiveId:"h1"},queued:true}]});await page.goto("/yard/apiaries/a1/visit?capture=recovery-1");
- await expect(page.getByRole("heading",{name:"Saved to Hive 2"})).toBeVisible();await expect(page.getByRole("heading",{name:"Saved to Hive 1"})).toHaveCount(0);expect(confirms).toBe(0);await page.reload();await expect(page.getByRole("heading",{name:"Saved to Hive 2"})).toBeVisible();
+ await expect(page.getByRole("listitem",{name:/^Hive 2, Saved/})).toBeVisible();await expect(page.getByRole("listitem",{name:/^Hive 1,/})).toHaveCount(0);expect(confirms).toBe(0);await page.reload();await expect(page.getByRole("listitem",{name:/^Hive 2, Saved/})).toBeVisible();
+});
+test("Whole-apiary ledger confirms rows by keyboard and in bulk, then links to the day",async({page})=>{
+ await mockVisit(page);const confirmed:string[]=[];
+ await page.route("**/api/v1/transcriptions/ledger-media?*",route=>route.fulfill({json:{id:"ledger-media",status:"complete",currentVersionId:"v1"}}));
+ await page.route("**/api/v1/transcriptions/ledger-media/confirm",async route=>{const item=route.request().postDataJSON().inspections[0];confirmed.push(item.itemKey);return route.fulfill({json:{success:true,outcomes:[{itemKey:item.itemKey,status:"saved",inspectionIds:[`i-${item.itemKey}`]}]}});});
+ await page.goto("/yard/apiaries/a1/visit?scope=batch");
+ await seedCapture(page,{...recoveryCapture,captureId:"ledger-1",mode:"batch",mediaFileId:"ledger-media",versionId:"v1",drafts:[
+  {itemKey:"row-1",scope:"hive",hiveId:"h1",fields:{queenSeen:null,notes:"Lid popped, strong"}},
+  {itemKey:"row-2",scope:"hive",hiveId:"h2",fields:{queenSeen:true,notes:"Fed two gallons"}},
+  {itemKey:"row-3",scope:"hive",hiveId:"",fields:{queenSeen:null,hiveReference:"the fence hive",notes:"Quiet"}}]});
+ await page.goto("/yard/apiaries/a1/visit?capture=ledger-1");
+ await expect(page.getByText("1 needs a hive")).toBeVisible();
+ await expect(page.getByRole("button",{name:"Confirm 2 matched"})).toBeVisible();
+ await page.locator("body").press("j");await expect(page.getByRole("listitem",{name:/^Hive 1, Matched/})).toBeFocused();
+ await page.keyboard.press("Enter");await expect(page.getByRole("listitem",{name:/^Hive 1, Saved/})).toBeVisible();
+ await expect(page.getByRole("listitem",{name:/^Hive 2, Matched/})).toBeFocused();
+ await page.keyboard.press("Control+Enter");await expect(page.getByRole("listitem",{name:/^Hive 2, Saved/})).toBeVisible();
+ expect(confirmed).toEqual(["row-1","row-2"]);
+ await page.getByRole("button",{name:"Skip this entry"}).click();
+ await expect(page.getByRole("heading",{name:"Visit recorded"})).toBeVisible();await expect(page.getByText("2 saved · 1 skipped")).toBeVisible();
+ await expect(page.getByRole("link",{name:"Open Sep 11 on the timeline"})).toHaveAttribute("href","/yard/apiaries/a1/timeline?date=2026-09-11");
 });

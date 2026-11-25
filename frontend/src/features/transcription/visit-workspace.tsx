@@ -10,8 +10,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError, OfflineQueuedError } from "@/lib/api";
+import { activeHives, hiveDisplayLabel } from "@/lib/hive-label";
+import { cn } from "@/lib/utils";
 import { useAccessProfile } from "@/features/access/api";
-import ApiaryCanvas from "@/features/canvas";
+import {
+  HiveGridPicker,
+  hiveGridOrder,
+} from "@/features/inspections/hive-grid-picker";
 import { useAudioRecorder } from "./use-audio-recorder";
 import {
   confirmTranscription,
@@ -21,21 +26,42 @@ import {
   listHives,
   uploadTranscription,
   type ConfirmResult,
+  type HiveSummary,
   type TranscriptionMode,
 } from "./api";
 import {
+  captureStateFor,
   listCaptures,
   saveCapture,
   type LocalCapture,
   type ReviewDraft,
 } from "./capture-store";
 import { VisitReview } from "./visit-review";
+import {
+  isConfirmable,
+  rowStatus,
+  VisitLedger,
+  type LedgerRun,
+} from "./visit-ledger";
+import { TranscriptionProgress } from "./transcription-progress";
 import { AUDIO_FILE_ACCEPT, prepareAudioFile } from "./audio-upload";
 
 const message = (error: unknown) =>
   error instanceof Error
     ? error.message
     : "Something went wrong. Your draft is still here.";
+
+type ConfirmOutcome = {
+  outcome: "saved" | "queued" | "failed" | "stopped";
+  error?: string;
+};
+
+const MODES: { value: TranscriptionMode; label: string }[] = [
+  { value: "batch", label: "Whole apiary" },
+  { value: "single", label: "One hive" },
+  { value: "apiary", label: "Apiary notes" },
+];
+
 const localDate = (date: string) => {
   const value = new Date(date);
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000)
@@ -43,25 +69,39 @@ const localDate = (date: string) => {
     .slice(0, 16);
 };
 
-/** One persistent field workspace for apiary observations and hive inspections. */
+/**
+ * One persistent field workspace for apiary observations and hive inspections.
+ *
+ * - `apiaryId`: Record visit under `/yard/apiaries/[id]/visit`. It opens on
+ *   the whole-apiary walkthrough (`?scope=batch` asks for it explicitly);
+ *   `?scope=apiary` opens apiary notes and `?hive=` one hive.
+ * - `hiveId`: Voice inspection for one hive. The hive is locked: no mode or
+ *   hive choice and no "Confirm & next". The record layout owns the header.
+ */
 export function VisitWorkspace({
   apiaryId: routeApiaryId,
+  hiveId: routeHiveId,
 }: {
   apiaryId?: string;
+  hiveId?: string;
 }) {
   const search = useSearchParams();
   const queryClient = useQueryClient();
   const access = useAccessProfile();
+  const lockedHiveId = routeHiveId ?? "";
+  const startHiveId = routeHiveId ?? search.get("hive") ?? "";
   const [chosenApiaryId, setApiaryId] = useState(
     routeApiaryId ?? search.get("apiary") ?? "",
   );
-  const [hiveId, setHiveId] = useState(search.get("hive") ?? "");
+  const [hiveId, setHiveId] = useState(startHiveId);
   const [mode, setMode] = useState<TranscriptionMode>(
-    search.get("hive")
+    startHiveId
       ? "single"
-      : search.get("scope") === "batch"
-        ? "batch"
-        : "apiary",
+      : search.get("scope") === "apiary"
+        ? "apiary"
+        : search.get("scope") === "single"
+          ? "single"
+          : "batch",
   );
   const [capture, setCapture] = useState<LocalCapture>();
   const current = useRef<LocalCapture | undefined>(undefined);
@@ -71,7 +111,8 @@ export function VisitWorkspace({
   const [notice, setNotice] = useState("");
   const [audioUrl, setAudioUrl] = useState("");
   const [online, setOnline] = useState(true);
-  const [showMap, setShowMap] = useState(search.get("view") === "map");
+  const [run, setRun] = useState<LedgerRun | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const handledBlob = useRef<Blob | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const uploadLock = useRef(false);
@@ -86,18 +127,18 @@ export function VisitWorkspace({
     queryFn: listHives,
   });
   const initialHive = useQuery({
-    queryKey: ["hive", "visit", search.get("hive")],
-    queryFn: () => getHive(search.get("hive")!),
-    enabled: Boolean(search.get("hive") && !chosenApiaryId),
+    queryKey: ["hive", "visit", startHiveId],
+    queryFn: () => getHive(startHiveId),
+    enabled: Boolean(startHiveId && !chosenApiaryId),
   });
   const apiaryId = chosenApiaryId || initialHive.data?.apiaryId || "";
-  const hives = (hiveQuery.data ?? [])
-    .filter((hive) => hive.apiaryId === apiaryId && !hive.isArchived)
-    .sort((a, b) =>
-      a.positionLabel.localeCompare(b.positionLabel, undefined, {
-        numeric: true,
-      }),
-    );
+  // Every hive of this apiary, retired ones included, names a reused label;
+  // only active hives can be picked, matched or recorded to.
+  const apiaryHives = (hiveQuery.data ?? []).filter(
+    (hive) => hive.apiaryId === apiaryId,
+  );
+  const hives = hiveGridOrder(activeHives(apiaryHives));
+  const labelFor = (hive: HiveSummary) => hiveDisplayLabel(hive, apiaryHives);
   const canEdit = Boolean(
     access.data?.isAdmin ||
       access.data?.memberships.some(
@@ -105,7 +146,10 @@ export function VisitWorkspace({
       ),
   );
   const selectedHive = hives.find((hive) => hive.id === hiveId);
-  const nextHive = hives[hives.findIndex((hive) => hive.id === hiveId) + 1];
+  // A hive-scoped page never moves on to another hive.
+  const nextHive = lockedHiveId
+    ? undefined
+    : hives[hives.findIndex((hive) => hive.id === hiveId) + 1];
 
   const display = useCallback((value: LocalCapture | undefined) => {
     if (value && value.userId !== account.current) return;
@@ -120,10 +164,11 @@ export function VisitWorkspace({
     selectedMode: TranscriptionMode,
     selectedHiveId: string,
   ) {
+    if (lockedHiveId) return;
     setMode(selectedMode);
     setHiveId(selectedHiveId);
     const url = new URL(window.location.href);
-    if (selectedMode === "single") {
+    if (selectedMode === "single" && selectedHiveId) {
       url.searchParams.set("hive", selectedHiveId);
       url.searchParams.delete("scope");
     } else {
@@ -205,6 +250,12 @@ export function VisitWorkspace({
             );
             return;
           }
+          if (lockedHiveId && restored.ownerId !== lockedHiveId) {
+            setError(
+              "This recording belongs to another hive. Open that hive to continue.",
+            );
+            return;
+          }
           if (!apiaryId) setApiaryId(ownerApiary);
           display(restored);
           setMode(restored.mode);
@@ -225,6 +276,7 @@ export function VisitWorkspace({
     access.data?.id,
     display,
     apiaryId,
+    lockedHiveId,
     hiveQuery.data,
     hiveQuery.isPending,
     resetRecorder,
@@ -306,7 +358,7 @@ export function VisitWorkspace({
           mediaFileId: result.mediaFileId,
           state: "uploaded",
         });
-        setNotice("Recording uploaded. Preparing your review…");
+        setNotice("");
       } catch (err) {
         setError(message(err));
       } finally {
@@ -431,7 +483,7 @@ export function VisitWorkspace({
       void persist({
         ...value,
         drafts,
-        state: drafts.every((draft) => draft.receipt) ? "saved" : "review",
+        state: captureStateFor(drafts),
       }).catch((err) => setError(message(err)));
   }, [transcript.data, persist]);
 
@@ -464,7 +516,7 @@ export function VisitWorkspace({
       });
       recorder.reset();
       setNotice(
-        "Recording saved on this device. Check the observation time, then upload for review.",
+        "Recording saved on this device. Check the observation time, then upload it for review.",
       );
     } catch (err) {
       setError(message(err));
@@ -473,6 +525,8 @@ export function VisitWorkspace({
   async function begin(manual: boolean) {
     setError("");
     setNotice("");
+    setRun(null);
+    setRowErrors({});
     const value = newCapture(manual);
     if (manual)
       value.drafts = [
@@ -496,17 +550,43 @@ export function VisitWorkspace({
   function changeDraft(draft: ReviewDraft) {
     const value = current.current;
     if (!value) return;
+    const drafts = value.drafts?.map((row) =>
+      row.itemKey === draft.itemKey ? draft : row,
+    );
     void persist({
       ...value,
-      drafts: value.drafts?.map((row) =>
-        row.itemKey === draft.itemKey ? draft : row,
-      ),
+      drafts,
+      state: captureStateFor(drafts),
       updatedAt: new Date().toISOString(),
     }).catch((err) => setError(message(err)));
   }
-  async function confirm(draft: ReviewDraft, advance: boolean) {
+  async function invalidateAfterSave() {
+    await Promise.all([
+      // The apiary Timeline reads this key; refresh it so the day shows now.
+      queryClient.invalidateQueries({
+        queryKey: ["apiaries", "detail", apiaryId, "activity"],
+      }),
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          !["visit-transcript", "access"].includes(String(query.queryKey[0])),
+      }),
+    ]);
+  }
+
+  /**
+   * Sends one reviewed draft with its stable mutation id and records the
+   * outcome in the device journal. Never throws. A lost connection returns
+   * "stopped" with the draft still pending, so the retry replays the same id
+   * and the server answers with the first result instead of saving twice.
+   */
+  async function confirmOne(draft: ReviewDraft): Promise<ConfirmOutcome> {
     const value = current.current;
-    if (!value || busy || !canEdit || value.userId !== account.current) return;
+    if (!value || !canEdit || value.userId !== account.current)
+      return { outcome: "failed", error: "Open this visit from its own account." };
+    const fail = (reason: string): ConfirmOutcome => {
+      setRowErrors((rows) => ({ ...rows, [draft.itemKey]: reason }));
+      return { outcome: "failed", error: reason };
+    };
     const payload = draft.pending ?? {
       ...draft.fields,
       itemKey: draft.itemKey,
@@ -524,12 +604,10 @@ export function VisitWorkspace({
           !Number.isInteger(action.quantity) ||
           action.quantity <= 0,
       )
-    ) {
-      setError(
-        "Choose equipment and a positive whole quantity for every accepted change.",
+    )
+      return fail(
+        "Choose equipment and a whole number above zero for every equipment change you accepted.",
       );
-      return;
-    }
     const pending = {
       ...draft,
       mutationId:
@@ -548,15 +626,16 @@ export function VisitWorkspace({
       await persist({
         ...latest,
         drafts,
-        state: drafts?.every((row) => row.receipt) ? "saved" : "review",
+        state: captureStateFor(drafts),
         updatedAt: new Date().toISOString(),
       });
     };
-    setBusy(true);
-    setError("");
     try {
+      // The pending payload and its mutation id are on the device before the
+      // request leaves, so a reload mid-request retries the same mutation.
       await update(pending);
-      if (value.userId !== account.current) return;
+      if (value.userId !== account.current)
+        return { outcome: "failed", error: "The signed-in account changed." };
       const result = value.manual
         ? await api.post<ConfirmResult>(
             "/inspection-visits",
@@ -591,13 +670,13 @@ export function VisitWorkspace({
           mutationId: undefined,
           queued: false,
         });
-        throw new Error(
+        return fail(
           (
             result.outcomes?.find((row) => row.status !== "saved") as
               | { error?: string }
               | undefined
           )?.error ??
-            "This item could not be saved. Review it and retry; other saved items are unchanged.",
+            "This entry could not be saved. Review it and try again; entries already saved are unchanged.",
         );
       }
       await update({
@@ -606,57 +685,144 @@ export function VisitWorkspace({
         receipt: result,
         queued: false,
       });
-      await queryClient.invalidateQueries({
-        predicate: (query) =>
-          !["visit-transcript", "access"].includes(String(query.queryKey[0])),
+      setRowErrors((rows) => {
+        if (!(draft.itemKey in rows)) return rows;
+        const next = { ...rows };
+        delete next[draft.itemKey];
+        return next;
       });
-      setNotice("Confirmed by the server. Your inspection is saved.");
-      if (advance && nextHive) {
-        selectContext("single", nextHive.id);
-        display(undefined);
-        recorder.reset();
-      }
+      return { outcome: "saved" };
     } catch (err) {
       if (err instanceof OfflineQueuedError) {
         await update({ ...pending, queued: true });
-        setNotice(
-          "Confirmation is queued on this device. It is not yet saved on the server.",
-        );
-      } else {
-        if (
-          err instanceof ApiError &&
-          err.status >= 400 &&
-          err.status < 500 &&
-          err.status !== 409
-        )
-          await update({
-            ...draft,
-            pending: undefined,
-            mutationId: undefined,
-            queued: false,
-          });
-        setError(message(err));
-        if (value.mediaFileId) void transcript.refetch();
+        return { outcome: "queued" };
       }
+      if (value.mediaFileId) void transcript.refetch();
+      if (!(err instanceof ApiError))
+        // No answer at all: keep the pending request so "Check again"
+        // replays the same mutation id.
+        return {
+          outcome: "stopped",
+          error:
+            "Lost the connection. Your entries are kept on this device; confirm again when you're back online.",
+        };
+      if (err.status >= 400 && err.status < 500 && err.status !== 409)
+        await update({
+          ...draft,
+          pending: undefined,
+          mutationId: undefined,
+          queued: false,
+        });
+      return fail(message(err));
+    }
+  }
+  async function confirm(draft: ReviewDraft, advance: boolean) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await confirmOne(draft);
+      if (result.outcome === "saved") {
+        await invalidateAfterSave();
+        setNotice("Saved.");
+        if (advance && nextHive) {
+          selectContext("single", nextHive.id);
+          display(undefined);
+          recorder.reset();
+        }
+      } else if (result.outcome === "queued") {
+        setNotice("Saved on this device. It uploads when you're back online.");
+      } else if (result.outcome === "stopped") {
+        setError(result.error ?? "Lost the connection.");
+      }
+      // A failed entry shows its reason beside the entry itself.
     } finally {
       setBusy(false);
     }
   }
+  async function confirmAll() {
+    const value = current.current;
+    if (!value?.drafts || busy || !canEdit || value.userId !== account.current)
+      return;
+    const targets = value.drafts.filter((draft) =>
+      isConfirmable(rowStatus(draft, hives, rowErrors[draft.itemKey])),
+    );
+    if (targets.length === 0) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const tally: LedgerRun = {
+      total: targets.length,
+      done: 0,
+      saved: 0,
+      queued: 0,
+      failed: 0,
+      finished: false,
+    };
+    setRun({ ...tally });
+    try {
+      // One request at a time, in the order spoken. Each carries its own
+      // mutation id; a dropped connection stops the run rather than failing
+      // every remaining row.
+      for (const target of targets) {
+        const latest =
+          current.current?.drafts?.find((row) => row.itemKey === target.itemKey) ??
+          target;
+        const result = await confirmOne(latest);
+        tally.done += 1;
+        if (result.outcome === "saved") tally.saved += 1;
+        else if (result.outcome === "queued") tally.queued += 1;
+        else tally.failed += 1;
+        if (result.outcome === "stopped") tally.stopped = result.error;
+        setRun({ ...tally });
+        if (result.outcome === "stopped") break;
+      }
+      if (tally.saved > 0) await invalidateAfterSave();
+    } finally {
+      setRun({ ...tally, finished: true });
+      setBusy(false);
+    }
+  }
+
   const active = Boolean(capture && capture.state !== "saved");
   const disabled = busy || recorder.status === "recording";
+  const status = transcript.data?.status;
+  const nothingHeard =
+    status === "complete" && !transcript.data?.parsed?.inspections.length;
+  const transcriptionStuck =
+    status === "failed" || Boolean(transcript.data?.parseError) || nothingHeard;
+  const showProgress = Boolean(
+    capture &&
+      !capture.drafts?.length &&
+      recorder.status !== "recording" &&
+      capture.state !== "recording" &&
+      (capture.mediaFileId
+        ? !transcriptionStuck
+        : capture.audio &&
+          (busy || capture.uploadAttempted || (!online && !capture.audioFileName))),
+  );
+  const helper =
+    mode === "apiary"
+      ? "Weather, forage, water and anything apiary-wide. This saves one apiary observation."
+      : mode === "batch"
+        ? "Walk the apiary and say each hive's label before what you see: “A1, lid popped, strong. A2, fed two gallons.” Afterward you confirm every hive in one list."
+        : selectedHive
+          ? `Inspecting ${labelFor(selectedHive)}. Say what you see and any feeding or equipment changes.`
+          : "Choose the hive on the grid, then record or type.";
+
   if (capture && capture.userId !== access.data?.id)
     return <p role="status">Loading this account’s visits…</p>;
   return (
     <div className="mx-auto grid w-full max-w-4xl gap-5 pb-8">
-      {routeApiaryId ? (
-        // Under /yard/apiaries/[id]/visit the record layout owns the header.
+      {routeApiaryId || lockedHiveId ? (
+        // Under a record route the record layout owns the header.
         <p className="max-w-prose text-sm text-muted-foreground">
-          Speak your observations, review what was heard, and continue through
-          the apiary.
+          Speak your observations, then confirm what was heard.
         </p>
       ) : (
         <PageHeader
-          subtitle="Speak your observations, review what was heard, and continue through the apiary."
+          subtitle="Speak your observations, then confirm what was heard."
           actions={
             <Link
               className="inline-flex min-h-9 items-center text-sm text-muted-foreground underline-offset-4 hover:underline"
@@ -706,11 +872,11 @@ export function VisitWorkspace({
         className="grid gap-4 rounded-xl border bg-card p-4 sm:p-6"
         aria-label="Visit context"
       >
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Label className="grid gap-2">
+        {!routeApiaryId && !lockedHiveId && (
+          <Label className="grid gap-2 sm:max-w-sm">
             Apiary
             <select
-              disabled={disabled || active || Boolean(routeApiaryId)}
+              disabled={disabled || active}
               className="min-h-11 min-w-0 rounded-md border bg-background px-3 text-base"
               value={apiaryId}
               onChange={(e) => {
@@ -726,63 +892,91 @@ export function VisitWorkspace({
               ))}
             </select>
           </Label>
-          <Label className="grid gap-2">
-            Record for
-            <select
-              disabled={disabled || active}
-              className="min-h-11 min-w-0 rounded-md border bg-background px-3 text-base"
-              value={mode === "single" ? hiveId : mode}
-              onChange={(e) => {
-                if (e.target.value === "apiary" || e.target.value === "batch")
-                  selectContext(e.target.value, "");
-                else selectContext("single", e.target.value);
-              }}
-            >
-              <option value="apiary">Apiary observations</option>
-              <option value="batch">Several hives in one recording</option>
-              {hives.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.positionLabel}
-                </option>
+        )}
+        {!lockedHiveId && (
+          <fieldset
+            className="grid min-w-0 gap-1.5"
+            disabled={disabled || active}
+          >
+            <legend className="mb-1.5 text-sm font-medium">What to record</legend>
+            <div className="grid grid-cols-3 gap-1">
+              {MODES.map((option) => (
+                <label
+                  key={option.value}
+                  className={cn(
+                    "flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-center text-sm font-medium transition-colors",
+                    "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background",
+                    "has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50",
+                    mode === option.value
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "bg-background hover:bg-secondary",
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="visit-mode"
+                    className="sr-only"
+                    value={option.value}
+                    checked={mode === option.value}
+                    onChange={() =>
+                      selectContext(
+                        option.value,
+                        option.value === "single" ? hiveId : "",
+                      )
+                    }
+                  />
+                  {option.label}
+                </label>
               ))}
-            </select>
-          </Label>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {mode === "apiary"
-            ? "Weather, forage, access and apiary-wide notes. This creates one apiary observation."
-            : mode === "batch"
-              ? "Say each hive name before its observations. You will confirm each hive separately."
-              : `Inspecting ${selectedHive?.positionLabel ?? "hive"}. Say what you see and any feeding or equipment changes.`}
-        </p>
+            </div>
+          </fieldset>
+        )}
+        {mode === "single" && !lockedHiveId && !active && apiaryId && (
+          <HiveGridPicker
+            hives={hives}
+            selected={new Set(hiveId ? [hiveId] : [])}
+            labelFor={labelFor}
+            legend="Hive"
+            disabled={disabled}
+            emptyText={
+              hiveQuery.isPending
+                ? "Loading hives…"
+                : "No active hives in this apiary."
+            }
+            onSelect={(hive) => selectContext("single", hive.id)}
+          />
+        )}
+        <p className="text-sm text-muted-foreground">{helper}</p>
         {!canEdit && apiaryId && access.data && (
           <p className="text-sm">
             You have viewing access. An apiary editor can record inspections.
           </p>
         )}
         {!active && canEdit && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               className="min-h-12"
               disabled={disabled || !apiaryId || (mode === "single" && !hiveId)}
               onClick={() => void begin(false)}
             >
               <Mic className="size-5" />
-              Record{" "}
               {mode === "single"
-                ? selectedHive?.positionLabel
+                ? `Record ${selectedHive?.positionLabel ?? "hive"}`
                 : mode === "batch"
-                  ? "hive walkthrough"
-                  : "apiary"}
+                  ? "Record walkthrough"
+                  : "Record apiary"}
             </Button>
-            <Button
-              variant="outline"
-              disabled={disabled}
-              onClick={() => void begin(true)}
-            >
-              <Keyboard className="size-4" />
-              Type instead
-            </Button>
+            {mode !== "batch" && (
+              <Button
+                variant="outline"
+                className="min-h-12"
+                disabled={disabled || !apiaryId || (mode === "single" && !hiveId)}
+                onClick={() => void begin(true)}
+              >
+                <Keyboard className="size-4" />
+                Type instead
+              </Button>
+            )}
             <input
               ref={fileInput}
               type="file"
@@ -804,20 +998,45 @@ export function VisitWorkspace({
               <Upload className="size-4" />
               Upload recording
             </Button>
+            {mode === "batch" && apiaryId && (
+              <Link
+                href={`/yard/apiaries/${apiaryId}/bulk`}
+                className="inline-flex min-h-11 items-center px-1 text-sm underline underline-offset-4"
+              >
+                Typing instead? Use Bulk record
+              </Link>
+            )}
           </div>
         )}
         {recorder.status === "recording" && (
           <div className="flex flex-wrap items-center gap-4">
-            <span role="status">
-              Recording · {Math.floor(recorder.elapsed / 60)}:
+            {/* The clock is not a live region: a screen reader hears
+                "Recording started" and "Recording stopped" only. */}
+            <span className="inline-flex items-center gap-2 font-medium tabular-nums">
+              <span
+                aria-hidden="true"
+                className="size-2.5 rounded-full bg-destructive motion-safe:animate-pulse"
+              />
+              Recording {Math.floor(recorder.elapsed / 60)}:
               {String(recorder.elapsed % 60).padStart(2, "0")}
             </span>
-            <Button variant="destructive" onClick={recorder.stop}>
+            <Button
+              variant="destructive"
+              className="min-h-12"
+              onClick={recorder.stop}
+            >
               <Square className="size-4" />
               Stop & review
             </Button>
           </div>
         )}
+        <p role="status" className="sr-only">
+          {recorder.status === "recording"
+            ? "Recording started"
+            : recorder.status === "recorded"
+              ? "Recording stopped"
+              : ""}
+        </p>
         {active && recorder.status !== "recording" && capture && (
           <>
             {capture.audioFileName && (
@@ -851,7 +1070,7 @@ export function VisitWorkspace({
               <>
                 <audio controls src={audioUrl} className="w-full" />
                 <a
-                  className="text-sm underline"
+                  className="inline-flex min-h-11 items-center text-sm underline"
                   download={
                     capture.audioFileName ??
                     `inspection-${capture.captureId}.${capture.audio?.type.includes("mp4") ? "mp4" : "webm"}`
@@ -865,6 +1084,7 @@ export function VisitWorkspace({
             {capture.audio && !capture.mediaFileId && (
               <Button
                 variant="outline"
+                className="min-h-12 justify-self-start"
                 disabled={busy || !online}
                 onClick={() => void upload(capture)}
               >
@@ -876,7 +1096,11 @@ export function VisitWorkspace({
             )}
             {!capture.audio && !capture.manual && (
               <div className="flex flex-wrap gap-2">
-                <Button disabled={busy} onClick={() => void recorder.start()}>
+                <Button
+                  className="min-h-12"
+                  disabled={busy}
+                  onClick={() => void recorder.start()}
+                >
                   <Mic className="size-4" />
                   Start microphone
                 </Button>
@@ -897,90 +1121,79 @@ export function VisitWorkspace({
           </>
         )}
       </section>
-      {apiaryId && !active && (
-        <details
-          className="rounded-xl border p-3"
-          open={showMap}
-          onToggle={(event) => setShowMap(event.currentTarget.open)}
-        >
-          <summary className="min-h-11 cursor-pointer font-medium">
-            Choose a hive on the apiary map
-          </summary>
-          {showMap && (
-            <ApiaryCanvas
-              apiaryId={apiaryId}
-              onHiveSelect={(id) => selectContext("single", id)}
-            />
-          )}
-        </details>
-      )}
       {transcript.isError && (
         <p role="alert">
-          Recording status could not be loaded.{" "}
+          Could not check on the recording.{" "}
           <Button variant="outline" onClick={() => void transcript.refetch()}>
-            Retry status
+            Check again
           </Button>
         </p>
       )}
-      {capture?.mediaFileId && !capture.drafts?.length && (
+      {showProgress && capture && (
+        <TranscriptionProgress
+          hasAudio={Boolean(capture.audio || capture.mediaFileId)}
+          uploading={busy}
+          uploaded={Boolean(capture.mediaFileId)}
+          online={online}
+          transcript={transcript.data}
+          since={transcript.data?.createdAt ?? capture.updatedAt}
+        />
+      )}
+      {capture?.mediaFileId && !capture.drafts?.length && transcriptionStuck && (
         <p role="status">
-          {transcript.data?.status === "failed"
-            ? (transcript.data.error ??
-              "Transcription failed. Keep the recording and enter observations manually.")
+          {status === "failed"
+            ? (transcript.data?.error ??
+              "The recording could not be turned into text. Keep it and type what you saw instead.")
             : (transcript.data?.parseError ??
-              "Preparing your inspection review…")}
+              "Nothing in this recording could be sorted into hives. Type what you saw instead.")}
         </p>
       )}
-      {capture?.mediaFileId &&
-        !capture.drafts?.length &&
-        (transcript.data?.status === "failed" ||
-          transcript.data?.parseError ||
-          (transcript.data?.status === "complete" &&
-            !transcript.data?.parsed?.inspections.length)) && (
-          <Button
-            variant="outline"
-            disabled={busy || !canEdit}
-            onClick={() =>
-              void persist({
-                ...capture,
-                manualEntry: true,
-                state: "review",
-                versionId: transcript.data?.currentVersionId ?? undefined,
-                drafts: [
-                  {
-                    itemKey: `manual-${capture.captureId}`,
-                    scope: capture.mode === "apiary" ? "apiary" : "hive",
-                    hiveId,
-                    fields: {
-                      queenSeen: null,
-                      notes: transcript.data?.transcriptionText ?? "",
-                    },
+      {capture?.mediaFileId && !capture.drafts?.length && transcriptionStuck && (
+        <Button
+          variant="outline"
+          className="min-h-12 justify-self-start"
+          disabled={busy || !canEdit}
+          onClick={() =>
+            void persist({
+              ...capture,
+              manualEntry: true,
+              state: "review",
+              versionId: transcript.data?.currentVersionId ?? undefined,
+              drafts: [
+                {
+                  itemKey: `manual-${capture.captureId}`,
+                  scope: capture.mode === "apiary" ? "apiary" : "hive",
+                  hiveId,
+                  fields: {
+                    queenSeen: null,
+                    notes: transcript.data?.transcriptionText ?? "",
                   },
-                ],
-              }).catch((err) => setError(message(err)))
-            }
-          >
-            Enter observations from this recording
-          </Button>
-        )}
+                },
+              ],
+            }).catch((err) => setError(message(err)))
+          }
+        >
+          Enter observations from this recording
+        </Button>
+      )}
       {transcript.data?.transcriptionText && (
         <details className="rounded-xl border p-4">
           <summary className="cursor-pointer font-medium">
-            Original transcript
+            What was heard
           </summary>
           <p className="mt-3 whitespace-pre-wrap text-sm">
             {transcript.data.transcriptionText}
           </p>
         </details>
       )}
-      {capture?.mediaFileId && (
+      {capture?.mediaFileId && capture.drafts?.some((row) => row.pending) && (
         <Button
-          variant="ghost"
-          className="justify-self-start"
+          variant="outline"
+          className="min-h-12 justify-self-start"
           disabled={busy}
           onClick={() => void transcript.refetch()}
         >
-          Refresh server receipts
+          Check what was saved
         </Button>
       )}
       {capture?.mediaFileId &&
@@ -988,6 +1201,7 @@ export function VisitWorkspace({
         canEdit && (
           <Button
             variant="outline"
+            className="min-h-12 justify-self-start"
             disabled={disabled}
             onClick={async () => {
               const replacement = {
@@ -1012,100 +1226,143 @@ export function VisitWorkspace({
             Record a replacement — keep original
           </Button>
         )}
-      {capture?.drafts?.map((draft) => (
-        <VisitReview
-          key={`${capture.captureId}-${draft.itemKey}`}
-          draft={draft}
-          hives={
-            capture.mode === "single"
-              ? hives.filter((row) => row.id === capture.ownerId)
-              : hives
-          }
-          apiaryId={apiaryId}
-          busy={busy || !canEdit}
-          onChange={changeDraft}
-          onSave={(advance) => void confirm(draft, advance)}
-          nextLabel={
-            capture.mode === "single" ? nextHive?.positionLabel : undefined
-          }
-        />
-      ))}
+      {capture?.drafts?.length ? (
+        capture.mode === "batch" ? (
+          <VisitLedger
+            key={capture.captureId}
+            drafts={capture.drafts}
+            hives={hives}
+            labelFor={labelFor}
+            apiaryId={apiaryId}
+            observedAt={capture.observedAt}
+            timeZone={capture.timeZone}
+            canEdit={canEdit}
+            busy={busy}
+            run={run}
+            rowErrors={rowErrors}
+            onChange={changeDraft}
+            onConfirm={(draft) => confirm(draft, false)}
+            onConfirmAll={confirmAll}
+          />
+        ) : (
+          capture.drafts.map((draft) => (
+            <VisitReview
+              key={`${capture.captureId}-${draft.itemKey}`}
+              draft={draft}
+              hives={
+                capture.mode === "single"
+                  ? hives.filter((row) => row.id === capture.ownerId)
+                  : hives
+              }
+              labelFor={labelFor}
+              apiaryId={apiaryId}
+              busy={busy || !canEdit}
+              error={rowErrors[draft.itemKey]}
+              onChange={changeDraft}
+              onSave={(advance) => void confirm(draft, advance)}
+              nextLabel={
+                capture.mode === "single" && nextHive
+                  ? labelFor(nextHive)
+                  : undefined
+              }
+            />
+          ))
+        )
+      ) : null}
       {capture && recorder.status !== "recording" && (
         <Button
           variant="outline"
+          className="min-h-12 justify-self-start"
           disabled={busy}
           onClick={() => {
             display(undefined);
             recorder.reset();
-            setNotice("Your capture remains in the device journal below.");
+            setRun(null);
+            setRowErrors({});
+            setNotice(
+              capture.state === "saved"
+                ? ""
+                : "Your recording stays in the list on this device below.",
+            );
           }}
         >
-          Return to recording choices
+          {capture.state === "saved"
+            ? "Start another recording"
+            : "Back to recording choices"}
         </Button>
       )}
       {journal.length > 0 && (
-        <section className="grid gap-3" aria-label="Device recording journal">
+        <section className="grid gap-3" aria-label="Recordings on this device">
           <h2 className="text-lg font-semibold">On this device</h2>
           <p className="text-sm text-muted-foreground">
-            Original audio and drafts remain available here for this account.
+            Original audio and drafts stay here for this account until you
+            clear the browser&apos;s data.
           </p>
           {journal
-            .filter(
-              (row) =>
-                row.ownerId === apiaryId ||
-                hives.some((hive) => hive.id === row.ownerId),
+            .filter((row) =>
+              lockedHiveId
+                ? row.ownerId === lockedHiveId
+                : row.ownerId === apiaryId ||
+                  apiaryHives.some((hive) => hive.id === row.ownerId),
             )
-            .map((row) => (
-              <div
-                key={row.captureId}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
-              >
-                <div>
-                  <p className="font-medium">
-                    {row.mode === "apiary"
-                      ? "Apiary"
-                      : row.mode === "batch"
-                        ? "Hive walkthrough"
-                        : (hives.find((hive) => hive.id === row.ownerId)
-                            ?.positionLabel ?? "Hive")}{" "}
-                    · {new Date(row.observedAt).toLocaleString()}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {row.state === "saved"
-                      ? "Server confirmed"
-                      : row.mediaFileId
-                        ? "Uploaded · review pending"
-                        : row.manual
-                          ? "Manual draft on device"
-                          : "Audio on device · not uploaded"}
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  disabled={disabled}
-                  onClick={() => {
-                    display(row);
-                    setMode(row.mode);
-                    setHiveId(row.ownerType === "hive" ? row.ownerId : "");
-                    setError("");
-                    setNotice("");
-                    recorder.reset();
-                    if (row.state === "recording")
-                      setNotice(
-                        "Interrupted recording: listen to the recovered audio before uploading; the final few seconds may be missing.",
-                      );
-                    else if (
-                      row.audio &&
-                      !row.mediaFileId &&
-                      (!row.audioFileName || row.uploadAttempted)
-                    )
-                      void upload(row);
-                  }}
+            .map((row) => {
+              const owner = apiaryHives.find((hive) => hive.id === row.ownerId);
+              return (
+                <div
+                  key={row.captureId}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
                 >
-                  Open {row.state === "saved" ? "receipt" : "draft"}
-                </Button>
-              </div>
-            ))}
+                  <div>
+                    <p className="font-medium">
+                      {row.mode === "apiary"
+                        ? "Apiary notes"
+                        : row.mode === "batch"
+                          ? "Whole-apiary walkthrough"
+                          : owner
+                            ? labelFor(owner)
+                            : "Hive"}{" "}
+                      · {new Date(row.observedAt).toLocaleString()}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {row.state === "saved"
+                        ? "Saved"
+                        : row.mediaFileId
+                          ? "Uploaded · not confirmed yet"
+                          : row.manual
+                            ? "Typed draft on this device"
+                            : "Recording on this device · not uploaded"}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="min-h-11"
+                    disabled={disabled}
+                    onClick={() => {
+                      display(row);
+                      setMode(row.mode);
+                      setHiveId(row.ownerType === "hive" ? row.ownerId : "");
+                      setError("");
+                      setNotice("");
+                      setRun(null);
+                      setRowErrors({});
+                      recorder.reset();
+                      if (row.state === "recording")
+                        setNotice(
+                          "Interrupted recording: listen to the recovered audio before uploading; the final few seconds may be missing.",
+                        );
+                      else if (
+                        row.audio &&
+                        !row.mediaFileId &&
+                        (!row.audioFileName || row.uploadAttempted)
+                      )
+                        void upload(row);
+                    }}
+                  >
+                    {row.state === "saved" ? "Open saved visit" : "Open draft"}
+                  </Button>
+                </div>
+              );
+            })}
         </section>
       )}
     </div>

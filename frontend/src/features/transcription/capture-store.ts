@@ -3,18 +3,22 @@ import type {
   ConfirmResult,
   TranscriptionMode,
 } from "./api";
-import type { EditableInspection } from "./inspection-fields";
+import type { InspectionFieldValues } from "@/features/inspections/inspection-fields";
 
 export interface ReviewDraft {
   itemKey: string;
   scope: "apiary" | "hive";
   hiveId: string;
   fields: ConfirmInspection;
-  editable?: EditableInspection;
+  /** Edited field state. Drafts saved by older builds may lack newer keys;
+   * read it through `draftValues` (review-values.ts). */
+  editable?: Partial<InspectionFieldValues>;
   mutationId?: string;
   pending?: ConfirmInspection;
   receipt?: ConfirmResult;
   queued?: boolean;
+  /** Left out of this visit on purpose; never confirmed by "Confirm all". */
+  skipped?: boolean;
 }
 
 /** A device journal, partitioned by account. Never an inventory authority. */
@@ -37,6 +41,17 @@ export interface LocalCapture {
   manual?: boolean;
   manualEntry?: boolean;
   updatedAt: string;
+}
+
+/** A capture is done once every draft is saved or deliberately skipped. */
+export function captureStateFor(
+  drafts: ReviewDraft[] | undefined,
+): "saved" | "review" {
+  return drafts?.length &&
+    drafts.every((draft) => draft.receipt || draft.skipped) &&
+    drafts.some((draft) => draft.receipt)
+    ? "saved"
+    : "review";
 }
 
 const DATABASE = "atlas-voice-captures";
