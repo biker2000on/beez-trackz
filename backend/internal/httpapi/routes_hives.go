@@ -751,7 +751,6 @@ func (s *Server) handleHiveUnarchive(w http.ResponseWriter, r *http.Request) {
 	s.hiveSimpleUpdate(w, r, "is_archived = false")
 }
 
-
 // GET /hives/{id}/location-history
 func (s *Server) handleHiveLocationHistory(w http.ResponseWriter, r *http.Request) {
 	id, err := uuidParam(r, "id")

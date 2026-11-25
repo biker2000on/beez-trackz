@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +65,42 @@ var queenEventTypes = map[string]bool{
 	"missing": true, "dead": true, "requeened": true,
 }
 
+// treatmentEventFields is one treatment_events row to insert. A nil
+// WithdrawalDays resolves from the product catalog.
+type treatmentEventFields struct {
+	HiveID         uuid.UUID
+	InspectionID   *uuid.UUID
+	DateApplied    time.Time
+	Product        string
+	Method         *string
+	DateRemoved    *time.Time
+	Notes          *string
+	WithdrawalDays *int
+}
+
+// treatmentEventInsert is the single insert path for a standalone treatment
+// (REST and MCP). q may be a transaction.
+func (s *Server) treatmentEventInsert(ctx context.Context, q inspectionQuerier, f treatmentEventFields) (uuid.UUID, error) {
+	days := 0
+	if f.WithdrawalDays != nil {
+		days = *f.WithdrawalDays
+	} else {
+		resolved, err := s.resolveWithdrawalDays(ctx, f.Product)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		days = resolved
+	}
+	var id uuid.UUID
+	err := q.QueryRow(ctx, `
+		INSERT INTO treatment_events
+			(hive_id, inspection_id, date_applied, product, method, date_removed, notes, withdrawal_days)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		f.HiveID, f.InspectionID, f.DateApplied, strings.TrimSpace(f.Product),
+		honeyTrimPtr(f.Method), f.DateRemoved, honeyTrimPtr(f.Notes), days).Scan(&id)
+	return id, err
+}
+
 func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HiveID         uuid.UUID  `json:"hiveId"`
@@ -96,28 +133,15 @@ func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		removed = &v
 	}
-	days := 0
-	if req.WithdrawalDays != nil {
-		if *req.WithdrawalDays < 0 {
-			writeError(w, http.StatusBadRequest, "withdrawalDays must be zero or greater")
-			return
-		}
-		days = *req.WithdrawalDays
-	} else {
-		resolved, err := s.resolveWithdrawalDays(r.Context(), req.Product)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		days = resolved
+	if req.WithdrawalDays != nil && *req.WithdrawalDays < 0 {
+		writeError(w, http.StatusBadRequest, "withdrawalDays must be zero or greater")
+		return
 	}
-	var id uuid.UUID
-	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO treatment_events
-			(hive_id, inspection_id, date_applied, product, method, date_removed, notes, withdrawal_days)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		req.HiveID, req.InspectionID, date, strings.TrimSpace(req.Product),
-		honeyTrimPtr(req.Method), removed, honeyTrimPtr(req.Notes), days).Scan(&id)
+	id, err := s.treatmentEventInsert(r.Context(), s.pool, treatmentEventFields{
+		HiveID: req.HiveID, InspectionID: req.InspectionID, DateApplied: date,
+		Product: req.Product, Method: req.Method, DateRemoved: removed,
+		Notes: req.Notes, WithdrawalDays: req.WithdrawalDays,
+	})
 	if err != nil {
 		if honeyIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid hiveId or inspectionId")
