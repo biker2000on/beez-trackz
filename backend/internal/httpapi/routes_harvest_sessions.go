@@ -481,6 +481,13 @@ func (s *Server) hsAddEntry(w http.ResponseWriter, r *http.Request) {
 				lineName+"hive must belong to the harvest session apiary")
 			return
 		}
+		if msg, err := refuseHarvestBeforeInstall(ctx, s.pool, hiveID, sessionDate); err != nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		} else if msg != "" {
+			writeError(w, http.StatusBadRequest, lineName+msg)
+			return
+		}
 		if msg, err := refuseHiveHarvest(ctx, s.pool, hiveID, sessionDate); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return

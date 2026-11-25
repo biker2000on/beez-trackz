@@ -108,7 +108,8 @@ Return ONLY valid JSON with this exact shape (omit fields that aren't mentioned)
 }
 
 Rules:
-- For numeric scales (storesHoney, storesPollen, temperament), interpret qualitative descriptions: "low"=1-2, "medium/moderate"=3, "high/good"=4, "excellent/full"=5
+- For the stores scales (storesHoney, storesPollen), interpret qualitative descriptions: "low"=1-2, "medium/moderate"=3, "high/good"=4, "excellent/full"=5
+- temperament runs the other way (1=calm, 5=aggressive): calm/gentle/docile=1-2, defensive/testy/runny=3-4, very aggressive/hot=5. "Good" or "excellent" temperament means calm (1-2), never a high number
 - For queenSeen, look for phrases like "saw the queen", "queen spotted", "couldn't find the queen", "queenless"
 - framesOfBees/framesOfBrood/framesOfStores are literal frame counts ("eight frames of bees" means framesOfBees: 8); they are separate from the 1-5 stores scales
 - For pests, look for: varroa mites, hive beetles, wax moths, ants, etc.
@@ -148,7 +149,8 @@ Return ONLY valid JSON as an array with this exact shape:
 Rules:
 - First, identify all distinct hive references in the text (e.g. "hive 1", "the blue hive", "number three", "first hive", "next hive")
 - Segment the transcription by hive and extract fields for each
-- For numeric scales (storesHoney, storesPollen, temperament), interpret qualitative descriptions: "low"=1-2, "medium/moderate"=3, "high/good"=4, "excellent/full"=5
+- For the stores scales (storesHoney, storesPollen), interpret qualitative descriptions: "low"=1-2, "medium/moderate"=3, "high/good"=4, "excellent/full"=5
+- temperament runs the other way (1=calm, 5=aggressive): calm/gentle/docile=1-2, defensive/testy/runny=3-4, very aggressive/hot=5. "Good" or "excellent" temperament means calm (1-2), never a high number
 - For queenSeen, look for phrases like "saw the queen", "queen spotted", "couldn't find the queen", "queenless"
 - framesOfBees/framesOfBrood/framesOfStores are literal frame counts ("eight frames of bees" means framesOfBees: 8); they are separate from the 1-5 stores scales
 - For pests, look for: varroa mites, hive beetles, wax moths, ants, etc.

@@ -18,7 +18,7 @@ export function BulkRecordPage({ apiaryId }: { apiaryId: string }) {
   return (
     <div className="grid w-full max-w-4xl gap-5">
       <p className="max-w-prose text-sm text-muted-foreground">
-        Record the same inspection or feeding across several hives in
+        Record the same note, feeding, treatment or mite count across several hives in
         {apiary.data ? ` ${apiary.data.name}` : " this apiary"} at once.
       </p>
       {apiary.isPending ? (

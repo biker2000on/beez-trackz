@@ -28,12 +28,15 @@ export function HiveStatusBadge({ status }: { status: string }) {
 
 export function HiveCard({
   hive,
+  label,
   showApiary = true,
   selectable = false,
   selected = false,
   onToggleSelect,
 }: {
   hive: Hive;
+  /** `hiveDisplayLabel` when the label is shared with a retired hive. */
+  label?: string;
   showApiary?: boolean;
   /** Bulk-select mode: clicking toggles selection instead of navigating. */
   selectable?: boolean;
@@ -63,7 +66,7 @@ export function HiveCard({
             />
           )}
           <Hexagon className="size-4 text-primary" />
-          {hive.positionLabel}
+          {label ?? hive.positionLabel}
         </CardTitle>
         <div className="flex items-center gap-1.5">
           {hive.isArchived && (

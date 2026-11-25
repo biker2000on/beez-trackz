@@ -1,15 +1,40 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { ClipboardList, Crown } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { useRecentInspections } from "@/features/inspections/hooks";
+import { useHives, type Hive } from "@/features/hives/hooks";
 import { formatDate } from "@/features/hives/lib";
+import { hiveDisplayLabel } from "@/lib/hive-label";
 import { WidgetFrame } from "./widget-frame";
+
+/**
+ * Labels are reused, so an inspection of the old A4 and one of the new A4
+ * must not both read "A4": name each hive against its apiary's roster.
+ */
+function useHiveLabels(): Map<string, string> {
+  const roster = useHives({ includeArchived: true });
+  return React.useMemo(() => {
+    const hives = roster.data ?? [];
+    const byApiary = new Map<string, Hive[]>();
+    for (const hive of hives) {
+      byApiary.set(hive.apiaryId, [...(byApiary.get(hive.apiaryId) ?? []), hive]);
+    }
+    return new Map(
+      hives.map((hive) => [
+        hive.id,
+        hiveDisplayLabel(hive, byApiary.get(hive.apiaryId) ?? []),
+      ]),
+    );
+  }, [roster.data]);
+}
 
 export function RecentInspectionsWidget() {
   const inspections = useRecentInspections(5);
+  const labels = useHiveLabels();
 
   return (
     <WidgetFrame
@@ -32,7 +57,7 @@ export function RecentInspectionsWidget() {
                   href={`/yard/hives/${inspection.hiveId}`}
                   className="truncate font-medium underline-offset-4 hover:underline"
                 >
-                  {inspection.hiveName}
+                  {labels.get(inspection.hiveId) ?? inspection.hiveName}
                 </Link>
                 {inspection.queenSeen && (
                   <Badge

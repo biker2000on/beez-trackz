@@ -490,9 +490,41 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 	if !s.requireHiveRole(w, r, hiveID, true) {
 		return
 	}
-	if strings.TrimSpace(req.Date) == "" {
-		writeError(w, http.StatusBadRequest, "Date is required")
+	fields, msg := inspectionFieldsFromReq(&req, hiveID)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
+	}
+	fields.Weather = s.inspectionWeatherSnapshot(r, hiveID)
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	id, status, msg := s.inspectionCreateTx(r.Context(), tx, fields, &req, actorID(r))
+	if msg != "" {
+		writeError(w, status, msg)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	created, err := s.inspectionByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// inspectionFieldsFromReq validates a create request once the hive is known
+// and authorized, and builds the row to insert (the caller adds weather).
+// It returns a user-facing message when the request is invalid.
+func inspectionFieldsFromReq(req *inspectionCreateReq, hiveID uuid.UUID) (inspectionFields, string) {
+	if strings.TrimSpace(req.Date) == "" {
+		return inspectionFields{}, "Date is required"
 	}
 	for name, value := range map[string]*int{
 		"framesOfBees": req.FramesOfBees, "framesOfBrood": req.FramesOfBrood,
@@ -500,20 +532,18 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		"queenCellsCount": req.QueenCellsCount,
 	} {
 		if value != nil && *value < 0 {
-			writeError(w, http.StatusBadRequest, name+" cannot be negative")
-			return
+			return inspectionFields{}, name + " cannot be negative"
 		}
 	}
 	date, err := parseDate(req.Date)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date")
-		return
+		return inspectionFields{}, "Invalid date"
 	}
 	var sourceMedia []byte
 	if len(req.SourceMedia) > 0 && string(req.SourceMedia) != "null" {
 		sourceMedia = req.SourceMedia
 	}
-	fields := inspectionFields{
+	return inspectionFields{
 		HiveID:          hiveID,
 		Date:            date,
 		InspectorName:   inspectionTrimPtr(req.InspectorName),
@@ -534,44 +564,36 @@ func (s *Server) handleInspectionCreate(w http.ResponseWriter, r *http.Request) 
 		Treatments:      inspectionMarshal(req.Treatments, req.Treatments != nil),
 		Notes:           inspectionTrimPtr(req.Notes),
 		SourceMedia:     sourceMedia,
-		Weather:         s.inspectionWeatherSnapshot(r, hiveID),
-	}
-	tx, err := s.pool.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	id, err := inspectionInsert(r.Context(), tx, fields)
+	}, ""
+}
+
+// inspectionCreateTx writes a new inspection with its treatment events and
+// mite counts inside q (a transaction). On failure it returns the HTTP status
+// and message the REST handler reports; the caller rolls back.
+func (s *Server) inspectionCreateTx(
+	ctx context.Context,
+	q inspectionQuerier,
+	fields inspectionFields,
+	req *inspectionCreateReq,
+	actor *uuid.UUID,
+) (uuid.UUID, int, string) {
+	id, err := inspectionInsert(ctx, q, fields)
 	if err != nil {
 		if inspectionIsFKViolation(err) {
-			writeError(w, http.StatusBadRequest, "Hive not found")
-			return
+			return uuid.Nil, http.StatusBadRequest, "Hive not found"
 		}
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+		return uuid.Nil, http.StatusInternalServerError, "database error"
 	}
 	// Same reconcile the PATCH path runs; on a brand-new inspection it is
 	// pure inserts, so create and update can never drift apart.
 	if err := s.syncInspectionTreatmentEvents(
-		r.Context(), tx, id, hiveID, date, req.Treatments, actorID(r)); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid treatment")
-		return
+		ctx, q, id, fields.HiveID, fields.Date, req.Treatments, actor); err != nil {
+		return uuid.Nil, http.StatusBadRequest, "invalid treatment"
 	}
-	if err := replaceInspectionMiteCounts(r.Context(), tx, id, hiveID, date, req.MiteCounts, actorID(r)); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid mite count")
-		return
+	if err := replaceInspectionMiteCounts(ctx, q, id, fields.HiveID, fields.Date, req.MiteCounts, actor); err != nil {
+		return uuid.Nil, http.StatusBadRequest, "invalid mite count"
 	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	created, err := s.inspectionByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
-	}
-	writeJSON(w, http.StatusCreated, created)
+	return id, 0, ""
 }
 
 // GET /inspections/{id}

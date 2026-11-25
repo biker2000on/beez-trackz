@@ -296,16 +296,23 @@ export function contextualNavRoutes(
       },
       { label: "Observations", href: `${base}/inspections`, keywords: ["apiary inspections visit notes"] },
       { label: "Flora", href: `${base}/flora`, keywords: ["blooms forage"] },
-      { label: "Photos", href: `${base}/photos` },
-      { label: "Timeline", href: `${base}/timeline`, keywords: ["yard photo timeline immich"] },
+      { label: "Photos", href: `${base}/photos`, keywords: ["immich evidence pictures"] },
+      {
+        label: "Timeline",
+        href: `${base}/timeline`,
+        keywords: ["visit days history by date treatments mite counts feedings"],
+      },
       { label: "Labels", href: `${base}/labels`, keywords: ["print tags qr nfc"] },
       { label: "Bulk record", href: `${base}/bulk`, requiresEdit: true },
-      { label: "Record visit", href: `${base}/visit`, requiresEdit: true, action: true },
+      // One whole-yard voice entry point. "Voice walkthrough" (several hives
+      // in one recording) is a mode inside Record visit; its old URL,
+      // `visit?scope=batch`, still opens the same page.
       {
-        label: "Voice walkthrough",
-        href: `${base}/visit?scope=batch`,
+        label: "Record visit",
+        href: `${base}/visit`,
         requiresEdit: true,
         action: true,
+        keywords: ["voice walkthrough whole apiary several hives one recording"],
       },
     ];
   }
@@ -326,10 +333,10 @@ export function contextualNavRoutes(
       { label: "Queen", href: `${base}/queen`, keywords: ["lineage genealogy"] },
       { label: "Photos", href: `${base}/photos` },
       {
-        // One voice surface for the yard (S10): the hive-scoped route is a
-        // search param on `/yard/transcribe`, not a route of its own.
+        // Voice inspection stays inside the hive record: the workspace is
+        // locked to this hive and the record layout keeps its header.
         label: "Voice inspection",
-        href: `/yard/transcribe?hive=${hive}`,
+        href: `${base}/voice`,
         keywords: ["record transcribe"],
         requiresEdit: true,
         action: true,

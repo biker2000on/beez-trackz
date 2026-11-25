@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +65,42 @@ var queenEventTypes = map[string]bool{
 	"missing": true, "dead": true, "requeened": true,
 }
 
+// treatmentEventFields is one treatment_events row to insert. A nil
+// WithdrawalDays resolves from the product catalog.
+type treatmentEventFields struct {
+	HiveID         uuid.UUID
+	InspectionID   *uuid.UUID
+	DateApplied    time.Time
+	Product        string
+	Method         *string
+	DateRemoved    *time.Time
+	Notes          *string
+	WithdrawalDays *int
+}
+
+// treatmentEventInsert is the single insert path for a standalone treatment
+// (REST and MCP). q may be a transaction.
+func (s *Server) treatmentEventInsert(ctx context.Context, q inspectionQuerier, f treatmentEventFields) (uuid.UUID, error) {
+	days := 0
+	if f.WithdrawalDays != nil {
+		days = *f.WithdrawalDays
+	} else {
+		resolved, err := s.resolveWithdrawalDays(ctx, f.Product)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		days = resolved
+	}
+	var id uuid.UUID
+	err := q.QueryRow(ctx, `
+		INSERT INTO treatment_events
+			(hive_id, inspection_id, date_applied, product, method, date_removed, notes, withdrawal_days)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+		f.HiveID, f.InspectionID, f.DateApplied, strings.TrimSpace(f.Product),
+		honeyTrimPtr(f.Method), f.DateRemoved, honeyTrimPtr(f.Notes), days).Scan(&id)
+	return id, err
+}
+
 func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		HiveID         uuid.UUID  `json:"hiveId"`
@@ -96,28 +133,15 @@ func (s *Server) treatmentEventCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		removed = &v
 	}
-	days := 0
-	if req.WithdrawalDays != nil {
-		if *req.WithdrawalDays < 0 {
-			writeError(w, http.StatusBadRequest, "withdrawalDays must be zero or greater")
-			return
-		}
-		days = *req.WithdrawalDays
-	} else {
-		resolved, err := s.resolveWithdrawalDays(r.Context(), req.Product)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
-		}
-		days = resolved
+	if req.WithdrawalDays != nil && *req.WithdrawalDays < 0 {
+		writeError(w, http.StatusBadRequest, "withdrawalDays must be zero or greater")
+		return
 	}
-	var id uuid.UUID
-	err = s.pool.QueryRow(r.Context(), `
-		INSERT INTO treatment_events
-			(hive_id, inspection_id, date_applied, product, method, date_removed, notes, withdrawal_days)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		req.HiveID, req.InspectionID, date, strings.TrimSpace(req.Product),
-		honeyTrimPtr(req.Method), removed, honeyTrimPtr(req.Notes), days).Scan(&id)
+	id, err := s.treatmentEventInsert(r.Context(), s.pool, treatmentEventFields{
+		HiveID: req.HiveID, InspectionID: req.InspectionID, DateApplied: date,
+		Product: req.Product, Method: req.Method, DateRemoved: removed,
+		Notes: req.Notes, WithdrawalDays: req.WithdrawalDays,
+	})
 	if err != nil {
 		if honeyIsFKViolation(err) {
 			writeError(w, http.StatusBadRequest, "invalid hiveId or inspectionId")
@@ -293,109 +317,45 @@ func (s *Server) hiveTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := 200
-	if raw := r.URL.Query().Get("limit"); raw != "" {
+	query := r.URL.Query()
+	if raw := query.Get("limit"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 && v <= 500 {
 			limit = v
 		}
 	}
-	rows, err := s.pool.Query(r.Context(), `
-		SELECT event_id, event_type, event_date, title, details, photos, meta
-		FROM (
-			SELECT i.id AS event_id, 'inspection'::text AS event_type, i.date AS event_date,
-				'Inspection'::text AS title,
-				COALESCE(i.notes, i.brood_pattern, i.queen_health) AS details,
-				COALESCE((
-					SELECT jsonb_agg(jsonb_build_object(
-						'id', p.id,
-						'url', COALESCE(
-							CASE WHEN p.medium_key IS NOT NULL AND p.medium_key <> ''
-								THEN '/api/v1/photos/file/' || p.medium_key END,
-							CASE WHEN p.thumbnail_key IS NOT NULL AND p.thumbnail_key <> ''
-								THEN '/api/v1/photos/file/' || p.thumbnail_key END,
-							'/api/v1/photos/' || p.id::text || '/original'
-						),
-						'caption', p.caption
-					) ORDER BY p.created_at)
-					FROM photos p WHERE p.owner_type = 'inspection' AND p.owner_id = i.id
-				), '[]'::jsonb) AS photos,
-				jsonb_build_object(
-					'queenSeen', i.queen_seen, 'storesHoney', i.stores_honey,
-					'storesPollen', i.stores_pollen, 'temperament', i.temperament
-				) AS meta
-			FROM inspections i WHERE i.hive_id = $1
-			UNION ALL
-			SELECT f.id, 'feeding', f.date_fed, 'Feeding',
-				concat_ws(' · ', replace(f.type::text, '_', ' '),
-					f.quantity::text || ' ' || f.quantity_unit::text, f.notes),
-				'[]'::jsonb, jsonb_build_object('dateEmpty', f.date_empty)
-			FROM feedings f WHERE f.hive_id = $1
-			UNION ALL
-			SELECT t.id, 'treatment', t.date_applied, 'Treatment: ' || t.product,
-				concat_ws(' · ', t.method, t.notes), '[]'::jsonb,
-				jsonb_build_object(
-					'dateRemoved', t.date_removed,
-					'withdrawalDays', t.withdrawal_days,
-					'lockoutUntil', CASE WHEN t.date_removed IS NULL THEN NULL
-						ELSE (t.date_removed::date + t.withdrawal_days)::date END
-				)
-			FROM treatment_events t WHERE t.hive_id = $1 AND t.deleted_at IS NULL
-			UNION ALL
-			SELECT m.id, 'mite_count', m.date, 'Varroa count',
-				m.mites_count::text || ' mites via ' || replace(m.method, '_', ' '),
-				'[]'::jsonb,
-				jsonb_build_object('method', m.method, 'mitesCount', m.mites_count,
-					'sampleSize', m.sample_size, 'daysOnBoard', m.days_on_board,
-					'mitesPer100', m.mites_per_100, 'mitesPerDay', m.mites_per_day)
-			FROM mite_counts m WHERE m.hive_id = $1 AND m.deleted_at IS NULL
-			UNION ALL
-			SELECT q.id, 'queen_event', q.event_date,
-				'Queen ' || replace(q.event_type, '_', ' '), q.notes,
-				'[]'::jsonb, '{}'::jsonb
-			FROM queen_events q WHERE q.hive_id = $1
-			UNION ALL
-			SELECT hs.id, 'harvest', hs.date, 'Honey harvest',
-				round(hs.calculated_honey_weight::numeric, 2)::text || ' lb', '[]'::jsonb,
-				jsonb_build_object('weightLbs', hs.calculated_honey_weight)
-			FROM honey_harvests hs WHERE hs.hive_id = $1 AND hs.deleted_at IS NULL
-			UNION ALL
-			SELECT sp.id, 'split', sp.split_date,
-				CASE WHEN sp.parent_hive_id = $1 THEN 'Split created'
-					ELSE 'Created from split' END,
-				concat_ws(' · ', replace(sp.split_type::text, '-', ' '), sp.notes),
-				'[]'::jsonb,
-				jsonb_build_object('parentHiveId', sp.parent_hive_id, 'childHiveId', sp.child_hive_id)
-			FROM hive_splits sp WHERE sp.parent_hive_id = $1 OR sp.child_hive_id = $1
-			UNION ALL
-			SELECT lh.id, 'move', lh.date_from, 'Moved to ' || a.name,
-				lh.position_label, '[]'::jsonb,
-				jsonb_build_object('apiaryId', lh.apiary_id, 'dateTo', lh.date_to)
-			FROM hive_location_history lh
-			JOIN apiaries a ON a.id = lh.apiary_id
-			WHERE lh.hive_id = $1
-		) timeline
-		ORDER BY event_date DESC
-		LIMIT $2`, hiveID, limit)
+	request := timelineQuery{HiveIDs: []uuid.UUID{hiveID}, Limit: limit}
+	// Contract 2: optional from/to/types with the activity endpoint's
+	// semantics. With none of them the response is exactly what it was.
+	var rg *activityRange
+	filtered := query.Has("from") || query.Has("to") || query.Has("types")
+	if strings.TrimSpace(query.Get("from")) != "" || strings.TrimSpace(query.Get("to")) != "" {
+		parsed, err := parseActivityRange(query.Get("from"), query.Get("to"), time.Now())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		rg = &parsed
+		lower, upper := parsed.sqlBounds()
+		request.Lower, request.Upper = &lower, &upper
+	}
+	types, err := parseActivityTypes(query.Get("types"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	request.Types = types
+	request.IncludeStatus = filtered && typeAllowed(types, "status")
+	rows, err := s.queryTimeline(r.Context(), request)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	defer rows.Close()
-	out := make([]hiveTimelineEntry, 0)
-	for rows.Next() {
-		var item hiveTimelineEntry
-		var photosJSON []byte
-		if err := rows.Scan(&item.ID, &item.Type, &item.Date, &item.Title,
-			&item.Details, &photosJSON, &item.Meta); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+	out := make([]hiveTimelineEntry, 0, len(rows))
+	for _, row := range rows {
+		if rg != nil && !rg.contains(eventDay(row.Date)) {
+			continue
 		}
-		item.Photos = []hiveTimelinePhoto{}
-		_ = json.Unmarshal(photosJSON, &item.Photos)
-		out = append(out, item)
-	}
-	if rows.Err() != nil {
-		writeError(w, http.StatusInternalServerError, "database error")
-		return
+		out = append(out, row.hiveTimelineEntry)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

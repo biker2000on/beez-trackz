@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -134,102 +137,6 @@ func (s *Server) writeMCPError(
 	})
 }
 
-func mcpObject(properties map[string]any, required ...string) map[string]any {
-	value := map[string]any{
-		"type":                 "object",
-		"properties":           properties,
-		"additionalProperties": false,
-	}
-	if len(required) > 0 {
-		value["required"] = required
-	}
-	return value
-}
-
-func mcpTools() []map[string]any {
-	stringID := map[string]any{"type": "string", "format": "uuid"}
-	return []map[string]any{
-		{
-			"name":        "list_apiaries",
-			"description": "List apiaries visible to the authenticated user.",
-			"inputSchema": mcpObject(map[string]any{}),
-		},
-		{
-			"name":        "list_hives",
-			"description": "List visible hives, optionally within one apiary.",
-			"inputSchema": mcpObject(map[string]any{"apiaryId": stringID}),
-		},
-		{
-			"name":        "get_hive",
-			"description": "Get the current details for one visible hive.",
-			"inputSchema": mcpObject(map[string]any{"hiveId": stringID}, "hiveId"),
-		},
-		{
-			"name":        "get_hive_timeline",
-			"description": "Get the inspection, feeding, treatment, queen, and harvest timeline for one hive.",
-			"inputSchema": mcpObject(map[string]any{"hiveId": stringID}, "hiveId"),
-		},
-		{
-			"name":        "get_apiary_weather",
-			"description": "Get a ten-day apiary forecast and beekeeping weather alerts.",
-			"inputSchema": mcpObject(map[string]any{"apiaryId": stringID}, "apiaryId"),
-		},
-		{
-			"name":        "get_bloom_predictions",
-			"description": "Predict local bloom windows from nearby observations and apiary weather.",
-			"inputSchema": mcpObject(map[string]any{"apiaryId": stringID}, "apiaryId"),
-		},
-		{
-			"name":        "get_queen_performance",
-			"description": "Score queens and queen lines using brood, temperament, yield, and survival records.",
-			"inputSchema": mcpObject(map[string]any{"apiaryId": stringID}),
-		},
-		{
-			"name":        "record_inspection",
-			"description": "Record an inspection. Requires editor access to the hive's apiary.",
-			"inputSchema": mcpObject(map[string]any{
-				"hiveId":       stringID,
-				"date":         map[string]any{"type": "string", "format": "date"},
-				"queenSeen":    map[string]any{"type": "boolean"},
-				"broodPattern": map[string]any{"type": "string"},
-				"temperament":  map[string]any{"type": "integer", "minimum": 1, "maximum": 5},
-				"notes":        map[string]any{"type": "string"},
-			}, "hiveId", "date"),
-		},
-		{
-			"name":        "record_feeding",
-			"description": "Record feed given to a hive. Requires editor access to the hive's apiary.",
-			"inputSchema": mcpObject(map[string]any{
-				"hiveId":  stringID,
-				"dateFed": map[string]any{"type": "string", "format": "date"},
-				"type": map[string]any{
-					"type": "string",
-					"enum": []string{"sugar_syrup_1to1", "sugar_syrup_2to1", "dry_sugar", "pollen_patty", "fondant", "other"},
-				},
-				"quantity": map[string]any{"type": "number", "exclusiveMinimum": 0},
-				"quantityUnit": map[string]any{
-					"type": "string", "enum": []string{"lbs", "oz", "quarts", "gallons"},
-				},
-				"feederType": map[string]any{"type": "string"},
-				"notes":      map[string]any{"type": "string"},
-			}, "hiveId", "dateFed", "type", "quantity", "quantityUnit"),
-		},
-		{
-			"name":        "record_mite_count",
-			"description": "Record a Varroa mite count. Washes/rolls are mites per 100 bees; sticky boards need daysOnBoard to become mites per day.",
-			"inputSchema": mcpObject(map[string]any{
-				"hiveId":      stringID,
-				"date":        map[string]any{"type": "string", "format": "date"},
-				"method":      map[string]any{"type": "string", "enum": []string{"alcohol_wash", "sugar_roll", "sticky_board", "visual"}},
-				"mitesCount":  map[string]any{"type": "integer", "minimum": 0},
-				"sampleSize":  map[string]any{"type": "integer", "exclusiveMinimum": 0},
-				"daysOnBoard": map[string]any{"type": "integer", "exclusiveMinimum": 0},
-				"notes":       map[string]any{"type": "string"},
-			}, "hiveId", "date", "method", "mitesCount"),
-		},
-	}
-}
-
 func mcpToolSuccess(value any) mcpToolResult {
 	raw, _ := json.Marshal(value)
 	return mcpToolResult{
@@ -245,9 +152,11 @@ func mcpToolError(message string) mcpToolResult {
 	}
 }
 
+// --- argument helpers ---------------------------------------------------
+
 func mcpUUID(arguments map[string]json.RawMessage, name string, required bool) (*uuid.UUID, error) {
 	raw, ok := arguments[name]
-	if !ok {
+	if !ok || string(raw) == "null" {
 		if required {
 			return nil, fmt.Errorf("%s is required", name)
 		}
@@ -264,6 +173,180 @@ func mcpUUID(arguments map[string]json.RawMessage, name string, required bool) (
 	return &id, nil
 }
 
+// mcpString reads an optional string argument; nil when absent or null.
+func mcpString(arguments map[string]json.RawMessage, name string) (*string, error) {
+	raw, ok := arguments[name]
+	if !ok || string(raw) == "null" {
+		return nil, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%s must be a string", name)
+	}
+	return &value, nil
+}
+
+// mcpRequiredString reads a string argument that must be present and
+// non-blank.
+func mcpRequiredString(arguments map[string]json.RawMessage, name string) (string, error) {
+	value, err := mcpString(arguments, name)
+	if err != nil {
+		return "", err
+	}
+	if value == nil || strings.TrimSpace(*value) == "" {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	return *value, nil
+}
+
+// mcpPopBool removes a boolean argument (such as allowDuplicate) so the
+// remaining arguments can be forwarded to a REST handler that rejects
+// unknown fields.
+func mcpPopBool(arguments map[string]json.RawMessage, name string) (bool, error) {
+	raw, ok := arguments[name]
+	if !ok {
+		return false, nil
+	}
+	delete(arguments, name)
+	if string(raw) == "null" {
+		return false, nil
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return value, nil
+}
+
+// mcpStringList reads an optional array of strings.
+func mcpStringList(arguments map[string]json.RawMessage, name string) ([]string, error) {
+	raw, ok := arguments[name]
+	if !ok || string(raw) == "null" {
+		return nil, nil
+	}
+	var values []string
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, fmt.Errorf("%s must be an array of strings", name)
+	}
+	return values, nil
+}
+
+// mcpDay parses a request date the way the REST handlers do (parseDate) and
+// returns both the stored instant and the calendar day it belongs to.
+func mcpDay(raw, name string) (time.Time, time.Time, error) {
+	at, err := parseDate(raw)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("%s must be a date (YYYY-MM-DD)", name)
+	}
+	return at, eventDay(at), nil
+}
+
+// mcpRangeQuery turns from/to/types arguments into the query string the
+// activity and timeline handlers take.
+func mcpRangeQuery(arguments map[string]json.RawMessage) (url.Values, error) {
+	query := url.Values{}
+	for _, name := range []string{"from", "to"} {
+		value, err := mcpString(arguments, name)
+		if err != nil {
+			return nil, err
+		}
+		if value != nil && strings.TrimSpace(*value) != "" {
+			if _, err := parseCivilDate(*value); err != nil {
+				return nil, fmt.Errorf("%s must be a date (YYYY-MM-DD)", name)
+			}
+			query.Set(name, strings.TrimSpace(*value))
+		}
+	}
+	types, err := mcpStringList(arguments, "types")
+	if err != nil {
+		return nil, err
+	}
+	if len(types) > 0 {
+		if _, err := parseActivityTypes(strings.Join(types, ",")); err != nil {
+			return nil, err
+		}
+		query.Set("types", strings.Join(types, ","))
+	}
+	return query, nil
+}
+
+// mcpValidateArguments enforces the tool's input schema at the top level:
+// every argument must be a declared property (additionalProperties: false)
+// and every required property must be present. Nested objects are checked by
+// the strict decoders behind each tool.
+func mcpValidateArguments(name string, arguments map[string]json.RawMessage) error {
+	tool, ok := mcpToolIndex()[name]
+	if !ok {
+		return fmt.Errorf("unknown tool %q", name)
+	}
+	schema, _ := tool["inputSchema"].(map[string]any)
+	properties, _ := schema["properties"].(map[string]any)
+	unknown := make([]string, 0)
+	for key := range arguments {
+		if _, ok := properties[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown argument(s) for %s: %s", name, strings.Join(unknown, ", "))
+	}
+	required, _ := schema["required"].([]string)
+	for _, key := range required {
+		raw, ok := arguments[key]
+		if !ok || string(raw) == "null" {
+			return fmt.Errorf("%s is required", key)
+		}
+	}
+	return nil
+}
+
+// --- authorization helpers ----------------------------------------------
+//
+// The REST permission helpers write their refusal to a ResponseWriter; MCP
+// turns that refusal into the tool error.
+
+func mcpRecorderError(recorder *httptest.ResponseRecorder) error {
+	var value struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(recorder.Body.Bytes(), &value)
+	if value.Error == "" {
+		value.Error = fmt.Sprintf("request failed (%d)", recorder.Code)
+	}
+	return errors.New(value.Error)
+}
+
+func (s *Server) mcpRequireHive(r *http.Request, hiveID uuid.UUID, edit bool) error {
+	recorder := httptest.NewRecorder()
+	if !s.requireHiveRole(recorder, r, hiveID, edit) {
+		return mcpRecorderError(recorder)
+	}
+	return nil
+}
+
+func (s *Server) mcpRequireApiary(r *http.Request, apiaryID uuid.UUID, edit bool) error {
+	recorder := httptest.NewRecorder()
+	if !s.requireApiaryRole(recorder, r, apiaryID, edit) {
+		return mcpRecorderError(recorder)
+	}
+	return nil
+}
+
+// mcpRequireOwner mirrors requireOwnerRole, naming the missing record.
+func (s *Server) mcpRequireOwner(r *http.Request, ownerType string, id uuid.UUID, edit bool) error {
+	recorder := httptest.NewRecorder()
+	if !s.requireOwnerRole(recorder, r, ownerType, id, edit) {
+		if recorder.Code == http.StatusNotFound {
+			return fmt.Errorf("%s not found", ownerType)
+		}
+		return mcpRecorderError(recorder)
+	}
+	return nil
+}
+
+// --- dispatch -------------------------------------------------------------
+
 func (s *Server) mcpCallTool(r *http.Request, raw json.RawMessage) (mcpToolResult, error) {
 	var call struct {
 		Name      string                     `json:"name"`
@@ -275,18 +358,19 @@ func (s *Server) mcpCallTool(r *http.Request, raw json.RawMessage) (mcpToolResul
 	if call.Arguments == nil {
 		call.Arguments = map[string]json.RawMessage{}
 	}
+	if err := mcpValidateArguments(call.Name, call.Arguments); err != nil {
+		return mcpToolResult{}, err
+	}
+	args := call.Arguments
 
 	switch call.Name {
+	// reads
 	case "list_apiaries":
 		return s.mcpListApiaries(r)
 	case "list_hives":
-		apiaryID, err := mcpUUID(call.Arguments, "apiaryId", false)
-		if err != nil {
-			return mcpToolResult{}, err
-		}
-		return s.mcpListHives(r, apiaryID)
+		return s.mcpListHives(r, args)
 	case "get_hive":
-		hiveID, err := mcpUUID(call.Arguments, "hiveId", true)
+		hiveID, err := mcpUUID(args, "hiveId", true)
 		if err != nil {
 			return mcpToolResult{}, err
 		}
@@ -299,9 +383,21 @@ func (s *Server) mcpCallTool(r *http.Request, raw json.RawMessage) (mcpToolResul
 		}
 		return mcpToolSuccess(item), nil
 	case "get_hive_timeline":
-		return s.mcpCallIDHandler(r, call.Arguments, "hiveId", false, s.hiveTimeline)
+		query, err := mcpRangeQuery(args)
+		if err != nil {
+			return mcpToolResult{}, err
+		}
+		return s.mcpCallIDHandlerQuery(r, args, "hiveId", false, s.hiveTimeline, query)
+	case "get_apiary_activity":
+		query, err := mcpRangeQuery(args)
+		if err != nil {
+			return mcpToolResult{}, err
+		}
+		return s.mcpCallIDHandlerQuery(r, args, "apiaryId", false, s.handleApiaryActivity, query)
+	case "list_apiary_observations":
+		return s.mcpListApiaryObservations(r, args)
 	case "get_apiary_weather":
-		apiaryID, err := mcpUUID(call.Arguments, "apiaryId", true)
+		apiaryID, err := mcpUUID(args, "apiaryId", true)
 		if err != nil {
 			return mcpToolResult{}, err
 		}
@@ -314,16 +410,37 @@ func (s *Server) mcpCallTool(r *http.Request, raw json.RawMessage) (mcpToolResul
 		}
 		return mcpToolSuccess(value), nil
 	case "get_bloom_predictions":
-		return s.mcpCallIDHandler(r, call.Arguments, "apiaryId", false,
-			s.apiaryBloomPredictions)
+		return s.mcpCallIDHandler(r, args, "apiaryId", false, s.apiaryBloomPredictions)
 	case "get_queen_performance":
-		return s.mcpCallQueenPerformance(r, call.Arguments)
+		return s.mcpCallQueenPerformance(r, args)
+	case "get_varroa_summary":
+		return s.mcpVarroaSummary(r, args)
+	case "get_treatment_locks":
+		return s.mcpTreatmentLocks(r, args)
+
+	// writes
 	case "record_inspection":
-		return s.mcpCallJSONHandler(r, call.Arguments, s.handleInspectionCreate)
+		return s.mcpRecordInspection(r, args)
+	case "update_inspection":
+		return s.mcpUpdateInspection(r, args)
+	case "delete_inspection":
+		return s.mcpDeleteInspection(r, args)
 	case "record_feeding":
-		return s.mcpCallJSONHandler(r, call.Arguments, s.handleFeedingCreate)
+		return s.mcpRecordFeeding(r, args)
 	case "record_mite_count":
-		return s.mcpCallJSONHandler(r, call.Arguments, s.miteCountCreate)
+		return s.mcpRecordMiteCount(r, args)
+	case "record_treatment":
+		return s.mcpRecordTreatment(r, args)
+	case "record_queen_event":
+		return s.mcpRecordQueenEvent(r, args)
+	case "record_apiary_observation":
+		return s.mcpRecordApiaryObservation(r, args)
+	case "record_bloom_observation":
+		return s.mcpRecordBloomObservation(r, args)
+	case "set_hive_status":
+		return s.mcpSetHiveStatus(r, args)
+	case "record_visit":
+		return s.mcpRecordVisit(r, args)
 	default:
 		return mcpToolResult{}, fmt.Errorf("unknown tool %q", call.Name)
 	}
@@ -365,10 +482,46 @@ func (s *Server) mcpListApiaries(r *http.Request) (mcpToolResult, error) {
 	return mcpToolSuccess(items), rows.Err()
 }
 
+var mcpHiveStatusFilters = []string{"active", "dead", "sold", "combined", "all"}
+
+// mcpParseHiveStatusFilter defaults to "active", meaning status active and
+// not archived: the colonies that are actually in the yard today.
+func mcpParseHiveStatusFilter(raw *string) (string, error) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return "active", nil
+	}
+	value := strings.ToLower(strings.TrimSpace(*raw))
+	for _, allowed := range mcpHiveStatusFilters {
+		if value == allowed {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("status must be one of %s", strings.Join(mcpHiveStatusFilters, ", "))
+}
+
 func (s *Server) mcpListHives(
 	r *http.Request,
-	apiaryID *uuid.UUID,
+	arguments map[string]json.RawMessage,
 ) (mcpToolResult, error) {
+	apiaryID, err := mcpUUID(arguments, "apiaryId", false)
+	if err != nil {
+		return mcpToolResult{}, err
+	}
+	rawStatus, err := mcpString(arguments, "status")
+	if err != nil {
+		return mcpToolResult{}, err
+	}
+	status, err := mcpParseHiveStatusFilter(rawStatus)
+	if err != nil {
+		return mcpToolResult{}, err
+	}
+	label, err := mcpString(arguments, "positionLabel")
+	if err != nil {
+		return mcpToolResult{}, err
+	}
+	if label != nil && strings.TrimSpace(*label) == "" {
+		label = nil
+	}
 	if apiaryID != nil &&
 		!s.requireApiaryRole(httptest.NewRecorder(), r, *apiaryID, false) {
 		return mcpToolResult{}, errors.New("apiary access denied")
@@ -380,7 +533,12 @@ func (s *Server) mcpListHives(
 			SELECT 1 FROM apiary_memberships membership
 			WHERE membership.user_id=$3 AND membership.apiary_id=h.apiary_id
 		  ))
-		ORDER BY a.name,h.position_label`, apiaryID, user.IsAdmin, user.ID)
+		  AND ($4::text = 'all'
+			OR ($4::text = 'active' AND h.status = 'active' AND NOT h.is_archived)
+			OR ($4::text NOT IN ('all', 'active') AND h.status::text = $4::text))
+		  AND ($5::text IS NULL OR lower(btrim(h.position_label)) = lower(btrim($5::text)))
+		ORDER BY a.name, h.position_label, h.installed_date DESC NULLS LAST`,
+		apiaryID, user.IsAdmin, user.ID, status, label)
 	if err != nil {
 		return mcpToolResult{}, err
 	}
@@ -409,23 +567,51 @@ func hiveCollectRows(rows interface {
 	return items, rows.Err()
 }
 
-func mcpRequestWithID(r *http.Request, id uuid.UUID) *http.Request {
-	routeContext := chi.NewRouteContext()
-	routeContext.URLParams.Add("id", id.String())
-	ctx := context.WithValue(r.Context(), chi.RouteCtxKey, routeContext)
-	return r.Clone(ctx)
+// --- REST handler reuse ---------------------------------------------------
+//
+// MCP tools reuse the REST handlers through httptest so validation,
+// permissions, and response shapes stay identical.
+
+// mcpInvoke runs a REST handler with an optional {id} route parameter, query
+// string, and JSON body.
+func mcpInvoke(
+	r *http.Request,
+	handler http.HandlerFunc,
+	id *uuid.UUID,
+	query url.Values,
+	body any,
+) (*httptest.ResponseRecorder, error) {
+	ctx := r.Context()
+	if id != nil {
+		routeContext := chi.NewRouteContext()
+		routeContext.URLParams.Add("id", id.String())
+		ctx = context.WithValue(ctx, chi.RouteCtxKey, routeContext)
+	}
+	cloned := r.Clone(ctx)
+	cloned.URL = &url.URL{Path: r.URL.Path}
+	if query != nil {
+		cloned.URL.RawQuery = query.Encode()
+	}
+	cloned.Body = http.NoBody
+	cloned.ContentLength = 0
+	cloned.Header = r.Header.Clone()
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		cloned.Body = ioNopCloser{Reader: bytes.NewReader(encoded)}
+		cloned.ContentLength = int64(len(encoded))
+		cloned.Header.Set("Content-Type", "application/json")
+	}
+	recorder := httptest.NewRecorder()
+	handler(recorder, cloned)
+	return recorder, nil
 }
 
 func mcpRecorderResult(recorder *httptest.ResponseRecorder) (mcpToolResult, error) {
 	if recorder.Code < 200 || recorder.Code >= 300 {
-		var value struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(recorder.Body.Bytes(), &value)
-		if value.Error == "" {
-			value.Error = fmt.Sprintf("request failed (%d)", recorder.Code)
-		}
-		return mcpToolResult{}, errors.New(value.Error)
+		return mcpToolResult{}, mcpRecorderError(recorder)
 	}
 	var value any
 	if err := json.Unmarshal(recorder.Body.Bytes(), &value); err != nil {
@@ -441,6 +627,17 @@ func (s *Server) mcpCallIDHandler(
 	edit bool,
 	handler http.HandlerFunc,
 ) (mcpToolResult, error) {
+	return s.mcpCallIDHandlerQuery(r, arguments, name, edit, handler, nil)
+}
+
+func (s *Server) mcpCallIDHandlerQuery(
+	r *http.Request,
+	arguments map[string]json.RawMessage,
+	name string,
+	edit bool,
+	handler http.HandlerFunc,
+	query url.Values,
+) (mcpToolResult, error) {
 	id, err := mcpUUID(arguments, name, true)
 	if err != nil {
 		return mcpToolResult{}, err
@@ -454,8 +651,10 @@ func (s *Server) mcpCallIDHandler(
 	if !allowed {
 		return mcpToolResult{}, errors.New("apiary access denied")
 	}
-	recorder := httptest.NewRecorder()
-	handler(recorder, mcpRequestWithID(r, *id))
+	recorder, err := mcpInvoke(r, handler, id, query, nil)
+	if err != nil {
+		return mcpToolResult{}, err
+	}
 	return mcpRecorderResult(recorder)
 }
 
@@ -467,35 +666,28 @@ func (s *Server) mcpCallQueenPerformance(
 	if err != nil {
 		return mcpToolResult{}, err
 	}
-	cloned := r.Clone(r.Context())
+	query := url.Values{}
 	if apiaryID != nil {
-		query := cloned.URL.Query()
 		query.Set("apiaryId", apiaryID.String())
-		cloned.URL.RawQuery = query.Encode()
 	}
-	recorder := httptest.NewRecorder()
-	s.queenPerformance(recorder, cloned)
+	recorder, err := mcpInvoke(r, s.queenPerformance, nil, query, nil)
+	if err != nil {
+		return mcpToolResult{}, err
+	}
 	return mcpRecorderResult(recorder)
 }
 
+// mcpCallJSONHandler forwards the tool arguments as the JSON body of a REST
+// create handler.
 func (s *Server) mcpCallJSONHandler(
 	r *http.Request,
 	arguments map[string]json.RawMessage,
 	handler http.HandlerFunc,
 ) (mcpToolResult, error) {
-	body, err := json.Marshal(arguments)
+	recorder, err := mcpInvoke(r, handler, nil, nil, arguments)
 	if err != nil {
 		return mcpToolResult{}, err
 	}
-	cloned := r.Clone(r.Context())
-	cloned.Body = http.NoBody
-	if len(body) > 0 {
-		cloned.Body = ioNopCloser{Reader: bytes.NewReader(body)}
-	}
-	cloned.Header = r.Header.Clone()
-	cloned.Header.Set("Content-Type", "application/json")
-	recorder := httptest.NewRecorder()
-	handler(recorder, cloned)
 	return mcpRecorderResult(recorder)
 }
 

@@ -74,7 +74,9 @@ export function ApiaryPhotoTimeline({
     return (
       <Card>
         <CardContent className="flex items-center justify-between gap-3 pt-5">
-          <p className="text-sm text-muted-foreground">Could not load the apiary timeline.</p>
+          <p className="text-sm text-muted-foreground">
+            Could not load the Immich evidence for this apiary.
+          </p>
           <Button variant="outline" size="sm" onClick={() => void timeline.refetch()}>
             Retry
           </Button>
@@ -90,7 +92,7 @@ export function ApiaryPhotoTimeline({
           <div className="grid gap-1.5">
             <CardTitle className="flex items-center gap-2">
               <CalendarRange className="size-5" />
-              Evidence timeline
+              Immich evidence
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Immich flower, bloom, bee, and hive matches near this apiary, ordered by when they were taken.

@@ -46,6 +46,8 @@ func (s *Server) mountDomains(r chi.Router) {
 	s.mountPhotos(r)
 	s.mountTranscriptions(r)
 	s.mountOperations(r)
+	// Apiary activity: every hive event by day (Contract 1).
+	s.mountActivity(r)
 	// Field objects: catch boxes, colony intake, incidents, deadout
 	// autopsies, and the derived swarm/split readiness list.
 	s.mountFieldObjects(r)

@@ -5,6 +5,7 @@ import { apiaryRole, useAccessProfile } from "@/features/access/api";
 import { PhotoSection } from "@/features/photos/photo-gallery";
 import { EquipmentTab } from "./equipment-tab";
 import { useHive } from "./hooks";
+import { hiveReadOnly } from "./lib";
 import { QueenTab } from "./queen-tab";
 
 export type HiveSubsection = "equipment" | "queen" | "photos";
@@ -27,9 +28,13 @@ export function HiveSubpage({
   if (hive.isPending) return <Skeleton className="h-72 w-full" />;
   if (hive.isError || !hive.data) return null;
 
-  const canEdit = ["admin", "editor"].includes(
-    apiaryRole(access.data, hive.data.apiaryId) ?? "",
-  );
+  // Queen and photo writes stop on a retired hive; equipment can still be
+  // returned from one, so the Equipment tab keeps its own rule.
+  const canEdit =
+    !hiveReadOnly(hive.data) &&
+    ["admin", "editor"].includes(
+      apiaryRole(access.data, hive.data.apiaryId) ?? "",
+    );
 
   if (section === "equipment") {
     return (
