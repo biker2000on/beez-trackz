@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api";
+import { hiveDisplayLabel } from "@/lib/hive-label";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -57,6 +58,25 @@ const columnHelper = createColumnHelper<typeof gridFeatures, Hive>();
 /** What the select cells read from `table.options.meta`. */
 interface HiveListMeta {
   selected: Set<string>;
+  /** `hiveDisplayLabel` per hive id ("A4 · since May 2026", "A4 (dead Apr 2026)"). */
+  labels: Map<string, string>;
+}
+
+/**
+ * Labels are reused when a colony dies or is sold, so the list names each
+ * hive against the others in its own apiary.
+ */
+function displayLabels(hives: readonly Hive[]): Map<string, string> {
+  const byApiary = new Map<string, Hive[]>();
+  for (const hive of hives) {
+    byApiary.set(hive.apiaryId, [...(byApiary.get(hive.apiaryId) ?? []), hive]);
+  }
+  return new Map(
+    hives.map((hive) => [
+      hive.id,
+      hiveDisplayLabel(hive, byApiary.get(hive.apiaryId) ?? []),
+    ]),
+  );
 }
 
 export function HivesListPage() {
@@ -164,7 +184,7 @@ export function HivesListPage() {
           id: "hive",
           header: "Hive",
           meta: { cellClassName: "font-medium", card: "title" } satisfies DataGridColumnMeta,
-          cell: ({ row: { original: hive } }) => (
+          cell: ({ row: { original: hive }, table }) => (
             <>
               {/* The name stays a link in bulk mode so a row can be
                   opened for a second look without losing the selection. */}
@@ -173,9 +193,11 @@ export function HivesListPage() {
                 className="underline-offset-4 hover:underline"
                 onClick={(event) => event.stopPropagation()}
               >
-                {hive.positionLabel}
+                {gridMeta<HiveListMeta>(table).labels.get(hive.id) ??
+                  hive.positionLabel}
               </Link>
-              {hive.isArchived && (
+              {hive.isArchived &&
+                !gridMeta<HiveListMeta>(table).labels.get(hive.id)?.includes("(") && (
                 <span className="ml-2 text-xs text-muted-foreground">
                   (archived)
                 </span>
@@ -208,7 +230,8 @@ export function HivesListPage() {
     [bulkMode],
   );
 
-  const listMeta: HiveListMeta = { selected };
+  const labels = React.useMemo(() => displayLabels(list), [list]);
+  const listMeta: HiveListMeta = { selected, labels };
   const table = useTable({
     features: gridFeatures,
     columns,
@@ -328,6 +351,7 @@ export function HivesListPage() {
             <HiveCard
               key={hive.id}
               hive={hive}
+              label={labels.get(hive.id)}
               selectable={bulkMode}
               selected={selected.has(hive.id)}
               onToggleSelect={toggleSelect}
