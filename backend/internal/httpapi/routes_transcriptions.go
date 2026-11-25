@@ -149,9 +149,11 @@ func transcriptionMode(mode string) (string, bool) {
 }
 
 // transcriptionCandidateHives lists hives to fuzzy-match references against:
-// the owner apiary's hives when owned by an apiary, otherwise all non-archived.
+// the owner apiary's active hives when owned by an apiary, otherwise every
+// active hive. Retired records (dead, sold, combined) keep their old labels,
+// so matching them would file a new note against a colony that is gone.
 func (s *Server) transcriptionCandidateHives(ctx context.Context, ownerType string, ownerID uuid.UUID) ([]ai.HiveRef, error) {
-	query := `SELECT id, position_label FROM hives WHERE is_archived = false`
+	query := `SELECT id, position_label FROM hives WHERE status = 'active' AND is_archived = false`
 	args := []any{}
 	if ownerType == "hive" {
 		query += ` AND id = $1`
