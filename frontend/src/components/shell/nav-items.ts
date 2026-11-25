@@ -333,10 +333,10 @@ export function contextualNavRoutes(
       { label: "Queen", href: `${base}/queen`, keywords: ["lineage genealogy"] },
       { label: "Photos", href: `${base}/photos` },
       {
-        // One voice surface for the yard (S10): the hive-scoped route is a
-        // search param on `/yard/transcribe`, not a route of its own.
+        // Voice inspection stays inside the hive record: the workspace is
+        // locked to this hive and the record layout keeps its header.
         label: "Voice inspection",
-        href: `/yard/transcribe?hive=${hive}`,
+        href: `${base}/voice`,
         keywords: ["record transcribe"],
         requiresEdit: true,
         action: true,
