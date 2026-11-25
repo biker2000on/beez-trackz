@@ -24,6 +24,7 @@ import { useUnits } from "@/lib/use-units";
 import { fahrenheitToCelsius, milesPerHourToKmh } from "@/lib/units";
 import { useDeleteInspection, type Inspection } from "./hooks";
 import { InspectionFormDialog } from "./inspection-form-dialog";
+import { temperamentText } from "./inspection-fields";
 import { NoteText } from "@/components/record/source-note";
 
 function Rating({ label, value }: { label: string; value: number | null }) {
@@ -31,6 +32,17 @@ function Rating({ label, value }: { label: string; value: number | null }) {
   return (
     <Badge variant="secondary">
       {label} {value}/5
+    </Badge>
+  );
+}
+
+function Temperament({ value }: { value: number | null }) {
+  const word = temperamentText(value);
+  if (value == null || !word) return null;
+  // 1 is calm, 5 is aggressive; say so rather than show a bare score.
+  return (
+    <Badge variant="secondary" title="Temperament: 1 calm, 5 aggressive">
+      Temperament: {word.toLowerCase()} ({value} of 5)
     </Badge>
   );
 }
@@ -74,72 +86,47 @@ export function InspectionCard({
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="flex items-center gap-2 text-base">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-2">
+        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
           {formatDate(inspection.date)}
-          {inspection.queenSeen && (
-            <Badge variant="accent" className="gap-1" title="Queen seen">
+          {inspection.queenSeen === true && (
+            <Badge variant="accent" className="gap-1">
               <Crown className="size-3" />
               Queen seen
             </Badge>
           )}
+          {inspection.queenSeen === false && (
+            <Badge variant="outline">Queen not seen</Badge>
+          )}
         </CardTitle>
-        {canEdit ? <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Edit inspection"
-            onClick={() => setEditOpen(true)}
-          >
-            <Pencil className="size-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Delete inspection"
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        </div> : null}
+        {canEdit ? (
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={() => setEditOpen(true)}>
+              <Pencil className="size-4" />
+              Edit
+              <span className="sr-only"> inspection</span>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="size-4" />
+              Delete
+              <span className="sr-only"> inspection</span>
+            </Button>
+          </div>
+        ) : null}
       </CardHeader>
       <CardContent className="grid gap-2 text-sm">
+        <NoteText text={inspection.notes} className="whitespace-pre-wrap" />
         {inspection.inspectorName && (
           <p className="text-muted-foreground">
             Inspected by {inspection.inspectorName}
           </p>
         )}
-        {inspection.weather?.current ? (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1 font-medium text-foreground">
-              <CloudSun className="size-3.5" />
-              {formatTemperature(
-                snapshotTemperature(inspection.weather.current.temperature_2m),
-              )}
-            </span>
-            <span>
-              Feels{" "}
-              {formatTemperature(
-                snapshotTemperature(
-                  inspection.weather.current.apparent_temperature,
-                ),
-              )}
-            </span>
-            <span>{inspection.weather.current.relative_humidity_2m}% humidity</span>
-            <span>
-              {formatWind(
-                snapshotWind(inspection.weather.current.wind_speed_10m),
-              )}{" "}
-              wind
-            </span>
-          </div>
-        ) : null}
         {inspection.queenHealth && <p>Queen: {inspection.queenHealth}</p>}
         {inspection.broodPattern && <p>Brood: {inspection.broodPattern}</p>}
         <div className="flex flex-wrap gap-1.5 empty:hidden">
           <Rating label="Honey" value={inspection.storesHoney} />
           <Rating label="Pollen" value={inspection.storesPollen} />
-          <Rating label="Temperament" value={inspection.temperament} />
+          <Temperament value={inspection.temperament} />
         </div>
         {(inspection.framesOfBees != null ||
           inspection.framesOfBrood != null ||
@@ -190,10 +177,31 @@ export function InspectionCard({
             })}
           </div>
         )}
-        <NoteText
-          text={inspection.notes}
-          className="whitespace-pre-wrap text-muted-foreground"
-        />
+        {inspection.weather?.current ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/50 px-2.5 py-2 text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1 font-medium text-foreground">
+              <CloudSun className="size-3.5" />
+              {formatTemperature(
+                snapshotTemperature(inspection.weather.current.temperature_2m),
+              )}
+            </span>
+            <span>
+              Feels{" "}
+              {formatTemperature(
+                snapshotTemperature(
+                  inspection.weather.current.apparent_temperature,
+                ),
+              )}
+            </span>
+            <span>{inspection.weather.current.relative_humidity_2m}% humidity</span>
+            <span>
+              {formatWind(
+                snapshotWind(inspection.weather.current.wind_speed_10m),
+              )}{" "}
+              wind
+            </span>
+          </div>
+        ) : null}
         {(photos.data?.length ?? 0) > 0 && (
           <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-3">
             {photos.data?.map((photo) => (
