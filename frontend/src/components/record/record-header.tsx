@@ -87,7 +87,8 @@ export function RecordHeader({
     : undefined;
   const collectionTo = collectionHref ?? collection?.route.href;
   const titleLabel = collection?.route.collectionLabel ?? collectionLabel;
-  usePageTitle(titleLabel ? `${name} · ${titleLabel}` : name);
+  // No name until the record loads: keep the route title rather than "undefined · …".
+  usePageTitle(name ? (titleLabel ? `${name} · ${titleLabel}` : name) : undefined);
 
   const facts = (context ?? []).filter(
     (entry) => entry != null && entry !== false && entry !== "",

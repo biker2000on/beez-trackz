@@ -3,8 +3,8 @@ import { test, expect, type Page } from "@playwright/test";
 const HIVES = [
   { id: "h1", apiaryId: "a1", positionLabel: "A1", status: "active", isArchived: false, installedDate: "2025-04-13", deadoutDate: null },
   { id: "h2", apiaryId: "a1", positionLabel: "A2", status: "active", isArchived: false, installedDate: "2025-04-13", deadoutDate: null },
-  // A retired colony that used to stand at A2: never offered, but it makes the
-  // active A2 read "A2 · since Apr 2025" to assistive tech.
+  // A retired colony that used to stand at A2: never offered. The active A2
+  // still reads as its bare label.
   { id: "h0", apiaryId: "a1", positionLabel: "A2", status: "dead", isArchived: true, installedDate: "2024-05-01", deadoutDate: "2025-03-01" },
 ];
 
@@ -31,13 +31,13 @@ async function mockBulk(page: Page) {
 test("Bulk treatment series saves one record per hive per date and ends one-shot treatments", async ({ page }) => {
   const posts = await mockBulk(page);
   await page.goto("/yard/apiaries/a1/bulk");
-  await expect(page.getByRole("button", { name: /^A2 · since/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "A2", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Choose all 2" }).click();
   await page.getByRole("radio", { name: "Treatment" }).check();
   await page.getByLabel("Product").fill("Oxalic acid");
-  await page.getByLabel("Date 1").fill("2026-11-01");
+  await page.getByLabel("Date 1", { exact: true }).fill("2026-11-01");
   await page.getByRole("button", { name: "Add the next date" }).click();
-  await expect(page.getByLabel("Date 2")).toHaveValue("2026-11-06");
+  await expect(page.getByLabel("Date 2", { exact: true })).toHaveValue("2026-11-06");
   await expect(page.getByRole("checkbox", { name: /ends the same day/ })).toBeChecked();
   await page.getByRole("button", { name: "Save 4 treatment records" }).click();
   await expect.poll(() => posts.length).toBe(4);

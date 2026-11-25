@@ -105,7 +105,7 @@ test("record routes carry no eyebrow and no hand-written tab list", () => {
     join(srcRoot, "features", "apiaries", "observations-page.tsx"),
     join(srcRoot, "features", "apiaries", "hive-labels-page.tsx"),
     join(srcRoot, "features", "apiaries", "bulk-record-page.tsx"),
-    join(srcRoot, "features", "photos", "apiary-timeline-page.tsx"),
+    join(srcRoot, "features", "apiaries", "timeline-page.tsx"),
   ];
   for (const file of recordBodies) {
     const source = readFileSync(file, "utf8");

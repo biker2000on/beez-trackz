@@ -547,14 +547,10 @@ export function ApiaryTimeline({ apiaryId }: { apiaryId: string }) {
             </p>
             <div className="flex flex-wrap gap-2">
               {canEdit ? (
-                <>
-                  <Button asChild>
-                    <Link href={`/yard/apiaries/${apiaryId}/visit`}>Record visit</Link>
-                  </Button>
-                  <Button asChild variant="outline">
-                    <Link href={`/yard/apiaries/${apiaryId}/bulk`}>Bulk record</Link>
-                  </Button>
-                </>
+                // Record visit is the record header's primary action; the body does not repeat it.
+                <Button asChild variant="outline">
+                  <Link href={`/yard/apiaries/${apiaryId}/bulk`}>Bulk record</Link>
+                </Button>
               ) : null}
               <Button variant="ghost" onClick={loadEarlier}>
                 Show the year before

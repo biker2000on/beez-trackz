@@ -59,7 +59,7 @@ type ConfirmOutcome = {
 const MODES: { value: TranscriptionMode; label: string }[] = [
   { value: "batch", label: "Whole apiary" },
   { value: "single", label: "One hive" },
-  { value: "apiary", label: "Apiary notes" },
+  { value: "apiary", label: "Apiary only" },
 ];
 
 const localDate = (date: string) => {
@@ -904,7 +904,7 @@ export function VisitWorkspace({
                 <label
                   key={option.value}
                   className={cn(
-                    "flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-center text-sm font-medium transition-colors",
+                    "relative flex min-h-11 cursor-pointer items-center justify-center rounded-md border px-2 text-center text-sm font-medium transition-colors",
                     "has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background",
                     "has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50",
                     mode === option.value
@@ -915,7 +915,7 @@ export function VisitWorkspace({
                   <input
                     type="radio"
                     name="visit-mode"
-                    className="sr-only"
+                    className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
                     value={option.value}
                     checked={mode === option.value}
                     onChange={() =>

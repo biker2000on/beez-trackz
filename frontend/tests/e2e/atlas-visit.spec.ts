@@ -133,7 +133,7 @@ test("Lost upload response freezes timestamp and replays the same capture after 
  await page.route("**/api/v1/transcriptions",async route=>{bodies.push(route.request().postDataBuffer()?.toString()??"");if(bodies.length===1)return route.abort("failed");return route.fulfill({json:{mediaFileId:"retry-media"}});});
  await page.route("**/api/v1/transcriptions/retry-media?*",route=>route.fulfill({json:{id:"retry-media",status:"complete",parsed:{inspections:[{itemKey:"item",scope:"apiary",notes:"Water source dry"}]}}}));
  await page.goto("/yard/apiaries/a1/visit");await seedCapture(page,{...recoveryCapture,state:"captured"},true);await page.goto("/yard/apiaries/a1/visit?capture=recovery-1");
- await page.getByRole("button",{name:"Retry upload",exact:true}).click();await expect(page.getByRole("alert")).toBeVisible();await expect(page.getByLabel(/Observed at/)).toBeDisabled();
+ await page.getByRole("button",{name:"Retry upload",exact:true}).click();await expect(page.getByRole("main").getByRole("alert")).toBeVisible();await expect(page.getByLabel(/Observed at/)).toBeDisabled();
  await page.reload();await expect(page.getByLabel(/Observed at/)).toBeDisabled();await page.getByRole("button",{name:"Retry upload",exact:true}).click();await expect(page.getByLabel("Apiary notes")).toHaveValue("Water source dry");
  expect(bodies).toHaveLength(2);for(const body of bodies){expect(body).toContain("recovery-1");expect(body).toContain("2026-09-11T10:00:00Z");expect(body).toContain("America/New_York");expect(body).toContain("a1");}
 });
