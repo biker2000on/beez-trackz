@@ -185,6 +185,8 @@ export function ApiaryTimeline({ apiaryId }: { apiaryId: string }) {
     return () => window.clearTimeout(timer);
   }, [findDraft, urlFind, setParams]);
   const find = React.useMemo(() => parseFind(findDraft), [findDraft]);
+  const hasRefine = Boolean(urlFind.trim() || urlFrom || urlTo);
+  const [refineOpen, setRefineOpen] = React.useState(hasRefine);
 
   // A deep link to a day outside the default year asks for the season
   // around it instead.
@@ -345,80 +347,103 @@ export function ApiaryTimeline({ apiaryId }: { apiaryId: string }) {
           multiple
         />
         <div className="flex flex-wrap items-end gap-3">
-          <div className="grid min-w-0 flex-1 basis-56 gap-1.5">
-            <Label htmlFor="timeline-find">Find</Label>
-            <div className="relative">
-              <Search
-                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden
-              />
+          {/* On phones Find and the date range fold behind one button so
+              the first screen shows history, not controls. */}
+          <div
+            id="timeline-refine"
+            className={cn(
+              "flex min-w-0 flex-1 basis-full flex-wrap items-end gap-3 sm:basis-auto",
+              !refineOpen && "max-sm:hidden",
+            )}
+          >
+            <div className="grid min-w-0 flex-1 basis-56 gap-1.5">
+              <Label htmlFor="timeline-find">Find</Label>
+              <div className="relative">
+                <Search
+                  className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <Input
+                  id="timeline-find"
+                  type="search"
+                  value={findDraft}
+                  onChange={(event) => setFindDraft(event.target.value)}
+                  placeholder="oxalic B1 C3"
+                  className="pl-8"
+                  aria-describedby="timeline-find-help"
+                />
+              </div>
+              <p id="timeline-find-help" className="text-xs text-muted-foreground">
+                Hive labels pick hives; other words must appear in the notes.
+              </p>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="timeline-from">From</Label>
               <Input
-                id="timeline-find"
-                type="search"
-                value={findDraft}
-                onChange={(event) => setFindDraft(event.target.value)}
-                placeholder="oxalic B1 C3"
-                className="pl-8"
-                aria-describedby="timeline-find-help"
+                id="timeline-from"
+                type="date"
+                value={from ?? ""}
+                max={to ?? today}
+                onChange={(event) => setParams({ from: event.target.value || null })}
+                className="w-[10.5rem]"
               />
             </div>
-            <p id="timeline-find-help" className="text-xs text-muted-foreground">
-              Hive labels pick hives; other words must appear in the notes.
-            </p>
+            <div className="grid gap-1.5">
+              <Label htmlFor="timeline-to">To</Label>
+              <Input
+                id="timeline-to"
+                type="date"
+                value={to ?? ""}
+                min={from}
+                max={today}
+                onChange={(event) => setParams({ to: event.target.value || null })}
+                className="w-[10.5rem]"
+              />
+            </div>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="timeline-from">From</Label>
-            <Input
-              id="timeline-from"
-              type="date"
-              value={from ?? ""}
-              max={to ?? today}
-              onChange={(event) => setParams({ from: event.target.value || null })}
-              className="w-[10.5rem]"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="timeline-to">To</Label>
-            <Input
-              id="timeline-to"
-              type="date"
-              value={to ?? ""}
-              min={from}
-              max={today}
-              onChange={(event) => setParams({ to: event.target.value || null })}
-              className="w-[10.5rem]"
-            />
-          </div>
-          <div
-            className="inline-flex rounded-md border p-0.5"
-            role="group"
-            aria-label="Layout"
-          >
-            {(
-              [
-                { value: "list", label: "List", icon: List },
-                { value: "grid", label: "Grid", icon: LayoutGrid },
-              ] as const
-            ).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                aria-pressed={view === option.value}
-                onClick={() =>
-                  setParams({ view: option.value === "grid" ? "grid" : null })
-                }
-                className={cn(
-                  "inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-sm font-medium transition-colors touch:min-h-10",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  view === option.value
-                    ? "bg-primary/12 text-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <option.icon className="size-4" aria-hidden />
-                {option.label}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="touch:min-h-11 sm:hidden"
+              aria-expanded={refineOpen}
+              aria-controls="timeline-refine"
+              onClick={() => setRefineOpen((open) => !open)}
+            >
+              <Search className="size-4" aria-hidden />
+              {refineOpen ? "Hide find & dates" : hasRefine ? "Find & dates (on)" : "Find & dates"}
+            </Button>
+            <div
+              className="inline-flex rounded-md border p-0.5"
+              role="group"
+              aria-label="Layout"
+            >
+              {(
+                [
+                  { value: "list", label: "List", icon: List },
+                  { value: "grid", label: "Grid", icon: LayoutGrid },
+                ] as const
+              ).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={view === option.value}
+                  onClick={() =>
+                    setParams({ view: option.value === "grid" ? "grid" : null })
+                  }
+                  className={cn(
+                    "inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-sm font-medium transition-colors touch:min-h-10",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    view === option.value
+                      ? "bg-primary/12 text-primary"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <option.icon className="size-4" aria-hidden />
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         {rangeError ? (

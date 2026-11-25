@@ -36,22 +36,22 @@ function formatMonthYear(iso: string | null): string | null {
 }
 
 /**
- * "A4" when no other hive in `all` shares the label. Otherwise the active hive
- * reads "A4 · since May 2026" and retired ones read "A4 (dead Apr 2026)",
- * "A4 (sold)" or "A4 (combined)".
+ * The active hive always reads as its bare label ("A4"): it is the colony the
+ * label means today, and nearly every label has predecessors, so qualifying
+ * it would put "since …" on every row. When another hive shares the label, a
+ * retired one reads "A4 (dead Apr 2026)", "A4 (sold)" or "A4 (combined)".
+ * Use `hiveSinceLabel` where two colonies at one label are compared side by
+ * side.
  */
 export function hiveDisplayLabel(
   hive: HiveLabelSource,
   all: readonly HiveLabelSource[],
 ): string {
   const label = hive.positionLabel;
+  if (isActiveHive(hive)) return label;
   const shared = all.some((other) => other.id !== hive.id && other.positionLabel === label);
   if (!shared) return label;
 
-  if (isActiveHive(hive)) {
-    const since = formatMonthYear(hive.installedDate);
-    return since ? `${label} · since ${since}` : label;
-  }
   if (hive.status === "dead") {
     const died = formatMonthYear(hive.deadoutDate);
     return died ? `${label} (dead ${died})` : `${label} (dead)`;
@@ -61,4 +61,10 @@ export function hiveDisplayLabel(
     return `${label} (archived)`;
   }
   return `${label} (${hive.status})`;
+}
+
+/** "A4 · since May 2026", for comparing two colonies at one label. */
+export function hiveSinceLabel(hive: HiveLabelSource): string {
+  const since = formatMonthYear(hive.installedDate);
+  return since ? `${hive.positionLabel} · since ${since}` : hive.positionLabel;
 }

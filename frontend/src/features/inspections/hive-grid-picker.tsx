@@ -156,9 +156,11 @@ export function HiveGridPicker<T extends GridHive>({
                 ) : (
                   <span
                     key={`${row.letter}-${index}`}
-                    aria-hidden="true"
-                    className="min-h-11 rounded-md border border-dashed border-border/60"
-                  />
+                    className="flex min-h-11 flex-col items-center justify-center rounded-md border border-dashed border-border px-1 py-1 text-sm tabular-nums text-muted-foreground"
+                  >
+                    <span>{`${row.letter}${index + 1}`}</span>
+                    <span className="text-[11px] leading-tight">empty</span>
+                  </span>
                 ),
               ),
             )}

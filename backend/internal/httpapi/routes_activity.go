@@ -239,7 +239,11 @@ func timelineUnionSQL(includeStatus bool) string {
 			WHERE i.hive_id = ANY($1::uuid[]) AND ` + timelineTypeGuard("inspection") + `
 			UNION ALL
 			SELECT f.hive_id, f.id, 'feeding', f.date_fed, 'Feeding',
-				concat_ws(' · ', replace(f.type::text, '_', ' '),
+				concat_ws(' · ', CASE f.type::text
+						WHEN 'sugar_syrup_1to1' THEN '1:1 syrup'
+						WHEN 'sugar_syrup_2to1' THEN '2:1 syrup'
+						ELSE replace(f.type::text, '_', ' ')
+					END,
 					f.quantity::text || ' ' || f.quantity_unit::text, f.notes),
 				'[]'::jsonb, jsonb_build_object('dateEmpty', f.date_empty)
 			FROM feedings f
