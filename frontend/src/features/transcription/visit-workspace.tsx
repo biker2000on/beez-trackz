@@ -59,7 +59,7 @@ type ConfirmOutcome = {
 const MODES: { value: TranscriptionMode; label: string }[] = [
   { value: "batch", label: "Whole apiary" },
   { value: "single", label: "One hive" },
-  { value: "apiary", label: "Apiary notes" },
+  { value: "apiary", label: "Apiary only" },
 ];
 
 const localDate = (date: string) => {
