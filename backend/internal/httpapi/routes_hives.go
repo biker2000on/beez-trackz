@@ -28,6 +28,7 @@ func (s *Server) mountHives(r chi.Router) {
 	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/archive", s.handleHiveArchive)
 	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/unarchive", s.handleHiveUnarchive)
 	r.With(s.requireHiveParamRole(true)).Post("/hives/{id}/deadout", s.handleHiveDeadout)
+	r.With(s.requireHiveParamRole(true)).Patch("/hives/{id}/status", s.handleHiveStatus)
 	r.With(s.requireHiveParamRole(false)).Get("/hives/{id}/location-history", s.handleHiveLocationHistory)
 }
 
@@ -750,10 +751,6 @@ func (s *Server) handleHiveUnarchive(w http.ResponseWriter, r *http.Request) {
 	s.hiveSimpleUpdate(w, r, "is_archived = false")
 }
 
-// POST /hives/{id}/deadout
-func (s *Server) handleHiveDeadout(w http.ResponseWriter, r *http.Request) {
-	s.hiveSimpleUpdate(w, r, "status = 'dead', is_archived = true, deadout_date = now()")
-}
 
 // GET /hives/{id}/location-history
 func (s *Server) handleHiveLocationHistory(w http.ResponseWriter, r *http.Request) {
