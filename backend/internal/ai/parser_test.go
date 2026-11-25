@@ -188,3 +188,16 @@ func TestMatchHiveReferencesIgnoresEmptyValues(t *testing.T) {
 		t.Errorf("A3 reference = %#v, want a3", matched[1].MatchedHiveID)
 	}
 }
+
+func TestPromptsScoreTemperamentCalmLow(t *testing.T) {
+	for name, prompt := range map[string]string{"single": singleModePrompt, "batch": batchModePrompt} {
+		if strings.Contains(prompt, "(storesHoney, storesPollen, temperament)") {
+			t.Errorf("%s prompt still applies the stores scale to temperament", name)
+		}
+		if !strings.Contains(prompt, "temperament runs the other way (1=calm, 5=aggressive)") ||
+			!strings.Contains(prompt, "calm/gentle/docile=1-2") ||
+			!strings.Contains(prompt, "very aggressive/hot=5") {
+			t.Errorf("%s prompt is missing the temperament rule", name)
+		}
+	}
+}

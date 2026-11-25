@@ -119,7 +119,7 @@ func mcpInspectionProperties() map[string]any {
 		"broodPattern":    mcpStringSchema("Free text, for example \"solid\" or \"spotty\"."),
 		"storesHoney":     mcpRatingSchema("Honey stores, 1 (very low) to 5 (full)."),
 		"storesPollen":    mcpRatingSchema("Pollen stores, 1 (very low) to 5 (full)."),
-		"temperament":     mcpRatingSchema("Temperament, 1 (calm) to 5 (aggressive)."),
+		"temperament":     mcpRatingSchema("Temperament: integer 1–5, 1 calm, 5 aggressive."),
 		"framesOfBees":    frames("bees"),
 		"framesOfBrood":   frames("brood"),
 		"framesOfStores":  frames("stores"),

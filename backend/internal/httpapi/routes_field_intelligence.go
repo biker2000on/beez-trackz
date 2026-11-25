@@ -650,6 +650,12 @@ type queenPerformanceRow struct {
 	OverallScore    float64    `json:"overallScore"`
 }
 
+// temperamentScore maps an inspection temperament (1 = calm, 5 = aggressive)
+// to a 0-100 queen score where calmer is better: 1 scores 100, 5 scores 20.
+func temperamentScore(temperament int) float64 {
+	return float64(6-temperament) * 20
+}
+
 func broodPatternScore(value string) float64 {
 	lower := strings.ToLower(value)
 	switch {
@@ -745,7 +751,7 @@ func (s *Server) queenPerformance(w http.ResponseWriter, r *http.Request) {
 				broodCount++
 			}
 			if temperament != nil {
-				tempTotal += float64(*temperament) * 20
+				tempTotal += temperamentScore(*temperament)
 				tempCount++
 			}
 		}
