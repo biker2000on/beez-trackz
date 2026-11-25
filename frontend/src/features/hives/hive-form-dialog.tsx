@@ -61,7 +61,32 @@ const hiveSchema = z.object({
 
 type HiveValues = z.infer<typeof hiveSchema>;
 
-function toValues(hive?: Hive | null, defaultApiaryId?: string): HiveValues {
+/** Starting values for a new hive (e.g. "Start a new hive at A4"). */
+export interface HivePrefill {
+  apiaryId: string;
+  positionLabel: string;
+  placement?: string | null;
+  installedDate?: string;
+}
+
+function toValues(
+  hive?: Hive | null,
+  defaultApiaryId?: string,
+  prefill?: HivePrefill,
+): HiveValues {
+  if (!hive && prefill) {
+    return {
+      apiaryId: prefill.apiaryId,
+      standId: "",
+      slotRow: "",
+      slotCol: "",
+      placement: prefill.placement ?? "full",
+      positionLabel: prefill.positionLabel,
+      status: "active",
+      installedDate: prefill.installedDate ?? "",
+      notes: "",
+    };
+  }
   return {
     apiaryId: hive?.apiaryId ?? defaultApiaryId ?? "",
     standId: hive?.standId ?? "",
@@ -92,7 +117,13 @@ export function HiveFormDialog({
   onOpenChange,
   hive,
   defaultApiaryId,
+  prefill,
+  onCreated,
 }: {
+  /** Starting values for the create form; ignored when editing. */
+  prefill?: HivePrefill;
+  /** Called with the new hive after a create (not after save-and-new). */
+  onCreated?: (hive: Hive) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** When set, the dialog edits this hive; otherwise it creates one. */
@@ -107,12 +138,12 @@ export function HiveFormDialog({
 
   const form = useForm<HiveValues>({
     resolver: zodResolver(hiveSchema),
-    defaultValues: toValues(hive, defaultApiaryId),
+    defaultValues: toValues(hive, defaultApiaryId, prefill),
   });
 
   React.useEffect(() => {
-    if (open) form.reset(toValues(hive, defaultApiaryId));
-  }, [open, hive, defaultApiaryId, form]);
+    if (open) form.reset(toValues(hive, defaultApiaryId, prefill));
+  }, [open, hive, defaultApiaryId, prefill, form]);
 
   const watched = form.watch();
   const autoLabel = generatedLabel(watched);
@@ -137,13 +168,15 @@ export function HiveFormDialog({
       notes: values.notes.trim() === "" ? null : values.notes,
     };
     try {
+      let created: Hive | null = null;
       if (isEdit) {
         await updateHive.mutateAsync(payload);
         toast.success("Hive updated");
       } else {
-        await createHive.mutateAsync(payload);
+        created = await createHive.mutateAsync(payload);
         toast.success("Hive created");
       }
+      if (created && !resetAfter) onCreated?.(created);
       if (resetAfter && !isEdit) {
         form.reset(toValues(null, defaultApiaryId));
         requestAnimationFrame(() => form.setFocus("positionLabel"));

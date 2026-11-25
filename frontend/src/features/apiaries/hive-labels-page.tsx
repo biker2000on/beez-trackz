@@ -16,8 +16,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useApiaryHives } from "@/features/canvas/lib/use-canvas-data";
+import { useHives } from "@/features/hives/hooks";
 import { api } from "@/lib/api";
+import { activeHives } from "@/lib/hive-label";
 
 import { useApiary } from "./hooks";
 
@@ -41,14 +42,17 @@ type NDEFReaderConstructor = new () => {
 
 export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
   const apiary = useApiary(apiaryId);
-  const hives = useApiaryHives(apiaryId);
+  // Tags name the live colony at a label; retired hives at the same label
+  // (dead, sold, combined) are not offered.
+  const roster = useHives({ apiaryId });
+  const liveHives = React.useMemo(() => activeHives(roster.data ?? []), [roster.data]);
   const [profileID, setProfileID] = React.useState<ProfileID>("munbyn-2x1");
   const [selected, setSelected] = React.useState<Set<string> | null>(null);
 
   const profile = profiles[profileID];
   const activeSelection =
-    selected ?? new Set((hives.data ?? []).map((hive) => hive.id));
-  const selectedHives = (hives.data ?? []).filter((hive) =>
+    selected ?? new Set(liveHives.map((hive) => hive.id));
+  const selectedHives = liveHives.filter((hive) =>
     activeSelection.has(hive.id),
   );
 
@@ -72,7 +76,7 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
     }
   }
 
-  if (apiary.isPending || hives.isPending) {
+  if (apiary.isPending || roster.isPending) {
     return <Skeleton className="h-96 rounded-xl" />;
   }
 
@@ -135,7 +139,7 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
             size="sm"
             variant="outline"
             onClick={() =>
-              setSelected(new Set((hives.data ?? []).map((hive) => hive.id)))
+              setSelected(new Set(liveHives.map((hive) => hive.id)))
             }
           >
             Select all
@@ -145,11 +149,11 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
           </Button>
         </div>
         <div className="divide-y rounded-lg border">
-          {(hives.data ?? []).length === 0 ? (
+          {liveHives.length === 0 ? (
             <div className="grid place-items-center gap-3 p-8 text-center">
               <QrCode className="size-8 text-muted-foreground" />
               <p className="text-sm text-muted-foreground">
-                This apiary has no hives yet, so there is nothing to label. Add
+                This apiary has no active hives, so there is nothing to label. Add
                 hives on the map, then come back to print labels.
               </p>
               <Button asChild variant="outline">
@@ -157,7 +161,7 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
               </Button>
             </div>
           ) : null}
-          {(hives.data ?? []).map((hive) => (
+          {liveHives.map((hive) => (
             <div className="flex items-center gap-3 p-3" key={hive.id}>
               <Checkbox
                 checked={activeSelection.has(hive.id)}
@@ -165,7 +169,7 @@ export function HiveLabelsPage({ apiaryId }: { apiaryId: string }) {
                   setSelected((current) => {
                     const next = new Set(
                       current ??
-                        (hives.data ?? []).map((currentHive) => currentHive.id),
+                        liveHives.map((currentHive) => currentHive.id),
                     );
                     if (checked) next.add(hive.id);
                     else next.delete(hive.id);
