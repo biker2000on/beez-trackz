@@ -60,7 +60,13 @@ usable with one hand, and dense only where comparison helps a decision.
   Lots & QR); Equipment (not gear, equipment stock, counts &
   equipment actions); Setup, Operation setup, Access & integrations (not
   Admin); Insights (not Reports); Map (not Layout); Record visit (apiary
-  voice), Voice inspection (hive voice), Log inspection (typed form); Visit
+  voice, the one whole-apiary voice entry point; recording several hives in
+  one take is a mode inside it, never a separate "Voice walkthrough" action,
+  and the old `visit?scope=batch` URL still opens it), Bulk record (the same
+  typed work on many hives at once), Voice inspection (hive voice), Log
+  inspection (typed form); Timeline (on an apiary, visit days newest first,
+  one row per hive; on a hive, that hive's events), Photos (uploads plus the
+  Immich evidence, which is never called a timeline); Visit
   queue (not Yard queue); Market day (not POS; "register" is only the Orders
   page's inline name); freshness reads "Updated 9:47 AM · Refresh" (never
   "Live — read", "Server stock"). No eyebrows or kickers above a heading.
@@ -206,7 +212,27 @@ usable with one hand, and dense only where comparison helps a decision.
   with Open order when a sale is linked), the field actions (Voice
   inspection, Log inspection, Feed, Split) leave the bar, and the primary is
   Reactivate (status back to active, unarchived) with Edit behind More. The
-  tabs stay readable.
+  tabs stay readable, and their rows are too: inspection cards, feedings,
+  queen and photo sections drop Edit, Delete and Add on a retired hive
+  (`hiveReadOnly`, `features/hives/lib.ts`); only equipment can still be
+  returned. Reactivate never fires on one tap: its confirmation says what it
+  does and offers "Start a new hive at A4" (the create form, prefilled with
+  the apiary and label) as the alternative, or, when another hive is already
+  active at that label, Open that hive instead.
+- Labels are reused (35 hive records for 16 spots): wherever hives are
+  listed or picked, the name comes from `hiveDisplayLabel`
+  (`lib/hive-label.ts`) — "A4 · since May 2026", "A4 (dead Apr 2026)" — and
+  pickers that write offer `activeHives` only.
+- The apiary Timeline (Wave 8) is visit days from
+  `GET /apiaries/{id}/activity`: newest day first, the apiary's notes, then
+  one row per hive with a chip per event (inspection one-liner, feeding,
+  treatment product, mite count as "4/300", status), expandable to the full
+  notes. A list/grid toggle (`?view=grid`, key `v`) draws the day on the
+  stands (A1–D4); `?date=YYYY-MM-DD` scrolls to and outlines that day (the
+  visit summary links there); `?types=` and Find (`?q=`, hive labels plus
+  words: "oxalic B1 C3") filter; `j`/`k` move between days. Timeline filter
+  chips, here and on a hive, show at most four plus More and are 44px on
+  coarse pointers (`features/hives/filter-chips.tsx`).
 - Apiary: layout canvas, flora, local forecast/bloom intelligence, bulk
   records, photos, and printable hive tags share one detail workflow.
 - Visits: voice is primary for both apiary observations and hive inspections.
